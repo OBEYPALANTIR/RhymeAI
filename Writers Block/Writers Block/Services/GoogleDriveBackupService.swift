@@ -669,6 +669,9 @@ struct BackupReport: Equatable, Sendable {
     var migratedLegacyBackup = false
     /// Older recordings that could not be moved (unreadable, missing or oversized); the old backup stays.
     var unmovedLegacyRecordings = 0
+    /// Export: recordings it could not include (no verified bytes here, or files the
+    /// library has not taken in), by name; never left out silently.
+    var leftOutRecordings: [String] = []
 }
 
 struct RemoteBackupSummary: Equatable, Sendable {
@@ -1226,20 +1229,27 @@ final class BackupService {
                                                           precedence: [String: (projectId: String, at: Date)], remote: RemoteFiles,
                                                           accessToken: String) async throws {
         let live = Set(recordings.map(\.driveName) + kept.map(RecordingBackupManifest.driveName(recordingId:)))
-        // An object is removed only when shown covered: by its recording's own
-        // gathered precedence time, or by a tombstone for that very recording (which a
-        // device wrote after comparing its time; a retry after a failed removal).
-        // Anything else (another device's upload not yet listed in a manifest, a file
-        // from before ids) is kept (finding 1).
+        // An object is removed only when shown covered by its recording's own time
+        // gathered in a run. Anything else (another device's upload not yet listed in a
+        // manifest, of a new id or of this very id, or a file from before ids) is kept
+        // (finding 1). An object shown covered is recorded by Drive id and version
+        // before its removal, so a retry after a failed removal deletes that same
+        // object, and never one uploaded under its name since.
+        var proven = (defaults.dictionary(forKey: Self.provenCoveredKey) as? [String: String]) ?? [:]
         for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) where !live.contains(file.name) {
             guard let id = file.appProperties?["id"] else { continue }
             let covered: Bool
             if let gathered = precedence[id] {
                 covered = deletions.contains { $0.covers(projectId: gathered.projectId, recordingId: id, sha256: file.appProperties?["sha256"] ?? "", at: gathered.at) }
             } else {
-                covered = deletions.contains { $0.recordingId == id && $0.projectId == file.appProperties?["projectId"] }
+                covered = proven[file.id] != nil && proven[file.id] == (file.version ?? "")
             }
-            if covered { try await driveClient.deleteFile(id: file.id, accessToken: accessToken) }
+            guard covered else { continue }
+            proven[file.id] = file.version ?? ""
+            defaults.set(proven, forKey: Self.provenCoveredKey)
+            try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
+            proven.removeValue(forKey: file.id)
+            defaults.set(proven, forKey: Self.provenCoveredKey)
         }
     }
 
@@ -1260,10 +1270,18 @@ final class BackupService {
         }
         let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
         let names = RecordingBackupManifest.exportNames(blob.recordings)
+        var report = BackupReport()
         for entry in blob.recordings {
-            guard let row = rows[entry.id], let name = names[entry.id] else { continue }
+            guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
+                report.leftOutRecordings.append(entry.fileName)
+                continue
+            }
             entries.append(("recordings/\(entry.projectId)/\(name)", row.audio))
         }
+        // Files on this device the library has not taken in are not in the archive.
+        report.leftOutRecordings += library.needsAttention.map(\.lastPathComponent)
+        report.oversizedRecordings = library.oversizedCount
+        lastReport = report
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
@@ -1376,6 +1394,8 @@ final class BackupService {
     /// once (A18): the same rule every candidate uses. A rename that conflicts
     /// across devices takes the name from the device holding the bytes.
     private static let firstSeenKey = "backup-first-seen-times"
+    /// Drive objects shown covered by a deletion, by Drive id, with the version seen.
+    private static let provenCoveredKey = "backup-proven-covered-objects"
 
     /// A32: an entry without a precedence time (zero or missing) gets the time this
     /// device first saw it, kept here and written to the manifest, never changed.
@@ -1411,7 +1431,7 @@ final class BackupService {
             }
             if trash.deletedAt.epochMilliseconds <= 0 {
                 trash.deletedAt = time("trashed:\(trash.id)")
-                trash.precedenceRepaired = true
+                trash.trashedAtRepaired = true
             }
             // The deadline always follows the deletion time (A37).
             trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
@@ -1462,9 +1482,10 @@ final class BackupService {
             }
             if trash.deletedAt.epochMilliseconds <= 0 {
                 trash.deletedAt = time("trashed:\(trash.id)")
-                trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
-                trash.precedenceRepaired = true
+                trash.trashedAtRepaired = true
             }
+            // A repaired deletion time always sets the deadline (A37).
+            if trash.trashedAtRepaired { trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval) }
         }
         for row in try modelContext.fetch(FetchDescriptor<Recording>()) where (row.uploadedAt?.epochMilliseconds ?? 0) <= 0 {
             row.uploadedAt = time("recording:\(row.id)")
@@ -1579,6 +1600,7 @@ final class BackupService {
                 existing.deletedAt = trash.deletedAt
                 existing.deleteAfter = trash.deleteAfter
                 existing.precedenceRepaired = trash.precedenceRepaired
+                existing.trashedAtRepaired = trash.trashedAtRepaired
             } else {
                 modelContext.insert(trash.makeModel())
             }

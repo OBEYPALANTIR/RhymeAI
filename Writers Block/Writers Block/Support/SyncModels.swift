@@ -168,11 +168,13 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
     var updatedAt: Date
     var deletedAt: Date
     var deleteAfter: Date
-    /// A37: a time here was established for a missing one (A32), not by an edit.
+    /// A38: `updatedAt` was established for a missing one (A32), not by an edit.
     var precedenceRepaired = false
+    /// A38: `deletedAt` was established for a missing one (A32).
+    var trashedAtRepaired = false
 
     init(id: String, title: String, lyrics: String, theme: String, updatedAt: Date, deletedAt: Date, deleteAfter: Date,
-         precedenceRepaired: Bool = false) {
+         precedenceRepaired: Bool = false, trashedAtRepaired: Bool = false) {
         self.id = id
         self.title = title
         self.lyrics = lyrics
@@ -181,6 +183,7 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
         self.deletedAt = deletedAt
         self.deleteAfter = deleteAfter
         self.precedenceRepaired = precedenceRepaired
+        self.trashedAtRepaired = trashedAtRepaired
     }
 
     init(trashed: TrashedSongProject) {
@@ -192,13 +195,15 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
             updatedAt: trashed.updatedAt,
             deletedAt: trashed.deletedAt,
             deleteAfter: trashed.deleteAfter,
-            precedenceRepaired: trashed.precedenceRepaired
+            precedenceRepaired: trashed.precedenceRepaired,
+            trashedAtRepaired: trashed.trashedAtRepaired
         )
     }
 
     func makeModel() -> TrashedSongProject {
         let model = TrashedSongProject(id: id, title: title, lyrics: lyrics, theme: theme, updatedAt: updatedAt, deletedAt: deletedAt, deleteAfter: deleteAfter)
         model.precedenceRepaired = precedenceRepaired
+        model.trashedAtRepaired = trashedAtRepaired
         return model
     }
 
@@ -471,6 +476,7 @@ struct SyncBlob: Equatable, Sendable {
                     "trashedAt": .int(trash.deletedAt.epochMilliseconds),
                 ]
                 if trash.precedenceRepaired { fields["precedenceRepaired"] = .bool(true) }
+                if trash.trashedAtRepaired { fields["trashedAtRepaired"] = .bool(true) }
                 return .object(fields)
             }),
             "recordings": .array(recordings.map { entry in
@@ -527,18 +533,19 @@ struct SyncBlob: Equatable, Sendable {
                     SyncSongProject(
                         id: try project.string("id"), title: try project.string("title"),
                         lyrics: try project.string("lyrics"), theme: try project.string("theme"),
-                        updatedAt: Date(millisecondsSince1970: try project.int("updatedAt")),
+                        updatedAt: Date(millisecondsSince1970: try project.time("updatedAt")),
                         precedenceRepaired: try project.repairedFlag()
                     )
                 },
                 trashed: try fields.array("trashed").map { trash in
-                    let trashedAt = Date(millisecondsSince1970: try trash.int("trashedAt"))
+                    let trashedAt = Date(millisecondsSince1970: try trash.time("trashedAt"))
                     return SyncTrashedSongProject(
                         id: try trash.string("id"), title: try trash.string("title"),
                         lyrics: try trash.string("lyrics"), theme: try trash.string("theme"),
-                        updatedAt: Date(millisecondsSince1970: try trash.int("updatedAt")),
+                        updatedAt: Date(millisecondsSince1970: try trash.time("updatedAt")),
                         deletedAt: trashedAt, deleteAfter: trashedAt.addingTimeInterval(trashRetentionInterval),
-                        precedenceRepaired: try trash.repairedFlag()
+                        precedenceRepaired: try trash.repairedFlag(),
+                        trashedAtRepaired: try trash.repairedFlag("trashedAtRepaired")
                     )
                 },
                 recordings: try fields.array("recordings").map { entry in
@@ -546,7 +553,7 @@ struct SyncBlob: Equatable, Sendable {
                         id: try entry.string("id"),
                         projectId: try entry.string("projectId"), fileName: try entry.string("fileName"),
                         bytes: try entry.int("bytes"), sha256: try entry.string("sha256"),
-                        uploadedAt: Date(millisecondsSince1970: try entry.int("uploadedAt")),
+                        uploadedAt: Date(millisecondsSince1970: try entry.time("uploadedAt")),
                         precedenceRepaired: try entry.repairedFlag()
                     )
                 },
@@ -661,9 +668,16 @@ private extension Dictionary where Key == String, Value == JSONValue {
         return value
     }
 
-    /// A37: an optional `precedenceRepaired`; absent means false.
-    func repairedFlag() throws -> Bool {
-        switch self["precedenceRepaired"] {
+    /// A38: a precedence time that is absent is unknown (0) and is repaired (A32);
+    /// any other type is refused.
+    func time(_ key: String) throws -> Int64 {
+        guard self[key] != nil else { return 0 }
+        return try int(key)
+    }
+
+    /// A37/A38: an optional repair flag; absent means false.
+    func repairedFlag(_ key: String = "precedenceRepaired") throws -> Bool {
+        switch self[key] {
         case nil, .null?: return false
         case .bool(let value)?: return value
         default: throw SyncManifestError.damaged
@@ -861,21 +875,27 @@ enum SyncMerger {
     private static func mergeTrash(local: [SyncTrashedSongProject], remote: [SyncTrashedSongProject]) -> [SyncTrashedSongProject] {
         var byId: [String: SyncTrashedSongProject] = [:]
         for trashed in local + remote {
-            if let existing = byId[trashed.id] {
-                let old = (existing.deletedAt, existing.updatedAt, existing.deleteAfter, existing.title, existing.lyrics, existing.theme)
-                let new = (trashed.deletedAt, trashed.updatedAt, trashed.deleteAfter, trashed.title, trashed.lyrics, trashed.theme)
-                // A37: an edit beats a repair; of two repairs the smaller times stand.
-                if existing.precedenceRepaired != trashed.precedenceRepaired {
-                    if !existing.precedenceRepaired { continue }
-                } else if existing.precedenceRepaired {
-                    if old <= new { continue }
-                } else if old >= new {
-                    continue
-                }
-            }
+            if let existing = byId[trashed.id], !trashBeats(trashed, existing) { continue }
             byId[trashed.id] = trashed
         }
         return Array(byId.values)
+    }
+
+    /// Of two times with their repair flags, the one that stands (A37): a recorded
+    /// time beats a repair, of two repairs the smaller, of two recorded the later.
+    /// Nil when they are equal.
+    private static func standingTime(_ new: (Date, Bool), over old: (Date, Bool)) -> Bool? {
+        if new.1 != old.1 { return !new.1 }
+        if new.0 == old.0 { return nil }
+        return new.1 ? new.0 < old.0 : new.0 > old.0
+    }
+
+    /// A38: each time is compared with its own flag: the deletion time first, then
+    /// the edit time, then the content.
+    private static func trashBeats(_ new: SyncTrashedSongProject, _ old: SyncTrashedSongProject) -> Bool {
+        if let decided = standingTime((new.deletedAt, new.trashedAtRepaired), over: (old.deletedAt, old.trashedAtRepaired)) { return decided }
+        if let decided = standingTime((new.updatedAt, new.precedenceRepaired), over: (old.updatedAt, old.precedenceRepaired)) { return decided }
+        return (new.title, new.lyrics, new.theme) > (old.title, old.lyrics, old.theme)
     }
 
     private static func resolveActiveTrashConflicts(projects: [SyncSongProject], trashed: [SyncTrashedSongProject]) -> (projects: [SyncSongProject], trashed: [SyncTrashedSongProject]) {
@@ -892,10 +912,11 @@ enum SyncMerger {
         return (resolvedProjects, resolvedTrash)
     }
 
-    /// A song and its Trash entry: the later time wins, ties to the Trash. A37: a
-    /// recorded time beats a repaired one, and of two repaired times the smaller wins.
+    /// A song and its Trash entry: the song's edit time against the Trash entry's
+    /// deletion time, each with its own repair flag (A38); the later wins, ties to the
+    /// Trash; a recorded time beats a repaired one; of two repaired the smaller wins.
     static func activeWins(_ project: SyncSongProject, over trash: SyncTrashedSongProject) -> Bool {
-        switch (project.precedenceRepaired, trash.precedenceRepaired) {
+        switch (project.precedenceRepaired, trash.trashedAtRepaired) {
         case (false, true): return true
         case (true, false): return false
         case (true, true): return project.updatedAt < trash.deletedAt
@@ -934,25 +955,59 @@ enum RecordingBackupManifest {
     }
 
     /// A project's memo files, sorted by name.
-    /// Names for an export (A36): each recording's display name, with " 2", " 3"
-    /// added by precedence time where names repeat within one song. Export is the
-    /// only place a display name becomes a file name; it is never read back as a name.
+    /// A39: the one archive-name allocator, shared with Android. Within a song,
+    /// entries are visited in precedence order (time ascending, ties by id byte-wise);
+    /// each takes its display name, or `<stem> 2<ext>`, `<stem> 3<ext>`, … (the first
+    /// free counter) when that is taken; "taken" compares NFC-normalized, case-folded
+    /// names, and nothing is reserved ahead of its turn. Export is the only place a
+    /// display name becomes a file name; import maps files back by id through the
+    /// manifest with this same function.
     static func exportNames(_ recordings: [SyncRecording]) -> [String: String] {
         var names: [String: String] = [:]
         for (_, song) in Dictionary(grouping: recordings, by: \.projectId) {
             var taken = Set<String>()
-            for entry in song.sorted(by: { ($0.uploadedAt, $0.id) < ($1.uploadedAt, $1.id) }) {
-                var name = entry.fileName
+            let ordered = song.sorted { lhs, rhs in
+                lhs.uploadedAt != rhs.uploadedAt ? lhs.uploadedAt < rhs.uploadedAt : Array(lhs.id.utf8).lexicographicallyPrecedes(Array(rhs.id.utf8))
+            }
+            for entry in ordered {
+                var name = archiveName(entry.fileName, number: nil)
                 var number = 2
-                while taken.contains(name.lowercased()) {
-                    name = RecordingFiles.numberedName(entry.fileName, number)
+                while taken.contains(foldedName(name)) {
+                    name = archiveName(entry.fileName, number: number)
                     number += 1
                 }
-                taken.insert(name.lowercased())
+                taken.insert(foldedName(name))
                 names[entry.id] = name
             }
         }
         return names
+    }
+
+    static func foldedName(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// A display name as an archive file name: path separators and leading dots
+    /// become "_", and the stem is cut (never inside a code point) so the whole name,
+    /// with ` <number>` when given, is at most 240 bytes of UTF-8.
+    static func archiveName(_ displayName: String, number: Int?) -> String {
+        var clean = displayName.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
+        let dots = clean.prefix { $0 == "." }.count
+        clean = String(repeating: "_", count: dots) + clean.dropFirst(dots)
+        let pathExtension = (clean as NSString).pathExtension
+        let ext = pathExtension.isEmpty ? "" : "." + pathExtension
+        let stem = String(clean.dropLast(ext.count))
+        let suffix = number.map { " \($0)" } ?? ""
+        let budget = RecordingFiles.maxFileNameBytes - (suffix + ext).utf8.count
+        var cut = String.UnicodeScalarView()
+        var used = 0
+        for scalar in stem.unicodeScalars {
+            let size = String(scalar).utf8.count
+            guard used + size <= budget else { break }
+            cut.append(scalar)
+            used += size
+        }
+        return String(cut) + suffix + ext
     }
 
     nonisolated static func scanFiles(projectId: String, memosRoot: URL) throws -> [(fileName: String, url: URL)] {

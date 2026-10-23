@@ -17,9 +17,11 @@ final class TrashedSongProject {
     var updatedAt: Date = Date()
     var deletedAt: Date = Date()
     var deleteAfter: Date = Date()
-    /// A37: a time here was established for a missing one (A32), not by an edit.
+    /// A38: `updatedAt` was established for a missing one (A32), not by an edit.
     /// Of two repairs the smaller time wins; an edit beats a repair and clears it.
     var precedenceRepaired: Bool = false
+    /// A38: `deletedAt` was established for a missing one; `deleteAfter` follows it.
+    var trashedAtRepaired: Bool = false
 
     init(
         id: String,
@@ -48,6 +50,8 @@ final class TrashedSongProject {
             updatedAt: project.updatedAt,
             deletedAt: deletedAt
         )
+        // The edit time keeps its mark; the deletion time is a real one.
+        precedenceRepaired = project.precedenceRepaired
     }
 
     func restoredProject() -> SongProject {

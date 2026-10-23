@@ -433,6 +433,11 @@ final class EditorViewModel: ObservableObject {
     @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
     /// Recordings over 16 MiB that stay on this device (not in iCloud or Drive).
     @Published private(set) var oversizedRecordingCount = 0
+    /// Files the recordings check left alone because another file holds their place
+    /// (both are kept); shown in Settings with a way to keep each separately.
+    @Published private(set) var recordingsNeedingAttention: [URL] = []
+    /// The last check left recordings it could not read in; reported, not re-run.
+    @Published private(set) var recordingAdoptionStalled = false
     /// True while the recordings could not be checked: recording lists show
     /// nothing and nothing plays until a check succeeds (A33).
     @Published private(set) var recordingListsSuspended = false
@@ -1626,7 +1631,7 @@ final class EditorViewModel: ObservableObject {
         // Chosen on the normalized deadline: a row without a deletion time is never
         // expired, and a repaired row's deadline is its repaired time plus retention (A37).
         let expiredProjects = ((try? context.fetch(descriptor)) ?? []).filter {
-            $0.deletedAt.epochMilliseconds > 0 && (!$0.precedenceRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
+            $0.deletedAt.epochMilliseconds > 0 && (!$0.trashedAtRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
         }
         guard !expiredProjects.isEmpty || !expiredMemos.isEmpty else {
             scheduleTrashPurge()
@@ -1693,12 +1698,12 @@ final class EditorViewModel: ObservableObject {
                 }
                 if project.deletedAt.epochMilliseconds <= 0 {
                     project.deletedAt = firstSeenTime("trashed:\(project.id)")
-                    project.precedenceRepaired = true
+                    project.trashedAtRepaired = true
                     repaired = true
                 }
-                // A repaired row's deadline always follows its deletion time.
+                // A repaired deletion time always sets the deadline.
                 let deadline = project.deletedAt.addingTimeInterval(trashRetentionInterval)
-                if project.precedenceRepaired, project.deleteAfter != deadline {
+                if project.trashedAtRepaired, project.deleteAfter != deadline {
                     project.deleteAfter = deadline
                     repaired = true
                 }
@@ -2338,11 +2343,13 @@ final class EditorViewModel: ObservableObject {
         do {
             try await recordingLibrary.reconcile(context: modelContext)
             oversizedRecordingCount = recordingLibrary.oversizedCount
+            recordingsNeedingAttention = recordingLibrary.needsAttention
+            recordingAdoptionStalled = recordingLibrary.adoptionStalled
             recordingListsSuspended = false
             voiceMemoService.recordingsChanged()
-            // Files left for a later run (finding 10): every run takes in at least
-            // one per pass, so this ends.
-            if recordingLibrary.pendingAdoption > 0 {
+            // Files left for a later run (finding 10) are taken by another run, but
+            // only while runs make progress; a stalled run is reported instead.
+            if recordingLibrary.pendingAdoption > 0, !recordingLibrary.adoptionStalled {
                 Task { [weak self] in await self?.reconcileRecordings() }
             }
             return true
@@ -2354,6 +2361,26 @@ final class EditorViewModel: ObservableObject {
             voiceMemoService.recordingsChanged()
             return false
         }
+    }
+
+    /// Keeps a reported file as a recording of its own under a new id; the other
+    /// file then takes its place on the next check. Nothing is replaced or deleted.
+    func keepRecordingSeparately(_ url: URL) async {
+        guard let recordingLibrary, let modelContext else { return }
+        recordingLibrary.context = modelContext
+        do {
+            try recordingLibrary.keepSeparately(url)
+        } catch {
+            errorMessage = "Couldn't keep that recording separately. Both files are still on this device."
+        }
+        _ = await reconcileRecordings()
+    }
+
+    /// "Song title · file name" for a reported file.
+    func attentionLabel(for url: URL) -> String {
+        let projectId = url.deletingLastPathComponent().lastPathComponent
+        let title = (try? modelContext?.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId })).first?.title) ?? nil
+        return "\(title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled song") · \(url.lastPathComponent)"
     }
 
     // MARK: - Cloud Backup
@@ -2597,6 +2624,10 @@ final class EditorViewModel: ObservableObject {
         if report.unmovedLegacyRecordings > 0 {
             let count = report.unmovedLegacyRecordings
             notes.append("\(count) older \(count == 1 ? "recording" : "recordings") could not be moved; the older backup is kept.")
+        }
+        if !report.leftOutRecordings.isEmpty {
+            let count = report.leftOutRecordings.count
+            notes.append("\(count) \(count == 1 ? "recording was" : "recordings were") not included: \(report.leftOutRecordings.joined(separator: ", ")).")
         }
         if report.oversizedRecordings > 0 {
             let count = report.oversizedRecordings
