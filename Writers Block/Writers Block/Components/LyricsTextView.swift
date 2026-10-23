@@ -99,7 +99,8 @@ struct LyricsTextView: UIViewRepresentable {
         }
         if context.coordinator.shouldUpdateRewriteHighlight(
             textChanged: textChanged,
-            highlight: activeHighlight
+            highlight: activeHighlight,
+            appearance: appearance
         ) {
             context.coordinator.updateRewriteHighlight(textView, highlight: activeHighlight)
         }
@@ -171,6 +172,7 @@ struct LyricsTextView: UIViewRepresentable {
         private var lastPlaceholderAppearance: AppAppearanceStyle?
         private var lastPlaceholder: String?
         private var lastRewriteHighlight: LyricsRewriteHighlight?
+        private var lastRewriteHighlightAppearance: AppAppearanceStyle?
         private var lastSelection: NSRange?
         private var lastRequestedText: String?
         private var lastPublishedText: String?
@@ -311,10 +313,14 @@ struct LyricsTextView: UIViewRepresentable {
 
         func shouldUpdateRewriteHighlight(
             textChanged: Bool,
-            highlight: LyricsRewriteHighlight?
+            highlight: LyricsRewriteHighlight?,
+            appearance: AppAppearanceStyle
         ) -> Bool {
-            let changed = textChanged || lastRewriteHighlight != highlight
+            let changed = textChanged
+                || lastRewriteHighlight != highlight
+                || lastRewriteHighlightAppearance != appearance
             lastRewriteHighlight = highlight
+            lastRewriteHighlightAppearance = appearance
             return changed
         }
 

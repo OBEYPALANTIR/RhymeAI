@@ -78,4 +78,19 @@ struct LyricsTextViewProgrammaticUpdateTests {
         #expect(textView.text == text)
         #expect(storedBefore.isEqual(to: textView.textStorage))
     }
+
+    @Test @MainActor
+    func rewriteHighlightRedrawsWhenTheAppearanceChanges() {
+        // Given
+        let coordinator = LyricsTextView(text: .constant("first line"), onCursorChange: { _ in }).makeCoordinator()
+        let highlight = LyricsRewriteHighlight(range: NSRange(location: 0, length: 5), isLoading: false, isError: false)
+        #expect(coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .ink))
+        #expect(!coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .ink))
+
+        // When
+        let redraws = coordinator.shouldUpdateRewriteHighlight(textChanged: false, highlight: highlight, appearance: .graphite)
+
+        // Then
+        #expect(redraws)
+    }
 }
