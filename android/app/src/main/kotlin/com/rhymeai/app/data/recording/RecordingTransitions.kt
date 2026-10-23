@@ -14,6 +14,8 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.Locale
 
 /** Where recording records (A20/A21) are persisted; the app's is [com.rhymeai.app.data.repository.ProjectRepository]. */
 interface RecordingCatalog {
@@ -140,18 +142,31 @@ internal object RecordingTransitions {
         return catalog.recordingRecords().firstOrNull { it.path == path }
     }
 
-    private fun stamp(item: Hashed, id: String) = RecordingRecord(
+    private fun stamp(item: Hashed, id: String, uploadedAt: Long) = RecordingRecord(
         id = id,
         projectId = item.projectId,
         fileName = item.displayName,
-        uploadedAt = item.file.lastModified(),
+        uploadedAt = uploadedAt,
         sha256 = item.sha,
-        bytes = item.file.length(),
-        origin = RecordingRecord.RECORDED,
+        bytes = item.size,
+        origin = RecordingRecord.ADOPTED,
         path = item.path
     )
 
-    /** A28: recordings that [deletions] remove leave the library for quarantine; returns how many. */
+    /**
+     * A28: paths of recordings that a known winning tombstone removes. They stay hidden
+     * from the recordings lists until [quarantineDeleted] has moved them.
+     */
+    fun deletedPaths(records: List<RecordingRecord>, deletions: List<SyncDeletion>): Set<String> {
+        val tombstones = SyncMerger.Tombstones(deletions)
+        return records.mapNotNullTo(HashSet()) { record -> record.path?.takeIf { tombstones.removes(record.toEntry()) } }
+    }
+
+    /**
+     * A28: recordings that [deletions] remove leave the library for quarantine; returns
+     * how many. The committed tombstones are the durable intent: this runs after Restore
+     * and Import and again at every launch, so an interrupted or failed move is retried.
+     */
     suspend fun quarantineDeleted(
         catalog: RecordingCatalog,
         filesDir: File,
@@ -220,9 +235,11 @@ internal object RecordingTransitions {
         onlyProjects: Set<String>? = null
     ): List<LocalRecordingFile> = namespace.withLock { snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects) }
 
-    private fun listStrictly(dir: File): List<File> {
-        if (!dir.exists()) return emptyList()
-        return dir.listFiles()?.toList() ?: throw IOException("Could not list ${dir.name}")
+    /** A missing folder is empty; any other failure to list it throws. */
+    private fun listStrictly(dir: File): List<File> = try {
+        Files.newDirectoryStream(dir.toPath()).use { entries -> entries.map { it.toFile() } }
+    } catch (_: java.nio.file.NoSuchFileException) {
+        emptyList()
     }
 
     private suspend fun snapshotLocked(
@@ -235,14 +252,18 @@ internal object RecordingTransitions {
         val hashed = mutableListOf<Hashed>()
         for ((root, inTrash) in listOf(RecordingFiles.memosRoot(filesDir) to false, RecordingFiles.trashRoot(filesDir) to true)) {
             for (dir in listStrictly(root)) {
-                if (!dir.isDirectory || dir.name in pendingDeletionIds || (onlyProjects != null && dir.name !in onlyProjects)) continue
+                if (dir.name in pendingDeletionIds || (onlyProjects != null && dir.name !in onlyProjects)) continue
+                // Throwing metadata reads: a file whose attributes cannot be read aborts adoption.
+                if (!Files.readAttributes(dir.toPath(), BasicFileAttributes::class.java).isDirectory) continue
                 for (file in listStrictly(dir)) {
-                    if (!RecordingFiles.isMemoFile(file)) continue
+                    val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+                    if (!attributes.isRegularFile || file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
                     val parsed = if (inTrash) VoiceMemoService.parseTrashedName(file.name) ?: continue else null
                     val displayName = parsed?.second ?: file.name
                     RecordingFiles.memoFile(filesDir, dir.name, displayName) // validates the names; throws
                     hashed += Hashed(file, relativePath(filesDir, file), dir.name, displayName,
-                        RecordingFileStore.sha256Hex(file), inTrash, parsed?.first ?: 0L)
+                        RecordingFileStore.sha256Hex(file), inTrash, parsed?.first ?: 0L,
+                        attributes.size(), attributes.lastModifiedTime().toMillis())
                 }
             }
         }
@@ -253,34 +274,34 @@ internal object RecordingTransitions {
             quarantined.clear()
             val byPath = records.filter { it.path != null }.associateBy { it.path }
             val hashedPaths = hashed.mapTo(HashSet()) { it.path }
-            fun matches(item: Hashed) = byPath[item.path]?.takeIf { it.sha256 == item.sha && it.bytes == item.file.length() }
-            // Records that keep their bytes: matched ones and those of files on disk but not listed here.
-            val holders = LinkedHashMap<String, RecordingRecord>()
-            records.filter { it.path != null && it.path !in hashedPaths && File(filesDir, it.path).isFile }
-                .forEach { holders[it.id] = it }
-            val itemFor = HashMap<String, Hashed>()
-            hashed.forEach { item -> matches(item)?.let { holders[it.id] = it; itemFor[it.id] = item } }
-            // First sight: the live copy first, then the most recently trashed.
-            val unmatched = hashed.filter { matches(it) == null }
-                .sortedWith(compareBy<Hashed> { it.inTrash }.thenByDescending { it.trashedAt })
-            for (item in unmatched) {
-                val id = RecordingManifestEntry.legacyRecordingId(item.projectId, item.displayName, item.sha)
-                val holder = holders[id]
-                val holderItem = itemFor[id]
-                when {
-                    holder == null -> { holders[id] = stamp(item, id); itemFor[id] = item }
-                    // A live copy takes over the id from a Trash copy, keeping its time.
-                    !item.inTrash && holderItem != null && holderItem.inTrash -> {
-                        quarantined += holderItem
-                        holders[id] = holder.copy(path = item.path, fileName = item.displayName)
-                        itemFor[id] = item
-                    }
-                    else -> quarantined += item
-                }
+            fun matches(item: Hashed) = byPath[item.path]?.takeIf { it.sha256 == item.sha && it.bytes == item.size }
+            // Records of files on disk but not listed here (songs pending deletion) keep their bytes.
+            val kept = records.filter { it.path != null && it.path !in hashedPaths && File(filesDir, it.path).isFile }
+                .associateByTo(LinkedHashMap()) { it.id }
+            // A26: every copy of one recording, matched or seen for the first time, is a candidate.
+            val groups = hashed.groupBy { item ->
+                matches(item)?.id ?: RecordingManifestEntry.legacyRecordingId(item.projectId, item.displayName, item.sha)
             }
-            for ((id, record) in holders) itemFor[id]?.let { result += LocalRecordingFile(record.toEntry(), it.file, it.inTrash) }
-            // Records whose bytes left this device go.
-            holders.values.toList()
+            for ((id, candidates) in groups) {
+                // Order-independent choice: a live copy, else the most recently trashed, then by name.
+                val canonical = candidates.sortedWith(
+                    compareBy<Hashed> { it.inTrash }.thenByDescending { it.trashedAt }.thenBy { it.path }
+                ).first()
+                quarantined += candidates.filter { it !== canonical }
+                val existing = kept[id] ?: candidates.firstNotNullOfOrNull { matches(it) }
+                val earliest = candidates.minOf { it.modifiedAt }
+                val record = when {
+                    existing == null -> stamp(canonical, id, earliest)
+                    // An adopted file's time is the earliest of its copies; other times are kept as stored.
+                    existing.origin == RecordingRecord.ADOPTED ->
+                        existing.copy(path = canonical.path, fileName = canonical.displayName, uploadedAt = minOf(existing.uploadedAt, earliest))
+                    existing.path == canonical.path -> existing
+                    else -> existing.copy(path = canonical.path, fileName = canonical.displayName)
+                }
+                kept[id] = record
+                result += LocalRecordingFile(record.toEntry(), canonical.file, canonical.inTrash)
+            }
+            kept.values.toList()
         }
         for (item in quarantined) quarantine(filesDir, item.file, item.projectId, item.displayName)
         return result.sortedWith(compareBy<LocalRecordingFile> { it.inTrash }.thenBy { it.entry.projectId }.thenBy { it.entry.fileName })
@@ -293,6 +314,8 @@ internal object RecordingTransitions {
         val displayName: String,
         val sha: String,
         val inTrash: Boolean,
-        val trashedAt: Long
+        val trashedAt: Long,
+        val size: Long,
+        val modifiedAt: Long
     )
 }

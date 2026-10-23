@@ -188,6 +188,45 @@ class RecordingImportInstrumentedTest {
         }
     }
 
+    @Test fun aTakeWhoseFinishCouldNotBeRecordedIsRecoverableAfterARestartOnlyIfItIsComplete() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val isolated = object : ContextWrapper(context) { override fun getFilesDir(): File = owned }
+        val service = VoiceMemoService(isolated)
+        val catalog = Catalog()
+        service.catalog = catalog
+        val staging = RecordingFiles.stagingDirectory(owned, "song").apply { mkdirs() }
+        try {
+            // As startRecording leaves them: each take with its id marker, written before recording.
+            val complete = File(staging, "1700000000000.m4a").apply { writeBytes(wav()) }
+            File(staging, "1700000000000.m4a.take").writeText("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\nrecording\n0\n")
+            val unfinished = File(staging, "1700000009000.m4a").apply { writeBytes(ByteArray(512) { 7 }) }
+            File(staging, "1700000009000.m4a.take").writeText("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2\nrecording\n0\n")
+            // The finish cannot be recorded (a folder sits where the marker's temp file goes) and the save fails.
+            File(staging, "1700000000000.m4a.take.tmp").mkdirs()
+            catalog.failWrites = true
+            assertTrue(runCatching { service.finishTake(complete, null) }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
+
+            // After a restart neither take is in the library; both show as "could not be saved".
+            val restarted = VoiceMemoService(isolated).apply { this.catalog = catalog }
+            assertTrue(restarted.memosForProject("song").isEmpty())
+            assertEquals(listOf(false, false), restarted.waitingTakes("song").map { it.finished })
+
+            catalog.failWrites = false
+            File(staging, "1700000000000.m4a.take.tmp").delete()
+            // Retry saves the take the recorder finalized and never publishes the unfinished one.
+            assertTrue(runCatching { restarted.retryWaitingTakes("song") }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
+            assertEquals(listOf("1700000000000.m4a"), restarted.memosForProject("song").map { it.file.name })
+            assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
+            assertTrue(unfinished.exists())
+            assertTrue(restarted.waitingTakes("song").isEmpty())
+            restarted.release()
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
     @Test fun aRetryAfterTheTakeMovedButItsFinalRecordFailedCountsAsSaved() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }

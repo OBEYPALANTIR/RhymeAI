@@ -199,6 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         it.recordingDeletionRecorder = repo::recordRecordingDeletion
         // Recording records (id, time, location) live beside the songs (A20/A21).
         it.catalog = repo
+        it.deletionsProvider = repo::syncDeletions
     }
 
     // Editor state
@@ -1185,6 +1186,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     throw cancelled
                 } catch (_: CorruptLibraryException) {
                     // Reported by the collectors above; nothing to back up from unreadable data.
+                }
+            }
+            // A28: finish moving recordings whose deletion won into quarantine (an interrupted
+            // or failed move after Restore or Import); until then the lists hide them.
+            launch(Dispatchers.IO) {
+                try {
+                    com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, getApplication<Application>().filesDir)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Retried at the next launch, Restore or Import.
                 }
             }
             if (isBackupConnected()) checkBackupAtLaunch()

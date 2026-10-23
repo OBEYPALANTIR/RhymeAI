@@ -142,7 +142,7 @@ class AppearanceUiTest {
             PaperWhite.toArgb()
         )
         val syncSummaryContrast = maxRenderedContrast(
-            composeRule.onNodeWithText("Not set up")
+            composeRule.onNodeWithText("Not connected")
                 .performScrollTo()
                 .assertIsDisplayed()
                 .captureToImage()

@@ -401,6 +401,9 @@ class ProjectRepository internal constructor(
         committed
     }
 
+    suspend fun syncDeletions(): List<SyncDeletion> =
+        deletionsStore.decode(dataStore.data.first()[SYNC_DELETIONS_KEY] ?: "[]")
+
     /**
      * Tombstone one recording so no device restores it through Drive sync. Callers
      * write this before deleting the file; a failed write keeps the file in Trash.

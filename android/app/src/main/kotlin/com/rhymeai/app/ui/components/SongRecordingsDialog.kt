@@ -76,9 +76,11 @@ fun SongRecordingsDialog(
         value = service.memosForProject(projectId)
     }
     // A27: finished takes whose save failed stay listed here until Retry saves them.
-    val waiting by produceState(0, projectId, revision, service.isRecording) {
-        value = service.waitingTakes(projectId).size
+    val waitingTakes by produceState(emptyList<VoiceMemoService.WaitingTake>(), projectId, revision, service.isRecording) {
+        value = service.waitingTakes(projectId)
     }
+    val waiting = waitingTakes.count { it.finished }
+    val unsaved = waitingTakes.size - waiting
     DisposableEffect(service) { onDispose { service.stopPlayback() } }
     val picker = rememberLauncherForActivityResult(OpenAudioDocument) { uri ->
         if (uri != null) {
@@ -136,9 +138,12 @@ fun SongRecordingsDialog(
                 label = { Text("Search recordings") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            if (waiting > 0) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (waitingTakes.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (waiting == 1) "1 recording waiting to be saved" else "$waiting recordings waiting to be saved",
+                    listOfNotNull(
+                        waiting.takeIf { it > 0 }?.let { if (it == 1) "1 recording waiting to be saved" else "$it recordings waiting to be saved" },
+                        unsaved.takeIf { it > 0 }?.let { if (it == 1) "1 recording could not be saved" else "$it recordings could not be saved" }
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
