@@ -988,7 +988,7 @@ struct RecordingLibraryTests {
         try await store.library.reconcile(context: context)
         let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
         #expect(try #require(row.trashedAt) >= before)
-        #expect(try store.library.trashedRecordings(in: context).allSatisfy { $0.deleteAfter > Date().addingTimeInterval(trashRetentionInterval - 60) })
+        #expect(try store.library.trashedRecordings(in: context).allSatisfy { $0.deleteAfter >= before.addingTimeInterval(trashRetentionInterval) })
     }
 
     @Test func interruptedOversizedMovesAreFinishedFromTheirJournal() async throws {

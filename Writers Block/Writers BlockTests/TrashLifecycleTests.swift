@@ -491,7 +491,10 @@ struct TrashLifecycleTests {
         #expect(row.deleteAfter == row.deletedAt.addingTimeInterval(trashRetentionInterval))
         #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
         let trashed = try library.trashedRecordings(in: context)
-        #expect(trashed.map(\.recordingId) == [id] && trashed[0].deleteAfter > Date().addingTimeInterval(trashRetentionInterval - 60))
+        // Full retention from a time taken in this launch, whatever the runner's speed.
+        #expect(trashed.map(\.recordingId) == [id])
+        #expect(trashed[0].deleteAfter >= before.addingTimeInterval(trashRetentionInterval - 1)
+            && trashed[0].deleteAfter <= Date().addingTimeInterval(trashRetentionInterval))
         #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
     }
 
