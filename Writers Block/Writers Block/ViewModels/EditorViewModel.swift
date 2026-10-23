@@ -2566,8 +2566,13 @@ final class EditorViewModel: ObservableObject {
         // with no row (over the cap) by its id too.
         guard let held = try? recordingLibrary.held(in: modelContext) else { return false }
         guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else {
-            return !held.contains(projectId: url.deletingLastPathComponent().lastPathComponent, recordingId: RecordingFiles.storedId(of: url),
-                                  displayName: url.lastPathComponent)
+            // A file over the cap: its id, song and display name come from its record,
+            // so a hold by its name (from before ids) matches too.
+            let id = RecordingFiles.storedId(of: url)
+            guard let ledger = try? OversizedRecordings.read(for: recordingLibrary.memosRoot) else { return false }
+            let entry = id.flatMap { ledger[$0] }
+            return !held.contains(projectId: entry?.projectId ?? url.deletingLastPathComponent().lastPathComponent, recordingId: id,
+                                  displayName: entry?.fileName ?? url.lastPathComponent)
         }
         guard !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { return false }
         // A row just delivered may not have its time fixed yet: it is fixed and kept
