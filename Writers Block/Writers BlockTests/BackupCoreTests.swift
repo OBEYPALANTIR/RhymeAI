@@ -3516,3 +3516,31 @@ extension BackupCoreTests {
         #expect(!FileManager.default.fileExists(atPath: harness.file(entry.id, "song").path))
     }
 }
+
+extension BackupCoreTests {
+    /// Round 18: a held recording does not take the name Drive gives it, on Back up
+    /// or on Restore.
+    @MainActor
+    @Test func aHeldRecordingKeepsItsNameAgainstDrive() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([3, 9]), projectId: "song", fileName: "take.m4a")
+        let id = try harness.rowId("take.m4a")
+        harness.context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "take.m4a", deletedAt: 0))
+        try harness.context.save()
+        let row = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first)
+        var renamed = row.syncEntry
+        renamed.fileName = "Drive name.m4a"
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+            recordings: [renamed]
+        ).encodedManifest())
+        harness.drive.seedRecording(renamed, content: Data([3, 9]))
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(row.displayName == "take.m4a")
+        try await harness.service.restoreNow(modelContext: harness.context)
+        #expect(row.displayName == "take.m4a")
+    }
+}

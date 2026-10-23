@@ -1324,3 +1324,58 @@ extension TrashLifecycleTests {
         #expect(try RecordingFiles.facts(live).size == bytes)
     }
 }
+
+/// Round 18: a hold binds to the recording it names, not to its current name.
+extension TrashLifecycleTests {
+    /// A recording from before ids (row-backed) held by its old name: renaming it is
+    /// refused, a rename arriving on its row does not release the hold, and it stays
+    /// hidden and unplayable.
+    @MainActor
+    @Test func aHeldRecordingCannotBeRenamedAndARenameDoesNotReleaseIt() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("HeldRename")
+        _ = container
+        let legacy = library.memosRoot.appendingPathComponent("song/take.m4a")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([4, 2]).write(to: legacy)
+        context.insert(SyncDeletionRecord(projectId: "song", fileName: "take.m4a", deletedAt: 0))
+        try context.save()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        let file = library.memosRoot.appendingPathComponent("song/\(row.id).m4a")
+        #expect(!viewModel.isPlayableRecording(file))
+
+        #expect(throws: RecordingLibraryError.held) { _ = try viewModel.voiceMemoService.renameMemo(at: file, to: "Escaped") }
+        #expect(row.displayName == "take.m4a")
+        #expect(throws: RecordingLibraryError.held) { _ = try library.keepSeparately(file) }
+
+        // A rename that arrives on the row (from another device) does not release it.
+        row.displayName = "Elsewhere.m4a"
+        try context.save()
+        _ = await viewModel.reconcileRecordings()
+        #expect(!viewModel.isPlayableRecording(file))
+        #expect(try library.liveRecordings(in: context).isEmpty)
+        #expect(try Data(contentsOf: file) == Data([4, 2]))
+    }
+
+    /// The same for a recording over the cap (no row) migrated from before ids.
+    @MainActor
+    @Test func aHeldRecordingOverTheCapCannotBeRenamed() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("HeldRenameLarge")
+        _ = container
+        let legacy = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 5, count: Int(SyncRecording.maxBytes) + 1).write(to: legacy)
+        context.insert(SyncDeletionRecord(projectId: "song", fileName: "long.m4a", deletedAt: 0))
+        try context.save()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let (id, _) = try #require(try OversizedRecordings.read(for: library.memosRoot).first)
+        let file = library.memosRoot.appendingPathComponent("song/\(id).m4a")
+
+        #expect(throws: RecordingLibraryError.held) { _ = try viewModel.voiceMemoService.renameMemo(at: file, to: "Escaped") }
+        #expect(try OversizedRecordings.read(for: library.memosRoot)[id]?.fileName == "long.m4a")
+        #expect(!viewModel.isPlayableRecording(file))
+        #expect(try library.liveRecordings(in: context).isEmpty)
+    }
+}

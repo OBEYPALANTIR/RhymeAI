@@ -1619,7 +1619,10 @@ final class BackupService {
     /// rename made here is marked written. A rename made while the run waited stays.
     private func adoptWrittenNames(_ recordings: [SyncRecording], heldBefore: [String: (String, Bool)], in modelContext: ModelContext) throws {
         let written = Dictionary(recordings.map { ($0.id, $0) }) { first, _ in first }
-        for row in try modelContext.fetch(FetchDescriptor<Recording>()) {
+        // A recording a tombstone without a time holds keeps its name here (T5.24).
+        let suspended = try library.held(in: modelContext)
+        for row in try modelContext.fetch(FetchDescriptor<Recording>())
+        where !suspended.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) {
             guard let entry = written[row.id], entry.sha256 == row.sha256, let before = heldBefore[row.id],
                   before.0 == row.displayName, before.1 == row.displayNameChanged else { continue }
             if row.displayName != entry.fileName { row.displayName = entry.fileName }
@@ -1769,9 +1772,10 @@ final class BackupService {
         }
         // A36: rows take the resolved display names (metadata only).
         let resolvedById = Dictionary(blob.recordings.map { ($0.id, $0) }) { first, _ in first }
-        for row in try modelContext.fetch(FetchDescriptor<Recording>()) where !row.isDeleted {
+        for row in try modelContext.fetch(FetchDescriptor<Recording>())
+        where !row.isDeleted && !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) {
             // A rename made here is the resolved name; its mark is cleared only once a
-            // verified manifest carries it.
+            // verified manifest carries it. A held recording keeps its name (T5.24).
             guard let entry = resolvedById[row.id], entry.sha256 == row.sha256, !row.displayNameChanged else { continue }
             if row.displayName != entry.fileName { row.displayName = entry.fileName }
         }
