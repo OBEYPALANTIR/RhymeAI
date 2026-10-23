@@ -37,7 +37,9 @@ enum CloudKitSchemaInitializer {
             print("CLOUDKIT_SCHEMA_INIT: ok")
         } catch {
             logger.error("CloudKit schema initialization failed: \(error)")
-            print("CLOUDKIT_SCHEMA_INIT: failed \(error)")
+            // NSError descriptions span lines; keep the stdout marker greppable.
+            let oneLine = String(describing: error).split(whereSeparator: \.isNewline).joined(separator: " ")
+            print("CLOUDKIT_SCHEMA_INIT: failed \(oneLine)")
         }
     }
 
@@ -45,12 +47,24 @@ enum CloudKitSchemaInitializer {
         var description: String { "NSManagedObjectModel could not be built from the SwiftData models" }
     }
 
+    private struct CleanupFailed: Error, CustomStringConvertible {
+        let initialization: Result<Void, Error>
+        let cleanup: Error
+        let leftover: URL
+        var description: String {
+            let outcome = switch initialization {
+            case .success: "initialization ok"
+            case .failure(let error): "initialization failed: \(error)"
+            }
+            return "\(outcome); temporary store cleanup failed: \(cleanup); leftover at \(leftover.path)"
+        }
+    }
+
     private static func initializeSchema() throws {
         guard let model = makeManagedObjectModel() else { throw ModelUnavailable() }
         let storeDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CloudKitSchemaInit-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: storeDirectory) }
 
         let container = NSPersistentCloudKitContainer(name: "SchemaInit", managedObjectModel: model)
         let description = NSPersistentStoreDescription(url: storeDirectory.appendingPathComponent("SchemaInit.sqlite"))
@@ -61,13 +75,24 @@ enum CloudKitSchemaInitializer {
 
         var loadError: Error?
         container.loadPersistentStores { _, error in loadError = error }
-        if let loadError { throw loadError }
-        defer {
-            for store in container.persistentStoreCoordinator.persistentStores {
-                try? container.persistentStoreCoordinator.remove(store)
-            }
+        let initialization = Result {
+            if let loadError { throw loadError }
+            try container.initializeCloudKitSchema(options: [])
         }
-        try container.initializeCloudKitSchema(options: [])
+
+        // Detach before deleting so the coordinator has released the SQLite files
+        // (including -wal/-shm). A cleanup failure is reported, never hidden, and
+        // the initialization outcome travels with it.
+        do {
+            let coordinator = container.persistentStoreCoordinator
+            for store in coordinator.persistentStores {
+                try coordinator.remove(store)
+            }
+            try FileManager.default.removeItem(at: storeDirectory)
+        } catch {
+            throw CleanupFailed(initialization: initialization, cleanup: error, leftover: storeDirectory)
+        }
+        try initialization.get()
     }
 }
 #endif
