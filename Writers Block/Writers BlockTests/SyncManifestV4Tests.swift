@@ -104,7 +104,7 @@ struct SyncManifestV4Tests {
         func trash(_ seconds: TimeInterval, repaired: Bool) -> SyncTrashedSongProject {
             let at = Date(timeIntervalSince1970: seconds)
             return SyncTrashedSongProject(id: "s", title: "S", lyrics: "", theme: "", updatedAt: at, deletedAt: at,
-                                          deleteAfter: at.addingTimeInterval(trashRetentionInterval), precedenceRepaired: repaired)
+                                          deleteAfter: at.addingTimeInterval(trashRetentionInterval), trashedAtRepaired: repaired)
         }
         func activeWins(_ project: SyncSongProject, _ trashed: SyncTrashedSongProject) throws -> Bool {
             let one = try SyncMerger.merge(local: SyncBlob(projects: [project]), remote: SyncBlob(trashed: [trashed]))
@@ -121,6 +121,111 @@ struct SyncManifestV4Tests {
         #expect(try activeWins(song(100, repaired: false), trash(900, repaired: true)))
         // Neither repaired: the later wins.
         #expect(try activeWins(song(200, repaired: false), trash(100, repaired: false)))
+        // A38: each time with its own flag. A Trash entry whose edit time was repaired
+        // but whose deletion time (100) is real beats a song edited at 50.
+        let zeroEdit = SyncTrashedSongProject(id: "s", title: "S", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 0),
+                                              deletedAt: Date(timeIntervalSince1970: 100), deleteAfter: Date(timeIntervalSince1970: 100).addingTimeInterval(trashRetentionInterval),
+                                              precedenceRepaired: true)
+        #expect(try !activeWins(song(50, repaired: false), zeroEdit))
+    }
+
+    @Test func aTrashEntryCarriesItsTwoRepairFlagsUnderTheirOwnKeys() async throws {
+        let at = Date(timeIntervalSince1970: 100)
+        let trash = SyncTrashedSongProject(id: "t", title: "T", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 50), deletedAt: at,
+                                           deleteAfter: at.addingTimeInterval(trashRetentionInterval), trashedAtRepaired: true)
+        let blob = SyncBlob(trashed: [trash])
+        let text = try #require(String(data: try blob.encodedManifest(), encoding: .utf8))
+        #expect(text.contains("\"trashedAtRepaired\":true") && !text.contains("\"precedenceRepaired\""))
+        let decoded = try #require(SyncBlob.decodeManifest(try blob.encodedManifest()).trashed.first)
+        #expect(decoded.trashedAtRepaired && !decoded.precedenceRepaired)
+        // Two repaired deletion times: the smaller stands, whichever comes first.
+        var later = trash
+        later.deletedAt = Date(timeIntervalSince1970: 300)
+        for (first, second) in [(trash, later), (later, trash)] {
+            let merged = try SyncMerger.merge(local: SyncBlob(trashed: [first]), remote: SyncBlob(trashed: [second]))
+            #expect(merged.trashed.map(\.deletedAt) == [at])
+        }
+    }
+
+    @Test func aCorrectlyHashedManifestWithoutATimeIsReadAsUnknown() async throws {
+        let audio = Data([1])
+        let blob = SyncBlob(
+            projects: [SyncSongProject(id: "p", title: "P", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 5))],
+            recordings: [SyncRecording(id: "r", projectId: "p", fileName: "take.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 5))]
+        )
+        func rehashed(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var fields = try #require(try JSONSerialization.jsonObject(with: try blob.encodedManifest()) as? [String: Any])
+            fields.removeValue(forKey: "manifestSha256")
+            change(&fields)
+            fields["manifestSha256"] = CanonicalJSON.sha256Hex(try JSONValue(any: fields))
+            return try JSONSerialization.data(withJSONObject: fields)
+        }
+        let absent = try rehashed { fields in
+            var recordings = fields["recordings"] as! [[String: Any]]
+            recordings[0].removeValue(forKey: "uploadedAt")
+            fields["recordings"] = recordings
+            var projects = fields["projects"] as! [[String: Any]]
+            projects[0].removeValue(forKey: "updatedAt")
+            fields["projects"] = projects
+        }
+        let decoded = try SyncBlob.decodeManifest(absent)
+        #expect(decoded.recordings.first?.uploadedAt.epochMilliseconds == 0 && decoded.projects.first?.updatedAt.epochMilliseconds == 0)
+        // A value of the wrong type is still refused.
+        let wrong = try rehashed { fields in
+            var recordings = fields["recordings"] as! [[String: Any]]
+            recordings[0]["uploadedAt"] = "yesterday"
+            fields["recordings"] = recordings
+        }
+        #expect(throws: SyncManifestError.damaged) { _ = try SyncBlob.decodeManifest(wrong) }
+    }
+
+    static let sharedArchiveNames = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("shared/fixtures/archive-names-v1.json")
+
+    @Test func archiveNamesMatchTheSharedFixture() async throws {
+        let url = try #require(Bundle(for: FixtureToken.self).url(forResource: "archive-names-v1", withExtension: "json"))
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let cases = try #require(root["cases"] as? [[String: Any]])
+        let recordings = try cases.map { item in
+            SyncRecording(id: try #require(item["id"] as? String), projectId: try #require(item["projectId"] as? String),
+                          fileName: try #require(item["displayName"] as? String), bytes: 1, sha256: String(repeating: "a", count: 64),
+                          uploadedAt: Date(millisecondsSince1970: try #require((item["precedenceTime"] as? NSNumber)?.int64Value)))
+        }
+        let names = RecordingBackupManifest.exportNames(recordings)
+        for (item, entry) in zip(cases, recordings) {
+            #expect("recordings/\(entry.projectId)/\(names[entry.id] ?? "")" == item["archivePath"] as? String)
+        }
+    }
+
+    /// The copy here is the shared fixture byte for byte, once the shared one is in this checkout.
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: SyncManifestV4Tests.sharedArchiveNames.path)))
+    func archiveNamesFixtureCopyMatchesTheSharedOne() async throws {
+        let copy = try #require(Bundle(for: FixtureToken.self).url(forResource: "archive-names-v1", withExtension: "json"))
+        #expect(try Data(contentsOf: copy) == Data(contentsOf: Self.sharedArchiveNames))
+    }
+
+    @Test func archiveNamesFollowTheSharedRule() async throws {
+        func names(_ entries: [(String, TimeInterval, String)]) -> [String] {
+            let recordings = entries.map { SyncRecording(id: $0.0, projectId: "p", fileName: $0.2, bytes: 1, sha256: String(repeating: "a", count: 64),
+                                                         uploadedAt: Date(timeIntervalSince1970: $0.1)) }
+            let allocated = RecordingBackupManifest.exportNames(recordings)
+            return entries.map { allocated[$0.0]! }
+        }
+        // Nothing is reserved ahead of its turn.
+        #expect(names([("a", 1, "take.m4a"), ("b", 2, "take.m4a"), ("c", 3, "take 2.m4a")]) == ["take.m4a", "take 2.m4a", "take 2 2.m4a"])
+        // Visited by time, then id byte-wise.
+        #expect(names([("b", 1, "take.m4a"), ("a", 1, "take.m4a")]) == ["take 2.m4a", "take.m4a"])
+        // A case-only or normalization-only difference is the same name.
+        #expect(names([("a", 1, "Take.m4a"), ("b", 2, "take.m4a")]) == ["Take.m4a", "take 2.m4a"])
+        #expect(names([("a", 1, "Caf\u{E9}.m4a"), ("b", 2, "Cafe\u{301}.m4a")]) == ["Caf\u{E9}.m4a", "Cafe\u{301} 2.m4a"])
+        // Separators and leading dots become "_".
+        #expect(names([("a", 1, "a/b\\c.m4a"), ("b", 2, "..hidden.m4a")]) == ["a_b_c.m4a", "__hidden.m4a"])
+        // Truncated to 240 bytes of UTF-8 without splitting a code point, suffix included.
+        let long = String(repeating: "\u{E9}", count: 200) + ".m4a"
+        let cut = names([("a", 1, long), ("b", 2, long)])
+        #expect(cut.allSatisfy { $0.utf8.count <= 240 && $0.hasSuffix(".m4a") })
+        #expect(cut[0].utf8.count == 240 && cut[1].hasSuffix(" 2.m4a") && cut[1].utf8.count == 240)
     }
 
     @Test func escapingCoversOnlyQuotesBackslashesAndControls() async {
@@ -694,6 +799,163 @@ struct RecordingLibraryTests {
         #expect(row.id == entry.id && row.displayName == "take.m4a" && !row.displayNameChanged)
         try await store.library.reconcile(context: context)
         #expect(names(store.root.appendingPathComponent("song")) == ["0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"])
+    }
+
+    @Test func duplicateRowsOfOneIdSettleTheirTimeBeforeOneIsKept() async throws {
+        // tA < tombstone < tB, in both arrangements of names (the kept copy is "a").
+        for (aTime, bTime) in [(10.0, 30.0), (30.0, 10.0)] {
+            let store = try await makeStore()
+            let context = store.container.mainContext
+            let id = uuid()
+            for (name, seconds) in [("a.m4a", aTime), ("b.m4a", bTime)] {
+                let row = Recording(id: id, projectId: "song", displayName: name, audio: Data([1]), recordedAt: Date(timeIntervalSince1970: seconds),
+                                    uploadedAt: Date(timeIntervalSince1970: seconds))
+                row.precedenceRepaired = true
+                context.insert(row)
+            }
+            context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "a.m4a", deletedAt: 20_000))
+            try context.save()
+            try await store.library.reconcile(context: context)
+            #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty, "the smaller repair (10 s) loses to the deletion at 20 s")
+        }
+        // A recorded time beats a repair, whichever copy is kept.
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let id = uuid()
+        let repaired = Recording(id: id, projectId: "song", displayName: "a.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10),
+                                 uploadedAt: Date(timeIntervalSince1970: 10))
+        repaired.precedenceRepaired = true
+        context.insert(repaired)
+        context.insert(Recording(id: id, projectId: "song", displayName: "b.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 30),
+                                 uploadedAt: Date(timeIntervalSince1970: 30)))
+        context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "a.m4a", deletedAt: 20_000))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        let kept = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(kept.uploadedAt == Date(timeIntervalSince1970: 30) && !kept.precedenceRepaired)
+    }
+
+    @Test func copiesOfOneRecordingShareTheBytesReadForAnyOfThem() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let audio = Data(repeating: 7, count: 100)
+        // Five Trash copies; the newest (the canonical one) is last in path order.
+        for ms in [1_000, 2_000, 3_000, 4_000, 5_000] { try write(audio, "song", "\(ms)__take.m4a", root: store.trash, modified: 50) }
+        store.library.adoptionBudget = 200
+        let result = try await store.library.reconcile(context: context)
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.trashedAt == Date(timeIntervalSince1970: 5) && result.pendingAdoption == 0 && !store.library.adoptionStalled)
+    }
+
+    @Test func aRunThatTakesNothingInStopsAndTheReportedFileCanBeKeptSeparately() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let id = derivedId("song", "a.m4a", Data([1]))
+        let legacy = try write(Data([1]), "song", "a.m4a", root: store.root)
+        let squatter = try write(Data([9]), "song", "\(id).m4a", root: store.root)
+        try write(Data([5]), "song", "z.m4a", root: store.root)
+        store.library.adoptionBudget = 1
+        for _ in 0..<2 {
+            let result = try await store.library.reconcile(context: context)
+            #expect(store.library.adoptionStalled && result.pendingAdoption > 0)
+            #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        }
+        #expect(Set(store.library.needsAttention.map(\.lastPathComponent)) == ["a.m4a", "\(id).m4a"])
+
+        // Kept separately: the squatter gets an id of its own, then everything is taken in.
+        let kept = try store.library.keepSeparately(squatter)
+        #expect(RecordingFiles.storedId(of: kept) != id)
+        for _ in 0..<3 { try await store.library.reconcile(context: context) }
+        let rows = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Recording>()).map { ($0.audio, $0) })
+        #expect(rows.count == 3 && rows[Data([1])]?.id == id && rows[Data([1])]?.displayName == "a.m4a")
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == Data([1]))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path) && !store.library.adoptionStalled)
+    }
+
+    @Test func aZeroTimeTrashFileGetsATrashTimeWhenTakenIn() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        try write(Data([3]), "song", "0__take.m4a", root: store.trash, modified: 0)
+        let before = Date().addingTimeInterval(-1)
+        try await store.library.reconcile(context: context)
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(try #require(row.trashedAt) >= before)
+        #expect(try store.library.trashedRecordings(in: context).allSatisfy { $0.deleteAfter > Date().addingTimeInterval(trashRetentionInterval - 60) })
+    }
+
+    @Test func interruptedOversizedMovesAreFinishedFromTheirJournal() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let big = Data(repeating: 4, count: Int(SyncRecording.maxBytes) + 1)
+        let live = try store.library.publishFinished(try stage(big), projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        // Trash journalled, then the app stopped before the move.
+        var entry = try #require(OversizedRecordings.read(for: store.root)[id])
+        entry.trashedAt = 9_000
+        entry.source = live.path
+        entry.completed = false
+        entry.bytes = Int64(big.count)
+        try OversizedRecordings.record(id: id, entry: entry, for: store.root)
+        try await store.library.reconcile(context: context)
+        let trashPlace = store.trash.appendingPathComponent("song/\(id).m4a")
+        #expect(FileManager.default.fileExists(atPath: trashPlace.path) && !FileManager.default.fileExists(atPath: live.path))
+        #expect(try OversizedRecordings.read(for: store.root)[id]?.completed == true)
+        #expect(try store.library.trashedRecordings(in: context).map(\.recordingId) == [id])
+
+        // A journal whose source holds other bytes moves nothing.
+        entry.trashedAt = nil
+        entry.source = trashPlace.path
+        entry.completed = false
+        entry.sha256 = String(repeating: "0", count: 64)
+        try OversizedRecordings.record(id: id, entry: entry, for: store.root)
+        try await store.library.reconcile(context: context)
+        #expect(FileManager.default.fileExists(atPath: trashPlace.path))
+        #expect(try OversizedRecordings.read(for: store.root)[id]?.completed == false)
+    }
+
+    @Test func symbolicLinksAreNeverRecordingsAndNothingOutsideIsMoved() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(uuid())", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let target = outside.appendingPathComponent("private.m4a")
+        try Data([8]).write(to: target)
+        // A linked file in a song folder, and a linked song folder.
+        let folder = store.root.appendingPathComponent("song", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("link.m4a"), withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: store.root.appendingPathComponent("linked-song"), withDestinationURL: outside)
+        // A move record naming the outside file, and a deletion that would cover it.
+        try RecordingFiles.setPendingQuarantine([RecordingFiles.canonicalPath(target)], for: store.root)
+        context.insert(SyncDeletionRecord(projectId: "song", deletedAt: 4_000_000_000_000))
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+        try await store.library.reconcile(context: context)
+
+        #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(try Data(contentsOf: target) == Data([8]))
+        #expect(names(RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("song")).isEmpty)
+        #expect(!RecordingFiles.isRecordingFile(folder.appendingPathComponent("link.m4a"), in: [store.root]))
+        #expect(throws: (any Error).self) { try RecordingFiles.quarantine(target, recordingId: "x", memosRoot: store.root, trashRoot: store.trash) }
+    }
+
+    @Test func aStagedFileLeftUnderTheSameIdIsUsedOnlyWithTheSameBytes() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let audio = Data([6, 6])
+        let id = uuid()
+        let staging = RecordingFiles.stagingRoot(for: store.root)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let leftover = staging.appendingPathComponent("\(id).m4a")
+        try Data([0, 0]).write(to: leftover)
+        let entry = SyncRecording(id: id, projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 5))
+        #expect(throws: SyncValidationError.invalidRecording) { try store.library.commitRestored(audio, entry: entry, origin: .restored, context: context) }
+        #expect(try Data(contentsOf: leftover) == Data([0, 0]), "never replaced")
+        try FileManager.default.removeItem(at: leftover)
+        try audio.write(to: leftover)
+        #expect(try store.library.commitRestored(audio, entry: entry, origin: .restored, context: context))
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == audio)
     }
 
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {
