@@ -93,9 +93,16 @@ def overlapping_lines(songs, pool):
 def pool_files(root):
     """Every file under a pool, following symlinked directories (Path.rglob does not, so a pool
     whose data lives on another volume would be audited as empty) and visiting each real
-    directory once so a symlink cycle cannot loop."""
+    directory once so a symlink cycle cannot loop. A pool or link whose target is missing, such
+    as one on an unmounted volume, raises rather than auditing as empty."""
+    if not Path(root).is_dir():
+        raise FileNotFoundError(f"Training pool unavailable: {root}")
+
+    def unreadable(error):
+        raise error
+
     visited = set()
-    for directory, subdirectories, files in os.walk(root, followlinks=True):
+    for directory, subdirectories, files in os.walk(root, followlinks=True, onerror=unreadable):
         real = os.path.realpath(directory)
         if real in visited:
             subdirectories[:] = []
@@ -103,7 +110,10 @@ def pool_files(root):
         visited.add(real)
         subdirectories.sort()
         for name in sorted(files):
-            yield Path(directory) / name
+            path = Path(directory) / name
+            if not path.exists():
+                raise FileNotFoundError(f"Training pool link target unavailable: {path}")
+            yield path
 
 
 def audit_overlap(songs, include_frozen=False, benchmark="v1"):
