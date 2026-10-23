@@ -676,6 +676,48 @@ class BackupServiceTest {
     }
 
     @Test
+    fun aNameOnlySuspensionStaysBoundToItsRecordingThroughARenameAndAnIncomingName() = runBlocking<Unit> {
+        // A name-only tombstone without a time binds to the recording first seen under that name with
+        // those bytes (its derived id); neither a rename nor an incoming display name releases it.
+        repository.saveProjects(listOf(song("p")))
+        val bytes = "legacy take".toByteArray()
+        File(RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }, "take.m4a").apply { writeBytes(bytes); setLastModified(1_000L) }
+        val key = androidx.datastore.preferences.core.stringPreferencesKey("sync_deletions_json")
+        dataStore.edit { it[key] = """[{"projectId":"p","fileName":"take.m4a"}]""" }
+        val id = RecordingManifestEntry.legacyRecordingId("p", "take.m4a", BackupManifest.sha256Hex(bytes))
+
+        suspend fun assertStillSuspended(displayName: String) {
+            val record = repository.recordingRecords().single { it.id == id }
+            assertEquals(displayName, record.displayName)
+            val file = File(filesDir, record.path!!)
+            assertContentEquals(bytes, file.readBytes())
+            assertEquals(setOf(record.path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
+            assertNull(com.rhymeai.app.data.recording.RecordingTransitions.withPlayableRecording(
+                repository, filesDir, file, "p", deletions = { repository.syncDeletions() }) { _, _ -> "played" })
+            assertTrue(repository.syncDeletions().single().let { it.recordingId == null && it.fileName == "take.m4a" && !it.timeKnown })
+        }
+
+        // Adopted: the file takes its derived id, the old name becomes its display name.
+        com.rhymeai.app.data.recording.RecordingTransitions.migrate(repository, filesDir)
+        assertStillSuspended("take.m4a")
+
+        // Renamed here.
+        val file = File(filesDir, repository.recordingRecords().single { it.id == id }.path!!)
+        assertNotNull(com.rhymeai.app.data.recording.RecordingTransitions.rename(repository, filesDir, file, "p", "Verse.m4a"))
+        assertStillSuspended("Verse.m4a")
+
+        // A backup writes that name (clearing the rename), then Drive's entry carries another
+        // display name, which the next backup adopts.
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        val written = remote().recordings.single { it.id == id }
+        assertEquals("Verse.m4a", written.fileName)
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(written.copy(fileName = "Chorus.m4a",
+            driveName = RecordingManifestEntry.driveNameFor("p", "Chorus.m4a")))))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertStillSuspended("Chorus.m4a")
+    }
+
+    @Test
     fun backUpKeepsADifferentRemoteVersionOfASongThisDeviceAlsoHolds() = runBlocking<Unit> {
         // Final review 2, finding 1: this device holds "s" ("old", repaired 300); Drive holds a
         // Trash version of "s" with other lyrics ("remote", repaired 200); a real tombstone at 100.
