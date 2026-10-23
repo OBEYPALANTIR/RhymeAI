@@ -362,14 +362,20 @@ struct SyncRecording: Equatable, Hashable, Sendable {
     /// The recording's precedence time (epoch milliseconds in the manifest); a
     /// tombstone removes it only when deleted after this.
     var uploadedAt: Date
+    /// A34: the name the recording's owner chose (no allocated " N" suffix); nil
+    /// means it equals `fileName`. Written only when it differs.
+    var claimedName: String? = nil
 
     var key: String { id }
+    /// The name this recording claims; `fileName` is the one allocated to it (A30).
+    var claim: String { claimedName ?? fileName }
     var driveName: String { RecordingBackupManifest.driveName(recordingId: id) }
 
     func validate() throws {
         try SyncIdentity.validateRecordingId(id)
         try SyncIdentity.validateProjectId(projectId)
         try SyncIdentity.validateFileName(fileName)
+        if let claimedName { try SyncIdentity.validateFileName(claimedName) }
         guard bytes >= 0, sha256.count == 64,
               sha256.unicodeScalars.allSatisfy({ "0123456789abcdef".unicodeScalars.contains($0) }) else {
             throw SyncValidationError.invalidRecording
@@ -449,12 +455,15 @@ struct SyncBlob: Equatable, Sendable {
                 ])
             }),
             "recordings": .array(recordings.map { entry in
-                .object([
+                var fields: [String: JSONValue] = [
                     "id": .string(entry.id),
                     "projectId": .string(entry.projectId), "fileName": .string(entry.fileName),
                     "bytes": .int(entry.bytes), "sha256": .string(entry.sha256),
                     "uploadedAt": .int(entry.uploadedAt.epochMilliseconds),
-                ])
+                ]
+                // A34: present only when the claim differs from the allocated name.
+                if let claim = entry.claimedName, claim != entry.fileName { fields["claimedName"] = .string(claim) }
+                return .object(fields)
             }),
             "deletions": .array(deletions.map { deletion in
                 var fields: [String: JSONValue] = [
@@ -513,11 +522,19 @@ struct SyncBlob: Equatable, Sendable {
                     )
                 },
                 recordings: try fields.array("recordings").map { entry in
-                    SyncRecording(
+                    let claimedName: String?
+                    switch entry["claimedName"] {
+                    case .string(let value)?: claimedName = value
+                    case .null?, nil: claimedName = nil
+                    default: throw SyncManifestError.damaged
+                    }
+                    let fileName = try entry.string("fileName")
+                    return SyncRecording(
                         id: try entry.string("id"),
-                        projectId: try entry.string("projectId"), fileName: try entry.string("fileName"),
+                        projectId: try entry.string("projectId"), fileName: fileName,
                         bytes: try entry.int("bytes"), sha256: try entry.string("sha256"),
-                        uploadedAt: Date(millisecondsSince1970: try entry.int("uploadedAt"))
+                        uploadedAt: Date(millisecondsSince1970: try entry.int("uploadedAt")),
+                        claimedName: claimedName == fileName ? nil : claimedName
                     )
                 },
                 deletions: try fields.array("deletions").map { deletion in
@@ -782,8 +799,9 @@ enum SyncMerger {
     /// A30 across devices: within each song, the earliest recording (then the
     /// smaller id) claiming a name gets it; the others are allocated
     /// "<claim stem> 2<ext>", 3, … in that order. `claim` is the name a recording
-    /// asks for: the stem its owner chose where this device knows it, else its
-    /// manifest name. The same rule names rows locally, so names converge.
+    /// asks for: the stem its owner chose where this device knows it, else the
+    /// entry's `claimedName`, else its manifest name. The same rule names rows
+    /// locally, so names converge.
     static func allocateNames(_ recordings: [SyncRecording], claim: (SyncRecording) -> String) -> [SyncRecording] {
         var allocated: [String: String] = [:]
         for (_, song) in Dictionary(grouping: recordings, by: \.projectId) {
@@ -809,7 +827,10 @@ enum SyncMerger {
         }
         return recordings.map { entry in
             var named = entry
+            let claimed = claim(entry)
             if let name = allocated[entry.id] { named.fileName = name }
+            // The claim travels with the entry; the allocated suffix never becomes one (A34).
+            named.claimedName = claimed == named.fileName ? nil : claimed
             return named
         }
     }

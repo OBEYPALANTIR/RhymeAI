@@ -61,7 +61,8 @@ final class Recording {
     var claim: String { claimedName.isEmpty ? fileName : claimedName }
 
     var syncEntry: SyncRecording {
-        SyncRecording(id: id, projectId: projectId, fileName: fileName, bytes: bytes, sha256: sha256, uploadedAt: precedenceTime)
+        SyncRecording(id: id, projectId: projectId, fileName: fileName, bytes: bytes, sha256: sha256, uploadedAt: precedenceTime,
+                      claimedName: claim == fileName ? nil : claim)
     }
 
     /// Where this recording's file lives: the memo folder, or the Trash while trashed.
@@ -826,6 +827,8 @@ final class RecordingLibrary: RecordingPublishing {
               RecordingBackupManifest.sha256Hex(written) == entry.sha256 else { throw SyncValidationError.invalidRecording }
         let row = Recording(id: entry.id, projectId: entry.projectId, fileName: entry.fileName, audio: audio,
                             recordedAt: entry.uploadedAt, uploadedAt: entry.uploadedAt, origin: origin)
+        // A restored recording claims its claimed name, never its allocated one (A34).
+        row.claimedName = entry.claim
         if try liveNames(projectId: entry.projectId, in: context).contains(entry.fileName) {
             let parking = RecordingFiles.parkingRoot(for: memosRoot)
             try FileManager.default.createDirectory(at: parking, withIntermediateDirectories: true)

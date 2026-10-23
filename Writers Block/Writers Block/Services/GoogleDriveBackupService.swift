@@ -1364,7 +1364,7 @@ final class BackupService {
         let claims = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.sha256, $0.claim)) }) { first, _ in first }
         var resolved = try SyncMerger.resolve(gathered)
         resolved.recordings = SyncMerger.allocateNames(resolved.recordings) { entry in
-            guard let local = claims[entry.id], local.0 == entry.sha256 else { return entry.fileName }
+            guard let local = claims[entry.id], local.0 == entry.sha256 else { return entry.claim }
             return local.1
         }.sorted { ($0.projectId, $0.fileName, $0.id) < ($1.projectId, $1.fileName, $1.id) }
         return resolved
