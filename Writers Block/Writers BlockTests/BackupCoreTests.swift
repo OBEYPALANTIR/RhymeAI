@@ -1024,6 +1024,40 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func aRestoredRecordingClaimsItsClaimedNameNeverItsAllocatedOne() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        let first = Data([1, 1]), second = Data([2, 2])
+        let a = SyncRecording(id: "a", projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(first), uploadedAt: Date(timeIntervalSince1970: 10))
+        let b = SyncRecording(id: "b", projectId: "song", fileName: "take 2.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(second), uploadedAt: Date(timeIntervalSince1970: 20), claimedName: "take.m4a")
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+            recordings: [a, b]
+        ).encodedManifest())
+        harness.drive.seedRecording(a, content: first)
+        harness.drive.seedRecording(b, content: second)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        let rows = Dictionary(uniqueKeysWithValues: try harness.context.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) })
+        #expect(rows["b"]?.claim == "take.m4a" && rows["b"]?.fileName == "take 2.m4a")
+        #expect(try Data(contentsOf: harness.memosRoot.appendingPathComponent("song/take 2.m4a")) == second)
+        // Backups keep writing the claim with the allocated name.
+        try await harness.service.backupNow(modelContext: harness.context)
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        let written = try #require(manifest.recordings.first { $0.id == "b" })
+        #expect(written.fileName == "take 2.m4a" && written.claimedName == "take.m4a")
+
+        // Once the earlier recording is gone, the claim (not "take 2") takes the name.
+        let gone = try #require(rows["a"])
+        harness.context.delete(gone)
+        try harness.context.save()
+        try await harness.service.library.reconcile(context: harness.context)
+        #expect(rows["b"]?.fileName == "take.m4a")
+    }
+
+    @MainActor
     @Test func alternatingBackupsFromTwoDevicesConvergeOnNames() async throws {
         let drive = FakeDriveClient()
         let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)

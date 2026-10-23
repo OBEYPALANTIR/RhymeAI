@@ -77,6 +77,21 @@ struct SyncManifestV4Tests {
                 == "b51b24cd-da93-393e-974b-0bd4efe9e243")
     }
 
+    @Test func aClaimedNameTravelsOnlyWhenItDiffersFromTheAllocatedName() async throws {
+        let sha = String(repeating: "a", count: 64)
+        let claimed = SyncRecording(id: "b", projectId: "song", fileName: "take 2.m4a", bytes: 1, sha256: sha, uploadedAt: Date(timeIntervalSince1970: 20), claimedName: "take.m4a")
+        let plain = SyncRecording(id: "a", projectId: "song", fileName: "take.m4a", bytes: 1, sha256: sha, uploadedAt: Date(timeIntervalSince1970: 10), claimedName: "take.m4a")
+        let blob = SyncBlob(recordings: [plain, claimed], savedAt: Date(timeIntervalSince1970: 30))
+        let text = try #require(String(data: try blob.encodedManifest(), encoding: .utf8))
+        #expect(text.components(separatedBy: "\"claimedName\"").count == 2)
+        #expect(text.contains("\"claimedName\":\"take.m4a\""))
+        let decoded = try SyncBlob.decodeManifest(try blob.encodedManifest())
+        #expect(decoded.recordings.first { $0.id == "b" }?.claimedName == "take.m4a")
+        #expect(decoded.recordings.first { $0.id == "a" }?.claimedName == nil)
+        // Absent means the claim is the file name.
+        #expect(decoded.recordings.first { $0.id == "a" }?.claim == "take.m4a")
+    }
+
     @Test func escapingCoversOnlyQuotesBackslashesAndControls() async {
         let value = JSONValue.object([
             "b": .string("tab\there \"q\" back\\slash /slash é 🎵 \u{1}\u{1f}\r\n"),
