@@ -134,12 +134,14 @@ class RecordingDeletionUiTest {
             )
 
             // At the move boundary: what was playing just before the hook, and after it.
-            val boundary = java.util.Collections.synchronizedList(mutableListOf<Triple<Set<String>, File?, File?>>())
+            // Also whether X's bytes were still in place and when (to rule out the take ending on its own).
+            data class Boundary(val ids: Set<String>, val before: File?, val after: File?, val xInPlace: Boolean, val at: Long)
+            val boundary = java.util.Collections.synchronizedList(mutableListOf<Boundary>())
             val hook = requireNotNull(RecordingTransitions.beforeBytesMove)
             RecordingTransitions.beforeBytesMove = { ids ->
                 val before = service.playingFile
                 hook(ids)
-                boundary += Triple(ids, before, service.playingFile)
+                boundary += Boundary(ids, before, service.playingFile, x.exists(), android.os.SystemClock.elapsedRealtime())
             }
             compose.runOnIdle { service.play(VoiceMemo(x, "take", 12_000L)) }
             compose.waitUntil(10_000) { service.playingFile == x.canonicalFile || service.playingFile == x }
@@ -152,7 +154,7 @@ class RecordingDeletionUiTest {
             }
             // A36: Y lands under its own id beside X; nothing of X moved, so X kept playing.
             assertTrue(x.exists())
-            assertTrue(boundary.toString(), boundary.none { (ids, _, _) -> xId in ids })
+            assertTrue(boundary.toString(), boundary.none { xId in it.ids })
             assertEquals(x.canonicalFile, service.playingFile?.canonicalFile)
             assertEquals(listOf("take.m4a", "take.m4a"), runBlocking { catalog.recordingRecords() }.filter { it.projectId == projectId }.map { it.displayName })
 
@@ -167,12 +169,19 @@ class RecordingDeletionUiTest {
                     0L, "other-device"
                 )
             )
+            // X plays from its start right before the Restore that deletes it (12 s long).
+            compose.runOnIdle { service.stopPlayback(); service.play(VoiceMemo(x, "take", 12_000L)) }
+            compose.waitUntil(10_000) { service.playingFile?.canonicalFile == x.canonicalFile }
+            val playStart = android.os.SystemClock.elapsedRealtime()
             compose.runOnIdle { viewModel.restoreFromBackup() }
             compose.waitUntil(30_000) { !x.exists() && viewModel.backupBusyLabel == null }
-            // At the quarantine move nothing is playing: the committed tombstone already stopped it
-            // (the deletion observer), or the hook did.
-            assertTrue(boundary.toString(), boundary.any { (ids, _, after) -> xId in ids && after == null })
-            assertTrue(boundary.toString(), boundary.none { (_, before, after) -> before != null && after != null })
+            // At the quarantine move X's bytes were still in place and nothing was playing: the
+            // committed tombstone stopped it (the deletion observer) or the hook did, and well
+            // before the take could have ended on its own.
+            val quarantined = boundary.single { xId in it.ids }
+            assertTrue(boundary.toString(), quarantined.xInPlace && quarantined.after == null)
+            assertTrue("the Restore took too long to rule out the take ending: $quarantined", quarantined.at - playStart < 11_000L)
+            assertTrue(boundary.toString(), boundary.none { it.before != null && it.after != null })
             assertNull(service.playingFile)
             assertEquals(listOf("$xId.m4a"), RecordingFiles.quarantineDirectory(filesDir, projectId).walk().filter { it.isFile }.map { it.name }.toList())
             assertTrue(yFile.exists())

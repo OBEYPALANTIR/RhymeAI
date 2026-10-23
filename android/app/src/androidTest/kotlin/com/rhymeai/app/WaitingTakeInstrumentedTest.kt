@@ -196,15 +196,17 @@ class WaitingTakeInstrumentedTest {
         assertTrue(service.trashedMemos().isEmpty())
     }
 
-    @Test fun waitingTakesUnderPreA36NamesMoveToTheirIdsWithTheirMarkers() = runBlocking<Unit> {
+    @Test fun waitingTakesUnderPreA36NamesMoveToTheirIdsWithTheirMarkersThroughTheJournal() = runBlocking<Unit> {
         val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
         val b = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"
         TestRecordings.recordFinalizedM4a(context, File(staging, "1700000000000.m4a"))
         File(staging, "1700000000000.m4a.take").writeText("$a\nfinished\n1700000000500\n")
-        // An earlier run moved this take and its marker but died before removing the old marker.
-        TestRecordings.recordFinalizedM4a(context, File(staging, "$b.m4a"))
-        File(staging, "$b.m4a.take").writeText("$b\nfinished\n1700000000600\n")
+        // An earlier run journaled and moved this take, then died before its marker followed.
+        val moved = TestRecordings.recordFinalizedM4a(context, File(staging, "$b.m4a"))
         File(staging, "1700000009000.m4a.take").writeText("$b\nfinished\n1700000000600\n")
+        File(staging, "$b.m4a.migrate").writeText(
+            "1700000009000.m4a\n$b.m4a\n${com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(moved)}\n${moved.length()}\n"
+        )
 
         assertTrue(service.migrateStaging().isEmpty())
         assertTrue(service.migrateStaging().isEmpty())
@@ -215,5 +217,22 @@ class WaitingTakeInstrumentedTest {
         assertTrue(waiting.all { it.finished })
         assertEquals(2, service.retryWaitingTakes("song"))
         assertEquals(1_700_000_000_500L, catalog.records.single { it.id == a }.uploadedAt)
+        assertEquals(1_700_000_000_600L, catalog.records.single { it.id == b }.uploadedAt)
+    }
+
+    @Test fun aRetryOfATakeListedBeforeItsMigrationSavesItWhereItIsNow() = runBlocking<Unit> {
+        val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        TestRecordings.recordFinalizedM4a(context, File(staging, "1700000000000.m4a"))
+        File(staging, "1700000000000.m4a.take").writeText("$a\nfinished\n1700000000500\n")
+        // Listed under its old name; then migration moves it before the save runs.
+        val listed = service.waitingTakes("song").single()
+        assertEquals("1700000000000.m4a", listed.file.name)
+        assertTrue(service.migrateStaging().isEmpty())
+
+        assertTrue(service.saveListedTake(listed))
+
+        assertEquals(a, catalog.records.single().id)
+        assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
+        assertTrue(service.waitingTakes("song").isEmpty())
     }
 }

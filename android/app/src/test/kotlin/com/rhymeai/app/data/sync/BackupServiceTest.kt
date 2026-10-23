@@ -1757,4 +1757,25 @@ class BackupServiceTest {
         assertTrue(remote().recordings.isEmpty())
         assertTrue(repository.recordingRecords().none { it.pendingOp != null })
     }
+
+    @Test
+    fun idLessRowsFromTheFirstRecordStoreGetTheirDerivedIdAndKeepTheirTime() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        val take = File(dir, "take.m4a").apply { writeBytes("take".toByteArray()); setLastModified(9_000L) }
+        val sha = BackupManifest.sha256Hex(take.readBytes())
+        // Exactly the shape commit 059a5f1 stored: no id, no path.
+        val stored = """[{"projectId":"p","fileName":"take.m4a","uploadedAt":1000,"sha256":"$sha","bytes":4,"origin":"recorded"}]"""
+        dataStore.edit { it[androidx.datastore.preferences.core.stringPreferencesKey("recording_records_json")] = stored }
+        val id = RecordingManifestEntry.legacyRecordingId("p", "take.m4a", sha)
+
+        assertEquals(listOf(id), repository.recordingRecords().map { it.id })
+        assertEquals(emptyList(), com.rhymeai.app.data.recording.RecordingTransitions.migrate(repository, filesDir))
+
+        val record = repository.recordingRecords().single()
+        assertEquals(id, record.id)
+        // Its stored time, not the file time, and its origin.
+        assertEquals(Triple(1_000L, RecordingRecord.RECORDED, "voice-memos/p/$id.m4a"), Triple(record.uploadedAt, record.origin, record.path))
+        assertEquals("take.m4a", record.displayName)
+    }
 }

@@ -84,7 +84,7 @@ internal object RecordingTransitions {
         if (!dir.exists() && !dir.mkdirs()) throw IOException("Could not create memo directory for $projectId")
         val target = RecordingFiles.memoFile(filesDir, projectId, id, displayName)
         // Never replace a file: the id's name is taken only by that recording.
-        if (target.exists() || isRegularFileStrictly(target)) throw IOException("Recording $id is already on this device")
+        if (target.exists() || isRegularFileStrictly(target)) throw java.nio.file.FileAlreadyExistsException(target.path)
         val record = RecordingRecord(
             id, projectId, displayName, uploadedAt, RecordingFileStore.sha256Hex(source), source.length(), origin,
             precedenceRepaired = repaired,
@@ -94,7 +94,7 @@ internal object RecordingTransitions {
         )
         catalog?.putRecord(record)
         try {
-            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            moveNoReplace(source, target)
         } catch (e: Exception) {
             runCatching { catalog?.removeRecord(id) }
             throw e
@@ -125,7 +125,7 @@ internal object RecordingTransitions {
             val id = RecordingFiles.idOf(from) ?: return null
             val target = if (toTrash) RecordingFiles.trashFile(filesDir, projectId, id, from.name) else RecordingFiles.memoFile(filesDir, projectId, id, from.name)
             target.parentFile?.mkdirs()
-            return target.takeIf { !it.exists() && from.renameTo(it) }
+            return target.takeIf { runCatching { moveNoReplace(from, it) }.isSuccess }
         }
         // Adoption hashes the song's files: the record is for these exact bytes.
         val record = recordForLocked(catalog, filesDir, from, projectId) ?: return null
@@ -145,7 +145,11 @@ internal object RecordingTransitions {
         )
         catalog.putRecord(intent)
         target.parentFile?.let { if (!it.exists()) it.mkdirs() }
-        if (!current.renameTo(target)) {
+        try {
+            moveNoReplace(current, target)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: IOException) {
             catalog.putRecord(record)
             return null
         }
@@ -269,7 +273,11 @@ internal object RecordingTransitions {
      * files left in place because their id name is taken by different bytes.
      */
     suspend fun migrate(catalog: RecordingCatalog, filesDir: File): List<File> =
-        namespace.withLock { migrateQuarantineLocked(filesDir) + snapshotLocked(catalog, filesDir, emptySet(), null).leftInPlace }
+        namespace.withLock {
+            // A33: nothing moves, quarantine included, unless the deletion state is readable.
+            reconcileLocked(catalog, filesDir)
+            migrateQuarantineLocked(filesDir) + snapshotLocked(catalog, filesDir, emptySet(), null).leftInPlace
+        }
 
     /**
      * A36 for quarantine: a pre-A36 kept copy `<movedAt>__<name>` moves to
@@ -290,7 +298,11 @@ internal object RecordingTransitions {
                     continue
                 }
                 target.parentFile?.mkdirs()
-                Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                try {
+                    moveNoReplace(file, target)
+                } catch (_: java.nio.file.FileAlreadyExistsException) {
+                    left += file
+                }
             }
         }
         return left
@@ -346,8 +358,26 @@ internal object RecordingTransitions {
         while (dir.exists()) dir = File(root, (++stamp).toString())
         if (!dir.mkdirs()) throw IOException("Could not create recording quarantine folder")
         val target = File(dir, RecordingFiles.idFileName(id, file.name))
-        Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        moveNoReplace(file, target)
         return target
+    }
+
+    /**
+     * Moves [source] to [target] without ever replacing a file there (A5/A16). A rename
+     * (`Files.move` with ATOMIC_MOVE, `File.renameTo`, `Os.rename`) replaces an existing
+     * target, and hard links are refused in app storage, so the target is first claimed
+     * with an exclusive create (O_CREAT|O_EXCL): if anything is there, nothing moves and
+     * [java.nio.file.FileAlreadyExistsException] is thrown. The rename then replaces only
+     * that empty claim. A claim a crash leaves behind is removed by reconciliation.
+     */
+    internal fun moveNoReplace(source: File, target: File) {
+        if (!target.createNewFile()) throw java.nio.file.FileAlreadyExistsException(target.path)
+        try {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: Exception) {
+            if (target.length() == 0L) target.delete()
+            throw e
+        }
     }
 
     /** Whether [file] is a regular file; only confirmed absence is false, and a file that cannot be examined throws. */
@@ -380,7 +410,13 @@ internal object RecordingTransitions {
     private suspend fun reconcileLocked(catalog: RecordingCatalog, filesDir: File) {
         // A33: every adoption, reconciliation and move starts here; none runs on unreadable tombstones.
         catalog.requireDeletionsReadable()
-        if (catalog.recordingRecords().none { it.pendingOp != null }) return
+        val pending = catalog.recordingRecords().filter { it.pendingOp != null }
+        if (pending.isEmpty()) return
+        // An empty file at a journaled target is the exclusive claim of a move a crash interrupted.
+        for (record in pending) {
+            val target = record.path?.let { RecordingFiles.fileAt(filesDir, it) } ?: continue
+            if (record.bytes > 0L && isRegularFileStrictly(target) && target.length() == 0L) target.delete()
+        }
         catalog.updateRecordingRecords { records ->
             records.mapNotNull { record ->
                 if (record.pendingOp == null) return@mapNotNull record
@@ -584,7 +620,7 @@ internal object RecordingTransitions {
         if (planned.isNotEmpty()) {
             for (move in planned) {
                 move.target.parentFile?.let { if (!it.exists()) it.mkdirs() }
-                Files.move(move.item.file.toPath(), move.target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                moveNoReplace(move.item.file, move.target)
             }
             val done = planned.mapTo(HashSet()) { it.record.id }
             catalog.updateRecordingRecords { records ->

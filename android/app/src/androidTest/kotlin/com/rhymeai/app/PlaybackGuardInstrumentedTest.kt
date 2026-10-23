@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -194,6 +195,30 @@ class PlaybackGuardInstrumentedTest {
         settle()
         assertEquals("$id.m4a", trashed?.name)
         assertEquals(RecordingFiles.trashDirectory(owned, "song").canonicalFile, trashed?.parentFile?.canonicalFile)
+        assertNull(service.playingFile)
+    }
+
+    @Test fun aQuarantineStopsActivePlaybackBeforeItsBytesMove() = runBlocking<Unit> {
+        play()
+        settle()
+        assertEquals(memo.file, service.playingFile)
+        // At the hook: what was playing, whether the source was still in place, and what played after.
+        var atHook: Triple<File?, Boolean, File?>? = null
+        RecordingTransitions.beforeBytesMove = { ids ->
+            val before = service.playingFile
+            service.stopPlayingIds(ids)
+            atHook = Triple(before, memo.file.exists(), service.playingFile)
+        }
+
+        // The deletion reaches the quarantine directly: nothing else (the deletion observer,
+        // the end of the take) can have stopped playback first.
+        val moved = RecordingTransitions.quarantineDeleted(
+            catalog, owned, listOf(SyncDeletion("song", "take.m4a", 9_000L, recordingId = id)), emptySet()
+        )
+
+        assertEquals(1, moved)
+        assertEquals(Triple(memo.file, true, null), atHook)
+        assertFalse(memo.file.exists())
         assertNull(service.playingFile)
     }
 }

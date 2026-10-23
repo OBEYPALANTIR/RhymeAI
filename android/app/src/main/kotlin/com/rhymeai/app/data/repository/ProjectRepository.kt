@@ -32,6 +32,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rhymeai_prefs")
 
@@ -139,8 +146,18 @@ class ProjectRepository internal constructor(
     private val firstSeenStore = FailClosedStoredJson("first-seen times") {
         json.decodeFromString<Map<String, Long>>(it)
     }
-    private val recordsStore = FailClosedStoredJson("recording records") {
-        json.decodeFromString<List<RecordingRecord>>(it)
+    private val recordsStore = FailClosedStoredJson("recording records") { raw ->
+        // Rows from before A21 (an early build of this feature) have no id: they get the
+        // derived legacy id of their song, name and hash, keeping their time and metadata.
+        val rows = json.parseToJsonElement(raw).jsonArray.map { element ->
+            val row = element.jsonObject
+            if ("id" in row) row else JsonObject(row + ("id" to JsonPrimitive(RecordingManifestEntry.legacyRecordingId(
+                row.getValue("projectId").jsonPrimitive.content,
+                row.getValue("fileName").jsonPrimitive.content,
+                row.getValue("sha256").jsonPrimitive.content
+            ))))
+        }
+        json.decodeFromJsonElement<List<RecordingRecord>>(JsonArray(rows))
     }
     private val workspacesStore = FailClosedStoredJson("song notebook") {
         json.decodeFromString<Map<String, SongWorkspace>>(it)
