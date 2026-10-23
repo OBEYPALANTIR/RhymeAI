@@ -403,6 +403,37 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func playbackStopsBeforeItsFileMoves() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("StopBeforeMove-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "StopBeforeMove-\(scratch.lastPathComponent)")!)
+        let url = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Far longer than the test: it cannot finish on its own.
+        try AudioFixtures.long(seconds: 120, at: url)
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = container.mainContext
+        await viewModel.recordingsLaunchTask?.value
+        #expect(try container.mainContext.fetch(FetchDescriptor<Recording>()).count == 1)
+
+        viewModel.voiceMemoService.togglePlayback(url: url)
+        for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(viewModel.voiceMemoService.isPlaying)
+
+        var atBoundary: [(playing: Bool, fileStillThere: Bool)] = []
+        library.atMoveBoundary = { file in
+            atBoundary.append((viewModel.voiceMemoService.isPlaying, FileManager.default.fileExists(atPath: file.path)))
+        }
+        _ = viewModel.voiceMemoService.trashMemo(at: url, projectId: "song")
+
+        #expect(atBoundary.count == 1 && atBoundary.first?.playing == false && atBoundary.first?.fileStillThere == true)
+        #expect(!viewModel.voiceMemoService.isPlaying && !FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
     private static func makeHarness() throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)

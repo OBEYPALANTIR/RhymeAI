@@ -716,6 +716,7 @@ final class EditorViewModel: ObservableObject {
         voiceMemoService.publisher = recordingLibrary
         voiceMemoService.playbackAllowed = { [weak self] url in self?.isPlayableRecording(url) ?? true }
         voiceMemoService.playbackIdentity = { [weak self] url in self?.recordingIdentity(url) }
+        recordingLibrary?.willMove = { [weak self] files in self?.voiceMemoService.stopPlayback(ifPlayingAnyOf: files) }
         refreshCloudBackupState()
     }
 
@@ -1646,8 +1647,7 @@ final class EditorViewModel: ObservableObject {
     private func applyPersistedDeletions() {
         guard let context = modelContext else { return }
         do {
-            let records = try context.fetch(FetchDescriptor<SyncDeletionRecord>())
-            let deletions = try SyncMerger.mergeDeletions(records.map(\.deletion))
+            let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: context))
             guard !deletions.isEmpty else { return }
             // A tombstone removes a song only when it is newer than the song's last change.
             let tombstones = Dictionary(deletions.filter { $0.fileName == nil }.map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
@@ -2189,12 +2189,19 @@ final class EditorViewModel: ObservableObject {
         return true
     }
 
-    /// The recording that owns a file, by its row; nil for a file no row holds.
+    /// A verified identity for what plays: the id of the row whose bytes the file
+    /// holds, else the file itself (its path and inode). Nil when the file cannot
+    /// be read; such a file does not play.
     func recordingIdentity(_ url: URL) -> String? {
         guard let recordingLibrary, let modelContext,
-              let rows = try? modelContext.fetch(FetchDescriptor<Recording>()) else { return nil }
+              let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
+              let facts = try? RecordingFiles.facts(url) else { return nil }
         let path = RecordingFiles.canonicalPath(url)
-        return rows.first { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }?.id
+        if let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }),
+           (try? RecordingFiles.sha256(of: url)) == row.sha256 {
+            return row.id
+        }
+        return "file:\(path)@\(facts.inode)"
     }
 
     /// A recording a winning deletion covers is not played (A28): nothing plays
