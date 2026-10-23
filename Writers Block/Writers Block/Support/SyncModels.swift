@@ -984,7 +984,8 @@ enum RecordingBackupManifest {
     }
 
     static func foldedName(_ name: String) -> String {
-        name.precomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
+        // As Android: NFC, then upper- then lower-case without a locale.
+        name.precomposedStringWithCanonicalMapping.uppercased().lowercased()
     }
 
     /// A display name as an archive file name: path separators and leading dots
