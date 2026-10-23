@@ -577,6 +577,60 @@ struct RecordingLibraryTests {
         #expect(try Data(contentsOf: kept[0]) == Data([1]))
     }
 
+    @Test func theCanonicalCopyDoesNotDependOnArrivalOrder() throws {
+        func stamp(_ url: URL, _ seconds: TimeInterval) throws {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: seconds)], ofItemAtPath: url.path)
+        }
+        // Both copies at once.
+        let together = try makeStore(onDisk: true)
+        try write(Data([1]), "song", "take.m4a", root: together.root)
+        try stamp(together.root.appendingPathComponent("song/take.m4a"), 1_000)
+        try write(Data([1]), "song", "5000__take.m4a", root: together.trash)
+        try stamp(together.trash.appendingPathComponent("song/5000__take.m4a"), 500)
+        try together.library.reconcile(context: together.container.mainContext)
+        let a = try #require(together.container.mainContext.fetch(FetchDescriptor<Recording>()).first)
+
+        // The Trash copy first, the live copy later.
+        let apart = try makeStore(onDisk: true)
+        let context = apart.container.mainContext
+        try write(Data([1]), "song", "5000__take.m4a", root: apart.trash)
+        try stamp(apart.trash.appendingPathComponent("song/5000__take.m4a"), 500)
+        try apart.library.reconcile(context: context)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).first?.trashedAt != nil)
+        try write(Data([1]), "song", "take.m4a", root: apart.root)
+        try stamp(apart.root.appendingPathComponent("song/take.m4a"), 1_000)
+        try apart.library.reconcile(context: context)
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        let b = try #require(rows.first)
+
+        #expect(rows.count == 1)
+        #expect(a.id == b.id && a.fileName == b.fileName && a.trashedAt == nil && b.trashedAt == nil)
+        #expect(a.precedenceTime == b.precedenceTime && b.precedenceTime == Date(timeIntervalSince1970: 1_000))
+        #expect(RecordingFiles.trashedMemos(in: apart.trash).isEmpty && RecordingFiles.trashedMemos(in: together.trash).isEmpty)
+        #expect(try Data(contentsOf: apart.root.appendingPathComponent("song/take.m4a")) == Data([1]))
+    }
+
+    @Test func anUnfinishedQuarantineMoveIsFinishedFirstUnlessARowStillNamesTheFile() throws {
+        let store = try makeStore(onDisk: true)
+        let context = store.container.mainContext
+        try write(Data([1]), "song", "kept.m4a", root: store.root)
+        try store.library.reconcile(context: context)
+        try write(Data([2]), "song", "deleted.m4a", root: store.root)
+        let kept = store.root.appendingPathComponent("song/kept.m4a")
+        let deleted = store.root.appendingPathComponent("song/deleted.m4a")
+        // Recorded before a save that removed one row and never landed for the other.
+        try RecordingFiles.setPendingQuarantine([RecordingFiles.canonicalPath(kept), RecordingFiles.canonicalPath(deleted)], for: store.root)
+        #expect(RecordingFiles.trashedMemos(in: store.trash).isEmpty)
+
+        try store.library.reconcile(context: context)
+
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.fileName) == ["kept.m4a"])
+        #expect(FileManager.default.fileExists(atPath: kept.path) && !FileManager.default.fileExists(atPath: deleted.path))
+        #expect(RecordingFiles.pendingQuarantine(for: store.root).isEmpty)
+        let quarantined = try FileManager.default.contentsOfDirectory(at: RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("song"), includingPropertiesForKeys: nil)
+        #expect(quarantined.count == 1 && (try? Data(contentsOf: quarantined[0])) == Data([2]))
+    }
+
     @Test func anUnreadableFileAbortsAdoptionAndEveryDeletionThatDependsOnIt() throws {
         let store = try makeStore(onDisk: true)
         let context = store.container.mainContext

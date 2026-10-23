@@ -1653,20 +1653,19 @@ final class EditorViewModel: ObservableObject {
             }
             // The deleted songs' recordings (adopted by the library just before) get
             // their own tombstones in the same save; only their files go.
-            var removedFiles: [(file: URL, projectId: String)] = []
+            var removedFiles: [URL] = []
             for projectId in deletedProjects {
                 for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: tombstones[projectId] ?? 0, in: context) {
                     if let library = recordingLibrary, let file = row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot) {
-                        removedFiles.append((file, projectId))
+                        removedFiles.append(file)
                     }
                 }
             }
-            try saveModelContext(context)
             // Their audio leaves the memo folders and the Trash for quarantine (A28).
             if let library = recordingLibrary {
-                for removed in removedFiles where FileManager.default.fileExists(atPath: removed.file.path) {
-                    try? RecordingFiles.quarantine(removed.file, projectId: removed.projectId, memosRoot: library.memosRoot)
-                }
+                try library.saveQuarantining(removedFiles, in: context) { try saveModelContext(context) }
+            } else {
+                try saveModelContext(context)
             }
             for projectId in deletedProjects {
                 do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
