@@ -16,15 +16,23 @@ internal object RecordingFiles {
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
 
+    /**
+     * The file at [path] (relative to the files folder, as records store it). Every
+     * recording [File] is built on the canonical files folder, so files from listings,
+     * records and playback compare equal even where the files folder is reached through
+     * a symlink (Android's /data/user/0 → /data/data).
+     */
+    fun fileAt(filesDir: File, path: String): File = File(filesDir.canonicalFile, path)
+
     fun memosRoot(filesDir: File): File =
-        File(filesDir, MEMOS_ROOT_DIR)
+        File(filesDir.canonicalFile, MEMOS_ROOT_DIR)
 
     fun trashRoot(filesDir: File): File =
-        File(filesDir, MEMOS_TRASH_ROOT_DIR)
+        File(filesDir.canonicalFile, MEMOS_TRASH_ROOT_DIR)
 
     /** Unfinished recordings and pending imports; never listed or backed up (A22). */
     fun stagingRoot(filesDir: File): File =
-        File(filesDir, MEMOS_STAGING_ROOT_DIR)
+        File(filesDir.canonicalFile, MEMOS_STAGING_ROOT_DIR)
 
     fun stagingDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(stagingRoot(filesDir), projectId)
@@ -34,7 +42,7 @@ internal object RecordingFiles {
      * recordings whose deletion won a merge. Never listed, adopted, backed up or deleted.
      */
     fun quarantineRoot(filesDir: File): File =
-        File(filesDir, MEMOS_QUARANTINE_ROOT_DIR)
+        File(filesDir.canonicalFile, MEMOS_QUARANTINE_ROOT_DIR)
 
     fun quarantineDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(quarantineRoot(filesDir), projectId)

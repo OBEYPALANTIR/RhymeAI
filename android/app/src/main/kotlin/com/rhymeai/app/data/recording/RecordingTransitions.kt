@@ -127,7 +127,7 @@ internal object RecordingTransitions {
         // Adoption hashes the song's files: the record is for these exact bytes.
         val record = recordForLocked(catalog, filesDir, from, projectId) ?: return null
         // Adoption may just have given a pre-A36 file its id name: move the file where it is now.
-        val current = File(filesDir, record.path ?: return null)
+        val current = RecordingFiles.fileAt(filesDir, record.path ?: return null)
         val target = if (toTrash) RecordingFiles.trashFile(filesDir, projectId, record.id, record.displayName)
         else RecordingFiles.memoFile(filesDir, projectId, record.id, record.displayName)
         // Never replace a file.
@@ -194,7 +194,7 @@ internal object RecordingTransitions {
         } catch (_: Exception) {
             true
         }
-        if (removed) null else start(record.id, File(filesDir, record.path ?: return@withLock null))
+        if (removed) null else start(record.id, RecordingFiles.fileAt(filesDir, record.path ?: return@withLock null))
     }
 
     /**
@@ -204,7 +204,7 @@ internal object RecordingTransitions {
     suspend fun deleteVerified(catalog: RecordingCatalog, filesDir: File, id: String): Boolean = namespace.withLock {
         reconcileLocked(catalog, filesDir)
         val record = catalog.recordingRecords().firstOrNull { it.id == id } ?: return@withLock false
-        val file = File(filesDir, record.path ?: return@withLock false)
+        val file = RecordingFiles.fileAt(filesDir, record.path ?: return@withLock false)
         if (!isRegularFileStrictly(file) || RecordingFileStore.sha256Hex(file) != record.sha256) return@withLock false
         beforeBytesMove?.invoke(setOf(id))
         if (!file.delete()) return@withLock false
@@ -356,8 +356,8 @@ internal object RecordingTransitions {
         catalog.updateRecordingRecords { records ->
             records.mapNotNull { record ->
                 if (record.pendingOp == null) return@mapNotNull record
-                val target = record.path?.let { File(filesDir, it) }
-                val source = record.pendingFrom?.let { File(filesDir, it) }
+                val target = record.path?.let { RecordingFiles.fileAt(filesDir, it) }
+                val source = record.pendingFrom?.let { RecordingFiles.fileAt(filesDir, it) }
                 when {
                     // The expected id's bytes at the target: the move happened. Strict checks: a file
                     // that cannot be examined throws here and nothing is committed.
@@ -467,7 +467,7 @@ internal object RecordingTransitions {
                 when {
                     path in itemPaths -> false
                     record.projectId in pendingDeletionIds || (onlyProjects != null && record.projectId !in onlyProjects) -> true
-                    else -> isRegularFileStrictly(File(filesDir, path))
+                    else -> isRegularFileStrictly(RecordingFiles.fileAt(filesDir, path))
                 }
             }.associateByTo(LinkedHashMap()) { it.id }
             // Each file's recording id, and whether its record already matches it at this path.
