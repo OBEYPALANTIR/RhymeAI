@@ -146,9 +146,13 @@ struct BackupCoreTests {
                                            updatedAt: Date(timeIntervalSince1970: 1_700_000_010)))
         try harness.context.save()
         let memoData = Data([0, 1, 2, 3, 4, 5])
+        // Bounds taken around the work itself, so runner speed cannot matter (the
+        // lower one allows for file dates kept to the second).
+        let before = Date().addingTimeInterval(-1)
         try await harness.writeMemo(memoData, projectId: "project-1", fileName: "take 1.m4a")
 
         try await harness.service.backupNow(modelContext: harness.context)
+        let after = Date()
 
         let manifestData = try #require(harness.drive.content(named: "rhymeai-manifest.json"))
         let manifest = try SyncBlob.decodeManifest(manifestData)
@@ -156,7 +160,8 @@ struct BackupCoreTests {
         #expect(manifest.platform == "ios")
         let id = try harness.rowId("take 1.m4a")
         #expect(manifest.recordings.map { [$0.id, $0.projectId, $0.fileName, String($0.bytes), $0.sha256] } == [[id, "project-1", "take 1.m4a", "6", RecordingBackupManifest.sha256Hex(memoData)]])
-        #expect(abs(try #require(manifest.recordings.first).uploadedAt.timeIntervalSinceNow) < 60)
+        let uploadedAt = try #require(manifest.recordings.first).uploadedAt
+        #expect(uploadedAt >= before && uploadedAt <= after)
         let text = try #require(String(data: manifestData, encoding: .utf8))
         #expect(!text.contains("apiKey"))
         #expect(text.contains(#""manifestSha256":"\#(manifest.manifestSha256)""#))
