@@ -59,7 +59,8 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   songs, trash, tombstones or recordings, and when leaving the app) merge this
   device into Drive and change no songs or recordings here (their only local writes
   are finishing or undoing an interrupted recording move and stamping a recording
-  seen for the first time with its file time). The manifest is re-checked
+  seen for the first time with its file time, moving extra copies of a pre-v4
+  recording to `voice-memos-quarantine/`). The manifest is re-checked
   just before each write and read back after it; if another device wrote in
   between, the backup merges again, keeping what earlier attempts saw (up to
   three times, then "Backup conflict, will retry").

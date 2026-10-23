@@ -35,7 +35,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Trash and persistence checks
 
 - Android sync merge: Unit-verified that active project changes merge by `updatedAt`, trash entries merge by `deletedAt`, newer trash removes stale active copies, and newer restored active projects are not deleted by stale trash entries.
-- Recording deletions through Drive sync: both platforms write a `fileName` tombstone when a trashed recording is permanently deleted or expires from Trash (iOS `EditorViewModel.upsertPermanentDeletion`, Android `ProjectRepository.recordRecordingDeletion` via `VoiceMemoService.recordingDeletionRecorder`), written before the file is removed. Android also skips restoring a remote recording that sits in its local Trash (`RecordingSyncPlanner.planRestores(locallyTrashed)`). Known difference: iOS deletes local files named by incoming `fileName` tombstones (`deleteLocalRecordingsCoveredByDeletions`); Android only drops them from the manifest and upload set.
+- Recording deletions through Drive sync: both platforms write a `fileName` tombstone when a trashed recording is permanently deleted or expires from Trash (iOS `EditorViewModel.upsertPermanentDeletion`, Android `ProjectRepository.recordRecordingDeletion` via `VoiceMemoService.recordingDeletionRecorder`), written before the file is removed. Android also skips restoring a remote recording that sits in its local Trash (`RecordingSyncPlanner.planRestores(locallyTrashed)`). Known difference: iOS deletes local files named by incoming `fileName` tombstones (`deleteLocalRecordingsCoveredByDeletions`); Android v4 moves a recording whose winning tombstone arrives through Restore or Import to `voice-memos-quarantine/` (A28) and never deletes it.
 - iOS trash lifecycle and CloudKit readiness: In-memory SwiftData unit-verified that moving the current project to trash clears editor state, creates a 30-day trash entry, collapses duplicate trash rows with the same ID, restore collapses duplicate active/trash rows with the same ID, and purge removes only expired trash. `scripts/ios-cloudkit-readiness.sh` verifies the private CloudKit container, entitlements, remote-notification background mode, build output, and trash conflict tests before live sync.
 - Import/autosave persistence: Android instrumented-verified that imported projects and debounced autosaves persist projects, current project ID, and editor state through DataStore and restore through a fresh ViewModel. iOS in-memory SwiftData unit-verified that imported projects and debounced autosaves persist the expected project fields and select the imported/saved project for editing.
 
@@ -118,12 +118,22 @@ below is the contract it must meet, not verified behaviour.
   (that moment), restored or imported from an archive (the entry's own
   `uploadedAt`), and kept through renames, Trash and restore from Trash. A file
   with no record at its path, or whose bytes no longer match the record there,
-  is a recording seen for the first time: it gets the derived pre-v4 id (a random
-  id only if another file already holds that id) and is stamped once with its
-  file time. Random ids are given only to new recordings and audio imports. A
-  backup's only local writes are that stamping and finishing or undoing an
-  interrupted move (reconciliation); it never touches restore staging. File
-  times are otherwise never used as precedence.
+  is a recording seen for the first time: it gets the derived pre-v4 id and is
+  stamped once with its file time. Random ids are given only to new recordings
+  and audio imports. Files sharing one pre-v4 identity (project, name and hash,
+  such as a live copy and a Trash copy) are one recording with that one id on
+  every device (A26): the live copy keeps it (taking over the record, and its
+  time, from a Trash copy stamped earlier), the most recently trashed copy keeps
+  it when none is live, and the other copies move to `voice-memos-quarantine/`,
+  which is never listed, adopted, backed up or deleted. Adoption is all or
+  nothing: an unreadable file or folder fails it, and Delete Forever, Trash expiry,
+  Restore and Import that depend on it fail with nothing changed. A backup's only
+  local writes are that stamping (with its quarantine moves) and finishing or
+  undoing an interrupted move (reconciliation); it never touches restore staging.
+  File times are otherwise never used as precedence.
+- Local visibility (A28): after Restore or Import commits, a recording whose
+  winning tombstone is now known here moves to quarantine and loses its record,
+  so the recordings list and playback no longer show it.
 - Name-only tombstones (pre-v4): migration turns each into an id tombstone for
   the older recording it names and drops it. One that names no older entry
   removes only a recording whose id is the pre-v4 id of that name and the
@@ -136,15 +146,24 @@ below is the contract it must meet, not verified behaviour.
   finishes it (`MediaRecorder.stop()` succeeds). A take whose stop fails is left
   unpublished and the user is told it was not saved. Snapshots never read
   staging, so a backup during recording never sees the take.
+- Waiting takes (A27): a finished take gets a `.waiting` marker (id and time)
+  beside it in staging before it is saved. If saving fails, the take stays there,
+  survives process death and later recordings, and the song's recordings sheet
+  shows "1 recording waiting to be saved" with Retry. Retry finishes any
+  interrupted save first and counts a take whose id is already published as
+  saved.
 - Metadata before publication (A24): restore, import, rename, move to Trash and
   restore from Trash write the record's intent (id, name, time, hash, size, new
   and old location) before the file moves, under one lock that snapshots also
   take. If the record cannot be written the operation fails and nothing moves;
-  the UI says so (a finished take stays in staging and the snackbar's Retry
-  saves it). Every transition, deletion and snapshot first finishes or undoes an
+  the UI says so (a finished take waits in staging, see A27). Every transition, deletion and snapshot first finishes or undoes an
   interrupted move from its intent, so an interrupted move never yields a new id.
   Collision variants (`take 2.m4a`) are shortened to stay within the 240-byte
-  name limit, and the final name is validated before the intent is written.
+  name limit, an empty stem (`.m4a`) gets "Recording 2.m4a", and the final name
+  is validated before the intent is written.
+- Oversized recordings (A29): a recording too large for this device to move
+  counts as backed up only when its raw Drive object is present with matching
+  `sha256` and `bytes`; otherwise it is reported in the skipped count.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
   Tombstones apply by timestamp: a song tombstone removes the song only when
