@@ -32,6 +32,10 @@ Create one OAuth client per signing certificate:
 5. Register the debug SHA-1 and the release SHA-1 for `rhymeai-local-release.jks`.
 6. No Android client-id constant is required in app code for the installed-app flow. If a web client is later needed for server-side validation, set `driveOauthClientId=<web_client_id>` in `android/local.properties`.
 
+### If sign-in silently fails
+
+If **Connect Google Drive** shows the account chooser and then nothing happens, Google refused the request after the account was picked. The usual cause is `DEVELOPER_ERROR` (status 10): the build's package name and signing SHA-1 are not registered as an Android OAuth client, or the consent screen lacks the `drive.appdata` scope. The app now shows the Google status under the Backup rows ("Google rejected this build's signing certificate or OAuth setup…", "Google sign-in was cancelled.", "Couldn't reach Google…", or "Google sign-in failed (code N)."), and `adb logcat -s RhymeAI` prints `Drive authorization failed: status=<code>`. Re-run `./gradlew signingReport`, compare the SHA-1 of the variant you installed (debug and release differ) with the OAuth client, and fix the client rather than the app.
+
 ## iOS OAuth client
 
 1. APIs & Services → Credentials → Create Credentials → OAuth client ID.

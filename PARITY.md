@@ -620,6 +620,10 @@ below is the contract it must meet, not verified behaviour.
 - Drive HTTP error mapping: 401 re-auth, 403/429 retry-later, 5xx server-error,
   and generic fallback buckets are aligned; neither platform echoes raw
   response bodies into user-facing text.
+- Sign-in failures: Android surfaces the Play Services status (developer
+  error, cancelled, network, or "code N") in the Backup status; iOS folds a
+  dismissed or failed web sign-in into "needs your permission" (known
+  difference).
 - Trash retention: 30 days on both platforms
   (`TrashedSongProject.kt` / `TrashedSongProject.swift`).
 - Prompt templates: section labels, rhyme-constraint blocks, rewrite action
