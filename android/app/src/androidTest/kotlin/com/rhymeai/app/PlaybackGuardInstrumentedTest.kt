@@ -181,7 +181,7 @@ class PlaybackGuardInstrumentedTest {
         assertTrue(memo.file.exists())
     }
 
-    @Test fun aMoveToTrashStopsPlaybackBeforeTheMoveAndNoPlayStartsWhileItsIntentIsBeingWritten() = runBlocking<Unit> {
+    @Test fun aMoveToTrashStopsPlaybackAfterItsIntentAndBeforeItsBytesMoveAndNoPlayStartsMeanwhile() = runBlocking<Unit> {
         val started = System.nanoTime()
         play()
         settle()
@@ -189,11 +189,16 @@ class PlaybackGuardInstrumentedTest {
         // At the hook: what was playing, whether the source was still in place, and what played after.
         var atHook: Triple<File?, Boolean, File?>? = null
         var hookAtMillis = 0L
+        var playedMeanwhile: File? = null
         RecordingTransitions.beforeBytesMove = { ids ->
             hookAtMillis = (System.nanoTime() - started) / 1_000_000
             val before = service.playingFile
             service.stopPlayingIds(ids)
             atHook = Triple(before, memo.file.exists(), service.playingFile)
+            // A play requested between the stop and the move waits for the lock: it cannot start now.
+            instrumentation.runOnMainSync { service.play(memo) }
+            kotlinx.coroutines.delay(500)
+            playedMeanwhile = service.playingFile
         }
 
         catalog.gateWrites = true
@@ -201,14 +206,12 @@ class PlaybackGuardInstrumentedTest {
         val trash = async(Dispatchers.IO) {
             RecordingTransitions.moveToTrash(catalog, owned, memo.file, "song", System.currentTimeMillis())
         }
-        // The move's intent is being written: the stop hook has run and the bytes have not moved.
+        // The move's intent is being written (it comes first, rule a): the bytes have not moved and
+        // the stop hook has not run yet, so the take still plays.
         withTimeout(10_000) { catalog.writeEntered.await() }
-        assertNull(service.playingFile)
+        assertEquals(memo.file, service.playingFile)
+        assertNull(atHook)
         assertTrue(memo.file.exists())
-        // A play requested now waits for the move and then finds no recording at the old path.
-        play()
-        Thread.sleep(500)
-        assertNull(service.playingFile)
         catalog.writeGate.complete(Unit)
         val trashed = withTimeout(10_000) { trash.await() }
         settle()
@@ -217,6 +220,7 @@ class PlaybackGuardInstrumentedTest {
         assertNull(service.playingFile)
         // The take was still playing when the transition stopped it: the stop was the hook's, not the take's end.
         assertEquals(Triple(memo.file, true, null), atHook)
+        assertNull(playedMeanwhile)
         assertTrue("hook ran at ${hookAtMillis}ms, after the take could have ended", hookAtMillis in 1 until 10_000)
     }
 
