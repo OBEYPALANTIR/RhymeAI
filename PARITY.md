@@ -373,8 +373,10 @@ below is the contract it must meet, not verified behaviour.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins; a real
   time beats a repair and of two repairs the smaller wins (A37).
-  Tombstones apply by timestamp: a song tombstone removes the song only when
-  `deletedAt` is newer than its `updatedAt` (and, in Trash, its `trashedAt`); a
+  Tombstones apply by timestamp (A38): a song tombstone removes an active song
+  only when its `deletedAt` is newer than the song's `updatedAt`, and a Trash
+  entry only when newer than the entry's `trashedAt` (the entry's own
+  `updatedAt` never overrides a tombstone; never the larger of the two); a
   recording tombstone, or its song's, removes a recording only when newer than
   its `uploadedAt`. A song or recording newer than its tombstone survives and
   the tombstone is dropped. When a song tombstone removes a recording, that
@@ -392,13 +394,17 @@ below is the contract it must meet, not verified behaviour.
   once; recordings this device cannot upload (Trash, too large, older ones that
   could not move) shape tombstones but are listed only if Drive already lists
   them. A raw file counts as present only when its `appProperties` hash and size
-  both match; otherwise this device's own bytes for that id are uploaded again,
-  and never another recording's. Several raw objects under one `rec_<id>` name
+  both match. One id has one digest forever (A40): this device uploads its own
+  bytes for an id only when Drive holds no object under it, or only objects whose
+  `appProperties` carry the same `sha256` (a torn or mis-sized copy of the same
+  audio, which is then replaced); an object with another digest, or none, is
+  never written over, and the recording is reported ("N recordings were not
+  uploaded because Google Drive holds different audio for them."). Several raw objects under one `rec_<id>` name
   (after a race) are all candidates: a download tries the one whose
   `appProperties` match first, then the others, and uses the first whose bytes
   match the manifest's size and digest, whatever order Drive lists them in.
-  Android never deletes a raw `rec_` object (it only overwrites one with this
-  device's own verified bytes for that id), so no unlisted object is ever judged
+  Android never deletes a raw `rec_` object (it only replaces a same-digest copy
+  with this device's verified bytes), so no unlisted object is ever judged
   covered by a tombstone.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and change no songs or recordings here (reconciliation and the
