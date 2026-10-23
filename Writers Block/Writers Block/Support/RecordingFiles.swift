@@ -1,3 +1,5 @@
+import AVFoundation
+import CryptoKit
 import Foundation
 
 // A recording sitting in the Trash Bin. The trash filename encodes the deletion
@@ -51,6 +53,48 @@ enum RecordingFiles {
     /// Written beside a take's audio when the recorder reports it finished; a take
     /// folder without it is unfinished and is never published.
     nonisolated static let finishedTakeMarker = "finished"
+    /// Written when a take is definitively not saveable; its files stay.
+    nonisolated static let failedTakeMarker = "failed"
+
+    /// The finished marker holds the finish time (epoch ms), written atomically.
+    nonisolated static func writeFinishedMarker(_ finishedAt: Date, in folder: URL) throws {
+        try Data(String(finishedAt.epochMilliseconds).utf8).write(to: folder.appendingPathComponent(finishedTakeMarker), options: .atomic)
+    }
+
+    /// Nil when the marker cannot be read or parsed.
+    nonisolated static func readFinishedMarker(in folder: URL) -> Date? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(finishedTakeMarker)),
+              let text = String(data: data, encoding: .utf8), let millis = Int64(text) else { return nil }
+        return Date(millisecondsSince1970: millis)
+    }
+
+    enum ContainerCheck: Equatable { case complete, invalid, uninspectable }
+
+    /// Whether a take with no finished marker is a finished recording: its bytes
+    /// read, its audio track decodes to the end of the stream without error, and
+    /// the decoded sample count matches the count the container declares. A file
+    /// cut off before its index, after it, or mid-data fails.
+    nonisolated static func checkFinishedContainer(_ url: URL) async -> ContainerCheck {
+        // Bytes that cannot be read cannot be judged.
+        guard (try? sha256(of: url)) != nil else { return .uninspectable }
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
+              let range = try? await track.load(.timeRange),
+              let format = try? await track.load(.formatDescriptions).first,
+              let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              description.mSampleRate > 0, range.duration.isNumeric else { return .invalid }
+        let declared = Int64((range.duration.seconds * description.mSampleRate).rounded())
+        guard declared > 0, let reader = try? AVAssetReader(asset: asset) else { return .invalid }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+        guard reader.canAdd(output) else { return .invalid }
+        reader.add(output)
+        guard reader.startReading() else { return .invalid }
+        var decoded: Int64 = 0
+        while let buffer = output.copyNextSampleBuffer() { decoded += Int64(CMSampleBufferGetNumSamples(buffer)) }
+        guard reader.status == .completed else { return .invalid }
+        // AAC trims its encoder delay and padding; that leaves under two packets of slack.
+        return abs(decoded - declared) <= 2048 ? .complete : .invalid
+    }
 
     nonisolated static func newMemoURL(for projectId: String) -> URL {
         let folder = memoFolder(for: projectId)
@@ -67,7 +111,8 @@ enum RecordingFiles {
             options: .skipsHiddenFiles
         ) else { return [] }
         // A recording waiting to move to quarantine is not listed (A28).
-        let hidden = pendingQuarantine(for: memosRoot())
+        // Fail closed: an unreadable record lists nothing rather than deleted audio.
+        guard let hidden = pendingQuarantine(for: memosRoot()) else { return [] }
         let memoURLs = items.filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) && !hidden.contains(canonicalPath($0)) }
         let datedMemos = memoURLs.map { url -> (url: URL, date: Date) in
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
@@ -114,7 +159,7 @@ enum RecordingFiles {
 
     /// All trashed recordings across every project, newest deletion first.
     nonisolated static func trashedMemos(in trashRoot: URL = memosTrashRoot()) -> [TrashedVoiceMemo] {
-        let hidden = pendingQuarantine(for: trashRoot)
+        guard let hidden = pendingQuarantine(for: trashRoot) else { return [] }
         guard let folders = try? FileManager.default.contentsOfDirectory(
             at: trashRoot,
             includingPropertiesForKeys: nil,
@@ -262,12 +307,6 @@ enum RecordingFiles {
         return targetURL
     }
 
-    nonisolated static func modificationDate(_ url: URL) -> Date {
-        var fresh = url
-        fresh.removeAllCachedResourceValues()
-        return ((try? fresh.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate) ?? Date()
-    }
-
     /// Where restored audio is written before it is verified and moved into
     /// place; beside the memos root, so the move is a rename on the same volume.
     nonisolated static func stagingRoot(for memosRoot: URL) -> URL {
@@ -289,22 +328,63 @@ enum RecordingFiles {
         try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent("\(UUID().uuidString.lowercased())\(trashNameSeparator)\(file.lastPathComponent)"))
     }
 
+    /// Size and modification time, read now; a file that cannot be read throws.
+    nonisolated static func facts(_ url: URL) throws -> (size: Int64, modified: Date) {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let size = (attributes[.size] as? NSNumber)?.int64Value, let modified = attributes[.modificationDate] as? Date else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return (size, modified)
+    }
+
+    /// SHA-256 of a file's bytes, read in chunks.
+    nonisolated static func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Where a reconcile parks audio between its old and new names, so a swap of
+    /// names never overwrites; parked files are named by the rows that hold them.
+    nonisolated static func parkingRoot(for memosRoot: URL) -> URL {
+        memosRoot.deletingLastPathComponent().appendingPathComponent("recording-parking", isDirectory: true)
+    }
+
+    /// True or false only when the file system confirms it; any other failure to
+    /// look (permissions, I/O) throws, so it is never taken for absence.
+    nonisolated static func exists(_ url: URL) throws -> Bool {
+        do {
+            _ = try FileManager.default.attributesOfItem(atPath: url.path)
+            return true
+        } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
+            return false
+        }
+    }
+
     nonisolated static func canonicalPath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// Files recorded for quarantine whose move has not finished yet (A28). `root`
-    /// is the memo or the Trash root; both sit in the same folder.
-    nonisolated static func pendingQuarantine(for root: URL) -> Set<String> {
-        guard let data = try? Data(contentsOf: pendingQuarantineURL(for: root)),
-              let paths = try? JSONDecoder().decode([String].self, from: data) else { return [] }
-        return Set(paths)
+    /// is the memo or the Trash root; both sit in the same folder. A missing record
+    /// is empty; one that cannot be read or parsed throws (fail closed, A31).
+    nonisolated static func readPendingQuarantine(for root: URL) throws -> Set<String> {
+        let url = pendingQuarantineURL(for: root)
+        guard try exists(url) else { return [] }
+        return Set(try JSONDecoder().decode([String].self, from: Data(contentsOf: url)))
+    }
+
+    /// For listings: nil when the record cannot be read, so nothing is listed.
+    nonisolated static func pendingQuarantine(for root: URL) -> Set<String>? {
+        try? readPendingQuarantine(for: root)
     }
 
     nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
         let url = pendingQuarantineURL(for: root)
         if paths.isEmpty {
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            if try exists(url) { try FileManager.default.removeItem(at: url) }
             return
         }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -317,12 +397,16 @@ enum RecordingFiles {
 
     /// Trash entries for adoption: an unreadable Trash fails rather than looking empty.
     static func readableTrashedMemos(in trashRoot: URL) throws -> [TrashedVoiceMemo] {
-        guard FileManager.default.fileExists(atPath: trashRoot.path) else { return [] }
-        let folders = try FileManager.default.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-        for folder in folders where folder.hasDirectoryPath || (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-            _ = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+        guard try exists(trashRoot) else { return [] }
+        var memos: [TrashedVoiceMemo] = []
+        for folder in try FileManager.default.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
+            guard try folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+            for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+            where supportedAudioExtensions.contains(file.pathExtension.lowercased()) {
+                if let memo = trashedMemo(at: file, projectId: folder.lastPathComponent) { memos.append(memo) }
+            }
         }
-        return trashedMemos(in: trashRoot)
+        return memos
     }
 
     /// Recovery for an interrupted restore or import, run only as one starts:
