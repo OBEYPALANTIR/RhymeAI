@@ -95,7 +95,9 @@ object BackupArchive {
         val songs: Int,
         val recordingsAdded: Int,
         val damagedRecordings: Int,
-        val skippedLargeRecordings: Int
+        val skippedLargeRecordings: Int,
+        /** A41: songs (here or in the archive) whose unknown time lost to a deletion, kept aside. */
+        val songsSetAside: Int = 0
     )
 
     /**
@@ -198,6 +200,7 @@ object BackupArchive {
     internal suspend fun import(contents: Contents, repository: ProjectRepository, filesDir: File): ImportSummary {
         // Finish or roll back an interrupted restore before reading what is on disk.
         RecordingFileStore.recoverInterruptedRestores(filesDir)
+        val setAsideBefore = repository.recoveredSongs().size
         val base = repository.snapshotLocalSyncBase()
         val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds)
         // Gather this device (live and Trash recordings) and the archive, then resolve once.
@@ -233,7 +236,8 @@ object BackupArchive {
             songs = contents.manifest.projects.size,
             recordingsAdded = added,
             damagedRecordings = contents.damagedRecordings + missing,
-            skippedLargeRecordings = contents.manifest.recordings.count { !it.isTransferable }
+            skippedLargeRecordings = contents.manifest.recordings.count { !it.isTransferable },
+            songsSetAside = repository.recoveredSongs().size - setAsideBefore
         )
     }
 }

@@ -222,6 +222,7 @@ internal object RecordingTransitions {
      */
     private fun recoverJournalsLocked(filesDir: File): List<String> {
         val unsettled = mutableListOf<String>()
+        val held = HashSet<File>()
         for (file in listStrictly(RecordingFiles.journalRoot(filesDir))) {
             // Never renamed into place: nothing was moved on its account.
             if (file.name.endsWith("$JOURNAL_SUFFIX.tmp")) { file.delete(); continue }
@@ -242,22 +243,38 @@ internal object RecordingTransitions {
             if (!isDirectoryStrictly(root)) continue
             for (dir in listStrictly(root).filter { isDirectoryStrictly(it) }) {
                 for (file in listStrictly(dir).filter { it.name.endsWith(LEGACY_JOURNAL_SUFFIX) }) {
+                    // Staging: source, target, SHA-256, length. Quarantine: source, target, id, SHA-256, length.
                     val lines = runCatching { file.readLines() }.getOrNull()
-                    val source = lines?.getOrNull(0)?.let { RecordingFiles.containedRecordingFile(filesDir, relativePath(filesDir, File(dir, it))) }
-                    val target = lines?.getOrNull(1)?.let { RecordingFiles.containedRecordingFile(filesDir, relativePath(filesDir, File(dir, it))) }
+                    val expected = if (staging) 4 else 5
+                    val source = lines?.getOrNull(0)?.let { runCatching { RecordingFiles.containedRecordingFile(filesDir, relativePath(filesDir, File(dir, it))) }.getOrNull() }
+                    val target = lines?.getOrNull(1)?.let { runCatching { RecordingFiles.containedRecordingFile(filesDir, relativePath(filesDir, File(dir, it))) }.getOrNull() }
+                    // The saved id must be the id the target is named by (T3.18).
+                    val idMatches = staging || lines?.getOrNull(2)?.let { id ->
+                        runCatching { SyncIdentity.validateRecordingId(id) }.isSuccess && target != null && RecordingFiles.idOf(target) == id
+                    } == true
                     val sha = lines?.getOrNull(if (staging) 2 else 3)?.takeIf { SHA256.matches(it) }
                     val length = lines?.getOrNull(if (staging) 3 else 4)?.toLongOrNull()?.takeIf { it > 0L }
-                    if (source == null || target == null || sha == null || length == null) { unsettled += "journal ${file.name}"; continue }
+                    val complete = lines != null && lines.size == expected
+                    if (!complete || source == null || target == null || !idMatches || sha == null || length == null) {
+                        // T3.17: a journal that cannot be read in full suspends every move in its folder.
+                        unsettled += "journal ${file.name}"
+                        held += dir.canonicalFile
+                        continue
+                    }
                     when {
                         holds(target, sha, length) -> { if (staging) followMarker(source, target); file.delete() }
                         holds(source, sha, length) -> file.delete()
-                        else -> unsettled += relativePath(filesDir, target)
+                        else -> { unsettled += relativePath(filesDir, target); held += dir.canonicalFile }
                     }
                 }
             }
         }
+        heldDirs = held
         return unsettled
     }
+
+    /** Folders whose historical journal could not be settled: nothing in them moves until it can. */
+    @Volatile private var heldDirs: Set<File> = emptySet()
 
     // ---------------------------------------------------------------------------
     // Transitions with records
@@ -596,6 +613,7 @@ internal object RecordingTransitions {
         val left = mutableListOf<File>()
         for (dir in listStrictly(RecordingFiles.quarantineRoot(filesDir))) {
             if (!isDirectoryStrictly(dir)) continue
+            if (dir.canonicalFile in heldDirs) { left += listStrictly(dir).filter { isRegularFileStrictly(it) && !it.name.endsWith(LEGACY_JOURNAL_SUFFIX) }; continue }
             for (file in listStrictly(dir)) {
                 if (!isRegularFileStrictly(file) || file.name.endsWith(LEGACY_JOURNAL_SUFFIX) ||
                     file.name.endsWith("$LEGACY_JOURNAL_SUFFIX.tmp") || file.length() == 0L) continue
@@ -631,6 +649,10 @@ internal object RecordingTransitions {
         catalog?.let { reconcileLocked(it, filesDir) } ?: throw IOException("Recordings need their records to move")
         val left = mutableListOf<File>()
         for (dir in listStrictly(RecordingFiles.stagingRoot(filesDir)).filter { isDirectoryStrictly(it) }) {
+            if (dir.canonicalFile in heldDirs) {
+                left += listStrictly(dir).filter { isRegularFileStrictly(it) && it.extension.lowercase(Locale.ROOT) in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS }
+                continue
+            }
             // Historical `.waiting` markers: "<id>\n<finish time>\n" for a finished take.
             for (waiting in listStrictly(dir).filter { it.name.endsWith(LEGACY_WAITING_SUFFIX) }) {
                 val take = File(dir, waiting.name.removeSuffix(LEGACY_WAITING_SUFFIX))

@@ -123,10 +123,24 @@ data class RhymeContext(
 )
 
 /** Lets instrumented tests run the real backup flow against a fake Drive. */
+/** Lets a test hold launch loading after the appearance is known (null in the app). */
+internal object LaunchTestHooks {
+    @Volatile var beforeLoading: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 internal object BackupTestHooks {
     @Volatile var driveClient: DriveClient? = null
     @Volatile var authorizer: DriveAuthorizer? = null
 }
+
+/** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
+internal fun recordingMaintenanceNotes(leftInPlace: Int, unresolved: Int, unreadableTrash: Int, heldRestores: Int, setAside: Int): List<String> = listOfNotNull(
+    leftInPlace.takeIf { it > 0 }?.let { "$it older recording file(s) could not be renamed because a file with their new name already exists. They were left in place." },
+    unresolved.takeIf { it > 0 }?.let { "$it recording move(s) could not be finished. The recordings were kept." },
+    unreadableTrash.takeIf { it > 0 }?.let { "$it file(s) in the recordings Trash have names this version cannot read. They were kept and are listed in the Trash Bin." },
+    heldRestores.takeIf { it > 0 }?.let { "An interrupted restore from an older version could not be finished. Its files were kept." },
+    setAside.takeIf { it > 0 }?.let { "$it deleted recording(s) were set aside on this device." }
+)
 
 internal enum class BackupAction { Connect, BackUp, Restore, Migrate }
 
@@ -134,8 +148,13 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
     "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive.".takeIf { result.migratedLegacyBackup },
     when (result.songsSetAside) {
         0 -> null
-        1 -> "1 song with an unknown date was removed by a deletion from another device; a copy is kept on this device."
-        else -> "${result.songsSetAside} songs with unknown dates were removed by a deletion from another device; copies are kept on this device."
+        1 -> "1 song with an unknown date was removed by a deletion; a copy is kept on this device."
+        else -> "${result.songsSetAside} songs with unknown dates were removed by a deletion; copies are kept on this device."
+    },
+    when (result.deletedRecordingsKeptInDrive) {
+        0 -> null
+        1 -> "1 deleted recording with an unknown date was kept in your Google Drive."
+        else -> "${result.deletedRecordingsKeptInDrive} deleted recordings with unknown dates were kept in your Google Drive."
     },
     when (result.unmovedLegacyRecordings) {
         0 -> null
@@ -308,8 +327,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var showSongNotebook by mutableStateOf(false)
     var persistenceError by mutableStateOf<String?>(null)
-    var savingBeforeNavigation by mutableStateOf(false)
-        private set
+    private var flushSaving by mutableStateOf(false)
+    /** A New Song still clearing the editor after its save landed (its own window, closed here). */
+    private var newSongClearing by mutableStateOf(false)
+    /** A draft is being saved before navigation, or a New Song is still opening: navigation waits. */
+    val savingBeforeNavigation: Boolean get() = flushSaving || newSongClearing
     var notebookError by mutableStateOf<String?>(null)
         private set
     var restoringDraft by mutableStateOf(false)
@@ -483,7 +505,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
-        savingBeforeNavigation = true
+        flushSaving = true
         viewModelScope.launch {
             try {
                 persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme)
@@ -494,7 +516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                 reconcileFailedProjectSave(project, error)
             } finally {
-                savingBeforeNavigation = false
+                flushSaving = false
             }
         }
     }
@@ -531,6 +553,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var cloudAISharingRequest by mutableStateOf<CloudAISharingRequest?>(null)
         private set
     internal var aiSettingsLoaded by mutableStateOf(false)
+        private set
+    /** Launch loading has finished (or failed and reported); the splash stays up until then. */
+    var initialized by mutableStateOf(false)
         private set
     var cloudAIConsentSaving by mutableStateOf(false)
         private set
@@ -1008,6 +1033,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (summary.skippedLargeRecordings > 0) {
                         append(" ${plural(summary.skippedLargeRecordings, "recording")} over 16 MB skipped.")
                     }
+                    when (summary.songsSetAside) {
+                        0 -> Unit
+                        1 -> append(" 1 song with an unknown date was removed by a deletion; a copy is kept on this device.")
+                        else -> append(" ${summary.songsSetAside} songs with unknown dates were removed by a deletion; copies are kept on this device.")
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1126,66 +1156,92 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
             appearanceLoaded = true
+            LaunchTestHooks.beforeLoading?.await()
+            var established = false
+            try {
+                // A32: every stored time is established before anything is loaded, sorted, selected or
+                // scheduled. If that fails, nothing unnormalized is published (fail closed, reported).
+                established = try {
+                    repo.establishPrecedence(emptyList(), System.currentTimeMillis())
+                    true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    persistenceError = (error as? CorruptLibraryException)?.let(::corruptLibraryMessage)
+                        ?: "Your songs could not be checked. Existing data was left untouched. Restart the app to try again."
+                    false
+                }
+                // Load projects; a song created while this loaded (its identity reserved) stays listed.
+                val pendingAtLoad = projects.filter { it.id in pendingProjectCreationIds }
+                projects = if (!established) emptyList() else try {
+                    pendingAtLoad + repo.projectsFlow.first().filterNot { stored -> pendingAtLoad.any { it.id == stored.id } }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: CorruptLibraryException) {
+                    persistenceError = corruptLibraryMessage(error)
+                    emptyList()
+                }
+                trashedProjects = if (!established) emptyList() else try {
+                    repo.trashedProjectsFlow.first()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: CorruptLibraryException) {
+                    persistenceError = corruptLibraryMessage(error)
+                    emptyList()
+                }
+                workspaces = try { repo.workspacesFlow.first() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
+                    notebookError = "Song Notebook could not be opened. Your songs are still available; notebook data has been left untouched."
+                    emptyMap()
+                }
+                if (established) {
+                    purgeExpiredTrashedProjects()
+                    scheduleTrashPurge()
+                }
+                val savedProjectId = if (established) repo.currentProjectIdFlow.first() else null
 
-            // A32: every stored time is established before anything is loaded, sorted, selected or scheduled.
-            runCatching { repo.establishPrecedence(emptyList(), System.currentTimeMillis()) }
-            // Load projects
-            projects = try {
-                repo.projectsFlow.first()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: CorruptLibraryException) {
-                persistenceError = corruptLibraryMessage(error)
-                emptyList()
+                // Load API keys, provider, and model. The key values themselves are
+                // never copied into Compose state — we only record which providers
+                // have a non-empty key so the UI can show a "configured" badge.
+                repo.ensureApiKeysMigrated()
+                apiKeyPresence = repo.apiKeySnapshot().mapValues { it.value.isNotEmpty() }
+                cloudAIConsents = repo.cloudAIConsentsFlow.first()
+                val savedProvider = repo.selectedProviderFlow.first()
+                selectedProvider = AIProvider.fromName(savedProvider)
+                val savedModelId = repo.modelIdFlow.first()
+                selectedModel = AIModel.entries.find { it.id == savedModelId && it.provider == selectedProvider }
+                    ?: AIModel.modelsForProvider(selectedProvider).first()
+                restoreSavedLocalModels()
+
+                val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
+                // Load persisted editor toggles — must happen before the editor is shown.
+                val toggles = repo.editorTogglesFlow.first()
+                // Load editor state, unless the user already started a draft while this loaded: that
+                // newer draft stays in the editor and is saved as its own song (never overwritten).
+                val startedMeanwhile = !showStartMenu || currentProjectId != null ||
+                    title.isNotEmpty() || lyrics.isNotEmpty() || theme.isNotEmpty()
+                if (startedMeanwhile) {
+                    triggerAutoSave()
+                } else {
+                    currentProjectId = savedProjectId
+                    title = savedTitle
+                    lyricsFieldValue = TextFieldValue(savedLyrics)
+                    theme = savedTheme
+                    restoreEditorPosition()
+                }
+                useWholeSongContext = toggles.useWholeSongContext
+                isHighlightEnabled = toggles.isHighlightEnabled
+                isSyllableColoringEnabled = toggles.isSyllableColoringEnabled
+                isStressPreviewEnabled = toggles.isStressIpaEnabled
+                isRhymeHighlightEnabled = toggles.isRhymeHighlightEnabled
+                isBeatGridEnabled = toggles.isBeatGridEnabled
+
+                aiSettingsLoaded = true
+                // The start menu opens on a fresh launch, but never over a draft started meanwhile.
+                if (!startedMeanwhile) showStartMenu = true
+            } finally {
+                initialized = true
             }
-            trashedProjects = try {
-                repo.trashedProjectsFlow.first()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: CorruptLibraryException) {
-                persistenceError = corruptLibraryMessage(error)
-                emptyList()
-            }
-            workspaces = try { repo.workspacesFlow.first() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
-                notebookError = "Song Notebook could not be opened. Your songs are still available; notebook data has been left untouched."
-                emptyMap()
-            }
-            purgeExpiredTrashedProjects()
-            scheduleTrashPurge()
-            currentProjectId = repo.currentProjectIdFlow.first()
-
-            // Load API keys, provider, and model. The key values themselves are
-            // never copied into Compose state — we only record which providers
-            // have a non-empty key so the UI can show a "configured" badge.
-            repo.ensureApiKeysMigrated()
-            apiKeyPresence = repo.apiKeySnapshot().mapValues { it.value.isNotEmpty() }
-            cloudAIConsents = repo.cloudAIConsentsFlow.first()
-            val savedProvider = repo.selectedProviderFlow.first()
-            selectedProvider = AIProvider.fromName(savedProvider)
-            val savedModelId = repo.modelIdFlow.first()
-            selectedModel = AIModel.entries.find { it.id == savedModelId && it.provider == selectedProvider }
-                ?: AIModel.modelsForProvider(selectedProvider).first()
-            restoreSavedLocalModels()
-
-            // Load editor state
-            val (savedTitle, savedLyrics, savedTheme) = repo.editorStateFlow().first()
-            title = savedTitle
-            lyricsFieldValue = TextFieldValue(savedLyrics)
-            theme = savedTheme
-            restoreEditorPosition()
-
-            // Load persisted editor toggles — must happen before the editor is shown.
-            val toggles = repo.editorTogglesFlow.first()
-            useWholeSongContext = toggles.useWholeSongContext
-            isHighlightEnabled = toggles.isHighlightEnabled
-            isSyllableColoringEnabled = toggles.isSyllableColoringEnabled
-            isStressPreviewEnabled = toggles.isStressIpaEnabled
-            isRhymeHighlightEnabled = toggles.isRhymeHighlightEnabled
-            isBeatGridEnabled = toggles.isBeatGridEnabled
-
-            aiSettingsLoaded = true
-            // Always show start menu on fresh launch
-            showStartMenu = true
+            if (!established) return@launch
 
             // Observe project changes
             launch {
@@ -1263,13 +1319,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                     val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
                     val unreadableTrash = com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles
-                    val notes = listOfNotNull(
-                        left.size.takeIf { it > 0 }?.let { "$it older recording file(s) could not be renamed because a file with their new name already exists. They were left in place." },
-                        unresolved.size.takeIf { it > 0 }?.let { "$it recording move(s) could not be finished. The recordings were kept." },
-                        unreadableTrash.size.takeIf { it > 0 }?.let { "$it file(s) in the recordings Trash have names this version cannot read. They were kept." },
-                        heldRestores.size.takeIf { it > 0 }?.let { "An interrupted restore from an older version could not be finished. Its files were kept." },
-                        setAside.takeIf { it > 0 }?.let { "$it deleted recording(s) were set aside on this device." }
-                    )
+                    val notes = recordingMaintenanceNotes(left.size, unresolved.size, unreadableTrash.size, heldRestores.size, setAside)
                     if (notes.isNotEmpty() && !leftReported) {
                         leftReported = true
                         withContext(Dispatchers.Main) { reportRecordingMaintenance(notes.joinToString(" ")) }
@@ -1771,6 +1821,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun newProject(onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
+            // Until the editor is cleared, no other navigation starts: a song opened in between
+            // would otherwise be cleared by this New Song when it lands.
+            newSongClearing = true
             viewModelScope.launch {
                 try {
                     val committed = repo.saveActiveState(null, false, "", "", "")
@@ -1788,6 +1841,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
+                } finally {
+                    newSongClearing = false
                 }
             }
         }

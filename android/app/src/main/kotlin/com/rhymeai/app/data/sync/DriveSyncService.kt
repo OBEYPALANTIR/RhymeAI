@@ -62,8 +62,10 @@ sealed class SyncResult {
         val unmigratedRecordings: Int = 0,
         /** A40: recordings not uploaded because Drive holds other audio under the same id. */
         val conflictingRecordings: Int = 0,
-        /** A41: songs here whose unknown time lost to a deletion: removed, their content kept aside. */
-        val songsSetAside: Int = 0
+        /** A41: songs (here or in Drive) whose unknown time lost to a deletion: removed, their content kept aside. */
+        val songsSetAside: Int = 0,
+        /** A41: deleted recordings whose time was unknown: unlisted, but their raw audio stays in Drive. */
+        val deletedRecordingsKeptInDrive: Int = 0
     ) : SyncResult()
 
     /** The user must approve Drive access; launch [pendingIntent], then retry. */
@@ -877,7 +879,8 @@ class DriveSyncService(
         val skippedLarge: Int,
         val damaged: Int,
         val notMigrated: Int = 0,
-        val conflicting: Int = 0
+        val conflicting: Int = 0,
+        val keptDeleted: Int = 0
     )
 
     /** All manifests named [BackupManifest.FILE_NAME]: the newest is kept, the rest merged in and removed. */
@@ -983,7 +986,7 @@ class DriveSyncService(
                     LegacyBackupAction.OFFER_MIGRATION, LegacyBackupAction.NONE -> Unit
                 }
 
-                val setAsideBefore = if (mode == Mode.RESTORE) repository.recoveredSongs().size else 0
+                val setAsideBefore = repository.recoveredSongs().size
                 // Migration merges into Drive only; this device changes only on Restore.
                 val outcome = pushMerge(
                     token = token,
@@ -1023,7 +1026,8 @@ class DriveSyncService(
                     unmovedLegacyRecordings = unmovedRecordings,
                     unmigratedRecordings = outcome.notMigrated,
                     conflictingRecordings = outcome.conflicting,
-                    songsSetAside = if (mode == Mode.RESTORE) repository.recoveredSongs().size - setAsideBefore else 0
+                    songsSetAside = repository.recoveredSongs().size - setAsideBefore,
+                    deletedRecordingsKeptInDrive = outcome.keptDeleted
                 )
             }
         }
@@ -1095,6 +1099,9 @@ class DriveSyncService(
             val liveFiles = localFiles.filterNot { it.inTrash }
             val gathered = SyncMerger.gather(*inputs.toTypedArray())
             var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
+            // A41: a song from any input whose repaired time lost to a tombstone is kept aside on
+            // this device before the manifest that held it is overwritten.
+            repository.setAsideRepairedLosers(gathered, merged, heldHere = base.baseIds)
             // Evidence that is not uploadable here (Trash, too large, older recordings that
             // could not move) shapes tombstones but is listed only if Drive already lists it.
             // The name Drive acknowledges for each recording, read from Drive's own entry: a tie
@@ -1184,17 +1191,25 @@ class DriveSyncService(
             remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
             // A40: a raw object goes only when its stored id, digest and length match an entry
             // gathered this run that a winning tombstone covers, and only by its own Drive file id.
+            // A41: a recording whose time was only a repair is never deleted for losing to a
+            // tombstone: its raw object stays in Drive (unlisted) and is reported.
             val tombstones = SyncMerger.Tombstones(merged.deletions)
             val gatheredById = gathered.recordings.groupBy { it.id }
+            var keptDeleted = 0
             for ((driveName, files) in driveFiles) {
                 for (file in files) {
                     val id = file.appProperties["id"] ?: continue
                     if (driveName != BackupManifest.recordingDriveName(id)) continue
-                    val covered = gatheredById[id].orEmpty().any { entry ->
+                    if (merged.recordings.any { it.id == id }) continue
+                    val covered = gatheredById[id].orEmpty().filter { entry ->
                         file.appProperties["sha256"] == entry.sha256 && file.appProperties["bytes"] == entry.sizeBytes.toString() &&
                             tombstones.removes(entry)
                     }
-                    if (covered && merged.recordings.none { it.id == id }) driveClient.deleteFile(token, file.id)
+                    when {
+                        covered.isEmpty() -> Unit
+                        covered.any { it.precedenceRepaired } -> keptDeleted++
+                        else -> driveClient.deleteFile(token, file.id)
+                    }
                 }
             }
 
@@ -1240,7 +1255,7 @@ class DriveSyncService(
                 // A Trash-held recording Drive lists but does not hold intact is unpreserved too.
                 localFiles.count { it.inTrash && !it.entry.isTransferable && it.entry.id in listedIds && !onDrive(it.entry) } +
                 merged.recordings.count { !it.isTransferable && it.id !in heldIds }
-            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size, conflicting)
+            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size, conflicting, keptDeleted)
         }
         throw DriveNetworkException(CONFLICT_MESSAGE)
     }
