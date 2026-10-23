@@ -77,7 +77,9 @@ class RecordingDeletionUiTest {
         val catalog = requireNotNull(service.catalog)
         TestRecordings.recordFinalizedM4a(
             InstrumentationRegistry.getInstrumentation().targetContext,
-            File(RecordingFiles.memoDirectory(filesDir, projectId), "Take.m4a")
+            File(RecordingFiles.memoDirectory(filesDir, projectId), "Take.m4a"),
+            // Long enough that the take cannot end on its own before the deletion stops it.
+            millis = 12_000L
         )
         // Adoption gives the file its id name (A36); "Take.m4a" becomes its display name.
         val (memo, record) = runBlocking {
@@ -91,6 +93,7 @@ class RecordingDeletionUiTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithContentDescription("Play").onFirst().performClick()
         compose.waitUntil(10_000) { service.playingFile?.name == "${record.id}.m4a" }
+        val playStart = android.os.SystemClock.elapsedRealtime()
 
         // A Restore commits the winning tombstone; its quarantine move has not happened.
         runBlocking { requireNotNull(service.recordingDeletionRecorder)(projectId, record.displayName, record.id, System.currentTimeMillis() + 60_000L) }
@@ -99,11 +102,16 @@ class RecordingDeletionUiTest {
             service.playingFile == null &&
                 compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isEmpty()
         }
+        val stoppedAfter = android.os.SystemClock.elapsedRealtime() - playStart
+        assertTrue("stopped ${stoppedAfter}ms into a 12 s take; it may have ended on its own", stoppedAfter < 11_000L)
         assertTrue(memo.exists())
 
-        // Playback refuses it even when asked directly.
-        compose.runOnIdle { service.play(VoiceMemo(memo, "Take", 1_000L)) }
-        Thread.sleep(1_000)
+        // Playback refuses it even when asked directly, at no moment while the request is checked.
+        compose.runOnIdle { service.play(VoiceMemo(memo, "Take", 12_000L)) }
+        repeat(30) {
+            assertNull("played at sample $it", service.playingFile)
+            Thread.sleep(50)
+        }
         compose.runOnIdle { assertNull(service.playingFile) }
     }
 

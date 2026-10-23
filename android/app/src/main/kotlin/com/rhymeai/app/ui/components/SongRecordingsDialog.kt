@@ -98,7 +98,9 @@ fun SongRecordingsDialog(
         }
     }
     val waiting = waitingTakes.count { it.finished }
-    val unsaved = waitingTakes.size - waiting
+    // T5.8: takes the recorder never finished stay listed until set aside (their audio is kept).
+    val failed = waitingTakes.count { it.failed }
+    val unsaved = waitingTakes.size - waiting - failed
     DisposableEffect(service) { onDispose { service.stopPlayback() } }
     val picker = rememberLauncherForActivityResult(OpenAudioDocument) { uri ->
         if (uri != null) {
@@ -160,12 +162,13 @@ fun SongRecordingsDialog(
                 Text(
                     listOfNotNull(
                         waiting.takeIf { it > 0 }?.let { if (it == 1) "1 recording waiting to be saved" else "$it recordings waiting to be saved" },
-                        unsaved.takeIf { it > 0 }?.let { if (it == 1) "1 recording could not be saved" else "$it recordings could not be saved" }
+                        unsaved.takeIf { it > 0 }?.let { if (it == 1) "1 recording could not be saved" else "$it recordings could not be saved" },
+                        failed.takeIf { it > 0 }?.let { if (it == 1) "1 recording did not finish" else "$it recordings did not finish" }
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(
+                if (waiting + unsaved > 0) TextButton(
                     onClick = {
                         scope.launch {
                             try {
@@ -173,7 +176,14 @@ fun SongRecordingsDialog(
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
-                                snackbar.showSnackbar("Couldn't save the recording. Free up storage, then tap Retry.")
+                                // T5.7: a take whose save details cannot be read gets no invented id.
+                                snackbar.showSnackbar(
+                                    if (waitingTakes.any { it.id == null && !it.failed }) {
+                                        "A recording's save details can't be read, so it can't be saved yet. Its audio stays on this device."
+                                    } else {
+                                        "Couldn't save the recording. Free up storage, then tap Retry."
+                                    }
+                                )
                             } finally {
                                 revision++
                             }
@@ -181,6 +191,26 @@ fun SongRecordingsDialog(
                     },
                     modifier = Modifier.testTag("retryWaitingTakes")
                 ) { Text("Retry") }
+                if (failed > 0) TextButton(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val moved = service.setAsideFailedTakes(projectId)
+                                snackbar.showSnackbar(
+                                    if (moved == 1) "1 unfinished recording was set aside. Its audio stays on this device."
+                                    else "$moved unfinished recordings were set aside. Their audio stays on this device."
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                snackbar.showSnackbar("Couldn't set the recording aside. Free up storage, then try again.")
+                            } finally {
+                                revision++
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("setAsideFailedTakes")
+                ) { Text("Set aside") }
             }
             TextButton(
                 onClick = { picker.launch(arrayOf("audio/*")) },

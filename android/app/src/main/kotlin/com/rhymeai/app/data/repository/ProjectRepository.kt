@@ -51,6 +51,20 @@ internal class MissingActiveProjectException(id: String) :
     IllegalStateException("Song $id is no longer active")
 
 /** A coherent local membership and deletion view captured before Drive network work. */
+/**
+ * A41: a song (active or in Trash) whose repaired time lost to a tombstone in a merge.
+ * Its time was unknown, so it may be newer than that deletion: it leaves the library like
+ * any deleted song, but its content and its recordings' ids are kept here, never erased.
+ */
+@kotlinx.serialization.Serializable
+internal data class RecoveredSong(
+    val project: SongProject,
+    val wasInTrash: Boolean,
+    val deletedAt: Long,
+    val keptAt: Long,
+    val recordingIds: List<String> = emptyList()
+)
+
 internal data class LocalSyncBase(
     val blob: SyncBlob,
     val baseIds: Set<String>,
@@ -93,6 +107,12 @@ class ProjectRepository internal constructor(
         private val SYNC_DELETIONS_KEY = stringPreferencesKey("sync_deletions_json")
         private val RECORDING_RECORDS_KEY = stringPreferencesKey("recording_records_json")
         private val FIRST_SEEN_KEY = stringPreferencesKey("first_seen_precedence_json")
+        private val RECOVERED_SONGS_KEY = stringPreferencesKey("recovered_songs_json")
+        private val FIRST_SEEN_KEY_PATTERN = Regex("(song|trash|rec|rtrash):.+")
+        private val SHA256_PATTERN = Regex("[0-9a-f]{64}")
+        private val RECORDING_ROOT_NAMES = setOf(
+            "voice-memos", "voice-memos-trash", "voice-memos-staging", "voice-memos-quarantine", "voice-memos-parking"
+        )
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
@@ -131,11 +151,51 @@ class ProjectRepository internal constructor(
 
     private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
-    private val projectsStore = FailClosedStoredJson("song library") {
-        json.decodeFromString<List<SongProject>>(it)
+
+    /**
+     * A stored song as an earlier build may have written it: without an id it is refused
+     * (no identity is ever invented); without `updatedAt` its time is unknown (0, repaired
+     * before any comparison), never the time it happens to be read.
+     */
+    private fun storedSong(song: JsonObject): JsonObject {
+        require("id" in song) { "A stored song has no id" }
+        return if ("updatedAt" in song) song else JsonObject(song + ("updatedAt" to JsonPrimitive(0L)))
     }
-    private val trashedProjectsStore = FailClosedStoredJson("trash") {
-        json.decodeFromString<List<TrashedSongProject>>(it)
+
+    /**
+     * Recording rows are checked as a whole before anything uses them: valid unique ids, a
+     * SHA-256, a positive size, paths inside the recording folders and a known intent. One bad
+     * row makes the store unreadable (fail closed), so nothing moves on its account.
+     */
+    private fun validateRecords(records: List<RecordingRecord>) {
+        require(records.mapTo(HashSet()) { it.id }.size == records.size) { "Duplicate recording id" }
+        for (record in records) {
+            com.rhymeai.app.data.sync.SyncIdentity.validateRecordingId(record.id)
+            com.rhymeai.app.data.sync.SyncIdentity.validateProjectId(record.projectId)
+            require(SHA256_PATTERN.matches(record.sha256)) { "Invalid recording digest" }
+            require(record.bytes > 0L) { "Invalid recording size" }
+            record.path?.let { require(isRecordingPath(it)) { "Invalid recording path" } }
+            record.pendingFrom?.let { require(isRecordingPath(it)) { "Invalid recording path" } }
+            require(record.pendingOp == null || record.pendingOp in setOf(RecordingRecord.OP_PUBLISH, RecordingRecord.OP_MOVE)) { "Invalid recording intent" }
+        }
+    }
+
+    private fun isRecordingPath(path: String): Boolean {
+        val parts = path.split('/')
+        return !path.startsWith("/") && parts.size >= 2 && parts.none { it.isEmpty() || it == "." || it == ".." } &&
+            (parts.first() in RECORDING_ROOT_NAMES || parts.first().startsWith(".recording-restore-"))
+    }
+    private val projectsStore = FailClosedStoredJson("song library") { raw ->
+        json.decodeFromJsonElement<List<SongProject>>(JsonArray(json.parseToJsonElement(raw).jsonArray.map { storedSong(it.jsonObject) }))
+    }
+    private val trashedProjectsStore = FailClosedStoredJson("trash") { raw ->
+        json.decodeFromJsonElement<List<TrashedSongProject>>(JsonArray(json.parseToJsonElement(raw).jsonArray.map { element ->
+            val entry = element.jsonObject
+            // A32: a missing Trash time is unknown (0, repaired before use), never a fresh real time.
+            // (An absent deleteAfter is its default, derived from the Trash time.)
+            val withTime = if ("deletedAt" in entry) entry else JsonObject(entry + ("deletedAt" to JsonPrimitive(0L)))
+            JsonObject(withTime + ("project" to storedSong(withTime.getValue("project").jsonObject)))
+        }))
     }
     // A33: every tombstone is validated where it is read; a malformed one makes the whole
     // deletion state unreadable, so mutations and lists that depend on it fail closed.
@@ -144,7 +204,10 @@ class ProjectRepository internal constructor(
         SyncMerger.mergeDeletions(json.decodeFromString<List<SyncDeletion>>(it))
     }
     private val firstSeenStore = FailClosedStoredJson("first-seen times") {
-        json.decodeFromString<Map<String, Long>>(it)
+        // A repair ledger entry is a known identity key with a real (positive) time.
+        json.decodeFromString<Map<String, Long>>(it).also { ledger ->
+            require(ledger.all { (key, time) -> time > 0L && FIRST_SEEN_KEY_PATTERN.matches(key) }) { "Invalid first-seen time" }
+        }
     }
     private val recordsStore = FailClosedStoredJson("recording records") { raw ->
         // Rows from before A21 (an early build of this feature) have no id: they get the
@@ -157,7 +220,10 @@ class ProjectRepository internal constructor(
                 row.getValue("sha256").jsonPrimitive.content
             ))))
         }
-        json.decodeFromJsonElement<List<RecordingRecord>>(JsonArray(rows))
+        json.decodeFromJsonElement<List<RecordingRecord>>(JsonArray(rows)).also(::validateRecords)
+    }
+    private val recoveredSongsStore = FailClosedStoredJson("songs kept aside") {
+        json.decodeFromString<List<RecoveredSong>>(it)
     }
     private val workspacesStore = FailClosedStoredJson("song notebook") {
         json.decodeFromString<Map<String, SongWorkspace>>(it)
@@ -343,15 +409,31 @@ class ProjectRepository internal constructor(
         committed
     }
 
-    override suspend fun recordingRecords(): List<RecordingRecord> =
-        recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]")
+    /**
+     * The records with every precedence and Trash time established (A32): a row stored
+     * without one gets its first-seen time, persisted, before any caller compares, sorts or
+     * derives a deadline from it.
+     */
+    override suspend fun recordingRecords(): List<RecordingRecord> {
+        val records = recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]")
+        if (records.none(::needsRepair)) return records
+        establishPrecedence(emptyList(), System.currentTimeMillis())
+        return recordsStore.decode(dataStore.data.first()[RECORDING_RECORDS_KEY] ?: "[]")
+    }
+
+    private fun needsRepair(record: RecordingRecord) = record.uploadedAt <= 0L || (record.trashedAt != null && record.trashedAt <= 0L)
 
     override suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>) {
         projectSaveMutex.withLock {
             dataStore.edit { prefs ->
                 val current = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
                 val next = transform(current)
-                if (next != current) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(next)
+                if (next != current) {
+                    validateRecords(next)
+                    prefs[RECORDING_RECORDS_KEY] = json.encodeToString(next)
+                    // A32: a row written without a time gets its first-seen time in the same write.
+                    if (next.any(::needsRepair)) normalizePrecedence(prefs, emptyList(), System.currentTimeMillis())
+                }
             }
         }
     }
@@ -483,21 +565,29 @@ class ProjectRepository internal constructor(
         projects.forEach(::seeSong)
         trash.forEach(::seeTrash)
         records.forEach { see("rec:${it.id}", it.uploadedAt, it.precedenceRepaired) }
+        // A recording in Trash without a Trash time gets its first-seen time, never an epoch deadline.
+        records.filter { it.trashedAt != null && it.trashedAt <= 0L }.forEach { needed += "rtrash:${it.id}" }
         for (key in needed) repairs.putIfAbsent(key, now)
         if (repairs != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(repairs.toMap())
         fun song(p: SongProject) =
             if (p.updatedAt > 0L && !p.precedenceRepaired) p else p.copy(updatedAt = repairs.getValue("song:${p.id}"), precedenceRepaired = true)
         fun trashed(t: TrashedSongProject): TrashedSongProject {
             val withSong = t.copy(project = song(t.project))
-            if (t.deletedAt > 0L && !t.deletedAtRepaired) return withSong
+            if (t.deletedAt > 0L && !t.deletedAtRepaired) {
+                // A deadline stored without its value follows the Trash time.
+                return if (withSong.deleteAfter <= 0L) withSong.copy(deleteAfter = withSong.deletedAt + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS) else withSong
+            }
             // The Trash deadline always follows the repaired time.
             val at = repairs.getValue("trash:${t.project.id}")
             return withSong.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, deletedAtRepaired = true)
         }
-        fun record(r: RecordingRecord) = when {
-            r.uploadedAt > 0L && !r.precedenceRepaired -> r
-            r.id in realRecordingTimes -> r.copy(uploadedAt = realRecordingTimes.getValue(r.id), precedenceRepaired = false)
-            else -> r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+        fun record(r: RecordingRecord): RecordingRecord {
+            val timed = when {
+                r.uploadedAt > 0L && !r.precedenceRepaired -> r
+                r.id in realRecordingTimes -> r.copy(uploadedAt = realRecordingTimes.getValue(r.id), precedenceRepaired = false)
+                else -> r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+            }
+            return if (timed.trashedAt != null && timed.trashedAt <= 0L) timed.copy(trashedAt = repairs.getValue("rtrash:${r.id}")) else timed
         }
         projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = json.encodeToString(it) }
         trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(it) }
@@ -513,6 +603,10 @@ class ProjectRepository internal constructor(
             )
         }
     }
+
+    /** Songs kept aside after their repaired time lost to a deletion (A41), oldest first. */
+    internal suspend fun recoveredSongs(): List<RecoveredSong> =
+        recoveredSongsStore.decode(dataStore.data.first()[RECOVERED_SONGS_KEY] ?: "[]")
 
     suspend fun syncDeletions(): List<SyncDeletion> =
         deletionsStore.decode(dataStore.data.first()[SYNC_DELETIONS_KEY] ?: "[]")
@@ -579,7 +673,9 @@ class ProjectRepository internal constructor(
                 val current = SyncBlob(
                     projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]"),
                     trashed = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]"),
-                    recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").filter { it.path != null }.map { it.toEntry() },
+                    // Every recording known here, a row whose file still awaits its id name included, so a
+                    // song tombstone covers each of them (A28).
+                    recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").map { it.toEntry() },
                     deletions = SyncMerger.mergeDeletions(deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]"))
                 )
                 val incoming = normalizePrecedence(prefs, listOf(merged), System.currentTimeMillis()).single()
@@ -591,6 +687,24 @@ class ProjectRepository internal constructor(
                 val writtenIds = buildSet {
                     nextProjects.forEach { add(it.id) }
                     nextTrash.forEach { add(it.project.id) }
+                }
+                // A41: a song here whose repaired time lost to a tombstone is kept aside, not erased;
+                // one that lost with a real time is a genuine deletion.
+                val songTombstones = SyncMerger.Tombstones(resolved.deletions).songs
+                val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+                fun kept(song: SongProject, inTrash: Boolean) = RecoveredSong(
+                    song, inTrash, songTombstones.getValue(song.id).deletedAt, System.currentTimeMillis(),
+                    records.filter { it.projectId == song.id }.map { it.id }
+                )
+                val setAside = current.projects
+                    .filter { it.id !in writtenIds && it.precedenceRepaired && it.id in songTombstones }
+                    .map { kept(it, false) } +
+                    current.trashed
+                        .filter { it.project.id !in writtenIds && it.deletedAtRepaired && it.project.id in songTombstones }
+                        .map { kept(it.project, true) }
+                if (setAside.isNotEmpty()) {
+                    val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
+                    prefs[RECOVERED_SONGS_KEY] = json.encodeToString(stored + setAside)
                 }
                 prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)

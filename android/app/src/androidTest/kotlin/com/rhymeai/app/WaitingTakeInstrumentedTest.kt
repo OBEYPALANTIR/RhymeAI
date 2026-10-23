@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.recording.RecordingCatalog
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.rhymeai.app.data.recording.RecordingTransitions
 import com.rhymeai.app.data.sync.RecordingRecord
 import com.rhymeai.app.service.VoiceMemoService
 import kotlinx.coroutines.Dispatchers
@@ -125,7 +126,7 @@ class WaitingTakeInstrumentedTest {
         assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
     }
 
-    @Test fun aTakeWhoseFinishWasNeverRecordedIsSavedOnlyIfFinalizedAndAnUnreadableOneStaysRetryable() = runBlocking {
+    @Test fun aTakeWhoseFinishWasNeverRecordedIsSavedOnlyIfFinalizedAndACutOneIsListedUntilSetAside() = runBlocking {
         // As after a crash: start markers only; one take finalized, one cut short.
         val complete = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
         val cut = TestRecordings.cutInsideMediaData(complete, File(staging, "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2.m4a"))
@@ -134,25 +135,41 @@ class WaitingTakeInstrumentedTest {
         assertTrue(after.memosForProject("song").isEmpty())
         assertEquals(listOf(false, false), after.waitingTakes("song").map { it.finished })
 
-        // The finalized take cannot be read for now: it stays waiting, not failed.
+        // The finalized take is saved under its own id; the cut one never is: it is marked failed.
+        assertTrue(runCatching { after.retryWaitingTakes("song") }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
+        assertEquals(listOf("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"), after.memosForProject("song").map { it.file.name })
+        assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
+
+        // T5.8: the failed take stays listed (never disappears unannounced), Retry skips it, and
+        // setting it aside keeps its bytes in quarantine.
+        val failed = after.waitingTakes("song").single()
+        assertTrue(failed.failed)
+        assertEquals(0, after.retryWaitingTakes("song"))
+        val cutBytes = cut.readBytes()
+        assertEquals(1, after.setAsideFailedTakes("song"))
+        assertTrue(after.waitingTakes("song").isEmpty())
+        assertFalse(cut.exists())
+        val kept = RecordingFiles.quarantineDirectory(owned, "song").walk().single { it.isFile }
+        assertEquals("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2.m4a", kept.name)
+        assertTrue(kept.readBytes().contentEquals(cutBytes))
+        after.release()
+    }
+
+    @Test fun aFinalizedTakeThatCannotBeReadNowStaysWaitingNotFailed() = runBlocking {
+        val complete = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val after = restarted()
         complete.setReadable(false)
-        val blocked = !complete.canRead()
         try {
-            if (blocked) {
-                assertTrue(runCatching { after.retryWaitingTakes("song") }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
-                assertTrue(after.waitingTakes("song").any { it.id == "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b" })
-                assertTrue(catalog.records.isEmpty())
-            }
+            org.junit.Assume.assumeFalse("permissions are not enforced here", complete.canRead())
+            assertTrue(runCatching { after.retryWaitingTakes("song") }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
+            val waiting = after.waitingTakes("song").single()
+            assertFalse(waiting.failed)
+            assertTrue(catalog.records.isEmpty())
         } finally {
             complete.setReadable(true)
         }
-
-        // Readable again: it is saved under its own id; the cut take never is (it is marked failed).
-        runCatching { after.retryWaitingTakes("song") }
-        assertEquals(listOf("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"), after.memosForProject("song").map { it.file.name })
+        assertEquals(1, after.retryWaitingTakes("song"))
         assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
-        assertTrue(cut.exists())
-        assertTrue(after.waitingTakes("song").isEmpty())
         after.release()
     }
 
@@ -245,12 +262,20 @@ class WaitingTakeInstrumentedTest {
         File(staging, "1700000000000.m4a.take").writeText("$a\nrecording\n0\n")
         val listed = service.waitingTakes("song").single()
         assertFalse(listed.finished)
+        assertEquals("1700000000000.m4a", listed.file.name)
 
-        val saving = async(Dispatchers.IO) { service.saveListedTake(listed) }
+        // Both wait on the recording lock: migration queued first moves the take, then the
+        // save (holding the listing's old path) inspects it where it is now.
+        RecordingTransitions.namespace.lock()
         val migrating = async(Dispatchers.IO) { service.migrateStaging() }
+        kotlinx.coroutines.delay(300)
+        val saving = async(Dispatchers.IO) { service.saveListedTake(listed) }
+        kotlinx.coroutines.delay(300)
+        assertFalse(migrating.isCompleted || saving.isCompleted)
+        RecordingTransitions.namespace.unlock()
 
-        assertTrue(saving.await())
         assertTrue(migrating.await().isEmpty())
+        assertTrue(saving.await())
         assertEquals(a, catalog.records.single().id)
         assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
         assertTrue(service.waitingTakes("song").isEmpty())

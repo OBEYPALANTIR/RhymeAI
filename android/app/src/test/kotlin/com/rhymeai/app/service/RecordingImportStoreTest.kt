@@ -106,7 +106,9 @@ class RecordingImportStoreTest {
         val duplicate = stage(ByteArrayInputStream(byteArrayOf(2)), song, nextId(), name, {}, {})
         assertEquals("曲".repeat(66) + ".wav", first.desiredName)
         assertEquals(first.desiredName, duplicate.desiredName)
-        assertEquals(2, song.listFiles().orEmpty().size)
+        assertEquals(2, song.listFiles().orEmpty().count { it.extension == "wav" })
+        // Each staged import carries its ownership marker until its importer saves or discards it.
+        assertTrue(RecordingImportStore.markerFor(first.file).exists() && RecordingImportStore.markerFor(duplicate.file).exists())
     }
 
     @Test fun importedNamesRemoveControlsAndRetainWholeUnicodeCharacters() {

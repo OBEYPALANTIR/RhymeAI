@@ -159,7 +159,7 @@ class RecordingImportInstrumentedTest {
     @Test fun anUnreadableTrashFolderIsNeverTreatedAsEmpty() = runBlocking<Unit> {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
-        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned }).also { it.catalog = Catalog() }
         val trash = RecordingFiles.trashDirectory(owned, "song").apply { mkdirs() }
         val expired = File(trash, "1500__old.m4a").apply { writeBytes(wav()) }
         trash.setReadable(false)
@@ -182,7 +182,7 @@ class RecordingImportInstrumentedTest {
     @Test fun rejectsRenamedTextAndLeavesNoImportedRecording() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
-        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned }).also { it.catalog = Catalog() }
         try {
             val source = File(owned, "fake.wav").apply { writeText("This is not audio") }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", source)

@@ -164,7 +164,8 @@ class ProjectRepositoryTest {
             assertFailsWith<CorruptLibraryException> {
                 repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS + 1L)
             }
-            assertEquals(originalTrash, dataStore.data.first()[trashKey])
+            // Still in Trash (its times may have been repaired, A32), never removed.
+            assertTrue(originalTrash!!.contains("delete-1") && dataStore.data.first()[trashKey]!!.contains("delete-1"))
             assertEquals("{broken notebook", dataStore.data.first()[notebookKey])
         } finally {
             scope.cancel()
@@ -1189,5 +1190,111 @@ class ProjectRepositoryTest {
         override fun setKey(provider: String, key: String) = Unit
         override fun allKeys(): Map<String, String> = emptyMap()
         override fun clear() = Unit
+    }
+    private fun withRepository(block: suspend (DataStore<Preferences>, ProjectRepository) -> Unit) = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-precedence").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+        try {
+            block(dataStore, ProjectRepository(dataStore, testKeyStore()))
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    private val recordsKey = stringPreferencesKey("recording_records_json")
+    private val firstSeenKey = stringPreferencesKey("first_seen_precedence_json")
+    private val recordingId = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+    private val digest = "a".repeat(64)
+
+    @Test
+    fun aRecordingInTrashWithoutATrashTimeGetsItsFirstSeenTimeBeforeAnyDeadline() = withRepository { store, repository ->
+        // T2.35: trashedAt=0 must never read as an epoch deadline (expired at once).
+        store.edit {
+            it[recordsKey] = """[{"id":"$recordingId","projectId":"p","displayName":"take.m4a","uploadedAt":500,"sha256":"$digest",""" +
+                """"bytes":4,"origin":"recorded","path":"voice-memos-trash/p/$recordingId.m4a","trashedAt":0}]"""
+        }
+        val before = System.currentTimeMillis()
+
+        val first = repository.recordingRecords().single()
+        val again = repository.recordingRecords().single()
+
+        assertTrue(first.trashedAt!! >= before && first.trashedAt!! <= System.currentTimeMillis())
+        assertEquals(first.trashedAt, again.trashedAt)
+        assertEquals(500L, first.uploadedAt)
+        assertTrue(store.data.first()[firstSeenKey]!!.contains("\"rtrash:$recordingId\":${first.trashedAt}"))
+    }
+
+    @Test
+    fun historicalRowsWithoutTimesOrIdsAreRepairedAndInvalidOnesFailClosed() = withRepository { store, repository ->
+        // T3.11/T3.12: songs and Trash written before precedence fields existed.
+        store.edit {
+            it[stringPreferencesKey("projects_json")] = """[{"id":"s1","title":"Old","lyrics":"x"}]"""
+            it[stringPreferencesKey("trashed_projects_json")] = """[{"project":{"id":"t1","title":"T","updatedAt":500}}]"""
+            // T3.4/T3.28: a row from before A21 has no id and calls the display name fileName.
+            it[recordsKey] = """[{"projectId":"p","fileName":"take.m4a","uploadedAt":700,"sha256":"$digest","bytes":4,"origin":"recorded"}]"""
+        }
+
+        repository.establishPrecedence(emptyList(), 7_000L)
+
+        val song = repository.projectsFlow.first().single()
+        assertEquals(7_000L, song.updatedAt)
+        assertTrue(song.precedenceRepaired)
+        val trash = repository.trashedProjectsFlow.first().single()
+        assertEquals(500L, trash.project.updatedAt)
+        assertEquals(7_000L, trash.deletedAt)
+        assertTrue(trash.deletedAtRepaired)
+        assertEquals(7_000L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, trash.deleteAfter)
+        val record = repository.recordingRecords().single()
+        assertEquals(RecordingManifestEntry.legacyRecordingId("p", "take.m4a", digest), record.id)
+        assertEquals(700L, record.uploadedAt)
+
+        // A song without an id, a zero-length recording row and a malformed ledger each fail closed.
+        store.edit { it[stringPreferencesKey("projects_json")] = """[{"title":"No id"}]""" }
+        assertFailsWith<CorruptLibraryException> { repository.establishPrecedence(emptyList(), 8_000L) }
+        store.edit { it[stringPreferencesKey("projects_json")] = "[]" }
+        store.edit {
+            it[recordsKey] = """[{"id":"$recordingId","projectId":"p","displayName":"take.m4a","uploadedAt":5,"sha256":"$digest","bytes":0,"origin":"recorded"}]"""
+        }
+        assertFailsWith<CorruptLibraryException> { repository.recordingRecords() }
+        store.edit { it[recordsKey] = "[]" }
+        // T3.9: a ledger entry must name a known identity with a real time.
+        store.edit { it[firstSeenKey] = """{"song:s1":0}""" }
+        assertFailsWith<CorruptLibraryException> { repository.establishPrecedence(emptyList(), 8_000L) }
+        store.edit { it[firstSeenKey] = """{"elsewhere:s1":5}""" }
+        assertFailsWith<CorruptLibraryException> { repository.establishPrecedence(emptyList(), 8_000L) }
+    }
+
+    @Test
+    fun aSongWhoseRepairedTimeLosesToATombstoneIsKeptAsideAndARealOneIsDeleted() = withRepository { store, repository ->
+        // A41: "repaired" has no updatedAt (first seen at 9_000); "real" was edited at 100.
+        store.edit {
+            it[stringPreferencesKey("projects_json")] = """[{"id":"repaired","title":"Kept","lyrics":"words"},{"id":"real","title":"Gone","lyrics":"x","updatedAt":100}]"""
+        }
+        repository.establishPrecedence(emptyList(), 9_000L)
+        val tombstones = listOf(SyncDeletion("repaired", deletedAt = 200L), SyncDeletion("real", deletedAt = 200L))
+
+        repository.applySyncResult(SyncBlob(deletions = tombstones), repository.snapshotLocalSyncBase())
+
+        assertTrue(repository.projectsFlow.first().isEmpty())
+        val kept = repository.recoveredSongs().single()
+        assertEquals("repaired", kept.project.id)
+        assertEquals("words", kept.project.lyrics)
+        assertEquals(200L, kept.deletedAt)
+        assertEquals(false, kept.wasInTrash)
+    }
+
+    @Test
+    fun aRemoteSongDeletionTombstonesItsPathlessHistoricalRecordings() = withRepository { store, repository ->
+        // Review 18 finding 2: a row from the first record store (no path) is still covered.
+        repository.saveProjects(listOf(SongProject(id = "p", title = "Song", updatedAt = 100L)))
+        store.edit {
+            it[recordsKey] = """[{"id":"$recordingId","projectId":"p","displayName":"take.m4a","uploadedAt":150,"sha256":"$digest","bytes":4,"origin":"recorded"}]"""
+        }
+
+        repository.applySyncResult(SyncBlob(deletions = listOf(SyncDeletion("p", deletedAt = 500L))), repository.snapshotLocalSyncBase())
+
+        assertTrue(repository.syncDeletions().any { it.recordingId == recordingId && it.deletedAt == 500L })
     }
 }

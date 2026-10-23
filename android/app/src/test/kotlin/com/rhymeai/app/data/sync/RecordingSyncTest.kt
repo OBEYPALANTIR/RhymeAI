@@ -341,7 +341,7 @@ class RecordingSyncTest {
             val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
             target.writeText("user memo")
 
-            RecordingFileStore.recoverInterruptedRestores(root)
+            kotlinx.coroutines.runBlocking { RecordingFileStore.recoverInterruptedRestores(root) }
 
             assertEquals("user memo", target.readText())
             assertFalse(stage.exists())
@@ -423,28 +423,45 @@ class RecordingSyncTest {
     fun theNoReplaceMoveRefusesAnExistingTargetAndAnInterruptedClaimIsCleared() = kotlinx.coroutines.runBlocking<Unit> {
         val root = Files.createTempDirectory("rhymeai-no-replace").toFile()
         try {
+            val transitions = com.rhymeai.app.data.recording.RecordingTransitions
             val source = File(root, "source.m4a").apply { writeText("mine") }
             val target = File(root, "target.m4a").apply { writeText("theirs") }
+            val token = java.util.UUID.randomUUID().toString()
             assertFailsWith<java.nio.file.FileAlreadyExistsException> {
-                com.rhymeai.app.data.recording.RecordingTransitions.moveNoReplace(source, target)
+                transitions.moveNoReplace(source, target, token, sha256Hex("mine".toByteArray()), 4L)
             }
             assertEquals("mine", source.readText())
             assertEquals("theirs", target.readText())
+            // Bytes that changed after their intent was written never move.
+            assertFailsWith<com.rhymeai.app.data.recording.RecordingTransitions.SourceChangedException> {
+                transitions.moveNoReplace(source, File(root, "free.m4a"), token, sha256Hex("other".toByteArray()), 5L)
+            }
+            assertFalse(File(root, "free.m4a").exists())
 
-            // A publish interrupted between its claim and its rename: the empty claim is removed
-            // at reconciliation and the journaled publish is undone.
+            // A publish interrupted between its claim and its rename: only the claim holding its
+            // own token is removed at reconciliation, and the journaled publish is undone.
             val staged = File(RecordingFiles.stagingDirectory(root, "p1").apply { mkdirs() }, "$ID.m4a").apply { writeText("take") }
-            val claim = RecordingFiles.memoFile(root, "p1", ID, "take.m4a").apply { parentFile!!.mkdirs(); createNewFile() }
+            val claim = RecordingFiles.memoFile(root, "p1", ID, "take.m4a").apply { parentFile!!.mkdirs(); writeText("rhymeai-claim\n$token\n") }
             val catalog = MemoryCatalog().apply {
                 records = listOf(RecordingRecord(ID, "p1", "take.m4a", 1L, sha256Hex("take".toByteArray()), 4L, RecordingRecord.RECORDED,
-                    path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(root, claim),
-                    pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(root, staged),
-                    pendingOp = RecordingRecord.OP_PUBLISH))
+                    path = transitions.relativePath(root, claim),
+                    pendingFrom = transitions.relativePath(root, staged),
+                    pendingOp = RecordingRecord.OP_PUBLISH, pendingClaim = token))
             }
-            com.rhymeai.app.data.recording.RecordingTransitions.reconcile(catalog, root)
+            transitions.reconcile(catalog, root)
             assertFalse(claim.exists())
             assertTrue(catalog.records.isEmpty())
             assertEquals("take", staged.readText())
+
+            // A foreign empty file at a pending target is never removed (ownership is the token, not the size).
+            val other = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+            val foreign = RecordingFiles.memoFile(root, "p1", other, "x.m4a").apply { createNewFile() }
+            val stagedOther = File(RecordingFiles.stagingDirectory(root, "p1"), "$other.m4a").apply { writeText("other") }
+            catalog.records = listOf(RecordingRecord(other, "p1", "x.m4a", 1L, sha256Hex("other".toByteArray()), 5L, RecordingRecord.RECORDED,
+                path = transitions.relativePath(root, foreign), pendingFrom = transitions.relativePath(root, stagedOther),
+                pendingOp = RecordingRecord.OP_PUBLISH, pendingClaim = java.util.UUID.randomUUID().toString()))
+            transitions.reconcile(catalog, root)
+            assertTrue(foreign.exists())
         } finally {
             root.deleteRecursively()
         }

@@ -47,7 +47,7 @@ class BackupScheduleTest {
         )
         assertNull(backupResultNotice(SyncResult.Success(SyncBlob()), BackupAction.BackUp))
         assertEquals(
-            "Your older encrypted backup was moved to the new format. 2 recordings are over 16 MB and were skipped.",
+            "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive. 2 recordings are over 16 MB and were skipped.",
             backupResultNotice(SyncResult.Success(SyncBlob(), skippedLargeRecordings = 2, migratedLegacyBackup = true), BackupAction.BackUp)
         )
         assertEquals(

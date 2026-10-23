@@ -61,7 +61,9 @@ sealed class SyncResult {
         /** Recordings left out because they still await their A36 rename (done at launch). */
         val unmigratedRecordings: Int = 0,
         /** A40: recordings not uploaded because Drive holds other audio under the same id. */
-        val conflictingRecordings: Int = 0
+        val conflictingRecordings: Int = 0,
+        /** A41: songs here whose unknown time lost to a deletion: removed, their content kept aside. */
+        val songsSetAside: Int = 0
     ) : SyncResult()
 
     /** The user must approve Drive access; launch [pendingIntent], then retry. */
@@ -639,19 +641,58 @@ object RecordingFileStore {
     }
 
     /**
-     * A staging folder left by an interrupted restore holds only downloaded temp
-     * files; every recording already moved into place is complete and verified, so
-     * recovery just removes the folder and never touches a memo.
+     * A staging folder left by an interrupted restore of this build holds only verified
+     * downloads, never an original, so it is removed. A folder from the encrypted-sync
+     * build before v4 may hold its binary restore journal (`restore-journal`, with or
+     * without `restore-complete`) and copies of the originals that restore replaced
+     * (`backup-<index>.tmp`): each original that is not exactly what its file holds now is
+     * first preserved in the song's folder as "<name> (original)" (journaled, verified,
+     * never replacing a file), and only then does the folder go. A folder whose journal
+     * cannot be read, or whose originals cannot all be preserved, is kept untouched and
+     * returned. With [onlyHistorical] (launch) folders of this build are left alone.
      */
-    internal fun recoverInterruptedRestores(filesDir: File) {
-        filesDir.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith(RESTORE_STAGE_PREFIX) }
-            ?.forEach { stageDirectory ->
-                if (!stageDirectory.deleteRecursively()) {
-                    throw DriveNetworkException("Interrupted recording restore could not be cleaned up")
+    internal suspend fun recoverInterruptedRestores(filesDir: File, onlyHistorical: Boolean = false): List<File> {
+        val kept = mutableListOf<File>()
+        for (stage in filesDir.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith(RESTORE_STAGE_PREFIX) }) {
+            val journal = File(stage, HISTORICAL_JOURNAL_FILE)
+            if (journal.exists()) {
+                val entries = readHistoricalJournal(journal) ?: run { kept += stage; null } ?: continue
+                var preserved = true
+                for (entry in entries.filter { it.hadOriginal }) {
+                    val original = File(stage, "backup-${entry.index}.tmp")
+                    if (!original.isFile || original.length() == 0L) continue
+                    val current = runCatching { RecordingFiles.legacyMemoFile(filesDir, entry.projectId, entry.fileName) }.getOrNull()
+                    if (current != null && current.isFile && current.length() == original.length() && sha256Hex(current) == sha256Hex(original)) {
+                        original.delete()
+                        continue
+                    }
+                    val placed = runCatching { RecordingTransitions.preserveOriginal(filesDir, original, entry.projectId, entry.fileName) }.getOrNull()
+                    if (placed == null) preserved = false
                 }
+                if (!preserved) { kept += stage; continue }
+            } else if (onlyHistorical) {
+                continue
             }
+            if (!stage.deleteRecursively()) throw DriveNetworkException("Interrupted recording restore could not be cleaned up")
+        }
+        return kept
     }
+
+    private const val HISTORICAL_JOURNAL_FILE = "restore-journal"
+    private const val HISTORICAL_JOURNAL_MAGIC = 0x5248594D
+    private const val HISTORICAL_JOURNAL_VERSION = 1
+
+    private class HistoricalEntry(val index: Int, val projectId: String, val fileName: String, val hadOriginal: Boolean)
+
+    /** The encrypted-sync build's restore journal, or null when it is not exactly that format. */
+    private fun readHistoricalJournal(journal: File): List<HistoricalEntry>? = runCatching {
+        java.io.DataInputStream(journal.inputStream().buffered()).use { data ->
+            require(data.readInt() == HISTORICAL_JOURNAL_MAGIC && data.readInt() == HISTORICAL_JOURNAL_VERSION)
+            val count = data.readInt()
+            require(count in 0..10_000)
+            List(count) { HistoricalEntry(data.readInt(), data.readUTF(), data.readUTF(), data.readBoolean()) }
+        }
+    }.getOrNull()
 
     /**
      * Publishes each verified download with its record (the backup entry's id and
@@ -732,11 +773,11 @@ object RecordingFileStore {
  * A28: after Restore or Import commits, a recording whose winning tombstone is now
  * known here leaves the library: its bytes move to quarantine and its record goes.
  */
-internal suspend fun quarantineDeletedRecordings(repository: ProjectRepository, filesDir: File) {
+internal suspend fun quarantineDeletedRecordings(repository: ProjectRepository, filesDir: File): Int {
     // A32: this device's own missing times are fixed before any tombstone is compared with them.
     repository.establishPrecedence(emptyList(), System.currentTimeMillis())
     val base = repository.snapshotLocalSyncBase()
-    RecordingTransitions.quarantineDeleted(repository, filesDir, base.blob.deletions, base.pendingIds)
+    return RecordingTransitions.quarantineDeleted(repository, filesDir, base.blob.deletions, base.pendingIds)
 }
 
 internal data class LocalRecordingFile(val entry: RecordingManifestEntry, val file: File, val inTrash: Boolean = false)
@@ -817,6 +858,8 @@ class DriveSyncService(
     companion object {
         /** SecureKeyStore entry of the pre-v4 passphrase; only read to migrate, then removed. */
         const val LEGACY_PASSPHRASE_KEY = "DRIVE_SYNC_PASSPHRASE"
+        /** The older backup's manifest id and version this device moved (its files are kept in Drive). */
+        const val LEGACY_MIGRATED_KEY = "DRIVE_LEGACY_MIGRATED_VERSION"
         const val CONFLICT_MESSAGE = "Backup conflict, will retry"
 
         internal const val MAX_SYNC_BLOB_BYTES = 16L * 1024L * 1024L
@@ -866,6 +909,13 @@ class DriveSyncService(
 
     fun hasLegacyPassphrase(): Boolean = secureKeyStore.getKey(LEGACY_PASSPHRASE_KEY).isNotEmpty()
 
+    /** The older backup's manifest unless this device already moved that very version. */
+    private suspend fun unmigratedLegacyFile(token: String): DriveFileMetadata? =
+        driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME)
+            ?.takeUnless { secureKeyStore.getKey(LEGACY_MIGRATED_KEY) == legacyVersionKey(it) }
+
+    private fun legacyVersionKey(file: DriveFileMetadata) = "${file.id}:${file.version ?: file.modifiedTime.orEmpty()}"
+
     /** Reads what Drive holds without changing anything (first-run restore offer). */
     suspend fun probe(repository: ProjectRepository? = null): ProbeResult = withContext(Dispatchers.IO) {
         guarded({ ProbeResult.Failed(it) }) {
@@ -875,7 +925,7 @@ class DriveSyncService(
                 DriveAuthorization.Unavailable -> return@guarded ProbeResult.Failed(SyncResult.NotConfigured)
             }
             val remote = readRemote(token, repository).blob?.let(SyncMerger::resolve)
-            val legacy = driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME) != null
+            val legacy = unmigratedLegacyFile(token) != null
             ProbeResult.Ready(BackupProbe(remote?.projects?.size ?: 0, remote?.recordings?.size ?: 0, legacy))
         }
     }
@@ -916,7 +966,7 @@ class DriveSyncService(
                 }
                 // Only Restore may touch local recordings, so only it finishes an interrupted restore.
                 if (mode == Mode.RESTORE) RecordingFileStore.recoverInterruptedRestores(filesDir)
-                val legacyFile = driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME)
+                val legacyFile = unmigratedLegacyFile(token)
                 val storedPassphrase = secureKeyStore.getKey(LEGACY_PASSPHRASE_KEY)
                 val passphrase = typedPassphrase ?: storedPassphrase.takeIf { it.isNotEmpty() }?.toCharArray()
                 var legacy: SyncBlob? = null
@@ -933,6 +983,7 @@ class DriveSyncService(
                     LegacyBackupAction.OFFER_MIGRATION, LegacyBackupAction.NONE -> Unit
                 }
 
+                val setAsideBefore = if (mode == Mode.RESTORE) repository.recoveredSongs().size else 0
                 // Migration merges into Drive only; this device changes only on Restore.
                 val outcome = pushMerge(
                     token = token,
@@ -949,10 +1000,15 @@ class DriveSyncService(
                 var unmovedSongs = 0
                 var unmovedRecordings = 0
                 if (legacy != null && move != null) {
-                    unmovedSongs = unpreservedLegacySongs(legacy, outcome.written)
-                    unmovedRecordings = unverifiedLegacyRecordings(token, legacy, outcome.written)
+                    // Checked against the older backup with its times established exactly as the merge saw them.
+                    val established = repository.establishPrecedence(listOf(legacyInputs(legacy)), now()).single()
+                    unmovedSongs = unpreservedLegacySongs(established, outcome.written)
+                    unmovedRecordings = unverifiedLegacyRecordings(token, established, outcome.written)
                     if (unmovedSongs == 0 && unmovedRecordings == 0) {
-                        removeLegacyBackup(token, legacyFile!!, legacy)
+                        // The older backup's files are never deleted: another older device may still
+                        // write to them. This device remembers which version it moved and stops
+                        // offering it; a newer version is offered again.
+                        secureKeyStore.setKey(LEGACY_MIGRATED_KEY, legacyVersionKey(legacyFile!!))
                         secureKeyStore.removeKey(LEGACY_PASSPHRASE_KEY)
                         migrated = true
                     }
@@ -966,7 +1022,8 @@ class DriveSyncService(
                     unmovedLegacySongs = unmovedSongs,
                     unmovedLegacyRecordings = unmovedRecordings,
                     unmigratedRecordings = outcome.notMigrated,
-                    conflictingRecordings = outcome.conflicting
+                    conflictingRecordings = outcome.conflicting,
+                    songsSetAside = if (mode == Mode.RESTORE) repository.recoveredSongs().size - setAsideBefore else 0
                 )
             }
         }
@@ -1023,16 +1080,19 @@ class DriveSyncService(
             val base = repository.snapshotLocalSyncBase()
             // A17: Back up never moves a file; one still awaiting its A36 rename is left out and reported.
             val notMigrated = mutableListOf<File>()
-            val localFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds, moveFiles = applyLocally, notListed = notMigrated)
-            val liveFiles = localFiles.filterNot { it.inTrash }
+            val scannedFiles = snapshotLocalRecordings(repository, filesDir, base.pendingIds, moveFiles = applyLocally, notListed = notMigrated)
             // Live, Trash and oversized recordings all join the inputs (unfiltered by
             // tombstones); resolution decides once, with every input present.
-            val local = base.blob.copy(recordings = localFiles.map { it.entry }, savedByClientId = clientId())
+            val local = base.blob.copy(recordings = scannedFiles.map { it.entry }, savedByClientId = clientId())
             val remote = readRemote(token, repository)
             if (requireRemote && remote.blob == null && extraRemote == null) return null
 
             // A32: missing precedence times are fixed (and persisted) before anything is compared.
             val inputs = repository.establishPrecedence(listOfNotNull(seen, local, extraRemote, remote.blob), now())
+            // Every later use of this device's recordings (uploads, skips, reports) sees the established times.
+            val established = inputs[if (seen != null) 1 else 0].recordings.associateBy { it.id }
+            val localFiles = scannedFiles.map { file -> established[file.entry.id]?.let { file.copy(entry = it) } ?: file }
+            val liveFiles = localFiles.filterNot { it.inTrash }
             val gathered = SyncMerger.gather(*inputs.toTypedArray())
             var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
             // Evidence that is not uploadable here (Trash, too large, older recordings that
@@ -1091,20 +1151,15 @@ class DriveSyncService(
             for (entry in RecordingSyncPlanner.planUploads(uploadable, merged.recordings, presentNames)) {
                 val file = liveById.getValue(entry.id).file
                 val name = BackupManifest.recordingDriveName(entry.id)
-                val existing = driveFiles[name].orEmpty()
-                if (existing.any { it.appProperties["sha256"] != entry.sha256 }) {
+                // A40: one id, one digest and length forever. An object under this id that is not
+                // intact here (another digest, another length, or no metadata) is never written
+                // over or replaced; the recording is reported instead.
+                if (driveFiles[name].orEmpty().isNotEmpty()) {
                     conflicting++
                     continue
                 }
                 val bytes = RecordingFileStore.readForUpload(file, entry)
-                // Same digest: an incomplete or damaged copy of these very bytes is replaced.
-                val stale = existing.firstOrNull()
-                uploaded[name] = if (stale != null) {
-                    driveClient.updateFile(token, stale.id, BackupManifest.RECORDING_MIME_TYPE, bytes, recordingAppProperties(entry))
-                    stale.id
-                } else {
-                    driveClient.uploadNewFile(token, name, BackupManifest.RECORDING_MIME_TYPE, bytes, recordingAppProperties(entry))
-                }
+                uploaded[name] = driveClient.uploadNewFile(token, name, BackupManifest.RECORDING_MIME_TYPE, bytes, recordingAppProperties(entry))
             }
 
             val writtenAt = now()
@@ -1127,6 +1182,21 @@ class DriveSyncService(
                 return@repeat
             }
             remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
+            // A40: a raw object goes only when its stored id, digest and length match an entry
+            // gathered this run that a winning tombstone covers, and only by its own Drive file id.
+            val tombstones = SyncMerger.Tombstones(merged.deletions)
+            val gatheredById = gathered.recordings.groupBy { it.id }
+            for ((driveName, files) in driveFiles) {
+                for (file in files) {
+                    val id = file.appProperties["id"] ?: continue
+                    if (driveName != BackupManifest.recordingDriveName(id)) continue
+                    val covered = gatheredById[id].orEmpty().any { entry ->
+                        file.appProperties["sha256"] == entry.sha256 && file.appProperties["bytes"] == entry.sizeBytes.toString() &&
+                            tombstones.removes(entry)
+                    }
+                    if (covered && merged.recordings.none { it.id == id }) driveClient.deleteFile(token, file.id)
+                }
+            }
 
             var damaged = 0
             var committed = merged
@@ -1263,12 +1333,20 @@ class DriveSyncService(
         val writtenById = written.projects.associateBy { it.id } + written.trashed.associate { it.project.id to it.project }
         val tombstones = SyncMerger.mergeDeletions(written.deletions + legacy.deletions)
             .filter { it.isSongTombstone }.associateBy { it.projectId }
-        return (legacy.projects + legacy.trashed.map { it.project }).count { old ->
-            if (tombstones[old.id]?.let { SyncMerger.deletes(it, old.updatedAt, old.precedenceRepaired) } == true) return@count false
-            val kept = writtenById[old.id] ?: return@count true
-            !(kept.updatedAt > old.updatedAt ||
-                (kept.updatedAt == old.updatedAt && kept.title == old.title && kept.lyrics == old.lyrics && kept.theme == old.theme))
+        // The same song in Drive, with this content or a newer edit (A37: a real time beats a repair).
+        fun preserved(old: com.rhymeai.app.data.model.SongProject): Boolean {
+            val kept = writtenById[old.id] ?: return false
+            val sameContent = kept.title == old.title && kept.lyrics == old.lyrics && kept.theme == old.theme
+            return sameContent || SyncMerger.supersedes(kept.updatedAt, kept.precedenceRepaired, old.updatedAt, old.precedenceRepaired)
         }
+        // A38: an active song meets a tombstone by its own time, a Trash entry by its Trash time.
+        val active = legacy.projects.count { old ->
+            tombstones[old.id]?.let { SyncMerger.deletes(it, old.updatedAt, old.precedenceRepaired) } != true && !preserved(old)
+        }
+        val trashed = legacy.trashed.count { old ->
+            tombstones[old.project.id]?.let { SyncMerger.deletes(it, old.deletedAt, old.deletedAtRepaired) } != true && !preserved(old.project)
+        }
+        return active + trashed
     }
 
     /**
@@ -1282,24 +1360,14 @@ class DriveSyncService(
         val raw = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).associateBy { it.name }
         val live = recordingsAllowedForUpload(legacy.recordings, written.deletions, legacy.deletions)
             .mapTo(HashSet()) { it.identityKey }
-        return legacy.recordings.count { entry ->
+        // A deleted older recording needs no raw copy: its encrypted original is never deleted (A40 removes the raw one).
+        val tombstones = SyncMerger.Tombstones(written.deletions)
+        return legacy.recordings.filterNot { it.identityKey !in live && tombstones.removes(it) }.count { entry ->
             val file = raw[BackupManifest.recordingDriveName(entry.id)]
             val rawMatches = file != null && file.appProperties["sha256"] == entry.sha256 &&
                 file.appProperties["bytes"] == entry.sizeBytes.toString()
             !rawMatches || (entry.identityKey in live && listed[entry.identityKey]?.sha256 != entry.sha256)
         }
-    }
-
-    /** Deletes only encrypted recordings whose raw copy is verified in Drive, then the old manifest. */
-    private suspend fun removeLegacyBackup(token: String, legacyFile: DriveFileMetadata, legacy: SyncBlob) {
-        val files = driveClient.listFilesByNamePrefix(token, RecordingManifestEntry.DRIVE_PREFIX).associateBy { it.name }
-        val moved = legacy.recordings.filter { entry ->
-            val raw = files[BackupManifest.recordingDriveName(entry.id)]
-            raw != null && raw.appProperties["sha256"] == entry.sha256 && raw.appProperties["bytes"] == entry.sizeBytes.toString()
-        }
-        if (moved.size != legacy.recordings.size) throw DriveNetworkException("The older backup changed during migration; it was kept.")
-        moved.mapNotNull { files[it.driveName] }.forEach { driveClient.deleteFile(token, it.id) }
-        driveClient.deleteFile(token, legacyFile.id)
     }
 
     /** Returns how many downloads were discarded because their bytes did not match the manifest. */
