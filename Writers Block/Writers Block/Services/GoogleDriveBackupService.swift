@@ -674,6 +674,8 @@ struct BackupReport: Equatable, Sendable {
     var leftOutRecordings: [String] = []
     /// Drive objects of a known recording id holding other bytes (A40): kept, reported.
     var conflictingDriveObjects: [String] = []
+    /// Recordings not uploaded because Drive holds different audio under their id (A40).
+    var notUploadedConflicts: [String] = []
     /// Export: quarantined files and takes waiting to be saved are never exported.
     var quarantinedNotExported = 0
     var takesWaitingNotExported = 0
@@ -917,6 +919,7 @@ final class BackupService {
         let legacyIds = Set(legacy?.allRecordings.map(\.id) ?? [])
 
         var merged = try candidate()
+        var uploadConflicts = Set<String>()
         var target = manifests.max { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }
         var verified = false
         for _ in 0..<Self.manifestWriteAttempts {
@@ -926,7 +929,8 @@ final class BackupService {
             var settled = false
             for _ in 0..<Self.manifestWriteAttempts {
                 merged = try candidate()
-                missing = try await uploadRecordings(merged, legacy: legacy, modelContext: modelContext, legacyAudio: legacyAudio, remote: &remoteRecordings, accessToken: accessToken)
+                missing = try await uploadRecordings(merged, legacy: legacy, modelContext: modelContext, legacyAudio: legacyAudio, remote: &remoteRecordings,
+                                                     conflicts: &uploadConflicts, accessToken: accessToken)
                 if try await !absorbFreshManifests() {
                     settled = true
                     break
@@ -961,6 +965,7 @@ final class BackupService {
         // Precedence times of every recording this run gathered, before resolution.
         let gatheredRecordings = try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs.map(fixingPrecedence)).recordings
         let gatheredById = Dictionary(gatheredRecordings.map { ($0.id, $0) }) { first, _ in first }
+        report.notUploadedConflicts = uploadConflicts.sorted()
         report.conflictingDriveObjects = try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
                                                                                             gathered: gatheredById, remote: remoteRecordings, accessToken: accessToken)
         var missingOnDrive: [String] = []
@@ -1152,7 +1157,8 @@ final class BackupService {
     /// and stamps their `uploadedAt`.
     /// Returns the file names the manifest lists that are neither verified on
     /// Drive (SHA-256 and size) nor uploadable from here.
-    private func uploadRecordings(_ merged: SyncBlob, legacy: LegacyBackup?, modelContext: ModelContext, legacyAudio: [String: Data], remote: inout RemoteFiles, accessToken: String) async throws -> [String] {
+    private func uploadRecordings(_ merged: SyncBlob, legacy: LegacyBackup?, modelContext: ModelContext, legacyAudio: [String: Data], remote: inout RemoteFiles,
+                                  conflicts: inout Set<String>, accessToken: String) async throws -> [String] {
         let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
         var missing: [String] = []
         // Old recordings a tombstone keeps out of the manifest still go up raw, so
@@ -1162,6 +1168,16 @@ final class BackupService {
         for entry in merged.recordings + extra {
             // Present only when an object under its name carries both the hash and the size.
             guard Self.intact(remote, entry.driveName, sha256: entry.sha256, bytes: entry.bytes) == nil else { continue }
+            // A40: Drive already holds other audio for this id. It is never changed or
+            // joined by another copy; the recording is not uploaded and is reported.
+            let other = (remote[entry.driveName] ?? []).contains { file in
+                guard let sha = file.appProperties?["sha256"] else { return false }
+                return sha != entry.sha256 || file.appProperties?["bytes"] != String(entry.bytes)
+            }
+            if other {
+                conflicts.insert(entry.fileName)
+                continue
+            }
             // Only audio that is the manifest's (winning) content is uploaded.
             let audio: Data
             if let row = rows[entry.id], row.sha256 == entry.sha256 {
@@ -1173,8 +1189,7 @@ final class BackupService {
                 continue
             }
             let properties = ["id": entry.id, "projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes)]
-            // A40: an existing object's content is never changed; the recording goes up
-            // as a new object beside any other one under its name.
+            // A40: an existing object's content is never changed.
             let uploaded = try await driveClient.uploadNewFile(named: entry.driveName, mimeType: "application/octet-stream", content: audio, appProperties: properties, accessToken: accessToken)
             if let checksum = uploaded.sha256Checksum, checksum.lowercased() != entry.sha256 {
                 throw BackupError.recordingIntegrityMismatch(entry.fileName)

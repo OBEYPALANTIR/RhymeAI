@@ -2626,6 +2626,10 @@ final class EditorViewModel: ObservableObject {
             let count = report.unmovedLegacyRecordings
             notes.append("\(count) older \(count == 1 ? "recording" : "recordings") could not be moved; the older backup is kept.")
         }
+        if !report.notUploadedConflicts.isEmpty {
+            let count = report.notUploadedConflicts.count
+            notes.append("\(count) \(count == 1 ? "recording was" : "recordings were") not uploaded because Google Drive holds different audio for \(count == 1 ? "it" : "them").")
+        }
         if !report.conflictingDriveObjects.isEmpty {
             let count = report.conflictingDriveObjects.count
             notes.append("\(count) Drive \(count == 1 ? "copy holds" : "copies hold") other audio under a recording's id and \(count == 1 ? "was" : "were") left in place.")

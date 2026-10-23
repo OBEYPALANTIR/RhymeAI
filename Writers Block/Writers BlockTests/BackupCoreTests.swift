@@ -1296,8 +1296,9 @@ struct BackupCoreTests {
 
         try await harness.service.backupNow(modelContext: harness.context)
 
-        #expect(harness.drive.objects(named: RecordingBackupManifest.driveName(recordingId: id)) == 2)
-        #expect(harness.drive.contents(named: RecordingBackupManifest.driveName(recordingId: id)) == [Data([8]), Data([4, 4])])
+        // Not uploaded beside it either: reported, as on Android.
+        #expect(harness.drive.contents(named: RecordingBackupManifest.driveName(recordingId: id)) == [Data([8])])
+        #expect(harness.service.lastReport?.notUploadedConflicts == ["take.m4a"])
     }
 
     @MainActor
