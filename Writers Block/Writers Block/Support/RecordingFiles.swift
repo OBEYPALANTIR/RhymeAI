@@ -78,22 +78,67 @@ enum RecordingFiles {
         // Bytes that cannot be read cannot be judged.
         guard (try? sha256(of: url)) != nil else { return .uninspectable }
         let asset = AVURLAsset(url: url)
-        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
-              let range = try? await track.load(.timeRange),
-              let format = try? await track.load(.formatDescriptions).first,
-              let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+        let tracks: [AVAssetTrack]
+        do {
+            tracks = try await asset.loadTracks(withMediaType: .audio)
+        } catch {
+            return demonstratesMalformed(error) ? .invalid : .uninspectable
+        }
+        // A container that parses and holds no audio is not a recording.
+        guard let track = tracks.first else { return .invalid }
+        let range: CMTimeRange
+        let formats: [CMFormatDescription]
+        do {
+            range = try await track.load(.timeRange)
+            formats = try await track.load(.formatDescriptions)
+        } catch {
+            return demonstratesMalformed(error) ? .invalid : .uninspectable
+        }
+        guard let format = formats.first, let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
               description.mSampleRate > 0, range.duration.isNumeric else { return .invalid }
         let declared = Int64((range.duration.seconds * description.mSampleRate).rounded())
-        guard declared > 0, let reader = try? AVAssetReader(asset: asset) else { return .invalid }
+        guard declared > 0 else { return .invalid }
+        let reader: AVAssetReader
+        do {
+            reader = try AVAssetReader(asset: asset)
+        } catch {
+            return demonstratesMalformed(error) ? .invalid : .uninspectable
+        }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
-        guard reader.canAdd(output) else { return .invalid }
+        guard reader.canAdd(output) else { return .uninspectable }
         reader.add(output)
-        guard reader.startReading() else { return .invalid }
+        guard reader.startReading() else {
+            return reader.error.map(demonstratesMalformed) == true ? .invalid : .uninspectable
+        }
         var decoded: Int64 = 0
         while let buffer = output.copyNextSampleBuffer() { decoded += Int64(CMSampleBufferGetNumSamples(buffer)) }
-        guard reader.status == .completed else { return .invalid }
-        // AAC trims its encoder delay and padding; that leaves under two packets of slack.
-        return abs(decoded - declared) <= 2048 ? .complete : .invalid
+        switch reader.status {
+        case .completed:
+            // AAC trims its encoder delay and padding; that leaves under two packets of slack.
+            return abs(decoded - declared) <= 2048 ? .complete : .invalid
+        case .failed:
+            return reader.error.map(demonstratesMalformed) == true ? .invalid : .uninspectable
+        default:
+            return .uninspectable
+        }
+    }
+
+    /// Errors that show the file itself is not a usable container (it was read,
+    /// and its structure or data is wrong), as opposed to a failure to look.
+    nonisolated private static func demonstratesMalformed(_ error: Error) -> Bool {
+        let codes: Set<Int> = [
+            AVError.Code.fileFormatNotRecognized.rawValue,
+            AVError.Code.decodeFailed.rawValue,
+            AVError.Code.undecodableMediaData.rawValue,
+            AVError.Code.failedToParse.rawValue,
+            AVError.Code.fileFailedToParse.rawValue,
+            // The index points at samples the file does not hold: cut off.
+            AVError.Code.invalidSampleCursor.rawValue,
+        ]
+        let nsError = error as NSError
+        if nsError.domain == AVFoundationErrorDomain, codes.contains(nsError.code) { return true }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error { return demonstratesMalformed(underlying) }
+        return false
     }
 
     nonisolated static func newMemoURL(for projectId: String) -> URL {
@@ -329,12 +374,13 @@ enum RecordingFiles {
     }
 
     /// Size and modification time, read now; a file that cannot be read throws.
-    nonisolated static func facts(_ url: URL) throws -> (size: Int64, modified: Date) {
+    nonisolated static func facts(_ url: URL) throws -> (size: Int64, modified: Date, inode: UInt64) {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard let size = (attributes[.size] as? NSNumber)?.int64Value, let modified = attributes[.modificationDate] as? Date else {
+        guard let size = (attributes[.size] as? NSNumber)?.int64Value, let modified = attributes[.modificationDate] as? Date,
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else {
             throw CocoaError(.fileReadUnknown)
         }
-        return (size, modified)
+        return (size, modified, inode)
     }
 
     /// SHA-256 of a file's bytes, read in chunks.
@@ -367,36 +413,63 @@ enum RecordingFiles {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    /// Files recorded for quarantine whose move has not finished yet (A28). `root`
-    /// is the memo or the Trash root; both sit in the same folder. A missing record
-    /// is empty; one that cannot be read or parsed throws (fail closed, A31).
-    nonisolated static func readPendingQuarantine(for root: URL) throws -> Set<String> {
-        let url = pendingQuarantineURL(for: root)
-        guard try exists(url) else { return [] }
-        return Set(try JSONDecoder().decode([String].self, from: Data(contentsOf: url)))
+    /// Moves recorded before the save that decides them and finished after it, or
+    /// at the next run (A28, finding 4): files going to quarantine, and files of
+    /// recordings removed on another device going to the recordings Trash. A
+    /// detached Trash entry stays recorded, so it is never adopted again.
+    nonisolated struct PendingMoves: Codable, Equatable, Sendable {
+        var quarantine: [String] = []
+        var detach: [Detach] = []
+
+        nonisolated struct Detach: Codable, Equatable, Hashable, Sendable {
+            var recordingId: String
+            /// Empty once the move is done.
+            var source: String
+            var destination: String
+        }
+
+        /// Never adopted: waiting for quarantine, or a detached entry either side of its move.
+        var adoptionHidden: Set<String> { Set(quarantine + detach.flatMap { [$0.source, $0.destination] }.filter { !$0.isEmpty }) }
+        /// Not listed or played: waiting for quarantine, or still at its source.
+        var listingHidden: Set<String> { Set(quarantine + detach.map(\.source).filter { !$0.isEmpty }) }
     }
 
-    /// For listings: nil when the record cannot be read, so nothing is listed.
-    nonisolated static func pendingQuarantine(for root: URL) -> Set<String>? {
-        try? readPendingQuarantine(for: root)
+    /// `root` is the memo or the Trash root; both sit in the same folder. A missing
+    /// record is empty; one that cannot be read or parsed throws (fail closed, A31).
+    nonisolated static func readPendingMoves(for root: URL) throws -> PendingMoves {
+        let url = pendingMovesURL(for: root)
+        guard try exists(url) else { return PendingMoves() }
+        return try JSONDecoder().decode(PendingMoves.self, from: Data(contentsOf: url))
     }
 
-    nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
-        let url = pendingQuarantineURL(for: root)
-        if paths.isEmpty {
+    nonisolated static func writePendingMoves(_ moves: PendingMoves, for root: URL) throws {
+        let url = pendingMovesURL(for: root)
+        if moves.quarantine.isEmpty && moves.detach.isEmpty {
             if try exists(url) { try FileManager.default.removeItem(at: url) }
             return
         }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(paths.sorted()).write(to: url, options: .atomic)
+        try JSONEncoder().encode(moves).write(to: url, options: .atomic)
     }
 
-    private nonisolated static func pendingQuarantineURL(for root: URL) -> URL {
+    /// For listings and playback: nil when the record cannot be read, so nothing is listed.
+    nonisolated static func pendingQuarantine(for root: URL) -> Set<String>? {
+        (try? readPendingMoves(for: root))?.listingHidden
+    }
+
+    /// Records files for quarantine (tests and callers outside a reconcile).
+    nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
+        var moves = try readPendingMoves(for: root)
+        moves.quarantine = paths.sorted()
+        try writePendingMoves(moves, for: root)
+    }
+
+    private nonisolated static func pendingMovesURL(for root: URL) -> URL {
         quarantineRoot(for: root).appendingPathComponent("pending-moves.json")
     }
 
     /// Trash entries for adoption: an unreadable Trash fails rather than looking empty.
-    static func readableTrashedMemos(in trashRoot: URL) throws -> [TrashedVoiceMemo] {
+    nonisolated static func readableTrashedMemos(in trashRoot: URL) throws -> [TrashedVoiceMemo] {
         guard try exists(trashRoot) else { return [] }
         var memos: [TrashedVoiceMemo] = []
         for folder in try FileManager.default.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {

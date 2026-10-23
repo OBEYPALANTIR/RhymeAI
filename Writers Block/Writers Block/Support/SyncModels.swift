@@ -853,7 +853,7 @@ enum RecordingBackupManifest {
     }
 
     /// A project's memo files, sorted by name.
-    static func scanFiles(projectId: String, memosRoot: URL) throws -> [(fileName: String, url: URL)] {
+    nonisolated static func scanFiles(projectId: String, memosRoot: URL) throws -> [(fileName: String, url: URL)] {
         let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
         // A folder that is not there has no recordings; one that cannot be read is an error.
         guard try RecordingFiles.exists(folder) else { return [] }
