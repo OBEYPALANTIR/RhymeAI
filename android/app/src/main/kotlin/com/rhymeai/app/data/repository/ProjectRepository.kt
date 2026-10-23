@@ -84,6 +84,7 @@ class ProjectRepository internal constructor(
         private val PENDING_RECORDING_DELETIONS_KEY = stringSetPreferencesKey("pending_recording_deletions")
         private val SYNC_DELETIONS_KEY = stringPreferencesKey("sync_deletions_json")
         private val RECORDING_RECORDS_KEY = stringPreferencesKey("recording_records_json")
+        private val FIRST_SEEN_KEY = stringPreferencesKey("first_seen_precedence_json")
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
@@ -128,8 +129,13 @@ class ProjectRepository internal constructor(
     private val trashedProjectsStore = FailClosedStoredJson("trash") {
         json.decodeFromString<List<TrashedSongProject>>(it)
     }
+    // A33: every tombstone is validated where it is read; a malformed one makes the whole
+    // deletion state unreadable, so mutations and lists that depend on it fail closed.
     private val deletionsStore = FailClosedStoredJson("sync deletions") {
-        json.decodeFromString<List<SyncDeletion>>(it)
+        json.decodeFromString<List<SyncDeletion>>(it).onEach(SyncDeletion::validate)
+    }
+    private val firstSeenStore = FailClosedStoredJson("first-seen times") {
+        json.decodeFromString<Map<String, Long>>(it)
     }
     private val recordsStore = FailClosedStoredJson("recording records") {
         json.decodeFromString<List<RecordingRecord>>(it)
@@ -401,6 +407,37 @@ class ProjectRepository internal constructor(
         committed
     }
 
+    /**
+     * A32: every song, trashed song and recording among [inputs] whose precedence time is
+     * missing (zero) gets the time this device first saw it, by identity, persisted here
+     * before any comparison or naming and reused on every later merge; it then travels
+     * in the manifest. Returns the inputs with those times filled in.
+     */
+    suspend fun establishPrecedence(inputs: List<SyncBlob>, now: Long): List<SyncBlob> {
+        val needed = inputs.flatMap { blob ->
+            blob.projects.filter { it.updatedAt <= 0L }.map { "song:${it.id}" } +
+                blob.trashed.filter { it.deletedAt <= 0L }.map { "trash:${it.project.id}" } +
+                blob.recordings.filter { it.precedenceTime <= 0L }.map { "rec:${it.id}" }
+        }.toSet()
+        if (needed.isEmpty()) return inputs
+        var seen: Map<String, Long> = emptyMap()
+        projectSaveMutex.withLock {
+            dataStore.edit { prefs ->
+                val known = firstSeenStore.decode(prefs[FIRST_SEEN_KEY] ?: "{}")
+                val next = known + (needed - known.keys).associateWith { now }
+                if (next != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(next)
+                seen = next
+            }
+        }
+        return inputs.map { blob ->
+            blob.copy(
+                projects = blob.projects.map { p -> if (p.updatedAt > 0L) p else p.copy(updatedAt = seen.getValue("song:${p.id}")) },
+                trashed = blob.trashed.map { t -> if (t.deletedAt > 0L) t else seen.getValue("trash:${t.project.id}").let { at -> t.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS) } },
+                recordings = blob.recordings.map { r -> if (r.precedenceTime > 0L) r else r.copy(uploadedAt = seen.getValue("rec:${r.id}")) }
+            )
+        }
+    }
+
     suspend fun syncDeletions(): List<SyncDeletion> =
         deletionsStore.decode(dataStore.data.first()[SYNC_DELETIONS_KEY] ?: "[]")
 
@@ -501,6 +538,8 @@ class ProjectRepository internal constructor(
                 val prefs = dataStore.data.first()
                 val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
                 val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+                // A33: no recording bytes are deleted unless the deletion state is readable and valid.
+                deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
                 if (active.any { it.id == id } || trash.any { it.project.id == id }) {
                     complete = false
                     continue
