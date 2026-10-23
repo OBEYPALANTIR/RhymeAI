@@ -109,7 +109,12 @@ deletion won moves to quarantine; if that move fails it is retried at the next
 launch, and meanwhile the recordings and Trash lists hide it (refreshing when the
 tombstones change) and playback refuses it. When two recordings of one song claim
 one name, the earlier keeps it and the other becomes "<stem> 2" on every device;
-Restore and Import rename local files to match, never replacing one. A name-only tombstone from before v4 removes only a recording
+the manifest keeps each recording's claimed name (`claimedName`, A34) beside its
+allocated one, Back up renames no local file, and Restore and Import rename local
+files to match, never replacing one. A missing precedence time becomes the time
+this device first saw the song or recording, persisted before any comparison
+(A32). Tombstones are validated when read; with a malformed or unreadable one,
+nothing is adopted, moved, quarantined or deleted (A33). A name-only tombstone from before v4 removes only a recording
 whose id is the pre-v4 id of that name and its own bytes, never a v4 recording
 that reuses the name. Unfinished recordings stay in a staging folder until the
 recorder finishes them, so a backup never sees them; a take the recorder fails to

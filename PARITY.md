@@ -194,12 +194,18 @@ below is the contract it must meet, not verified behaviour.
   recordings Drive lists that this device does not hold, live or in Trash, are
   counted once each, a Trash-held one Drive lists without its intact raw object
   counts as unpreserved, and tombstoned ones are deletions, not skips.
-- Stable precedence (A32): every entry's precedence time is fixed when merge
-  inputs are gathered (an entry without `uploadedAt` keeps its file time, or 0)
-  and never changes afterwards; a backup write no longer stamps a missing time.
-- Readable tombstones first (A33): no adoption, reconciliation or quarantine
-  mutation happens unless the sync deletions can be read (they are the quarantine
-  intent); Delete Forever, expiry and moves fail with nothing changed otherwise.
+- Stable precedence (A32): before any merge compares or names anything, every
+  song, trashed song and recording whose precedence time is missing (zero) gets
+  the time this device first saw it, by identity, persisted locally
+  (`first_seen_precedence_json`) and then written into the manifest; it never
+  changes afterwards. An older tombstone therefore cannot delete a recording or
+  song only because its time was unknown.
+- Valid tombstones first (A33): tombstones are validated where they are read
+  (Android `ProjectRepository`'s deletion store runs `SyncDeletion.validate` on
+  every entry; iOS validates at its store too), so a malformed one makes the
+  deletion state unreadable. No adoption, reconciliation, move, quarantine or
+  pending song-folder deletion happens unless that state is readable and valid,
+  and the recordings lists show nothing and playback is refused otherwise.
 - Local folders (Android, under the app's files directory): `voice-memos/`
   (live), `voice-memos-trash/` (`<deletedAt>__<name>`), `voice-memos-staging/`
   (takes being recorded or waiting), `voice-memos-quarantine/` (duplicates and
@@ -217,13 +223,34 @@ below is the contract it must meet, not verified behaviour.
   then tap Retry." (save failed, with Retry); in the recordings sheet "N
   recording(s) waiting to be saved" and "N recording(s) could not be saved" with
   Retry.
-- Name collisions (A30): when two recordings of one song claim one file name,
-  the one with the earlier `uploadedAt` (then the smaller id) keeps it and each
-  other takes the first free "<stem> 2<ext>", "<stem> 3<ext>" in that same order
-  (`SyncMerger.assignNames`). Backups write those names; Restore and Import first
-  rename local recordings to them (a move with its record, never replacing a
-  file), then place downloads, so devices converge without renaming loops. A
-  path belongs to the recording whose id and bytes the record verified.
+- Name collisions (A30/A34): each manifest entry may carry `claimedName`, the
+  name the user chose, when it differs from its allocated `fileName` (absent means
+  the claim is `fileName`). Names are allocated from claims over the whole
+  collision group of a song, identically on backup and restore: the claim with
+  the earlier `uploadedAt` (then the smaller id) keeps the name, each other takes
+  the first free "<stem> 2<ext>", "<stem> 3<ext>" from its claim's stem, never from
+  an allocated name (Android `SyncMerger.assignNames`, iOS
+  `SyncMerger.allocateNames`). A device's claim for a recording it holds is its
+  own when the user changed it since the device last wrote it (a new recording,
+  or a rename), else the manifest's claim. Back up writes the allocated names and
+  renames no local file; Restore and Import rename local recordings to their
+  allocated names (a move with its record, never replacing a file, through
+  parking when names swap) before placing downloads. A restored or imported
+  recording claims its `claimedName`, never its allocated name. A path belongs
+  to the recording whose id and bytes the record verified.
+- Playback (A28): Android starts playback under the recording lock with a
+  verified id (adopting a file seen for the first time), and every transition
+  that moves bytes calls `RecordingTransitions.beforeBytesMove` under the same
+  lock first, so playback stops before a quarantine, rename or parking move and
+  no play can start in between; iOS stops playback through its `willMove` hook.
+- iOS specifics (round 6): recording tombstones by id live in the CloudKit
+  record type `SyncRecordingDeletion` (`SyncDeletionRecord` keeps song and
+  legacy name tombstones, without a recording id); iOS rows carry `claimedName`
+  separate from the allocated `fileName`; `pending-moves.json` also records
+  Trash-detach intents (id, source, destination) before the deciding save; and
+  `oversized-recordings.json` records an oversized take's id, name and finish
+  time before its move. The manifest's only addition is the optional
+  `claimedName` (A34); the shared fixture is unchanged.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
   Tombstones apply by timestamp: a song tombstone removes the song only when
