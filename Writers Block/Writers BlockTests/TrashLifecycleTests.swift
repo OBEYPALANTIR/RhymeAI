@@ -365,6 +365,34 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func aRecordingAWinningDeletionCoversIsNotPlayable() throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Playable-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "Playable-\(scratch.lastPathComponent)")!)
+        let context = container.mainContext
+        context.insert(Recording(id: "old", projectId: "song", fileName: "old.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        context.insert(Recording(id: "new", projectId: "song", fileName: "new.m4a", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 90)))
+        try context.save()
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = context
+        let old = library.memosRoot.appendingPathComponent("song/old.m4a")
+        let new = library.memosRoot.appendingPathComponent("song/new.m4a")
+        #expect(viewModel.isPlayableRecording(old) && viewModel.isPlayableRecording(new))
+
+        // A song deletion at 50 s wins against the older take only.
+        context.insert(SyncDeletionRecord(projectId: "song", deletedAt: 50_000))
+        try context.save()
+        #expect(!viewModel.isPlayableRecording(old) && viewModel.isPlayableRecording(new))
+
+        // A file waiting to move to quarantine is not played either.
+        try RecordingFiles.setPendingQuarantine([RecordingFiles.canonicalPath(new)], for: library.memosRoot)
+        #expect(!viewModel.isPlayableRecording(new))
+    }
+
+    @MainActor
     private static func makeHarness() throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)

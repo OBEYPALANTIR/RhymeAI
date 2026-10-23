@@ -456,7 +456,7 @@ final class EditorViewModel: ObservableObject {
             if reconcileRecordings() {
                 applyPersistedDeletions()
                 purgeExpiredTrashedProjects()
-                voiceMemoService.retryPendingTakes()
+                Task { await voiceMemoService.retryPendingTakes() }
             }
             recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
@@ -701,6 +701,7 @@ final class EditorViewModel: ObservableObject {
             self?.scheduleAutomaticBackup()
         }
         voiceMemoService.publisher = recordingLibrary
+        voiceMemoService.playbackAllowed = { [weak self] url in self?.isPlayableRecording(url) ?? true }
         refreshCloudBackupState()
     }
 
@@ -1698,10 +1699,11 @@ final class EditorViewModel: ObservableObject {
             $0.projectId == trashed.projectId && $0.fileName == trashed.originalName
                 && $0.trashedAt?.epochMilliseconds == trashed.deletedAt.epochMilliseconds
         }
-        // A Trash entry without a row is named by the id every device derives for it.
-        let recordingId = row?.id ?? (try? Data(contentsOf: trashed.url)).map {
-            RecordingBackupManifest.legacyRecordingId(projectId: trashed.projectId, fileName: trashed.originalName, sha256: RecordingBackupManifest.sha256Hex($0))
-        }
+        // A Trash entry without a row is named by the id every device derives for it;
+        // one that cannot be read is not deleted.
+        let recordingId = try row?.id ?? RecordingBackupManifest.legacyRecordingId(
+            projectId: trashed.projectId, fileName: trashed.originalName, sha256: RecordingFiles.sha256(of: trashed.url)
+        )
         try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: recordingId, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
         if let row { context.delete(row) }
     }
@@ -2157,7 +2159,19 @@ final class EditorViewModel: ObservableObject {
     /// first, so a take published before an interruption counts as saved.
     func retryPendingRecordings() {
         guard reconcileRecordings() else { return }
-        voiceMemoService.retryPendingTakes()
+        Task { await voiceMemoService.retryPendingTakes() }
+    }
+
+    /// A recording a winning deletion covers is not played (A28): one waiting for
+    /// quarantine, or one whose row a stored deletion covers by time.
+    func isPlayableRecording(_ url: URL) -> Bool {
+        guard let recordingLibrary, let modelContext else { return true }
+        let path = RecordingFiles.canonicalPath(url)
+        guard let hidden = RecordingFiles.pendingQuarantine(for: recordingLibrary.memosRoot), !hidden.contains(path) else { return false }
+        guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
+              let deletions = try? modelContext.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion) else { return false }
+        guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
+        return !deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
     }
 
     /// Brings `Recording` rows (iCloud) and memo files in step. Runs at launch, when
@@ -2171,6 +2185,7 @@ final class EditorViewModel: ObservableObject {
         do {
             try recordingLibrary.reconcile(context: modelContext)
             oversizedRecordingCount = recordingLibrary.oversizedCount
+            voiceMemoService.recordingsChanged()
             return true
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -2300,6 +2315,7 @@ final class EditorViewModel: ObservableObject {
         ) { service, context in
             try await service.restoreNow(modelContext: context)
         }
+        voiceMemoService.recordingsChanged()
     }
 
     /// Opens the older encrypted backup with a passphrase typed once; it is not kept.
@@ -2325,6 +2341,7 @@ final class EditorViewModel: ObservableObject {
             try service.importArchive(data, modelContext: context)
         }
         // Imported recordings are files, which no library save announces.
+        voiceMemoService.recordingsChanged()
         scheduleAutomaticBackup()
     }
 
