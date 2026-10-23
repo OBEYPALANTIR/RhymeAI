@@ -197,6 +197,7 @@ final class RecordingLibrary: RecordingPublishing {
     private static let verifiedKey = "recording-library-verified-ids"
     private static let digestCacheKey = "recording-library-digest-cache"
     private static let firstSeenKey = "recording-library-first-seen"
+    private static let legacyAliasesKey = "recording-library-legacy-path-ids"
     let memosRoot: URL
     let trashRoot: URL
     private let defaults: UserDefaults
@@ -250,7 +251,12 @@ final class RecordingLibrary: RecordingPublishing {
 
     private var verified: [String: Verified] {
         get {
-            guard let raw = validatedRegistry(Self.verifiedKey, as: [String: [String: Any]].self) else { return [:] }
+            let present = defaults.object(forKey: Self.verifiedKey) != nil
+            guard let raw = validatedRegistry(Self.verifiedKey, as: [String: [String: Any]].self) else {
+                // A registry of the wrong shape is set aside: removals wait (T3.31).
+                if present { identityRegistryDamaged = true }
+                return [:]
+            }
             var entries: [String: Verified] = [:]
             for (id, entry) in raw {
                 guard let at = (entry["at"] as? NSNumber)?.int64Value, let sha = entry["sha256"] as? String,
@@ -605,6 +611,10 @@ final class RecordingLibrary: RecordingPublishing {
             // Staging is scratch: a partial or staged copy left by a crash is reused
             // only when it holds the same bytes, so its journal entries can end.
             try? FileManager.default.removeItem(at: RecordingFiles.stagingRoot(for: memosRoot).appendingPathComponent("journal.json"))
+        } else {
+            // An unreadable staging record keeps every staged file (T1.7).
+            let reason = "The record of recordings being staged could not be read; staged copies are kept."
+            if !stateIssues.contains(reason) { stateIssues.append(reason) }
         }
     }
 
@@ -618,6 +628,12 @@ final class RecordingLibrary: RecordingPublishing {
         let adoptions = defaults.dictionary(forKey: LegacyKeys.claimAdoptions) as? [String: String]
         var changed = false
         for row in rows {
+            // A row whose name arrived empty (an older record synced without the
+            // renamed field) gets a name rather than being refused; its audio stays.
+            if row.displayName.isEmpty, row.legacyClaimedName.isEmpty {
+                row.displayName = "Recording.m4a"
+                changed = true
+            }
             if !row.legacyClaimedName.isEmpty {
                 if row.displayName != row.legacyClaimedName { row.displayName = row.legacyClaimedName }
                 row.legacyClaimedName = ""
@@ -650,17 +666,24 @@ final class RecordingLibrary: RecordingPublishing {
             let time = at.flatMap { $0 > 0 ? $0 : nil }
             ids[id] = Verified(at: time ?? firstSeen(id).epochMilliseconds, sha256: sha, displayName: name, repaired: time == nil)
         }
+        // A file they verified by path is that recording while it holds those bytes:
+        // its path is kept as an alias of the id, until the file is gone (T3.37).
+        var aliases = defaults.dictionary(forKey: Self.legacyAliasesKey) as? [String: String] ?? [:]
         if let paths = defaults.dictionary(forKey: LegacyKeys.verifiedPaths) as? [String: [String: Any]] {
             for (path, entry) in paths {
                 guard let id = entry["id"] as? String else { continue }
                 remember(id: id, file: URL(fileURLWithPath: path), sha: entry["sha256"] as? String, at: (entry["at"] as? NSNumber)?.int64Value)
+                aliases[RecordingFiles.canonicalPath(URL(fileURLWithPath: path))] = id
             }
         }
         if let paths = defaults.dictionary(forKey: LegacyKeys.mirroredPaths) as? [String: String] {
             for (path, id) in paths where (try? RecordingFiles.exists(URL(fileURLWithPath: path))) == true {
                 remember(id: id, file: URL(fileURLWithPath: path), sha: nil, at: nil)
+                aliases[RecordingFiles.canonicalPath(URL(fileURLWithPath: path))] = id
             }
         }
+        aliases = aliases.filter { (try? RecordingFiles.exists(URL(fileURLWithPath: $0.key))) == true }
+        if aliases.isEmpty { defaults.removeObject(forKey: Self.legacyAliasesKey) } else { defaults.set(aliases, forKey: Self.legacyAliasesKey) }
         if let keys = defaults.stringArray(forKey: LegacyKeys.mirroredKeys) {
             for key in keys {
                 let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
@@ -965,17 +988,7 @@ final class RecordingLibrary: RecordingPublishing {
         //    before A20 keeps its recorded `recordedAt` as its time (T3.1); a row with
         //    no time at all gets the time it was first seen here, stored at once and
         //    marked as a repair (A37). A missing Trash time is stamped and marked (A38).
-        for row in allRows {
-            if row.uploadedAt == nil, row.recordedAt.epochMilliseconds > 0 { row.uploadedAt = row.recordedAt }
-            if row.precedenceTime.epochMilliseconds <= 0 {
-                row.uploadedAt = firstSeen(row.id)
-                row.precedenceRepaired = true
-            }
-            if let trashed = row.trashedAt, trashed.epochMilliseconds <= 0 {
-                row.trashedAt = firstSeen("trashed:\(row.id)")
-                row.trashedAtRepaired = true
-            }
-        }
+        for row in allRows { establishTimes(row) }
 
         var byPath: [String: DiskFile] = [:]
         for file in pass.live + pass.trash + pass.sources { byPath[file.path] = file }
@@ -1050,6 +1063,26 @@ final class RecordingLibrary: RecordingPublishing {
         var candidates: [Candidate] = []
         var oversizedMigrations: [(file: DiskFile, id: String, entry: OversizedRecordings.Entry)] = []
         let tombstonedIds = Set(deletions.compactMap(\.recordingId))
+        // Files an earlier build had verified as a recording by path (T3.37).
+        let aliases = defaults.dictionary(forKey: Self.legacyAliasesKey) as? [String: String] ?? [:]
+        /// A recording removed on another device whose file is still here: to the
+        /// recordings Trash under its id, or to quarantine when a deletion of it wins
+        /// (A28/A41) or its Trash place is taken.
+        func removedElsewhere(_ file: DiskFile, id: String, mirror: Verified, sha: String, storedName: String) throws {
+            if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: id, sha256: sha, at: Date(millisecondsSince1970: mirror.at), repaired: mirror.repaired) }) {
+                toQuarantine.append((file.url, sha, id))
+                return
+            }
+            let destination = trashURL(projectId: file.projectId, storedName: storedName)
+            if try RecordingFiles.exists(destination) {
+                toQuarantine.append((file.url, sha, id))
+                return
+            }
+            detaches.append(.init(recordingId: id, source: file.path, destination: RecordingFiles.canonicalPath(destination), sha256: sha,
+                                  // A mirror without a time gets its first-seen time, a repair (T2.25).
+                                  displayName: mirror.displayName, at: mirror.at > 0 ? mirror.at : firstSeen(id).epochMilliseconds,
+                                  detachedAt: Date().epochMilliseconds, repaired: mirror.repaired, bytes: file.size))
+        }
         for file in pass.live + pass.trash where !claimed.contains(file.path) {
             if file.oversized {
                 result.oversizedCount += 1
@@ -1091,6 +1124,12 @@ final class RecordingLibrary: RecordingPublishing {
             }
             // An empty file is never a recording (as recording and import refuse it).
             guard let sha = file.sha256, file.size > 0 else { continue }
+            if file.storedId == nil, !file.trashed, allowRemovals, let id = aliases[file.path], let mirror = known[id], mirror.sha256 == sha,
+               rowsById[id] == nil {
+                try removedElsewhere(file, id: id, mirror: mirror, sha: sha,
+                                     storedName: RecordingFiles.storedName(id: id, displayName: mirror.displayName))
+                continue
+            }
             if let id = file.storedId {
                 // Copies written for a draft, taken in under the identity recorded for them.
                 if let entry = adoptByPath[file.path], entry.sha256 == sha, rowsById[entry.recordingId] == nil {
@@ -1101,19 +1140,8 @@ final class RecordingLibrary: RecordingPublishing {
                     if rowsById[id] != nil {
                         // A second copy of a recording held elsewhere.
                         toQuarantine.append((file.url, sha, id))
-                    } else if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: id, sha256: sha, at: Date(millisecondsSince1970: mirror.at), repaired: mirror.repaired) }) {
-                        // Removed on another device, and a deletion of it wins here (A28/A41).
-                        toQuarantine.append((file.url, sha, id))
                     } else {
-                        // Removed on another device: to the recordings Trash, keeping its id.
-                        let destination = trashURL(projectId: file.projectId, storedName: file.name)
-                        if try RecordingFiles.exists(destination) {
-                            toQuarantine.append((file.url, sha, id))
-                        } else {
-                            detaches.append(.init(recordingId: id, source: file.path, destination: RecordingFiles.canonicalPath(destination), sha256: sha,
-                                                  displayName: mirror.displayName, at: mirror.at, detachedAt: Date().epochMilliseconds,
-                                                  repaired: mirror.repaired, bytes: file.size))
-                        }
+                        try removedElsewhere(file, id: id, mirror: mirror, sha: sha, storedName: file.name)
                     }
                     continue
                 }
@@ -1553,7 +1581,10 @@ final class RecordingLibrary: RecordingPublishing {
         let hidden = moves.listingHidden
         var items: [TrashedVoiceMemo] = []
         var listed = Set<String>()
+        // A time missing on a row or record that arrived since the last check is fixed
+        // and kept here, before it is listed or compared with a deadline (T2.50, T2.52).
         for row in try context.fetch(FetchDescriptor<Recording>()) where row.trashedAt != nil {
+            if establishTimes(row) { try save(context) }
             guard let file = url(of: row), try RecordingFiles.exists(file), !hidden.contains(RecordingFiles.canonicalPath(file)) else { continue }
             listed.insert(RecordingFiles.canonicalPath(file))
             items.append(TrashedVoiceMemo(url: file, projectId: row.projectId, originalName: row.displayName, deletedAt: row.trashedAt!, recordingId: row.id))
@@ -1564,7 +1595,12 @@ final class RecordingLibrary: RecordingPublishing {
             items.append(TrashedVoiceMemo(url: file, projectId: file.deletingLastPathComponent().lastPathComponent, originalName: entry.displayName,
                                           deletedAt: Date(millisecondsSince1970: entry.detachedAt), recordingId: entry.recordingId))
         }
-        for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.trashedAt != nil {
+        for (id, var entry) in try OversizedRecordings.read(for: memosRoot) where entry.trashedAt != nil {
+            if entry.trashedAt! <= 0 {
+                entry.trashedAt = firstSeen("trashed:\(id)").epochMilliseconds
+                entry.trashedAtRepaired = true
+                try OversizedRecordings.record(id: id, entry: entry, for: memosRoot)
+            }
             let file = oversizedURL(id: id, entry: entry)
             guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
             items.append(TrashedVoiceMemo(url: file, projectId: entry.projectId, originalName: entry.fileName,
@@ -1942,14 +1978,37 @@ final class RecordingLibrary: RecordingPublishing {
         return names
     }
 
+    /// A row's precedence times, fixed on the row in the same pass that judges it
+    /// (A32, T2.34): a row from before A20 keeps its `recordedAt` as its real time
+    /// (T3.1); a row with no time at all gets the time it was first seen here, kept
+    /// at once and marked as a repair (A37); a missing Trash time likewise (A38).
+    /// True when the row changed (the caller saves).
+    @discardableResult
+    func establishTimes(_ row: Recording) -> Bool {
+        var changed = false
+        if row.uploadedAt == nil, row.recordedAt.epochMilliseconds > 0 { row.uploadedAt = row.recordedAt; changed = true }
+        if row.precedenceTime.epochMilliseconds <= 0 {
+            row.uploadedAt = firstSeen(row.id)
+            row.precedenceRepaired = true
+            changed = true
+        }
+        if let trashed = row.trashedAt, trashed.epochMilliseconds <= 0 {
+            row.trashedAt = firstSeen("trashed:\(row.id)")
+            row.trashedAtRepaired = true
+            changed = true
+        }
+        return changed
+    }
+
     /// Song deletion: each of its recordings the deletion beats (an older recorded
     /// time, or any repair or unknown time, A41, judged in this same pass, T2.34)
     /// gets its own tombstone by id, in the caller's transaction, and its row goes;
     /// a row whose audio is on no disk here has it written to quarantine first
     /// (T1.42). Returns the rows, whose files the caller sends to quarantine.
     func tombstoneRecordings(ofProject projectId: String, deletedAt: Int64, in context: ModelContext) throws -> [Recording] {
-        let rows = try context.fetch(FetchDescriptor<Recording>()).filter {
-            $0.projectId == projectId && ($0.precedenceIsRepair || $0.precedenceTime.epochMilliseconds < deletedAt)
+        let rows = try context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == projectId }.filter {
+            establishTimes($0)
+            return $0.precedenceIsRepair || $0.precedenceTime.epochMilliseconds < deletedAt
         }
         for row in rows {
             try DeletionStore.upsert(SyncDeletion(projectId: projectId, recordingId: row.id, fileName: row.displayName, deletedAt: deletedAt), in: context)

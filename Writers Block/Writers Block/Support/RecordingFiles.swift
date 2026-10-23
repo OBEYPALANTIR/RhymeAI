@@ -2,6 +2,7 @@ import AVFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import os
 
 // A recording sitting in the Trash Bin. On disk it is `<recordingId>.<ext>`
 // (A36); its name and deletion time come from the recording's metadata.
@@ -209,22 +210,6 @@ enum RecordingFiles {
         return (Date(millisecondsSince1970: millis > 0 && millis < maxPlausibleMilliseconds ? millis : 0), originalName)
     }
 
-    /// Remove a project's entire memo folder — live and trashed. Called on
-    /// permanent delete and on trash-purge expiry so orphaned audio doesn't
-    /// accumulate on disk.
-    @discardableResult
-    static func deleteMemosFolder(for projectId: String) -> Bool {
-        do {
-            let live = try projectURL(projectId: projectId, memosRoot: memosRoot())
-            let trash = try projectURL(projectId: projectId, memosRoot: memosTrashRoot())
-            try removeItemIfPresent(at: live, within: memosRoot())
-            try removeItemIfPresent(at: trash, within: memosTrashRoot())
-            return true
-        } catch {
-            return false
-        }
-    }
-
     // MARK: - Recordings Trash
 
     /// Separated the deletion time from the original name in Trash file names before A36.
@@ -247,22 +232,18 @@ enum RecordingFiles {
             includingPropertiesForKeys: nil,
             options: .skipsHiddenFiles
         ), contents.isEmpty {
-            try? removeItemIfPresent(at: folder, within: memosTrashRoot())
+            removeEmptyFolder(folder, within: memosTrashRoot())
         }
     }
 
-    nonisolated static func removeItemIfPresent(at url: URL, within root: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-
-        let standardizedURL = url.standardizedFileURL
-        let canonicalURL = standardizedURL.resolvingSymlinksInPath()
+    /// Removes a folder inside `root` only while it is empty: `rmdir` refuses a
+    /// folder that holds anything, so a file that appears meanwhile stays (T1.4).
+    nonisolated static func removeEmptyFolder(_ url: URL, within root: URL) {
+        let canonicalURL = url.standardizedFileURL.resolvingSymlinksInPath()
         let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
         let rootPrefix = canonicalRoot.path.hasSuffix("/") ? canonicalRoot.path : canonicalRoot.path + "/"
-        guard canonicalURL.path != canonicalRoot.path, canonicalURL.path.hasPrefix(rootPrefix) else {
-            throw SyncValidationError.pathOutsideMemoRoot
-        }
-
-        try FileManager.default.removeItem(at: standardizedURL)
+        guard canonicalURL.path != canonicalRoot.path, canonicalURL.path.hasPrefix(rootPrefix) else { return }
+        rmdir(url.standardizedFileURL.path)
     }
 
     /// Strip illegal filesystem characters from a candidate display name.
@@ -341,8 +322,32 @@ enum RecordingFiles {
     /// destination, so neither other bytes nor an occupied destination are ever moved
     /// or replaced.
     nonisolated static func verifiedMove(_ source: URL, to target: URL, sha256: String, bytes: Int64, within roots: [URL]) throws {
+        try BoundaryHooks.run(.beforeCheck, source, target)
         guard try facts(source).size == bytes, try self.sha256(of: source) == sha256 else { throw SyncValidationError.invalidRecording }
         try safeMove(source, to: target, within: roots)
+        try BoundaryHooks.run(.afterPrimitive, source, target)
+    }
+
+    /// Tests only: observers of every move or unlink of recording bytes, called
+    /// before the bytes are checked and after the primitive; a hook that throws stops
+    /// the operation there, as a crash would. Each test registers its own hook and
+    /// filters by its own folders, so tests running at once do not see each other.
+    nonisolated enum BoundaryHooks {
+        enum Point: Sendable { case beforeCheck, afterPrimitive }
+        typealias Hook = @Sendable (Point, URL, URL?) throws -> Void
+        private static let hooks = OSAllocatedUnfairLock(initialState: [UUID: Hook]())
+
+        static func install(_ hook: @escaping Hook) -> UUID {
+            let id = UUID()
+            hooks.withLock { $0[id] = hook }
+            return id
+        }
+
+        static func remove(_ id: UUID) { _ = hooks.withLock { $0.removeValue(forKey: id) } }
+
+        static func run(_ point: Point, _ source: URL, _ target: URL?) throws {
+            for hook in hooks.withLock({ Array($0.values) }) { try hook(point, source, target) }
+        }
     }
 
     /// `rename(2)` with `RENAME_EXCL`: atomic, and it fails rather than replace an
@@ -693,6 +698,7 @@ enum RecordingFiles {
             let file = URL(fileURLWithPath: item.path)
             do {
                 guard try exists(file) else { continue }
+                try BoundaryHooks.run(.beforeCheck, file, nil)
                 // Immediately before the unlink: still a recording file there, and still those bytes.
                 guard isRecordingFile(file, in: roots), try facts(file).size == item.bytes, try sha256(of: file) == item.sha256 else {
                     kept.append(file)
@@ -720,10 +726,7 @@ enum RecordingFiles {
     /// Removes a song's memo and Trash folders once nothing is left in them.
     nonisolated static func removeEmptySongFolders(_ projectId: String, memosRoot: URL, trashRoot: URL) {
         for root in [memosRoot, trashRoot] {
-            let folder = root.appendingPathComponent(projectId, isDirectory: true)
-            if let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path), contents.isEmpty {
-                try? FileManager.default.removeItem(at: folder)
-            }
+            removeEmptyFolder(root.appendingPathComponent(projectId, isDirectory: true), within: root)
         }
     }
 
@@ -735,7 +738,8 @@ enum RecordingFiles {
     /// for is never dropped (T1.7).
     nonisolated static func clearStaging(for memosRoot: URL, keeping claimed: Set<String>) {
         let staging = stagingRoot(for: memosRoot)
-        let journal = (try? readStagingJournal(for: memosRoot)) ?? StagingJournal()
+        // An unreadable record is not an empty one: nothing is cleared (T1.7).
+        guard let journal = try? readStagingJournal(for: memosRoot) else { return }
         // The journal itself stays while it holds moves (an unreadable one is kept too).
         let keep = claimed.union(journal.moves.flatMap { [$0.source, $0.destination] })
             .union([canonicalPath(stagingJournalURL(for: memosRoot))])
@@ -744,7 +748,7 @@ enum RecordingFiles {
             if !keep.contains(canonicalPath(file)) { try? FileManager.default.removeItem(at: file) }
         }
         let partial = staging.appendingPathComponent("partial", isDirectory: true)
-        if (try? FileManager.default.contentsOfDirectory(atPath: partial.path))?.isEmpty == true { try? FileManager.default.removeItem(at: partial) }
+        rmdir(partial.path) // only when empty
     }
 
     /// Partial → staged moves inside the staging folder, recorded before they are
@@ -818,7 +822,7 @@ enum RecordingFiles {
 
     /// Removes a staged file only while it holds the bytes it was staged with (T1.11).
     nonisolated static func unstage(_ staged: URL, sha256: String, bytes: Int64) {
-        guard (try? facts(staged).size) == bytes, (try? self.sha256(of: staged)) == sha256 else { return }
+        guard (try? BoundaryHooks.run(.beforeCheck, staged, nil)) != nil, (try? facts(staged).size) == bytes, (try? self.sha256(of: staged)) == sha256 else { return }
         try? FileManager.default.removeItem(at: staged)
     }
 

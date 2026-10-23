@@ -1508,3 +1508,732 @@ extension RecordingLibraryTests {
         #expect(defaults.object(forKey: "recording-library-mirrored-keys") == nil)
     }
 }
+
+/// Round 14: each byte transition, interrupted or challenged at its boundary by the
+/// production code itself (a hook at the primitive), then replayed after a reopen.
+extension RecordingLibraryTests {
+    private func scratch(_ store: Store) -> URL { store.root.deletingLastPathComponent() }
+
+    /// A published take in "song", with its row.
+    private func published(_ data: Data, in store: Store) throws -> (url: URL, id: String) {
+        let url = try store.library.publishFinished(try stage(data), projectId: "song", preferredName: "take.m4a", origin: .recorded)
+        return (url, try #require(RecordingFiles.storedId(of: url)))
+    }
+
+    /// T1.13, T6.26: a row move (trashed elsewhere) stops the id, records its source
+    /// on the row before the move, and is finished after a crash at either window.
+    @Test(arguments: [RecordingFiles.BoundaryHooks.Point.beforeCheck, .afterPrimitive])
+    func aRowMoveKilledAtItsBoundaryIsFinishedAfterARelaunch(window: RecordingFiles.BoundaryHooks.Point) async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([1, 2]), in: store)
+        let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        row.trashedAt = Date(timeIntervalSince1970: 60)
+        try context.save()
+        let stopped = HookBox<Set<String>>([])
+        store.library.willMove = { ids, _ in stopped.value.formUnion(ids) }
+        let seen = HookBox<(stopped: Bool, pendingSaved: Bool)?>(nil)
+        let crashed = HookBox(false)
+        try? await withBoundaryHook(scope: scratch(store), { point, source, _ in
+            guard point == window, source.lastPathComponent == take.url.lastPathComponent else { return }
+            if crashed.value { throw SimulatedCrash() }
+            crashed.value = true
+            seen.value = (stopped.value.contains(take.id), true)
+            throw SimulatedCrash()
+        }) {
+            try await store.library.reconcile(context: context)
+        }
+        #expect(crashed.value && seen.value?.stopped == true, "playback of the id was stopped before the primitive")
+        // What the production run saved before the crash names the move's source.
+        let relaunched = try reopen(store)
+        let saved = try #require(try relaunched.container.mainContext.fetch(FetchDescriptor<Recording>()).first)
+        #expect(saved.pendingFrom.map { RecordingFiles.canonicalPath(URL(fileURLWithPath: $0)) } == RecordingFiles.canonicalPath(take.url))
+
+        try await relaunched.library.reconcile(context: relaunched.container.mainContext)
+
+        #expect(!FileManager.default.fileExists(atPath: take.url.path))
+        #expect(try Data(contentsOf: store.trash.appendingPathComponent("song/\(take.id).m4a")) == Data([1, 2]))
+        #expect(try relaunched.container.mainContext.fetch(FetchDescriptor<Recording>()).map(\.pendingFrom) == [nil])
+    }
+
+    /// T1.13: bytes that change at the boundary are not moved; they stay where they are.
+    @Test func aRowMoveKeepsBytesThatChangeAtItsBoundary() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([1, 2]), in: store)
+        try #require(try context.fetch(FetchDescriptor<Recording>()).first).trashedAt = Date(timeIntervalSince1970: 60)
+        try context.save()
+
+        try await withBoundaryHook(scope: scratch(store), { point, source, _ in
+            guard point == .beforeCheck, source.lastPathComponent == take.url.lastPathComponent else { return }
+            try Data([9, 9]).write(to: source)
+        }) {
+            try await store.library.reconcile(context: context)
+        }
+
+        #expect(try Data(contentsOf: take.url) == Data([9, 9]))
+        #expect(!FileManager.default.fileExists(atPath: store.trash.appendingPathComponent("song/\(take.id).m4a").path))
+    }
+
+    /// T1.6: a file that appears at the destination after the check and before the
+    /// rename is never replaced.
+    @Test func aDestinationThatAppearsAtTheBoundaryIsNeverReplaced() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([1, 2]), in: store)
+        try #require(try context.fetch(FetchDescriptor<Recording>()).first).trashedAt = Date(timeIntervalSince1970: 60)
+        try context.save()
+        let place = store.trash.appendingPathComponent("song/\(take.id).m4a")
+
+        let result = try await withBoundaryHook(scope: scratch(store), { point, _, target in
+            guard point == .beforeCheck, let target, target.lastPathComponent == place.lastPathComponent else { return }
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([7]).write(to: target)
+        }) {
+            try await store.library.reconcile(context: context)
+        }
+
+        #expect(try Data(contentsOf: place) == Data([7]))
+        #expect(try Data(contentsOf: take.url) == Data([1, 2]))
+        #expect(result.needsAttention.map(RecordingFiles.canonicalPath).contains(RecordingFiles.canonicalPath(take.url)))
+    }
+
+    /// T1.5, T1.14, T6.42: a quarantine is recorded by the run with its id,
+    /// destination and length before the move; after a crash at the move the replay
+    /// uses that record, and checks the bytes again at the boundary.
+    @Test(arguments: [false, true])
+    func aQuarantineKilledAtItsMoveIsReplayedFromItsRecord(bytesChange: Bool) async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([3, 4]), in: store)
+        context.insert(SyncRecordingDeletion(projectId: "song", recordingId: take.id, fileName: "take.m4a", deletedAt: Date().epochMilliseconds + 60_000))
+        try context.save()
+        let crashed = HookBox(false)
+
+        try await withBoundaryHook(scope: scratch(store), { point, source, _ in
+            // Once crashed, the process is gone: every later step there fails too.
+            guard point == .beforeCheck, source.lastPathComponent == take.url.lastPathComponent else { return }
+            crashed.value = true
+            throw SimulatedCrash()
+        }) {
+            _ = try? await store.library.reconcile(context: context)
+        }
+
+        #expect(crashed.value)
+        let record = try #require(try RecordingFiles.readPendingMoves(for: store.root).quarantine.first)
+        #expect(record.recordingId == take.id && record.bytes == 2 && record.destination != nil)
+        #expect(FileManager.default.fileExists(atPath: take.url.path))
+        if bytesChange { try Data([5, 5]).write(to: take.url) }
+
+        let relaunched = try reopen(store)
+        try await relaunched.library.reconcile(context: relaunched.container.mainContext)
+
+        let destination = URL(fileURLWithPath: try #require(record.destination))
+        if bytesChange {
+            #expect(try Data(contentsOf: take.url) == Data([5, 5]), "other bytes are never moved on the record's say")
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: take.url.path))
+            #expect(try Data(contentsOf: destination) == Data([3, 4]))
+        }
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).quarantine.isEmpty)
+    }
+
+    /// T1.15: a recording removed elsewhere is detached to the Trash under its id; a
+    /// crash at the move leaves the record with its length, the replay stops the id
+    /// and refuses a source whose length changed.
+    @Test(arguments: [false, true])
+    func aDetachKilledAtItsMoveIsReplayedOnlyForItsOwnBytes(lengthChanges: Bool) async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([6, 6]), in: store)
+        // Removed on another device: the row goes, the file is still here.
+        context.delete(try #require(try context.fetch(FetchDescriptor<Recording>()).first))
+        try context.save()
+        let crashed = HookBox(false)
+        try await withBoundaryHook(scope: scratch(store), { point, source, _ in
+            // Once crashed, the process is gone: every later step there fails too.
+            guard point == .beforeCheck, source.lastPathComponent == take.url.lastPathComponent else { return }
+            crashed.value = true
+            throw SimulatedCrash()
+        }) {
+            _ = try? await store.library.reconcile(context: context)
+        }
+        let record = try #require(try RecordingFiles.readPendingMoves(for: store.root).detach.first)
+        #expect(crashed.value && record.recordingId == take.id && record.bytes == 2)
+        if lengthChanges { try Data([6, 6, 6]).write(to: take.url) }
+
+        let relaunched = try reopen(store)
+        let stopped = HookBox<Set<String>>([])
+        relaunched.library.willMove = { ids, _ in stopped.value.formUnion(ids) }
+        try await relaunched.library.reconcile(context: relaunched.container.mainContext)
+
+        let destination = URL(fileURLWithPath: record.destination)
+        if lengthChanges {
+            #expect(try Data(contentsOf: take.url) == Data([6, 6, 6]))
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        } else {
+            #expect(stopped.value.contains(take.id))
+            #expect(try Data(contentsOf: destination) == Data([6, 6]))
+            #expect(try relaunched.library.trashedRecordings(in: relaunched.container.mainContext).map(\.recordingId) == [take.id])
+        }
+    }
+
+    /// T1.9, T1.10, T1.12: a row whose audio is on no disk is written out: staged as
+    /// `partial/<id>.<ext>` with the partial-to-staged move journalled first, then the
+    /// row records its staged source and the id is stopped before the final move.
+    @Test func materializationRecordsEveryStepBeforeItsMove() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let row = Recording(projectId: "song", displayName: "take.m4a", audio: Data([8, 8]), recordedAt: Date(timeIntervalSince1970: 10))
+        context.insert(row)
+        try context.save()
+        let id = row.id
+        let stopped = HookBox<Set<String>>([])
+        store.library.willMove = { ids, _ in stopped.value.formUnion(ids) }
+        let partialStep = HookBox<(name: String, folder: String, journalled: Bool)?>(nil)
+        let finalStep = HookBox<(stopped: Bool, source: String)?>(nil)
+        let root = store.root
+
+        try await withBoundaryHook(scope: scratch(store), { point, source, target in
+            guard point == .beforeCheck, let target else { return }
+            if source.deletingLastPathComponent().lastPathComponent == "partial" {
+                let journal = try RecordingFiles.readStagingJournal(for: root)
+                partialStep.value = (source.lastPathComponent, source.deletingLastPathComponent().lastPathComponent,
+                                     journal.moves.contains { $0.recordingId == id && $0.destination == RecordingFiles.canonicalPath(target) && $0.bytes == 2 })
+            } else if target.lastPathComponent == "\(id).m4a" {
+                finalStep.value = (stopped.value.contains(id), source.path)
+            }
+        }) {
+            try await store.library.reconcile(context: context)
+        }
+
+        #expect(partialStep.value?.name == "\(id).m4a" && partialStep.value?.journalled == true)
+        #expect(finalStep.value?.stopped == true)
+        // The run saved the staged source on the row before the move (read from disk).
+        let source = try #require(finalStep.value?.source)
+        #expect(URL(fileURLWithPath: source).lastPathComponent == "\(id).m4a")
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == Data([8, 8]))
+        #expect(try RecordingFiles.readStagingJournal(for: store.root).moves.isEmpty)
+    }
+
+    /// T1.20: publication stops the id before the take's file moves.
+    @Test func publicationStopsTheIdBeforeTheTakeMoves() async throws {
+        let store = try await makeStore()
+        let stopped = HookBox<Set<String>>([])
+        store.library.willMove = { ids, _ in stopped.value.formUnion(ids) }
+        let atMove = HookBox<Bool?>(nil)
+        let staged = try stage(Data([2, 2]))
+        let id = uuid()
+        try await withBoundaryHook(scope: staged.deletingLastPathComponent(), { point, source, _ in
+            guard point == .beforeCheck else { return }
+            atMove.value = stopped.value.contains(id)
+        }) {
+            _ = try store.library.publishFinished(staged, projectId: "song", preferredName: "take.m4a", origin: .recorded, id: id, finishedAt: Date(timeIntervalSince1970: 5))
+        }
+        #expect(atMove.value == true)
+    }
+
+    /// T1.1, T6: a song's file deletion is planned (path, digest, length) before the
+    /// unlink; after a crash there the plan is finished on the next run.
+    @Test func aSongDeletionKilledBeforeItsUnlinkIsFinishedFromThePlan() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([4, 4]), in: store)
+        let plan = try store.library.songDeletionPlan("song", in: context)
+        // As a permanent deletion does: the rows go in the save before the files.
+        try context.fetch(FetchDescriptor<Recording>()).forEach(context.delete)
+        try context.save()
+        let crashed = HookBox(false)
+        try await withBoundaryHook(scope: scratch(store), { point, source, target in
+            guard point == .beforeCheck, target == nil else { return }
+            crashed.value = true
+            throw SimulatedCrash()
+        }) {
+            _ = try store.library.deleteSongFiles("song", plan: plan)
+        }
+        #expect(crashed.value && FileManager.default.fileExists(atPath: take.url.path))
+        #expect(try RecordingFiles.readDeletionPlan(for: store.root).items.map(\.bytes) == [2])
+
+        let relaunched = try reopen(store)
+        try await relaunched.library.reconcile(context: relaunched.container.mainContext)
+
+        #expect(!FileManager.default.fileExists(atPath: take.url.path))
+        #expect(try RecordingFiles.readDeletionPlan(for: store.root).items.isEmpty)
+    }
+
+    /// T1.1, T1.2, T1.25: bytes that change right before the unlink are kept, for a
+    /// song's files and for a recordings Trash entry.
+    @Test func aDeletionKeepsBytesThatChangeRightBeforeTheUnlink() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let take = try published(Data([4, 4]), in: store)
+        let plan = try store.library.songDeletionPlan("song", in: context)
+        let replace: @Sendable (RecordingFiles.BoundaryHooks.Point, URL, URL?) throws -> Void = { point, source, target in
+            guard point == .beforeCheck, target == nil else { return }
+            try Data([0, 1]).write(to: source)
+        }
+        let kept = try await withBoundaryHook(scope: scratch(store), replace) { try store.library.deleteSongFiles("song", plan: plan) }
+        #expect(kept.map(RecordingFiles.canonicalPath) == [RecordingFiles.canonicalPath(take.url)])
+        #expect(try Data(contentsOf: take.url) == Data([0, 1]))
+
+        // A recordings Trash entry, deleted with the proof of the bytes it held.
+        let other = try published(Data([5, 5, 5]), in: store)
+        try await store.library.reconcile(context: context)
+        let trashed = try store.library.trashRecording(at: other.url, trashedAt: Date())
+        let sha = try RecordingFiles.sha256(of: trashed.url)
+        try await withBoundaryHook(scope: scratch(store), replace) {
+            #expect(throws: RecordingLibraryError.notVerified) { try store.library.deleteTrashedFile(trashed, sha256: sha, bytes: 3) }
+        }
+        #expect(try Data(contentsOf: trashed.url) == Data([0, 1]))
+    }
+}
+
+extension RecordingLibraryTests {
+    /// SHOULD 5 (T1.7): a staging record that cannot be read clears nothing; the
+    /// staged audio it may name stays, and the damage is reported.
+    @Test func anUnreadableStagingRecordClearsNothing() async throws {
+        let store = try await makeStore()
+        let staging = RecordingFiles.stagingRoot(for: store.root)
+        let partial = staging.appendingPathComponent("partial", isDirectory: true)
+        try FileManager.default.createDirectory(at: partial, withIntermediateDirectories: true)
+        let id = uuid()
+        try Data([1, 1]).write(to: partial.appendingPathComponent("\(id).m4a"))
+        try Data([2, 2]).write(to: staging.appendingPathComponent("\(id).m4a"))
+        try Data("{\"moves\":[{\"recordingId\":".utf8).write(to: staging.appendingPathComponent("journal.json"))
+
+        store.library.clearStaging(context: store.container.mainContext)
+        try await store.library.reconcile(context: store.container.mainContext)
+        store.library.clearStaging(context: store.container.mainContext)
+
+        #expect(try Data(contentsOf: partial.appendingPathComponent("\(id).m4a")) == Data([1, 1]))
+        #expect(try Data(contentsOf: staging.appendingPathComponent("\(id).m4a")) == Data([2, 2]))
+        #expect(store.library.stateIssues.contains { $0.contains("staged copies are kept") })
+    }
+}
+
+/// Round 14: times, earlier state, gate and reports, each failing if its fix is undone.
+extension RecordingLibraryTests {
+    private func suite(_ store: Store) -> UserDefaults {
+        UserDefaults(suiteName: "RecordingLibraryTests-\(store.root.deletingLastPathComponent().lastPathComponent)")!
+    }
+
+    /// T2.21, T2.26: rows of one recording in the Trash, one with a recorded Trash
+    /// time and one with a repaired one, settle on the recorded time, in both orders.
+    @Test(arguments: [false, true])
+    func duplicateTrashRowsSettleOnTheRecordedTrashTime(recordedFirst: Bool) async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let id = uuid()
+        let times: [(String, TimeInterval, Bool)] = recordedFirst ? [("a.m4a", 5_000, false), ("b.m4a", 1_000, true)] : [("a.m4a", 1_000, true), ("b.m4a", 5_000, false)]
+        for (name, seconds, repaired) in times {
+            let row = Recording(id: id, projectId: "song", displayName: name, audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
+            row.trashedAt = Date(timeIntervalSince1970: seconds)
+            row.trashedAtRepaired = repaired
+            context.insert(row)
+        }
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        let kept = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
+        #expect(kept.trashedAt == Date(timeIntervalSince1970: 5_000) && !kept.trashedAtRepaired)
+    }
+
+    /// T2.27: two Trash files of one identity, one named with no time and one with a
+    /// recorded time, are one recording with the recorded time.
+    @Test func duplicateTrashFilesTakeTheRecordedTimeOverAMissingOne() async throws {
+        let store = try await makeStore()
+        let zero = try write(Data([7]), "song", "0__take.m4a", root: store.trash, modified: 0)
+        let timed = try write(Data([7]), "song", "5000__take.m4a", root: store.trash, modified: 0)
+        _ = (zero, timed)
+
+        try await store.library.reconcile(context: store.container.mainContext)
+
+        let rows = try store.container.mainContext.fetch(FetchDescriptor<Recording>())
+        #expect(rows.count == 1)
+        #expect(rows.first?.trashedAt == Date(timeIntervalSince1970: 5) && rows.first?.trashedAtRepaired == false)
+    }
+
+    /// T2.25: a recording removed elsewhere whose verified record has no time is
+    /// detached with its first-seen time as a repair, and the record stays readable.
+    @Test func aRemovedRecordingWhoseRecordHasNoTimeIsDetachedWithARepairedTime() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let url = try store.library.publishFinished(try stage(Data([2, 5])), projectId: "song", preferredName: "take.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: url))
+        var registry = try #require(suite(store).dictionary(forKey: "recording-library-verified-ids") as? [String: [String: Any]])
+        registry[id]?["at"] = NSNumber(value: 0)
+        registry[id]?["repaired"] = false
+        suite(store).set(registry, forKey: "recording-library-verified-ids")
+        context.delete(try #require(try context.fetch(FetchDescriptor<Recording>()).first))
+        try context.save()
+        let before = Date().epochMilliseconds
+
+        try await store.library.reconcile(context: context)
+        try await store.library.reconcile(context: context)
+
+        let detach = try #require(try RecordingFiles.readPendingMoves(for: store.root).detach.first)
+        #expect(detach.recordingId == id && detach.at >= before && detach.repaired == true)
+    }
+
+    /// T2.31: a Trash file not taken in, with no time in its name or its date, keeps
+    /// one first-seen time across listings and a relaunch.
+    @Test func aTrashFileWithNoTimeKeepsOneTimeAcrossListingsAndRelaunch() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        // Its id is held by a row with other bytes, so it is not taken in.
+        let id = uuid()
+        context.insert(Recording(id: id, projectId: "song", displayName: "x.m4a", audio: Data([9]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        try write(Data([4, 4, 4]), "other", "loose.m4a", root: store.trash, modified: 0)
+        func time(_ library: RecordingLibrary, _ context: ModelContext) throws -> Date? {
+            try library.trashedRecordings(in: context).first { $0.originalName == "loose.m4a" }?.deletedAt
+        }
+        let first = try #require(try time(store.library, context))
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(try time(store.library, context) == first)
+        let relaunched = try reopen(store)
+        #expect(try time(relaunched.library, relaunched.container.mainContext) == first)
+        #expect(first.epochMilliseconds > 0)
+    }
+
+    /// T2.34: a song deletion fixes and keeps an unknown recording time in the same
+    /// pass (a repair, so the deletion wins, A41), while a newer recorded time stands.
+    @Test func aSongDeletionFixesUnknownRecordingTimesInTheSamePass() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let unknown = Recording(projectId: "song", displayName: "old.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 0))
+        unknown.uploadedAt = nil
+        let newer = Recording(projectId: "song", displayName: "new.m4a", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 9_000))
+        context.insert(unknown)
+        context.insert(newer)
+        try context.save()
+        let unknownId = unknown.id
+        let before = Date().epochMilliseconds
+
+        let removed = try store.library.tombstoneRecordings(ofProject: "song", deletedAt: 5_000_000, in: context)
+        try context.save()
+
+        #expect(removed.map(\.id) == [unknownId])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.displayName) == ["new.m4a"])
+        let firstSeen = try #require(suite(store).dictionary(forKey: "recording-library-first-seen") as? [String: NSNumber])
+        #expect((firstSeen[unknownId]?.int64Value ?? 0) >= before)
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.recordingId) == [unknownId])
+    }
+
+    /// T3.23: a move record that is valid JSON with an invalid field (a relative
+    /// path, a bad digest, a negative length or a zero time) stops the run; nothing moves.
+    @Test(arguments: ["path", "digest", "bytes", "time"])
+    func aMoveRecordWithAnInvalidFieldStopsTheRun(field: String) async throws {
+        let store = try await makeStore()
+        let file = try write(Data([3]), "song", "\(uuid()).m4a", root: store.root)
+        let sha = RecordingBackupManifest.sha256Hex(Data([3]))
+        let path = field == "path" ? "song/x.m4a" : RecordingFiles.canonicalPath(file)
+        let digest = field == "digest" ? "XYZ" : sha
+        let bytes = field == "bytes" ? -1 : 1
+        let at = field == "time" ? 0 : 1_700_000_000_000
+        let record = #"{"quarantine":[],"detach":[{"recordingId":"\#(uuid())","source":"\#(path)","destination":"\#(store.trash.path)/song/a.m4a","sha256":"\#(digest)","displayName":"a.m4a","at":\#(at),"detachedAt":1700000000000,"bytes":\#(bytes)}],"adopt":[]}"#
+        let url = RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("pending-moves.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(record.utf8).write(to: url)
+
+        await #expect(throws: RecordingLibraryError.journalDamaged) { try await store.library.reconcile(context: store.container.mainContext) }
+        #expect(try Data(contentsOf: file) == Data([3]))
+        #expect(try Data(contentsOf: url) == Data(record.utf8))
+    }
+
+    /// T3.30: a Trash name whose time is not a plausible time is read as no time.
+    @Test func implausibleTrashNameTimesAreNoTime() async throws {
+        #expect(RecordingFiles.legacyTrashName("99999999999999999999__take.m4a")?.deletedAt.epochMilliseconds == 0)
+        #expect(RecordingFiles.legacyTrashName("40000000000000000__take.m4a")?.deletedAt.epochMilliseconds == 0)
+        #expect(RecordingFiles.legacyTrashName("-5__take.m4a") == nil)
+        #expect(RecordingFiles.legacyTrashName("1e3__take.m4a") == nil)
+        #expect(RecordingFiles.legacyTrashName("1700000000000__take.m4a")?.deletedAt.epochMilliseconds == 1_700_000_000_000)
+    }
+
+    /// T3.31: a verified-recordings record of the wrong shape is set aside and
+    /// reported, and removals wait: a recording removed elsewhere is not moved.
+    @Test func aDamagedVerifiedRecordHoldsRemovalsBack() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let url = try store.library.publishFinished(try stage(Data([6, 1])), projectId: "song", preferredName: "take.m4a", origin: .recorded)
+        suite(store).set(["not": "entries"], forKey: "recording-library-verified-ids")
+        context.delete(try #require(try context.fetch(FetchDescriptor<Recording>()).first))
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(try Data(contentsOf: url) == Data([6, 1]))
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).detach.isEmpty)
+        #expect(suite(store).object(forKey: "recording-library-verified-ids.damaged") != nil)
+        #expect(!store.library.stateIssues.isEmpty)
+    }
+
+    /// T3.33: a damaged first-seen record is set aside and reported, never read as empty silently.
+    @Test func aDamagedFirstSeenRecordIsSetAsideAndReported() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        suite(store).set("garbage", forKey: "recording-library-first-seen")
+        let row = Recording(projectId: "song", displayName: "t.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 0))
+        row.uploadedAt = nil
+        context.insert(row)
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(suite(store).string(forKey: "recording-library-first-seen.damaged") == "garbage")
+        #expect(store.library.stateIssues.contains { $0.contains("recording-library-first-seen") })
+        #expect(row.precedenceRepaired && row.precedenceTime.epochMilliseconds > 0)
+    }
+
+    /// T3.37: a file an earlier build verified by path, whose row was removed
+    /// elsewhere, is that recording: it goes to the Trash under the recorded id.
+    @Test func anEarlierVerifiedPathKeepsItsRecordingIdentity() async throws {
+        let store = try makeUncheckedStore(onDisk: true)
+        let context = store.container.mainContext
+        let file = try write(Data([8, 1]), "song", "take.m4a", root: store.root)
+        let id = uuid()
+        suite(store).set([RecordingFiles.canonicalPath(file): ["id": id, "at": NSNumber(value: 1_700_000_000_000),
+                                                               "sha256": RecordingBackupManifest.sha256Hex(Data([8, 1]))]],
+                         forKey: "recording-library-verified-paths")
+
+        try await store.library.reconcile(context: context)
+
+        #expect(try store.library.trashedRecordings(in: context).map(\.recordingId) == [id])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(suite(store).object(forKey: "recording-library-verified-paths") == nil)
+    }
+
+    /// T3.39: a name adoption an earlier build left waiting is applied to a row not
+    /// renamed since, and not to one renamed here.
+    @Test func earlierNameAdoptionsApplyOnlyToRowsNotRenamedSince() async throws {
+        let store = try makeUncheckedStore(onDisk: true)
+        let context = store.container.mainContext
+        let plain = Recording(projectId: "song", displayName: "a.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
+        let renamed = Recording(projectId: "song", displayName: "mine.m4a", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 10))
+        renamed.displayNameChanged = true
+        context.insert(plain)
+        context.insert(renamed)
+        try context.save()
+        suite(store).set([plain.id: "Adopted.m4a", renamed.id: "Other.m4a"], forKey: "recording-library-claim-adoptions")
+
+        try await store.library.reconcile(context: context)
+
+        #expect(plain.displayName == "Adopted.m4a" && renamed.displayName == "mine.m4a")
+        #expect(suite(store).object(forKey: "recording-library-claim-adoptions") == nil)
+    }
+
+    /// T5.5: an oversized take blocked by other bytes at its place, kept separately
+    /// from its staged source: the other bytes get an id of their own, the take moves in.
+    @Test func keepingABlockedOversizedTakeSeparatelyFinishesIt() async throws {
+        let store = try await makeStore()
+        let take = Data(repeating: 1, count: Int(SyncRecording.maxBytes) + 1)
+        let staged = try stage(take)
+        let id = uuid()
+        let place = store.root.appendingPathComponent("song/\(id).m4a")
+        try FileManager.default.createDirectory(at: place.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 9, count: Int(SyncRecording.maxBytes) + 1).write(to: place)
+        #expect(throws: (any Error).self) {
+            _ = try store.library.publishFinished(staged, projectId: "song", preferredName: "long.m4a", origin: .recorded, id: id, finishedAt: Date(timeIntervalSince1970: 3))
+        }
+
+        let target = try store.library.keepSeparately(staged)
+
+        #expect(try target.lastPathComponent == "\(id).m4a" && Data(contentsOf: target).first == 1)
+        #expect(!FileManager.default.fileExists(atPath: staged.path))
+        let ledger = try OversizedRecordings.read(for: store.root)
+        #expect(ledger.count == 2 && ledger.values.allSatisfy { $0.completed != false })
+    }
+
+    /// T5.7: an id-named file over the cap with no record is taken in under its id,
+    /// with its digest and length recorded.
+    @Test func anIdNamedOversizedFileWithoutARecordIsTakenIn() async throws {
+        let store = try await makeStore()
+        let id = uuid()
+        let big = Data(repeating: 4, count: Int(SyncRecording.maxBytes) + 1)
+        try write(big, "song", "\(id).m4a", root: store.root)
+
+        try await store.library.reconcile(context: store.container.mainContext)
+
+        let entry = try #require(OversizedRecordings.read(for: store.root)[id])
+        #expect(entry.sha256 == RecordingBackupManifest.sha256Hex(big) && entry.bytes == Int64(big.count) && entry.completed != false)
+        #expect(store.library.oversizedCount == 1)
+    }
+
+    /// T5.21: a row whose audio is not its recorded bytes cannot be written out; it
+    /// is reported and the row (and its audio) stays.
+    @Test func audioThatCannotBeWrittenOutIsReportedAndKept() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        context.insert(Recording(projectId: "song", displayName: "broken.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10),
+                                 sha256: RecordingBackupManifest.sha256Hex(Data([2]))))
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(store.library.unmaterialized == ["broken.m4a"])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([1])])
+        #expect(names(store.root.appendingPathComponent("song")).isEmpty)
+    }
+
+    /// T4.1, T4.2: while a check is suspended in its detached work (here, writing a
+    /// row's audio out), every change outside it is refused as busy and changes
+    /// nothing, and a second check waits for the first.
+    @Test func changesWaitForACheckSuspendedInItsDetachedWork() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let live = try store.library.publishFinished(try stage(Data([5, 5])), projectId: "song", preferredName: "keep.m4a", origin: .recorded)
+        context.insert(Recording(projectId: "song", displayName: "row.m4a", audio: Data([8, 8]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        let reached = HookBox(false)
+        let release = DispatchSemaphore(value: 0)
+        let order = HookBox<[String]>([])
+
+        try await withBoundaryHook(scope: store.root.deletingLastPathComponent(), { point, source, _ in
+            // The partial-to-staged move runs off the main actor: the check waits here.
+            guard point == .beforeCheck, source.deletingLastPathComponent().lastPathComponent == "partial", !reached.value else { return }
+            reached.value = true
+            release.wait()
+        }) {
+            let first = Task { @MainActor in
+                try await store.library.reconcile(context: context)
+                order.value.append("first")
+            }
+            while !reached.value { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(throws: RecordingLibraryError.busy) { _ = try store.library.trashRecording(at: live, trashedAt: Date()) }
+            #expect(throws: RecordingLibraryError.busy) { try store.library.renameRecording(at: live, to: "Other") }
+            #expect(throws: RecordingLibraryError.busy) {
+                _ = try store.library.publishFinished(try stage(Data([1])), projectId: "song", preferredName: "x.m4a", origin: .recorded)
+            }
+            let second = Task { @MainActor in
+                try await store.library.reconcile(context: context)
+                order.value.append("second")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(order.value.isEmpty, "the second check waits")
+            release.signal()
+            try await first.value
+            try await second.value
+        }
+        #expect(order.value == ["first", "second"])
+        #expect(try Data(contentsOf: live) == Data([5, 5]))
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.displayName).sorted() == ["keep.m4a", "row.m4a"])
+    }
+
+    /// T6.38: an oversized Trash move killed after its rename and before its record
+    /// was completed is finished from the record after a relaunch.
+    @Test func anOversizedTrashMoveKilledAfterItsRenameIsCompletedAfterARelaunch() async throws {
+        let store = try await makeStore()
+        let big = Data(repeating: 6, count: Int(SyncRecording.maxBytes) + 1)
+        let live = try store.library.publishFinished(try stage(big), projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        try await withBoundaryHook(scope: store.root.deletingLastPathComponent(), { point, source, _ in
+            if point == .afterPrimitive, source.lastPathComponent == live.lastPathComponent { throw SimulatedCrash() }
+        }) {
+            _ = try? store.library.trashRecording(at: live, trashedAt: Date(timeIntervalSince1970: 7))
+        }
+        let trashPlace = store.trash.appendingPathComponent("song/\(id).m4a")
+        #expect(FileManager.default.fileExists(atPath: trashPlace.path))
+        #expect(try OversizedRecordings.read(for: store.root)[id]?.completed == false)
+
+        let relaunched = try reopen(store)
+        try await relaunched.library.reconcile(context: relaunched.container.mainContext)
+
+        #expect(try OversizedRecordings.read(for: store.root)[id]?.completed == true)
+        #expect(try relaunched.library.trashedRecordings(in: relaunched.container.mainContext).map(\.recordingId) == [id])
+    }
+}
+
+extension RecordingSnapshotCopyTests {
+    /// T1.30: copies a killed session made are taken in under the ids recorded for
+    /// them, after a relaunch, and are not removed.
+    @Test func copiesOfAKilledSessionAreTakenInUnderTheirIds() async throws {
+        let (snapshot, root) = try makeSnapshot()
+        let scratch = root.deletingLastPathComponent()
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        func open() throws -> (ModelContainer, RecordingLibrary) {
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: scratch.appendingPathComponent("library.store"), cloudKitDatabase: .none)])
+            let library = RecordingLibrary(memosRoot: root, trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                           defaults: UserDefaults(suiteName: "SnapshotCopy-\(scratch.lastPathComponent)")!)
+            library.context = container.mainContext
+            return (container, library)
+        }
+        let (container, library) = try open()
+        try await library.reconcile(context: container.mainContext)
+        let copies = try snapshot.copy(to: "copy", expecting: library.expectCopies)
+        // The session is killed here: no save, no rollback.
+
+        let (reopened, relaunched) = try open()
+        try await relaunched.reconcile(context: reopened.mainContext)
+
+        let rows = try reopened.mainContext.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == "copy" }
+        #expect(Set(rows.map(\.id)) == Set(copies.map(\.recordingId)))
+        #expect(Set(rows.map(\.displayName)) == ["Verse.m4a", "b.m4a"])
+        for copy in copies { #expect(FileManager.default.fileExists(atPath: copy.url.path)) }
+    }
+
+    /// T3.49: a names record that is present but unreadable is reported, not taken
+    /// for absence; the copies carry their file names.
+    @Test(arguments: [false, true])
+    func anUnreadableNamesRecordIsReported(cannotBeOpened: Bool) async throws {
+        let (snapshot, root) = try makeSnapshot()
+        let names = OpenRecordingSnapshot.stagingRoot(for: root).appendingPathComponent(snapshot.folderName).appendingPathComponent("names.json")
+        if cannotBeOpened {
+            // Present, but it cannot be read at all.
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: names.path)
+        } else {
+            try Data("{not json".utf8).write(to: names)
+        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: names.path) }
+
+        let copies = try snapshot.copy(to: "copy")
+
+        #expect(snapshot.namesDamaged)
+        #expect(Set(copies.map(\.displayName)) == ["a.m4a", "b.m4a"])
+    }
+
+    /// T3.50: a recovery folder that cannot be listed names every snapshot (nothing is
+    /// swept); one that does not exist names none.
+    @Test func aRecoveryFolderThatCannotBeListedKeepsEverySnapshot() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Recovery-\(UUID().uuidString)", isDirectory: true)
+        #expect(EditorViewModel.snapshotNamesNeededByRecovery(in: folder) == [])
+        // A file where the folder should be cannot be listed as a folder.
+        try Data([0]).write(to: folder)
+        #expect(EditorViewModel.snapshotNamesNeededByRecovery(in: folder) == nil)
+    }
+}
+
+extension RecordingLibraryTests {
+    /// T1.11: a staged copy is removed only while it holds the bytes it was staged
+    /// with, checked right before the unlink.
+    @Test func unstagingKeepsBytesThatChangeRightBeforeTheUnlink() async throws {
+        let store = try await makeStore()
+        let staged = try RecordingFiles.stageVerified(Data([1, 2]), sha256: RecordingBackupManifest.sha256Hex(Data([1, 2])), recordingId: uuid(),
+                                                      storedName: "\(uuid()).m4a", memosRoot: store.root, modifiedAt: Date())
+        try await withBoundaryHook(scope: store.root.deletingLastPathComponent(), { point, source, target in
+            if point == .beforeCheck, target == nil { try Data([9, 9]).write(to: source) }
+        }) {
+            RecordingFiles.unstage(staged, sha256: RecordingBackupManifest.sha256Hex(Data([1, 2])), bytes: 2)
+        }
+        #expect(try Data(contentsOf: staged) == Data([9, 9]))
+        RecordingFiles.unstage(staged, sha256: RecordingBackupManifest.sha256Hex(Data([9, 9])), bytes: 2)
+        #expect(!FileManager.default.fileExists(atPath: staged.path))
+    }
+
+    /// A row whose name arrived empty gets a name and keeps its audio.
+    @Test func aRowWithAnEmptyNameGetsOne() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let row = Recording(projectId: "song", displayName: "", audio: Data([3]), recordedAt: Date(timeIntervalSince1970: 10))
+        context.insert(row)
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(row.displayName == "Recording.m4a")
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(row.id).m4a")) == Data([3]))
+    }
+}
