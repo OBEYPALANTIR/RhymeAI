@@ -288,6 +288,32 @@ class BackupArchiveTest {
     }
 
     @Test
+    fun archiveNameFixtureCasesRoundTripThroughARealArchive() {
+        val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
+            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+        ).jsonObject
+        val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
+        fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
+        val filesDir = File(root, "fixture-files")
+        val files = cases.map { case ->
+            val bytes = "audio of ${field(case, "id")}".toByteArray()
+            val entry = RecordingManifestEntry(field(case, "projectId"), field(case, "displayName"), sizeBytes = bytes.size.toLong(),
+                modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = field(case, "precedenceTime").toLong(), id = field(case, "id"))
+            val file = RecordingFileStore.targetFile(filesDir, entry.projectId, entry.id, entry.fileName).apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+            LocalRecordingFile(entry, file)
+        }
+        val zipFile = File(root, "fixture.zip")
+        zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(), files, 1_000L, "device") }
+
+        val entryNames = ZipFile(zipFile).use { zip -> zip.entries().toList().map { it.name }.toSet() }
+        assertTrue(entryNames.containsAll(cases.map { field(it, "archivePath") }), entryNames.toString())
+        val read = BackupArchive.read(zipFile)
+        assertEquals(cases.associate { field(it, "id") to field(it, "displayName") }, read.manifest.recordings.associate { it.id to it.fileName })
+        for (local in files) assertContentEquals(local.file.readBytes(), read.recordings.getValue(local.entry.id))
+        assertTrue(read.damagedIds.isEmpty())
+    }
+
+    @Test
     fun theIosCopyOfTheArchiveNamesFixtureMatches() {
         val iosCopy = repoFileOrNull("Writers Block/Writers BlockTests/archive-names-v1.json")
         org.junit.Assume.assumeTrue("iOS copy of archive-names-v1.json is not in this checkout yet; drift check skipped.", iosCopy != null)

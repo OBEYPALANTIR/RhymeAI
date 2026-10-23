@@ -34,8 +34,8 @@ object BackupArchive {
      * allocator both platforms share (pinned by `shared/fixtures/archive-names-v1.json`).
      * Within each song, recordings are visited by precedence time, then id; each takes its
      * sanitized display name ("/" and "\\" and leading dots become "_"), or else
-     * "<stem> 2<ext>", "<stem> 3<ext>", … (the first free counter); "taken" compares NFC
-     * and case-folded names; nothing is reserved ahead of its turn; the stem is cut so the
+     * "<stem> 2<ext>", "<stem> 3<ext>", … (the first free counter); "taken" compares NFC,
+     * lowercased names; nothing is reserved ahead of its turn; the stem is cut so the
      * whole name fits 240 UTF-8 bytes. The reader applies the same rule to find each
      * recording's audio by id; these names never feed back into the recordings.
      */
@@ -67,9 +67,9 @@ object BackupArchive {
         return "_".repeat(dots) + separated.substring(dots)
     }
 
-    /** NFC, then case-folded (upper then lower case, which folds "ß" to "ss" like full case folding). */
+    /** NFC, then Unicode default lowercasing (not full case folding: "İ", "ı" and "i" stay distinct). */
     private fun archiveNameKey(name: String): String =
-        java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC).uppercase(java.util.Locale.ROOT).lowercase(java.util.Locale.ROOT)
+        java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC).lowercase(java.util.Locale.ROOT)
 
     /** [text] cut to at most [maxBytes] UTF-8 bytes at a whole code point. */
     private fun fitBytes(text: String, maxBytes: Int): String {
