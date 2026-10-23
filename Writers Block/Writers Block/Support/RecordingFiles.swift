@@ -265,15 +265,6 @@ enum RecordingFiles {
     /// The byte limit for a recording's file name (shared with Android and the manifest).
     nonisolated static let maxFileNameBytes = 240
 
-    /// "stem n.ext", shortening the stem so the whole name stays within the limit.
-    nonisolated static func numberedName(_ name: String, _ number: Int) -> String {
-        let ext = (name as NSString).pathExtension
-        var stem = (name as NSString).deletingPathExtension
-        let suffix = " \(number)" + (ext.isEmpty ? "" : ".\(ext)")
-        while stem.utf8.count + suffix.utf8.count > maxFileNameBytes, !stem.isEmpty { stem.removeLast() }
-        return stem + suffix
-    }
-
     /// Where restored audio is written before it is verified and moved into
     /// place; beside the memos root, so the move is a rename on the same volume.
     nonisolated static func stagingRoot(for memosRoot: URL) -> URL {
@@ -289,7 +280,8 @@ enum RecordingFiles {
     /// Moves `file` (in a memo or Trash project folder) into quarantine as
     /// `<recordingId>.<ext>` (A36); a second copy of one id goes in a folder of
     /// its own. Never replaces anything.
-    nonisolated static func quarantine(_ file: URL, recordingId: String, memosRoot: URL) throws {
+    nonisolated static func quarantine(_ file: URL, recordingId: String, memosRoot: URL, trashRoot: URL) throws {
+        guard isRecordingFile(file, in: [memosRoot, trashRoot]) else { throw SyncValidationError.pathOutsideMemoRoot }
         let projectId = file.deletingLastPathComponent().lastPathComponent
         var folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
         let name = "\(recordingId).\(storedExtension(of: file.lastPathComponent))"
@@ -328,6 +320,18 @@ enum RecordingFiles {
         } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
             return false
         }
+    }
+
+    /// True only for a file itself (not a symbolic link) directly in a song folder of
+    /// one of `roots` (finding 10): checked before a move is recorded and again
+    /// before it is made.
+    nonisolated static func isRecordingFile(_ url: URL, in roots: [URL]) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey]),
+              values.isSymbolicLink != true, values.isRegularFile == true else { return false }
+        let songFolder = url.deletingLastPathComponent()
+        guard (try? songFolder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { return false }
+        let root = canonicalPath(songFolder.deletingLastPathComponent())
+        return roots.contains { canonicalPath($0) == root }
     }
 
     nonisolated static func canonicalPath(_ url: URL) -> String {
@@ -436,22 +440,27 @@ enum RecordingFiles {
 
     /// Writes `data` to a new staging file, reads it back and checks its digest;
     /// runs off the main actor. The caller moves it into place or removes it.
-    /// `storedName` is the recording's `<id>.<ext>` (A36); the staging folder is
-    /// the library's own and its runs are serialised.
+    /// Writes `data` to staging as `storedName` (the recording's `<id>.<ext>`, A36)
+    /// through a temporary name and a move that never replaces: the bytes are read
+    /// back and checked first. A staged file of that name left by an interrupted run
+    /// is used only when it holds the same bytes. Runs off the main actor; the caller
+    /// moves the result into place or removes it.
     nonisolated static func stageVerified(_ data: Data, sha256: String, storedName: String, in staging: URL, modifiedAt: Date) throws -> URL {
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let temporary = staging.appendingPathComponent("\(UUID().uuidString).partial")
         let staged = staging.appendingPathComponent(storedName)
-        do {
-            try data.write(to: staged, options: .atomic)
-            guard try RecordingFiles.sha256(of: staged) == sha256, try facts(staged).size == Int64(data.count) else {
-                throw SyncValidationError.invalidRecording
-            }
-            try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: staged.path)
-            return staged
-        } catch {
-            try? FileManager.default.removeItem(at: staged)
-            throw error
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: .withoutOverwriting)
+        guard try RecordingFiles.sha256(of: temporary) == sha256, try facts(temporary).size == Int64(data.count) else {
+            throw SyncValidationError.invalidRecording
         }
+        try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: temporary.path)
+        do {
+            try FileManager.default.moveItem(at: temporary, to: staged)
+        } catch CocoaError.fileWriteFileExists {
+            guard try RecordingFiles.sha256(of: staged) == sha256, try facts(staged).size == Int64(data.count) else { throw SyncValidationError.invalidRecording }
+        }
+        return staged
     }
 
     nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {

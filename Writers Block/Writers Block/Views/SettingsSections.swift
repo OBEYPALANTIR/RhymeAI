@@ -563,6 +563,33 @@ struct SettingsCloudBackupSection: View {
                     .foregroundStyle(appearance.palette.secondaryInk)
                     .accessibilityIdentifier("oversizedRecordingsNote")
             }
+            if !viewModel.recordingsNeedingAttention.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("These recordings couldn't move to their new file names because another file is in the way. Both are kept on this device.")
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(viewModel.recordingsNeedingAttention, id: \.self) { url in
+                        HStack {
+                            Text(viewModel.attentionLabel(for: url))
+                                .font(.caption)
+                                .lineLimit(2)
+                            Spacer()
+                            Button("Keep separately") { Task { await viewModel.keepRecordingSeparately(url) } }
+                                .font(.caption.weight(.semibold))
+                                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                                .accessibilityIdentifier("keepRecordingSeparately")
+                        }
+                    }
+                }
+                .accessibilityIdentifier("recordingsNeedingAttention")
+            }
+            if viewModel.recordingAdoptionStalled {
+                Text("Some recordings couldn't be read into the library yet. They stay on this device.")
+                    .font(.caption)
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .accessibilityIdentifier("recordingsStalledNote")
+            }
             if !viewModel.cloudBackupConfigured {
                 Text("Google Drive isn't set up in this build.")
                     .font(.caption)
