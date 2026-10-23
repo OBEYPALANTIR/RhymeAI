@@ -567,6 +567,29 @@ struct PendingTakeTests {
         #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.completed == true)
     }
 
+    @Test func anOversizedTakeNeverCountsAnotherFileAtItsPlaceAsItself() async throws {
+        let store = try await makeStore()
+        let staged = try take(Data(repeating: 7, count: Int(SyncRecording.maxBytes) + 1), in: store, finishedAt: Date(timeIntervalSince1970: 99))
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        try OversizedRecordings.record(id: id, entry: .init(projectId: "song", fileName: staged.lastPathComponent, finishedAt: 99_000, source: staged.path,
+                                                             completed: false, sha256: try RecordingFiles.sha256(of: staged)), for: store.library.memosRoot)
+        // Something else took its place before the move.
+        let place = store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)")
+        try FileManager.default.createDirectory(at: place.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: Int(SyncRecording.maxBytes) + 1).write(to: place)
+
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        await service.retryPendingTakes()
+
+        let entry = try #require(OversizedRecordings.read(for: store.library.memosRoot)[id])
+        #expect(entry.completed == true && entry.fileName != staged.lastPathComponent)
+        let moved = store.library.memosRoot.appendingPathComponent("song/\(entry.fileName)")
+        #expect(try RecordingFiles.sha256(of: moved) == entry.sha256)
+        #expect(try Data(contentsOf: place).first == 1)
+        #expect(service.pendingTakes.isEmpty && service.failedTakes.isEmpty)
+    }
+
     @Test func takesThatCannotBeListedOrReadStayWaiting() async throws {
         let store = try await makeStore()
         let unreadable = try take(Data([1, 2]), in: store)
