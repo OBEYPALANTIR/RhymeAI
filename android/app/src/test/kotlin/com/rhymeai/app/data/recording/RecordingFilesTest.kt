@@ -16,8 +16,8 @@ class RecordingFilesTest {
         val root = tempFolder.root
         val live = RecordingFiles.memoDirectory(root, "song-a")
         val trash = RecordingFiles.trashDirectory(root, "song-a")
-        assertEquals(File(root, "voice-memos"), RecordingFiles.memosRoot(root))
-        assertEquals(File(root, "voice-memos-trash"), RecordingFiles.trashRoot(root))
+        assertEquals(File(root.canonicalFile, "voice-memos"), RecordingFiles.memosRoot(root))
+        assertEquals(File(root.canonicalFile, "voice-memos-trash"), RecordingFiles.trashRoot(root))
         assertEquals(File(root, "voice-memos/song-a").canonicalFile, live)
         assertEquals(File(root, "voice-memos-trash/song-a").canonicalFile, trash)
         assertFalse(live.exists())
@@ -92,5 +92,21 @@ class RecordingFilesTest {
         val memo = RecordingFiles.memoFile(tempFolder.root, "p", id, "take.m4a")
         assertEquals("$id.m4a", memo.name)
         assertEquals("p", memo.parentFile!!.name)
+    }
+
+    @Test
+    fun filesFromRecordsListingsAndTargetsShareOneFormThroughASymlinkedFilesFolder() {
+        // Like Android's /data/user/0 -> /data/data: the app is handed the symlinked path.
+        val real = File(tempFolder.root, "real").apply { mkdirs() }
+        val filesDir = File(tempFolder.root, "link")
+        java.nio.file.Files.createSymbolicLink(filesDir.toPath(), real.toPath())
+        val id = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        val target = RecordingFiles.memoFile(filesDir, "p", id, "take.m4a").apply { parentFile!!.mkdirs(); writeText("take") }
+        val stored = RecordingTransitions.relativePath(filesDir, target)
+
+        assertEquals("voice-memos/p/$id.m4a", stored)
+        assertEquals(target, RecordingFiles.fileAt(filesDir, stored))
+        assertEquals(listOf(target), RecordingTransitions.listStrictly(File(RecordingFiles.memosRoot(filesDir), "p")))
+        assertEquals(RecordingFiles.stagingDirectory(filesDir, "p").parentFile, RecordingFiles.stagingRoot(filesDir))
     }
 }

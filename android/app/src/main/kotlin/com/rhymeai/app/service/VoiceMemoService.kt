@@ -524,7 +524,7 @@ class VoiceMemoService(private val context: Context) {
                 id, take.recordedAt, RecordingRecord.RECORDED, skipIfPresent = true
             ) ?: catalog?.recordingRecords()?.firstOrNull { it.id == id }?.let { record ->
                 // Already published counts only if its file is really there with the record's bytes.
-                val file = File(context.filesDir, record.path ?: throw java.io.IOException("The saved take is missing"))
+                val file = RecordingFiles.fileAt(context.filesDir, record.path ?: throw java.io.IOException("The saved take is missing"))
                 if (!RecordingTransitions.isRegularFileStrictly(file) || com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) != record.sha256) {
                     throw java.io.IOException("The saved take is missing")
                 }
