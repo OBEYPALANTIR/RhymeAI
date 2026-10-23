@@ -85,7 +85,7 @@ struct PersistenceTests {
     @Test func pendingAutoSaveCompletesAfterItsContainerOwnerIsReleased() async throws {
         let viewModel = EditorViewModel()
         do {
-            let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+            let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
             let container = try ModelContainer(for: schema, configurations: [configuration])
             viewModel.modelContext = container.mainContext
@@ -288,7 +288,7 @@ struct PersistenceTests {
         await empty.viewModel.checkFirstRunRestoreOffer(afterConnecting: false)
         #expect(empty.viewModel.firstRunRestoreOffer?.songs == 1)
 
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
         container.mainContext.insert(SongProject(title: "Local"))
         try container.mainContext.save()
@@ -398,7 +398,7 @@ struct PersistenceTests {
         backupService: CloudBackupServicing? = nil,
         saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> Harness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel(backupService: backupService, saveModelContext: saveModelContext)

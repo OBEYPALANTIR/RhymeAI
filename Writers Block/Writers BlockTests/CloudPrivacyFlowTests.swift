@@ -253,7 +253,7 @@ struct CloudPrivacyFlowTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let keychain = InMemoryKeychainStore()
         keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let first = SongProject(id: "song-a", title: "First", lyrics: "Song A private draft")
@@ -286,7 +286,7 @@ struct CloudPrivacyFlowTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let keychain = InMemoryKeychainStore()
         keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         PrivacyURLProtocol.reset(holdResponse: true)
@@ -324,7 +324,7 @@ struct CloudPrivacyFlowTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let keychain = InMemoryKeychainStore()
         keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let first = SongProject(id: "rewrite-a", title: "First", lyrics: "Replace this phrase", theme: "")
