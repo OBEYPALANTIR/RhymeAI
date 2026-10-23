@@ -319,8 +319,8 @@ class ProjectRepositoryTest {
                 assertEquals(false, live.exists())
                 assertEquals(emptyList(), reopened.trashedProjectsFlow.first())
                 assertEquals(listOf(retainedId), reopened.projectsFlow.first().map { it.id })
-                assertEquals("recoverable recording", File(retained, "keep.m4a").readText())
-                assertEquals("unsaved draft recording", File(untracked, "unsaved.m4a").readText())
+                assertEquals(listOf("recoverable recording"), retained.listFiles()!!.map { it.readText() })
+                assertEquals(listOf("unsaved draft recording"), untracked.listFiles()!!.map { it.readText() })
             } finally {
                 reopenedScope.cancel()
             }
@@ -356,7 +356,8 @@ class ProjectRepositoryTest {
             assertTrue(repository.retryPendingRecordingDeletions { id ->
                 RecordingFiles.memoDirectory(filesDir, id).deleteRecursively()
             })
-            assertEquals("restore me", recording.readText())
+            // The snapshot gave it its id name (A36); the bytes are kept.
+            assertEquals(listOf("restore me"), RecordingFiles.memoDirectory(filesDir, song.id).listFiles()!!.map { it.readText() })
         } finally {
             scope.cancel()
             directory.deleteRecursively()
@@ -387,7 +388,7 @@ class ProjectRepositoryTest {
 
             // Simulate an Auto Backup restore of app files, including DataStore and memo bytes.
             filesDir.copyRecursively(restored, overwrite = true)
-            val restoredAudio = RecordingFiles.memoFile(restored, song.id, "take.m4a")
+            val restoredAudio = File(RecordingFiles.memoDirectory(restored, song.id), "take.m4a")
             assertEquals("pending private recording", restoredAudio.readText())
             val restoredScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             try {
@@ -476,7 +477,7 @@ class ProjectRepositoryTest {
             })
             assertEquals(setOf(earlier.id), repository.pendingRecordingDeletionIds())
             assertEquals(false, RecordingFiles.memoDirectory(filesDir, current.id).exists())
-            assertEquals("Earlier", RecordingFiles.memoFile(filesDir, earlier.id, "take.m4a").readText())
+            assertEquals("Earlier", File(RecordingFiles.memoDirectory(filesDir, earlier.id), "take.m4a").readText())
         } finally {
             scope.cancel()
             directory.deleteRecursively()

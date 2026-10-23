@@ -24,7 +24,49 @@ object BackupArchive {
     const val MIME_TYPE = "application/zip"
     private val unsafeFileNameCharacters = Regex("""[\\/:*?"<>|\p{Cntrl}]""")
 
-    class Contents(val manifest: SyncBlob, val recordings: Map<String, ByteArray>, val damagedRecordings: Int)
+    /** [recordings] are keyed by recording id; [damagedIds] are recordings whose audio failed its check. */
+    class Contents(val manifest: SyncBlob, val recordings: Map<String, ByteArray>, val damagedIds: Set<String> = emptySet()) {
+        val damagedRecordings: Int get() = damagedIds.size
+    }
+
+    /**
+     * A36: export is the only place a display name becomes a file name. Within each song,
+     * recordings sharing a display name are told apart by " 2", " 3" in precedence order
+     * (then id); the archive's reader applies the same rule to find each recording's audio.
+     * These names never feed back into the recordings.
+     */
+    internal fun exportNames(entries: List<RecordingManifestEntry>): Map<String, String> {
+        val names = HashMap<String, String>()
+        for ((_, song) in entries.groupBy { it.projectId }) {
+            val taken = song.mapTo(HashSet()) { it.fileName }
+            val ordered = song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })
+            val owners = ordered.groupBy { it.fileName }.mapValues { it.value.first().id }
+            for (entry in ordered) {
+                if (owners[entry.fileName] == entry.id) {
+                    names[entry.id] = entry.fileName
+                    continue
+                }
+                val stem = entry.fileName.substringBeforeLast('.').ifEmpty { "Recording" }
+                val extension = entry.fileName.substringAfterLast('.', "m4a")
+                var n = 2
+                var name: String
+                do {
+                    val suffix = " ${n++}.$extension"
+                    name = fitBytes(stem, SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - suffix.toByteArray().size) + suffix
+                } while (name in taken)
+                taken += name
+                names[entry.id] = name
+            }
+        }
+        return names
+    }
+
+    /** [text] cut to at most [maxBytes] UTF-8 bytes at a whole code point. */
+    private fun fitBytes(text: String, maxBytes: Int): String {
+        var end = text.length
+        while (text.substring(0, end).toByteArray().size > maxBytes) end = text.offsetByCodePoints(end, -1)
+        return text.substring(0, end)
+    }
 
     data class ExportSummary(val songs: Int, val recordings: Int, val skippedLargeRecordings: Int)
 
@@ -58,6 +100,7 @@ object BackupArchive {
         // Entries come from snapshotLocalRecordings, so each carries its stored precedence time.
         val included = files.filter { !it.inTrash && it.entry.isTransferable }
         val manifest = blob.copy(recordings = included.map { it.entry })
+        val names = exportNames(manifest.recordings)
         ZipOutputStream(output).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST_ENTRY))
             zip.write(BackupManifest.encode(manifest, savedAtMillis, clientId))
@@ -76,7 +119,7 @@ object BackupArchive {
                 zip.closeEntry()
             }
             for (recording in included) {
-                zip.putNextEntry(ZipEntry("recordings/${recording.entry.projectId}/${recording.entry.fileName}"))
+                zip.putNextEntry(ZipEntry("recordings/${recording.entry.projectId}/${names.getValue(recording.entry.id)}"))
                 zip.write(RecordingFileStore.readForUpload(recording.file, recording.entry))
                 zip.closeEntry()
             }
@@ -92,7 +135,7 @@ object BackupArchive {
         }
         if (!isZip) {
             if (file.length() > DriveSyncService.MAX_SYNC_BLOB_BYTES) throw DamagedBackupException()
-            return Contents(BackupManifest.decode(file.readBytes()), emptyMap(), 0)
+            return Contents(BackupManifest.decode(file.readBytes()), emptyMap())
         }
         return try {
             ZipFile(file).use { zip ->
@@ -101,10 +144,11 @@ object BackupArchive {
                 val manifest = BackupManifest.decode(
                     zip.getInputStream(manifestEntry).use { it.readBytesBounded(DriveSyncService.MAX_SYNC_BLOB_BYTES) }
                 )
-                var damaged = 0
+                val damaged = HashSet<String>()
                 val recordings = HashMap<String, ByteArray>()
+                val names = exportNames(manifest.recordings)
                 for (entry in manifest.recordings.filter { it.isTransferable }) {
-                    val zipEntry = zip.getEntry("recordings/${entry.projectId}/${entry.fileName}") ?: continue
+                    val zipEntry = zip.getEntry("recordings/${entry.projectId}/${names.getValue(entry.id)}") ?: continue
                     val bytes = try {
                         zip.getInputStream(zipEntry).use { it.readBytesBounded(entry.sizeBytes) }
                     } catch (_: DriveNetworkException) {
@@ -113,10 +157,10 @@ object BackupArchive {
                     if (bytes == null || bytes.size.toLong() != entry.sizeBytes ||
                         BackupManifest.sha256Hex(bytes) != entry.sha256
                     ) {
-                        damaged++
+                        damaged += entry.id
                         continue
                     }
-                    recordings[entry.identityKey] = bytes
+                    recordings[entry.id] = bytes
                 }
                 Contents(manifest, recordings, damaged)
             }
@@ -145,22 +189,18 @@ object BackupArchive {
         // A recording held here, live or in Trash, is never imported again.
         val local = localFiles.mapTo(HashSet()) { it.entry.id }
         val imported = contents.manifest.recordings.associateBy { it.id }
-        // A30: names two recordings claim converge; local recordings take theirs first.
-        val names = SyncMerger.assignNames(merged.recordings).associate { it.id to it.fileName }
-        RecordingTransitions.applyNames(repository, filesDir, names)
-        // The merged entry (with its established time), placed under its allocated name and
-        // keeping the archive's claim; its bytes are found by id and verified on publication.
-        val wanted = merged.recordings
-            .filter { it.id in imported && it.id !in local }
-            .map { entry ->
-                val name = names[entry.id] ?: entry.fileName
-                entry.copy(fileName = name, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name), claimedName = imported.getValue(entry.id).claim)
-            }
+        // The merged entry, with its established time, is published as `<id>.<ext>` with its
+        // display name; its audio is found by id and verified on publication.
+        val wanted = merged.recordings.filter { it.id in imported && it.id !in local }
         var added = 0
         var missing = 0
         for (entry in wanted) {
-            // Found by id; a listed recording whose audio is not in the archive is reported, not skipped silently.
-            val bytes = contents.recordings[entry.id] ?: run { missing++; null } ?: continue
+            // Each affected recording is counted once: oversized ones are size skips, damaged
+            // ones were counted on reading, and only audio that is simply absent counts here.
+            val bytes = contents.recordings[entry.id] ?: run {
+                if (entry.isTransferable && entry.id !in contents.damagedIds) missing++
+                null
+            } ?: continue
             // Published with the archive entry's id and time, never the time it was written.
             if (RecordingFileStore.importVerified(repository, filesDir, entry, bytes, RecordingRecord.IMPORTED)) added++
         }

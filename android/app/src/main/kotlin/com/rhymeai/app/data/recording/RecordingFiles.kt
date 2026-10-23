@@ -12,7 +12,6 @@ internal object RecordingFiles {
 
     private const val MEMOS_STAGING_ROOT_DIR = "voice-memos-staging"
     private const val MEMOS_QUARANTINE_ROOT_DIR = "voice-memos-quarantine"
-    private const val MEMOS_PARKING_ROOT_DIR = "voice-memos-parking"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -40,12 +39,6 @@ internal object RecordingFiles {
     fun quarantineDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(quarantineRoot(filesDir), projectId)
 
-    /** A30: where a recording waits for a moment while names swap; never listed or backed up. */
-    fun parkingRoot(filesDir: File): File =
-        File(filesDir, MEMOS_PARKING_ROOT_DIR)
-
-    fun parkingDirectory(filesDir: File, projectId: String): File =
-        safeProjectDirectory(parkingRoot(filesDir), projectId)
 
     fun memoDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(memosRoot(filesDir), projectId)
@@ -53,10 +46,29 @@ internal object RecordingFiles {
     fun trashDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(trashRoot(filesDir), projectId)
 
-    fun memoFile(filesDir: File, projectId: String, fileName: String): File {
-        SyncIdentity.validateFileName(fileName)
-        return requireDescendant(memosRoot(filesDir), File(memoDirectory(filesDir, projectId), fileName))
+    private val ID_FILE_NAME = Regex("^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\.([a-z0-9]+)$")
+
+    /**
+     * A36: every recording file is named by its id. The extension is the audio's own
+     * (`m4a` for the app's takes); anything that is not a supported audio extension is m4a.
+     */
+    fun idFileName(id: String, displayName: String): String {
+        SyncIdentity.validateRecordingId(id)
+        val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        return "$id.${extension.takeIf { it in SUPPORTED_AUDIO_EXTENSIONS } ?: "m4a"}"
     }
+
+    /** The recording id a file is named by, or null for any other name (a pre-A36 file). */
+    fun idOf(file: File): String? =
+        ID_FILE_NAME.matchEntire(file.name)?.takeIf { it.groupValues[2] in SUPPORTED_AUDIO_EXTENSIONS }?.groupValues?.get(1)
+
+    /** The live file of recording [id] in [projectId]. */
+    fun memoFile(filesDir: File, projectId: String, id: String, displayName: String): File =
+        requireDescendant(memosRoot(filesDir), File(memoDirectory(filesDir, projectId), idFileName(id, displayName)))
+
+    /** The Trash file of recording [id] in [projectId]. */
+    fun trashFile(filesDir: File, projectId: String, id: String, displayName: String): File =
+        requireDescendant(trashRoot(filesDir), File(trashDirectory(filesDir, projectId), idFileName(id, displayName)))
 
     private fun safeProjectDirectory(root: File, projectId: String): File {
         SyncIdentity.validateProjectId(projectId)
@@ -101,29 +113,5 @@ internal object RecordingFiles {
             byteCount += bytes
         }
         return bounded.toString()
-    }
-
-    /**
-     * Find a free filename for [base] with [extension] inside [dir]. If that name already
-     * exists (and is not the source file being renamed), append " 2", " 3", … until
-     * a free slot is found. The base is shortened so a variant stays within the
-     * recording filename limit.
-     */
-    fun resolveCollision(dir: File, base: String, extension: String = "m4a"): File {
-        var candidate = File(dir, "$base.$extension")
-        var suffix = 2
-        while (candidate.exists()) candidate = File(dir, variantName(base, extension, suffix++))
-        return candidate
-    }
-
-    /**
-     * "<stem> <n>.<extension>", the stem shortened to keep the name within the recording
-     * filename limit; a name like ".m4a" has no stem to number and uses "Recording".
-     */
-    fun variantName(base: String, extension: String, n: Int): String {
-        val stem = base.trim().ifEmpty { "Recording" }
-        val tail = " $n.$extension"
-        val room = SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - tail.toByteArray(Charsets.UTF_8).size
-        return truncateUtf8(stem, room).trimEnd() + tail
     }
 }

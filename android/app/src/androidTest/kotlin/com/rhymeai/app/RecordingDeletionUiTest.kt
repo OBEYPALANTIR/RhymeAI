@@ -19,6 +19,7 @@ import com.rhymeai.app.service.VoiceMemo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -74,23 +75,25 @@ class RecordingDeletionUiTest {
     @Test fun aDeletionThatWinsWhileTheSheetIsOpenHidesStopsAndBlocksPlayback() {
         val service = viewModel.voiceMemoService
         val catalog = requireNotNull(service.catalog)
-        val memo = TestRecordings.recordFinalizedM4a(
+        TestRecordings.recordFinalizedM4a(
             InstrumentationRegistry.getInstrumentation().targetContext,
             File(RecordingFiles.memoDirectory(filesDir, projectId), "Take.m4a")
         )
-        val record = runBlocking {
-            RecordingTransitions.snapshot(catalog, filesDir, emptySet())
-            catalog.recordingRecords().single { it.path == RecordingTransitions.relativePath(filesDir, memo) }
+        // Adoption gives the file its id name (A36); "Take.m4a" becomes its display name.
+        val (memo, record) = runBlocking {
+            val listed = RecordingTransitions.snapshot(catalog, filesDir, emptySet()).single { it.entry.projectId == projectId }
+            listed.file to catalog.recordingRecords().single { it.id == listed.entry.id }
         }
+        assertEquals("Take.m4a", record.displayName)
 
         compose.onNodeWithTag("songActionsMenuButton").performClick()
         compose.onNodeWithTag("songRecordings").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithContentDescription("Play").onFirst().performClick()
-        compose.waitUntil(10_000) { service.playingFile?.name == "Take.m4a" }
+        compose.waitUntil(10_000) { service.playingFile?.name == "${record.id}.m4a" }
 
         // A Restore commits the winning tombstone; its quarantine move has not happened.
-        runBlocking { requireNotNull(service.recordingDeletionRecorder)(projectId, record.fileName, record.id, System.currentTimeMillis() + 60_000L) }
+        runBlocking { requireNotNull(service.recordingDeletionRecorder)(projectId, record.displayName, record.id, System.currentTimeMillis() + 60_000L) }
 
         compose.waitUntil(10_000) {
             service.playingFile == null &&
@@ -104,7 +107,7 @@ class RecordingDeletionUiTest {
         compose.runOnIdle { assertNull(service.playingFile) }
     }
 
-    @Test fun aRealRestoreThatRenamesAndThenQuarantinesStopsPlaybackFirst() {
+    @Test fun aRealRestoreLeavesAPlayingTakeAloneAndAQuarantineStopsItFirst() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         try {
@@ -112,12 +115,12 @@ class RecordingDeletionUiTest {
             val catalog = requireNotNull(service.catalog)
             val dir = RecordingFiles.memoDirectory(filesDir, projectId)
             // Long enough that playback cannot end on its own while Restore runs.
-            val x = TestRecordings.recordFinalizedM4a(context, File(dir, "take.m4a"), millis = 12_000L)
-            val xId = runBlocking {
-                RecordingTransitions.snapshot(catalog, filesDir, emptySet())
-                catalog.recordingRecords().single { it.path == RecordingTransitions.relativePath(filesDir, x) }.id
+            TestRecordings.recordFinalizedM4a(context, File(dir, "take.m4a"), millis = 12_000L)
+            val (x, xId) = runBlocking {
+                val listed = RecordingTransitions.snapshot(catalog, filesDir, emptySet()).single { it.entry.projectId == projectId }
+                listed.file to listed.entry.id
             }
-            // Drive holds an earlier recording Y under the same name: A30 gives it take.m4a.
+            // Drive holds an earlier recording Y with the same display name.
             val yBytes = TestRecordings.recordFinalizedM4a(context, File(filesDir, "y-${projectId}.m4a")).readBytes()
             val y = com.rhymeai.app.data.sync.RecordingManifestEntry(
                 projectId, "take.m4a", sizeBytes = yBytes.size.toLong(), modifiedAt = 0L,
@@ -141,38 +144,38 @@ class RecordingDeletionUiTest {
             compose.runOnIdle { service.play(VoiceMemo(x, "take", 12_000L)) }
             compose.waitUntil(10_000) { service.playingFile == x.canonicalFile || service.playingFile == x }
             compose.runOnIdle { viewModel.restoreFromBackup() }
+            val yFile = File(dir, "${y.id}.m4a")
             try {
-                compose.waitUntil(30_000) { File(dir, "take 2.m4a").exists() && File(dir, "take.m4a").exists() && viewModel.backupBusyLabel == null }
+                compose.waitUntil(30_000) { yFile.exists() && viewModel.backupBusyLabel == null }
             } catch (e: Throwable) {
                 throw AssertionError("restore: notice=${viewModel.backupNotice} status=${viewModel.backupStatus} files=${dir.list()?.toList()}", e)
             }
-            // The rename moved X's bytes; its playback stopped at that move, not by finishing.
-            assertTrue(boundary.toString(), boundary.any { (ids, before, after) -> xId in ids && before != null && after == null })
-            assertNull(service.playingFile)
-            boundary.clear()
+            // A36: Y lands under its own id beside X; nothing of X moved, so X kept playing.
+            assertTrue(x.exists())
+            assertTrue(boundary.toString(), boundary.none { (ids, _, _) -> xId in ids })
+            assertEquals(x.canonicalFile, service.playingFile?.canonicalFile)
+            assertEquals(listOf("take.m4a", "take.m4a"), runBlocking { catalog.recordingRecords() }.filter { it.projectId == projectId }.map { it.displayName })
 
-            // Play X under its new name, then a deletion of X arrives through the next Restore.
-            val renamed = File(dir, "take 2.m4a")
-            compose.runOnIdle { service.play(VoiceMemo(renamed, "take 2", 12_000L)) }
-            compose.waitUntil(10_000) { service.playingFile?.name == "take 2.m4a" }
+            // A deletion of X arrives through the next Restore.
             val manifest = com.rhymeai.app.data.sync.BackupManifest.decode(requireNotNull(drive.bytes(com.rhymeai.app.data.sync.BackupManifest.FILE_NAME)))
             drive.put(
                 com.rhymeai.app.data.sync.BackupManifest.FILE_NAME,
                 com.rhymeai.app.data.sync.BackupManifest.encode(
                     manifest.copy(deletions = manifest.deletions + com.rhymeai.app.data.sync.SyncDeletion(
-                        projectId, "take 2.m4a", System.currentTimeMillis() + 60_000L, recordingId = xId
+                        projectId, "take.m4a", System.currentTimeMillis() + 60_000L, recordingId = xId
                     )),
                     0L, "other-device"
                 )
             )
             compose.runOnIdle { viewModel.restoreFromBackup() }
-            compose.waitUntil(30_000) { !renamed.exists() && viewModel.backupBusyLabel == null }
+            compose.waitUntil(30_000) { !x.exists() && viewModel.backupBusyLabel == null }
             // At the quarantine move nothing is playing: the committed tombstone already stopped it
             // (the deletion observer), or the hook did.
             assertTrue(boundary.toString(), boundary.any { (ids, _, after) -> xId in ids && after == null })
             assertTrue(boundary.toString(), boundary.none { (_, before, after) -> before != null && after != null })
             assertNull(service.playingFile)
-            assertTrue(RecordingFiles.quarantineDirectory(filesDir, projectId).listFiles().orEmpty().isNotEmpty())
+            assertEquals(listOf("$xId.m4a"), RecordingFiles.quarantineDirectory(filesDir, projectId).walk().filter { it.isFile }.map { it.name }.toList())
+            assertTrue(yFile.exists())
         } finally {
             RecordingTransitions.beforeBytesMove = viewModel.voiceMemoService::stopPlayingIds
             RecordingFiles.quarantineDirectory(filesDir, projectId).deleteRecursively()

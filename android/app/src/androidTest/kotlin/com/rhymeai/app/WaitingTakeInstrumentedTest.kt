@@ -55,8 +55,9 @@ class WaitingTakeInstrumentedTest {
 
     private fun restarted() = VoiceMemoService(isolated).also { it.catalog = catalog }
 
-    private fun take(name: String, id: String): File =
-        TestRecordings.recordFinalizedM4a(context, File(staging, name)).also { TestRecordings.startMarker(it, id) }
+    /** A finished take in staging, named by its id (A36) with its start marker. */
+    private fun take(id: String): File =
+        TestRecordings.recordFinalizedM4a(context, File(staging, "$id.m4a")).also { TestRecordings.startMarker(it, id) }
 
     @Test fun onlyAFinalizedTakePassesAndTruncatedCopiesDoNot() {
         val full = TestRecordings.recordFinalizedM4a(context, File(owned, "full.m4a"))
@@ -71,7 +72,7 @@ class WaitingTakeInstrumentedTest {
     }
 
     @Test fun aFinishedTakeWhoseSaveFailedWaitsAcrossARestartAndALaterTakeUntilRetrySavesIt() = runBlocking {
-        val first = take("1700000000000.m4a", "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val first = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
         catalog.failWrites = true
         assertTrue(runCatching { service.finishTake(first, null) }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
         assertTrue(first.exists())
@@ -80,7 +81,7 @@ class WaitingTakeInstrumentedTest {
         val waiting = after.waitingTakes("song").single()
         assertTrue(waiting.finished)
         catalog.failWrites = false
-        after.finishTake(take("1700000005000.m4a", "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"), null)
+        after.finishTake(take("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"), null)
         assertEquals(listOf(waiting.id), after.waitingTakes("song").map { it.id })
 
         assertEquals(1, after.retryWaitingTakes("song"))
@@ -92,7 +93,7 @@ class WaitingTakeInstrumentedTest {
     }
 
     @Test fun aRetryAfterTheTakeMovedButItsFinalRecordFailedCountsAsSaved() = runBlocking {
-        val file = take("1700000000000.m4a", "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val file = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
         // Write 1 is the intent; write 2, the final record, fails after the file moved.
         catalog.failOnWrite = 2
         assertTrue(runCatching { service.finishTake(file, null) }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
@@ -102,13 +103,13 @@ class WaitingTakeInstrumentedTest {
 
         assertEquals(1, service.retryWaitingTakes("song"))
         assertTrue(service.waitingTakes("song").isEmpty())
-        assertEquals(listOf("1700000000000.m4a"), service.memosForProject("song").map { it.file.name })
+        assertEquals(listOf("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"), service.memosForProject("song").map { it.file.name })
         assertNull(catalog.records.single().pendingOp)
     }
 
     @Test fun anUnreadableStartMarkerIsNeverReplacedAndTheTakeIsSavedUnderItOnceReadable() = runBlocking {
-        val file = take("1700000000000.m4a", "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
-        val marker = File(staging, "1700000000000.m4a.take")
+        val file = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val marker = File(staging, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a.take")
         marker.setReadable(false)
         org.junit.Assume.assumeFalse("permissions are not enforced here", marker.canRead())
         try {
@@ -124,8 +125,8 @@ class WaitingTakeInstrumentedTest {
 
     @Test fun aTakeWhoseFinishWasNeverRecordedIsSavedOnlyIfFinalizedAndAnUnreadableOneStaysRetryable() = runBlocking {
         // As after a crash: start markers only; one take finalized, one cut short.
-        val complete = take("1700000000000.m4a", "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
-        val cut = TestRecordings.cutInsideMediaData(complete, File(staging, "1700000009000.m4a"))
+        val complete = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val cut = TestRecordings.cutInsideMediaData(complete, File(staging, "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2.m4a"))
         TestRecordings.startMarker(cut, "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2")
         val after = restarted()
         assertTrue(after.memosForProject("song").isEmpty())
@@ -146,7 +147,7 @@ class WaitingTakeInstrumentedTest {
 
         // Readable again: it is saved under its own id; the cut take never is (it is marked failed).
         runCatching { after.retryWaitingTakes("song") }
-        assertEquals(listOf("1700000000000.m4a"), after.memosForProject("song").map { it.file.name })
+        assertEquals(listOf("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"), after.memosForProject("song").map { it.file.name })
         assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
         assertTrue(cut.exists())
         assertTrue(after.waitingTakes("song").isEmpty())
@@ -156,10 +157,10 @@ class WaitingTakeInstrumentedTest {
     @Test fun aTakeInterruptedBetweenItsJournalAndItsMoveIsSavedByRetry() = runBlocking<Unit> {
         // Any size goes through the same journal: the finish (marker) and the publish intent
         // (record) are written, then the process died before the move.
-        val take = File(staging, "1700000000000.m4a").apply { writeBytes(ByteArray(64) { it.toByte() }) }
-        File(staging, "1700000000000.m4a.take").writeText("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\nfinished\n1700000000500\n")
+        val take = File(staging, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a").apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        File(staging, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a.take").writeText("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\nfinished\n1700000000500\n")
         val target = File(RecordingFiles.memoDirectory(owned, "song").apply { mkdirs() }, take.name)
-        catalog.records = listOf(RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", take.name, 1_700_000_000_500L,
+        catalog.records = listOf(RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", "1700000000500.m4a", 1_700_000_000_500L,
             com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(take), take.length(), RecordingRecord.RECORDED,
             path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(owned, target),
             pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(owned, take),
@@ -175,5 +176,23 @@ class WaitingTakeInstrumentedTest {
         assertEquals(1_700_000_000_500L, catalog.records.single().uploadedAt)
         assertNull(catalog.records.single().pendingOp)
         after.release()
+    }
+
+    @Test fun aFailedLaunchCheckHidesBothListsUntilARetrySucceeds() = runBlocking<Unit> {
+        assertTrue(service.finishTake(take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"), null) != null)
+        var failing = true
+        service.maintenance = { if (failing) throw java.io.IOException("injected launch check failure") }
+
+        assertTrue(runCatching { service.runMaintenance() }.isFailure)
+        assertTrue(service.maintenanceFailed)
+        // Neither list shows anything while the check keeps failing.
+        assertTrue(runCatching { service.memosForProject("song") }.isFailure)
+        assertTrue(runCatching { service.trashedMemos() }.isFailure)
+
+        // Opening a list retries the check; once it succeeds both lists are back.
+        failing = false
+        assertEquals(1, service.memosForProject("song").size)
+        assertFalse(service.maintenanceFailed)
+        assertTrue(service.trashedMemos().isEmpty())
     }
 }

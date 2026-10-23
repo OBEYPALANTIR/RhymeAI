@@ -211,8 +211,8 @@ class RecordingSyncTest {
         val root = Files.createTempDirectory("rhymeai-recording-store").toFile()
         try {
             val catalog = MemoryCatalog()
-            val existing = RecordingFileStore.targetFile(root, "p1", "clip.m4a")
-            existing.parentFile?.mkdirs()
+            // A file that happens to carry the display name is a different (legacy) file.
+            val existing = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "clip.m4a")
             existing.writeText("local stays")
 
             val remoteBytes = "remote copy".toByteArray()
@@ -227,13 +227,14 @@ class RecordingSyncTest {
             assertFailsWith<DriveNetworkException> {
                 RecordingFileStore.importVerified(catalog, root, entry.copy(sizeBytes = remoteBytes.size + 1L), remoteBytes, RecordingRecord.IMPORTED)
             }
-            // A different recording holds the name: the import gets a free variant, the original stays.
+            // A36: the import is named by its id, so nothing in place is touched.
             assertTrue(RecordingFileStore.importVerified(catalog, root, entry, remoteBytes, RecordingRecord.IMPORTED))
             assertEquals("local stays", existing.readText())
             val record = catalog.records.single()
             assertEquals(entry.id, record.id)
             assertEquals(700_123L, record.uploadedAt)
-            assertEquals("clip 2.m4a", record.fileName)
+            assertEquals("clip.m4a", record.displayName)
+            assertEquals("${entry.id}.m4a", File(record.path!!).name)
             assertEquals("remote copy", File(root, record.path!!).readText())
             // The same recording id is never imported twice.
             assertFalse(RecordingFileStore.importVerified(catalog, root, entry, remoteBytes, RecordingRecord.IMPORTED))
@@ -255,7 +256,7 @@ class RecordingSyncTest {
                 RecordingFileStore.importVerified(catalog, root, entry, bytes, RecordingRecord.IMPORTED)
             }
 
-            assertFalse(RecordingFileStore.targetFile(root, "p1", "clip.m4a").exists())
+            assertFalse(RecordingFileStore.targetFile(root, "p1", entry.id, "clip.m4a").exists())
             assertTrue(catalog.records.isEmpty())
         } finally {
             root.deleteRecursively()
@@ -275,16 +276,16 @@ class RecordingSyncTest {
                 RecordingFileStore.stageRestore(stage, 0, planned, bytes),
                 RecordingFileStore.stageRestore(stage, 1, other, bytes)
             )
-            // The user renames a memo onto the planned name while the download runs.
-            val target = RecordingFileStore.targetFile(root, "p1", "take.m4a").also { it.parentFile?.mkdirs() }
+            // A file with the planned display name appears while the download runs.
+            val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
             target.writeText("renamed memo")
 
             assertEquals(listOf(planned, other), RecordingFileStore.commitStagedRestores(catalog, root, staged))
 
-            // Both recordings are kept: the download takes a free name.
+            // Both are kept: downloads are named by id, display names never collide on disk.
             assertEquals("renamed memo", target.readText())
-            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", "take 2.m4a").readText())
-            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", "other.m4a").readText())
+            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", planned.id, "take.m4a").readText())
+            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", other.id, "other.m4a").readText())
             assertEquals(setOf(planned.id, other.id), catalog.records.mapTo(HashSet()) { it.id })
             assertFalse(stage.exists())
         } finally {
@@ -297,11 +298,11 @@ class RecordingSyncTest {
         val root = Files.createTempDirectory("rhymeai-recording-batch").toFile()
         val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
-            val firstTarget = RecordingFileStore.targetFile(root, "p1", "first.m4a")
-            firstTarget.parentFile?.mkdirs()
+            val firstTarget = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "first.m4a")
             firstTarget.writeText("original")
             val bytes = "download".toByteArray()
-            val stagedNew = RecordingFileStore.stageRestore(stage, 1, recording("p1", "new.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
+            val newEntry = recording("p1", "new.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
+            val stagedNew = RecordingFileStore.stageRestore(stage, 1, newEntry, bytes)
             val missingThird = RecordingFileStore.StagedRecording(
                 recording("p2", "third.m4a", 3L, sha256Hex("third".toByteArray()), 5L),
                 File(stage, "missing.tmp")
@@ -313,8 +314,8 @@ class RecordingSyncTest {
 
             // Nothing is replaced or removed: the original stays and the complete new take stays.
             assertEquals("original", firstTarget.readText())
-            assertEquals("download", RecordingFileStore.targetFile(root, "p1", "new.m4a").readText())
-            assertFalse(RecordingFileStore.targetFile(root, "p2", "third.m4a").exists())
+            assertEquals("download", RecordingFileStore.targetFile(root, "p1", newEntry.id, "new.m4a").readText())
+            assertFalse(RecordingFiles.memoDirectory(root, "p2").exists())
         } finally {
             root.deleteRecursively()
         }
@@ -327,8 +328,8 @@ class RecordingSyncTest {
         try {
             val bytes = "download".toByteArray()
             RecordingFileStore.stageRestore(stage, 0, recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
-            // A memo the user renamed onto the planned name while the restore was interrupted.
-            val target = RecordingFileStore.targetFile(root, "p1", "take.m4a").also { it.parentFile?.mkdirs() }
+            // A legacy memo with the planned display name, present while the restore was interrupted.
+            val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
             target.writeText("user memo")
 
             RecordingFileStore.recoverInterruptedRestores(root)
@@ -369,10 +370,10 @@ class RecordingSyncTest {
         val root = Files.createTempDirectory("rhymeai-recording-traversal").toFile()
         try {
             assertFailsWith<IllegalArgumentException> {
-                RecordingFileStore.targetFile(root, "../escape", "clip.m4a")
+                RecordingFileStore.targetFile(root, "../escape", ID, "clip.m4a")
             }
             assertFailsWith<IllegalArgumentException> {
-                RecordingFileStore.targetFile(root, "safe", "../clip.m4a")
+                RecordingFileStore.targetFile(root, "safe", "../$ID", "clip.m4a")
             }
             assertFalse(File(root.parentFile, "escape").exists())
         } finally {
@@ -389,13 +390,15 @@ class RecordingSyncTest {
             Files.createSymbolicLink(File(memosRoot, "safe").toPath(), external.toPath())
 
             assertFailsWith<IllegalArgumentException> {
-                RecordingFileStore.targetFile(root, "safe", "clip.m4a")
+                RecordingFileStore.targetFile(root, "safe", ID, "clip.m4a")
             }
         } finally {
             root.deleteRecursively()
             external.deleteRecursively()
         }
     }
+
+    private companion object { const val ID = "0f8fad5b-d9cb-469f-a165-70867728950e" }
 
     private fun recording(
         projectId: String,

@@ -1,13 +1,9 @@
 package com.rhymeai.app.service
 
 import com.rhymeai.app.data.recording.RecordingFiles
-import com.rhymeai.app.data.recording.RecordingTransitions
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
-import java.nio.file.Files
 import java.util.Locale
 
 /** Stages imports outside the live audio list until validation has succeeded. */
@@ -17,12 +13,13 @@ internal object RecordingImportStore {
     class Staged(val file: File, val desiredName: String)
 
     /**
-     * Copies and validates the audio into a `.pending` file in [directory] (outside the
+     * Copies and validates the audio into `<id>.<ext>` in [directory] (staging, outside the
      * published list). The caller publishes it with its record, or deletes it.
      */
     fun stage(
         input: InputStream,
         directory: File,
+        id: String,
         displayName: String,
         checkCancellation: () -> Unit,
         validate: (File) -> Unit
@@ -35,7 +32,9 @@ internal object RecordingImportStore {
                 val basename = RecordingFiles.sanitizeBasename(displayName.substringBeforeLast('.'))
                     .takeUnless { it.startsWith(".") }.orEmpty().ifBlank { "Imported recording" }
                 if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create recording folder")
-                val temporary = File.createTempFile("import-", ".pending", directory)
+                // A36: named by the recording's id from the start, never by its display name.
+                val temporary = File(directory, RecordingFiles.idFileName(id, "x.$extension"))
+                if (!temporary.createNewFile()) throw IOException("Cannot stage the recording")
                 staged = temporary
                 temporary.outputStream().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -59,30 +58,6 @@ internal object RecordingImportStore {
             return Staged(candidate, "$basename.$extension")
         } finally {
             staged?.delete()
-        }
-    }
-
-    /** Stages into [directory] and publishes there under a free name, without a record. */
-    fun copy(
-        input: InputStream,
-        directory: File,
-        displayName: String,
-        checkCancellation: () -> Unit,
-        validate: (File) -> Unit
-    ): File {
-        val staged = stage(input, directory, displayName, checkCancellation, validate)
-        try {
-            // No REPLACE_EXISTING: a concurrent import must never overwrite another take.
-            return runBlocking {
-                RecordingTransitions.namespace.withLock {
-                    val base = staged.desiredName.substringBeforeLast('.')
-                    RecordingFiles.resolveCollision(directory, base, staged.desiredName.substringAfterLast('.')).also {
-                        Files.move(staged.file.toPath(), it.toPath())
-                    }
-                }
-            }
-        } finally {
-            staged.file.delete()
         }
     }
 }

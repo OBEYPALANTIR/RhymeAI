@@ -8,5 +8,7 @@ data class SongProject(
     val title: String = "",
     val lyrics: String = "",
     val theme: String = "",
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** A37: [updatedAt] is a first-seen repair of a missing time (A32), not an edit. */
+    val precedenceRepaired: Boolean = false
 )

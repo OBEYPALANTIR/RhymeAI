@@ -198,7 +198,7 @@ fun SongRecordingsDialog(
                 }
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
-                val visible = memos.orEmpty().filter { VoiceMemoService.displayName(it.file).contains(search.trim(), ignoreCase = true) }
+                val visible = memos.orEmpty().filter { VoiceMemoService.displayLabel(it.displayName).contains(search.trim(), ignoreCase = true) }
                 if (memos == null) item { CircularProgressIndicator() }
                 else if (visible.isEmpty()) item {
                     Text(when {

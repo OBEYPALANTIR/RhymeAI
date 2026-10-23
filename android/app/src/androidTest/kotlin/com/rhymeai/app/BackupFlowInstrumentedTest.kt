@@ -232,10 +232,15 @@ class BackupFlowInstrumentedTest {
     @Test fun aPreExistingMemoKeepsItsStampedTimeAcrossRestartAndRename() {
         launchConnectedWithEmptyLibrary()
         val dir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "stamped").also { it.mkdirs() }
-        val memo = java.io.File(dir, "old take.m4a").apply { writeBytes(byteArrayOf(4, 5, 6)); setLastModified(1_000_000L) }
+        java.io.File(dir, "old take.m4a").apply { writeBytes(byteArrayOf(4, 5, 6)); setLastModified(1_000_000L) }
         try {
-            val stamped = runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(repo, context.filesDir, emptySet()) }
-                .single { it.entry.projectId == "stamped" }.entry
+            val listed = runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(repo, context.filesDir, emptySet()) }
+                .single { it.entry.projectId == "stamped" }
+            val stamped = listed.entry
+            // A36: adoption named the file by its id; its old name is the display name.
+            val memo = listed.file
+            assertEquals("${stamped.id}.m4a", memo.name)
+            assertEquals("old take.m4a", stamped.fileName)
             assertEquals(1_000_000L, stamped.uploadedAt)
             fun record(r: ProjectRepository) = runBlocking { r.recordingRecords() }.single { it.id == stamped.id }
 
@@ -251,14 +256,15 @@ class BackupFlowInstrumentedTest {
             runBlocking { com.rhymeai.app.data.sync.snapshotLocalRecordings(reopened, context.filesDir, emptySet()) }
             assertEquals(1_000_000L, record(reopened).uploadedAt)
 
-            // A rename through the app moves the record and keeps its time.
+            // A rename through the app changes the record only and keeps its time.
             runBlocking {
                 val live = vm.voiceMemoService.memosForProject("stamped").single()
                 checkNotNull(vm.voiceMemoService.renameMemo(live, "renamed take"))
             }
-            // Same id and time; only the file name changed.
+            // Same id, time and file; only the display name changed.
             assertEquals(1_000_000L, record(reopened).uploadedAt)
-            assertEquals("renamed take.m4a", record(reopened).fileName)
+            assertEquals("renamed take.m4a", record(reopened).displayName)
+            assertEquals(listOf(memo.name), dir.list()!!.toList())
         } finally {
             dir.deleteRecursively()
         }

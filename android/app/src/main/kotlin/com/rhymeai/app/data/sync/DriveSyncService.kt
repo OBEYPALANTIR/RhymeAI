@@ -586,14 +586,14 @@ object RecordingFileStore {
         val file: File
     )
 
-    fun targetFile(filesDir: File, projectId: String, fileName: String): File =
-        RecordingFiles.memoFile(filesDir, projectId, fileName)
+    /** Where recording [id] lives in [projectId] (A36: named by its id, not its display name). */
+    fun targetFile(filesDir: File, projectId: String, id: String, displayName: String): File =
+        RecordingFiles.memoFile(filesDir, projectId, id, displayName)
 
     /**
-     * Stages a verified recording from an archive or backup and publishes it under its
-     * id with its own precedence time; a name taken by another recording gets a free
-     * variant, and nothing in place is replaced. Returns false when this device already
-     * holds that recording id.
+     * Stages a verified recording from an archive or backup and publishes it as
+     * `<id>.<ext>` with its display name and its own precedence time; nothing in place is
+     * replaced. Returns false when this device already holds that recording id.
      */
     internal suspend fun importVerified(
         catalog: RecordingCatalog?,
@@ -608,7 +608,7 @@ object RecordingFileStore {
             syncFile(staged.file)
             return RecordingTransitions.publish(
                 catalog, filesDir, staged.file, entry.projectId, entry.fileName, entry.id, entry.precedenceTime, origin,
-                skipIfPresent = true, claimedName = entry.claim
+                skipIfPresent = true
             ) != null
         } finally {
             stage.deleteRecursively()
@@ -663,7 +663,7 @@ object RecordingFileStore {
             syncFile(item.file)
             val target = RecordingTransitions.publish(
                 catalog, filesDir, item.file, item.entry.projectId, item.entry.fileName, item.entry.id,
-                item.entry.precedenceTime, origin, skipIfPresent = true, claimedName = item.entry.claim
+                item.entry.precedenceTime, origin, skipIfPresent = true
             ) ?: continue
             target.parentFile?.let(::syncDirectory)
             placed += item.entry
@@ -719,6 +719,8 @@ object RecordingFileStore {
  * known here leaves the library: its bytes move to quarantine and its record goes.
  */
 internal suspend fun quarantineDeletedRecordings(repository: ProjectRepository, filesDir: File) {
+    // A32: this device's own missing times are fixed before any tombstone is compared with them.
+    repository.establishPrecedence(emptyList(), System.currentTimeMillis())
     val base = repository.snapshotLocalSyncBase()
     RecordingTransitions.quarantineDeleted(repository, filesDir, base.blob.deletions, base.pendingIds)
 }
@@ -1022,32 +1024,28 @@ class DriveSyncService(
             merged = merged.copy(
                 recordings = merged.recordings
                     .filterNot { it.id in evidenceOnly && it.id !in listedRemotely }
-                    // A34 claims: a claim this device changed since it last wrote one (a new
-                    // recording, or one the user renamed) wins; otherwise the manifest's claim
-                    // stands. Names are then allocated from claims (A30), never from allocations.
+                    // A36: the display name is metadata. A rename made here and not yet written, or
+                    // a recording Drive does not list yet, carries this device's name; otherwise
+                    // Drive's name stands and this device takes it after the write.
                     .map { entry ->
                         val held = liveById[entry.id] ?: return@map entry
-                        val record = recordsById[entry.id]
-                        val localClaim = record?.claimedName ?: held.entry.fileName
-                        val claim = when {
-                            // A35: no baseline here (a new recording, or a reinstall or cleared store):
-                            // Drive's claim stands if Drive lists the recording; otherwise this one.
-                            record?.syncedName == null -> if (entry.id in listedRemotely) entry.claim else localClaim
-                            localClaim != record.syncedName -> localClaim
-                            else -> entry.claim
-                        }
-                        entry.copy(claimedName = claim)
+                        val renamedHere = recordsById[entry.id]?.displayNameChanged == true
+                        val name = if (renamedHere || entry.id !in listedRemotely) held.entry.fileName else entry.fileName
+                        entry.copy(fileName = name, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name))
                     }
-                    // A30: a name two recordings claim goes to the earlier one on every device.
-                    .let(SyncMerger::assignNames)
             )
-            val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX)
-                .associateBy { it.name }
+            // Every raw object under one name is a candidate: several can exist after a race.
+            val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).groupBy { it.name }
+            fun intact(file: DriveFileMetadata, entry: RecordingManifestEntry) =
+                file.appProperties["sha256"] == entry.sha256 && file.appProperties["bytes"] == entry.sizeBytes.toString()
             // A raw file counts only when its appProperties carry the listed id, hash and size.
-            fun onDrive(entry: RecordingManifestEntry): Boolean {
-                val file = driveFiles[BackupManifest.recordingDriveName(entry.id)] ?: return false
-                return file.appProperties["sha256"] == entry.sha256 && file.appProperties["bytes"] == entry.sizeBytes.toString()
-            }
+            fun onDrive(entry: RecordingManifestEntry): Boolean =
+                driveFiles[BackupManifest.recordingDriveName(entry.id)].orEmpty().any { intact(it, entry) }
+            // The object a download uses: the intact one when there is one.
+            fun driveFileFor(entry: RecordingManifestEntry): DriveFileMetadata? =
+                driveFiles[BackupManifest.recordingDriveName(entry.id)].orEmpty().let { candidates ->
+                    candidates.firstOrNull { intact(it, entry) } ?: candidates.firstOrNull()
+                }
 
             // Only this device's own bytes for the same id are ever uploaded: no other
             // recording, time or name is substituted for a listed entry.
@@ -1058,7 +1056,7 @@ class DriveSyncService(
                 val file = liveById.getValue(entry.id).file
                 val name = BackupManifest.recordingDriveName(entry.id)
                 val bytes = RecordingFileStore.readForUpload(file, entry)
-                val stale = driveFiles[name]
+                val stale = driveFiles[name]?.firstOrNull()
                 uploaded[name] = if (stale != null) {
                     driveClient.updateFile(token, stale.id, BackupManifest.RECORDING_MIME_TYPE, bytes, recordingAppProperties(entry))
                     stale.id
@@ -1090,25 +1088,27 @@ class DriveSyncService(
 
             var damaged = 0
             var committed = merged
-            // A35: the claim this device just wrote is now both its claim and its synced name for
-            // each recording it holds, so an accepted remote claim is not mistaken next time for a
-            // rename made here. Back up never renames local files.
-            val claims = merged.recordings.associate { it.id to it.claim }
+            // A36: each held recording now has the display name just written (metadata only; no
+            // file changes), and a rename made here is written. A rename made while this ran stays.
+            val written = merged.recordings.associate { it.id to it.fileName }
             repository.updateRecordingRecords { records ->
                 records.map { r ->
-                    val claim = claims[r.id]?.takeIf { r.path != null } ?: return@map r
-                    // A rename made here while this backup ran is a newer claim; leave it to the next run.
+                    val name = written[r.id]?.takeIf { r.path != null } ?: return@map r
                     val before = recordsById[r.id]
-                    if (before != null && (r.claimedName ?: r.fileName) != (before.claimedName ?: before.fileName)) return@map r
-                    if (r.claimedName == claim && r.syncedName == claim) r else r.copy(claimedName = claim, syncedName = claim)
+                    if (before != null && (r.displayName != before.displayName || r.displayNameChanged != before.displayNameChanged)) return@map r
+                    if (r.displayName == name && !r.displayNameChanged) r else r.copy(displayName = name, displayNameChanged = false)
                 }
             }
             if (applyLocally) {
-                // A30: local recordings take their allocated names before downloads are placed.
-                RecordingTransitions.applyNames(repository, filesDir, merged.recordings.associate { it.id to it.fileName })
-                damaged = restoreRemoteRecordings(
-                    token, repository, merged.recordings, driveFiles.mapValues { it.value.id } + uploaded, localFiles
-                )
+                val filesById = merged.recordings.mapNotNull { entry ->
+                    driveFileFor(entry)?.let { BackupManifest.recordingDriveName(entry.id) to it.id }
+                }.toMap()
+                // Every object under a name, intact-looking first: a download tries them in turn.
+                val candidates = merged.recordings.associate { entry ->
+                    entry.id to driveFiles[BackupManifest.recordingDriveName(entry.id)].orEmpty()
+                        .sortedBy { if (intact(it, entry)) 0 else 1 }.map { it.id }
+                }
+                damaged = restoreRemoteRecordings(token, repository, merged.recordings, filesById + uploaded, localFiles, candidates)
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
                 // The apply needs the last reconciliation to still hold (it throws otherwise).
@@ -1264,7 +1264,8 @@ class DriveSyncService(
         repository: ProjectRepository,
         remoteManifest: List<RecordingManifestEntry>,
         remoteFilesByName: Map<String, String>,
-        local: List<LocalRecordingFile>
+        local: List<LocalRecordingFile>,
+        candidates: Map<String, List<String>> = emptyMap()
     ): Int {
         // A recording held here, live or in Trash, is never downloaded again.
         val plan = RecordingSyncPlanner.planRestores(
@@ -1287,24 +1288,39 @@ class DriveSyncService(
         // committed; the next restore plans only what is still missing.
         var damaged = 0
         for (chunk in RecordingSyncPlanner.chunkRestores(plan)) {
-            damaged += restoreRecordingChunk(token, repository, chunk)
+            damaged += restoreRecordingChunk(token, repository, chunk, candidates)
         }
         return damaged
     }
 
-    private suspend fun restoreRecordingChunk(token: String, repository: ProjectRepository, chunk: List<RecordingRestorePlan>): Int {
+    private suspend fun restoreRecordingChunk(
+        token: String,
+        repository: ProjectRepository,
+        chunk: List<RecordingRestorePlan>,
+        candidates: Map<String, List<String>>
+    ): Int {
         val stageDirectory = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         var damaged = 0
         try {
             val staged = chunk.mapIndexedNotNull { index, restore ->
-                val bytes = driveClient.downloadFile(token, restore.remoteFileId, restore.entry.sizeBytes)
-                if (bytes.size.toLong() != restore.entry.sizeBytes || BackupManifest.sha256Hex(bytes) != restore.entry.sha256) {
+                // Several raw objects can share a name after a race: the first whose bytes match
+                // the manifest's size and digest is used, whatever order Drive lists them in.
+                val ids = (listOf(restore.remoteFileId) + candidates[restore.entry.id].orEmpty()).distinct()
+                val bytes = ids.withIndex().firstNotNullOfOrNull { (i, id) ->
+                    val downloaded = try {
+                        driveClient.downloadFile(token, id, restore.entry.sizeBytes)
+                    } catch (e: DriveNetworkException) {
+                        if (i == ids.lastIndex) throw e else null
+                    }
+                    downloaded?.takeIf { it.size.toLong() == restore.entry.sizeBytes && BackupManifest.sha256Hex(it) == restore.entry.sha256 }
+                }
+                if (bytes == null) {
                     damaged++
                     return@mapIndexedNotNull null
                 }
                 RecordingFileStore.stageRestore(stageDirectory, index, restore.entry, bytes)
             }
-            // Published with the entry's id and time; a taken name gets a free variant.
+            // Published as `<id>.<ext>` with the entry's display name and time.
             RecordingFileStore.commitStagedRestores(repository, filesDir, staged)
         } finally {
             stageDirectory.deleteRecursively()

@@ -32,9 +32,10 @@ class VoiceMemoExpiryInstrumentedTest {
             })
             val memoDir = RecordingFiles.memoDirectory(root, "signal-fixture")
             assertTrue(memoDir.mkdirs())
-            val memoFile = File(memoDir, "take.m4a")
+            // A36: a recording file is named by its id.
+            val memoFile = File(memoDir, "${UUID.randomUUID()}.m4a")
             assertTrue(memoFile.createNewFile())
-            val memo = service.memosForProject("signal-fixture").single { it.file.name == "take.m4a" }
+            val memo = service.memosForProject("signal-fixture").single { it.file.name == memoFile.name }
 
             val events = mutableListOf<Unit>()
             val collector = launch { service.trashChanges.take(3).toList(events) }

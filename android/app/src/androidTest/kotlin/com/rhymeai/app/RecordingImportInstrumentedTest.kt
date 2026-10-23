@@ -26,7 +26,7 @@ class RecordingImportInstrumentedTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
         val isolated = object : ContextWrapper(context) { override fun getFilesDir(): File = owned }
-        val service = VoiceMemoService(isolated)
+        val service = VoiceMemoService(isolated).also { it.catalog = Catalog() }
         try {
             val source = File(owned, "take.wav").apply { writeBytes(wav()) }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", source)
@@ -38,8 +38,12 @@ class RecordingImportInstrumentedTest {
             assertTrue(service.memosForProject("song-b").isEmpty())
             assertNotEquals(first.file.name, second.file.name)
             assertArrayEquals(source.readBytes(), first.file.readBytes())
+            // A36: files are named by id; the import's name and a rename are display names only.
+            assertEquals("take.wav", first.displayName)
+            assertTrue(first.file.name.endsWith(".wav") && first.file.name != "take.wav")
             val renamed = requireNotNull(service.renameMemo(first, "Verse idea"))
-            assertEquals("Verse idea.wav", renamed.file.name)
+            assertEquals("Verse idea.wav", renamed.displayName)
+            assertEquals(first.file, renamed.file)
             val trashed = requireNotNull(service.trashMemo(renamed))
             assertEquals(1, service.trashedMemos().size)
             assertTrue(service.restoreTrashedMemo(trashed))

@@ -26,7 +26,7 @@ interface RecordingCatalog {
 
     /**
      * A33: throws unless the sync deletions (the tombstones that are also the quarantine
-     * intent) can be read. No adoption, reconciliation or quarantine happens otherwise.
+     * intent) can be read and are valid. No adoption, reconciliation or move happens otherwise.
      */
     suspend fun requireDeletionsReadable() {}
 }
@@ -38,57 +38,56 @@ internal suspend fun RecordingCatalog.removeRecord(id: String) =
     updateRecordingRecords { records -> records.filterNot { it.id == id } }
 
 /**
- * Every change to the published recording folders (record, import, Drive restore,
- * archive import, rename, Trash, restore from Trash) and every backup snapshot runs
- * under one [namespace] lock, so a name is checked and taken in one step and a
- * snapshot never sees half a transition. Each transition writes its record intent
- * before touching the file (A24); [reconcile] finishes or undoes an interrupted one.
+ * A36: every recording file is named `<id>.<ext>`, live, in Trash, in staging and in
+ * quarantine; the name the user sees is the record's display name. So the only moves
+ * are staging → live (publish), live ⇄ Trash, live or Trash → quarantine, and the
+ * one-time migration of a pre-A36 file to its id name. All of them, and every backup
+ * snapshot, run under one [namespace] lock; each writes its record intent (expected
+ * id, digest, source) before touching the file, and [reconcile] finishes or undoes an
+ * interrupted one from that intent. Lock order: this lock first, then the repository's.
  */
 internal object RecordingTransitions {
     val namespace = Mutex()
 
     /**
-     * Called before a recording's bytes move to quarantine or to another name, with the
-     * ids concerned, so playback of them stops first. Set by the app to the voice memo
-     * service; null in tests.
+     * Called before a recording's bytes move, with the ids concerned, so playback of
+     * them stops in the same step. Set by the app to the voice memo service; null in tests.
      */
     @Volatile var beforeBytesMove: (suspend (Set<String>) -> Unit)? = null
 
     fun relativePath(filesDir: File, file: File): String = file.canonicalFile.relativeTo(filesDir.canonicalFile).path
 
     /**
-     * Moves a complete, verified file from staging into the project's memo folder,
-     * under [desiredName] or a free variant, with its record. Returns null when
-     * [skipIfPresent] and this device already holds the recording [id].
+     * Moves a complete, verified file from staging to `<id>.<ext>` in the song's memo
+     * folder, with its record. Returns null when [skipIfPresent] and this device already
+     * holds the recording [id].
      */
     suspend fun publish(
         catalog: RecordingCatalog?,
         filesDir: File,
         source: File,
         projectId: String,
-        desiredName: String,
+        displayName: String,
         id: String,
         uploadedAt: Long,
         origin: String,
-        skipIfPresent: Boolean = false,
-        claimedName: String? = null
+        skipIfPresent: Boolean = false
     ): File? = namespace.withLock {
         catalog?.let { reconcileLocked(it, filesDir) }
         if (skipIfPresent && catalog?.recordingRecords()?.any { it.id == id && it.path != null } == true) {
             return@withLock null
         }
+        SyncIdentity.validateFileName(displayName)
         val dir = RecordingFiles.memoDirectory(filesDir, projectId)
         if (!dir.exists() && !dir.mkdirs()) throw IOException("Could not create memo directory for $projectId")
-        val target = File(dir, desiredName).takeUnless { it.exists() }
-            ?: RecordingFiles.resolveCollision(dir, desiredName.substringBeforeLast('.'), desiredName.substringAfterLast('.', "m4a"))
-        RecordingFiles.memoFile(filesDir, projectId, target.name) // validates the final name before any intent
+        val target = RecordingFiles.memoFile(filesDir, projectId, id, displayName)
+        // Never replace a file: the id's name is taken only by that recording.
+        if (target.exists() || isRegularFileStrictly(target)) throw IOException("Recording $id is already on this device")
         val record = RecordingRecord(
-            id, projectId, target.name, uploadedAt, RecordingFileStore.sha256Hex(source), source.length(), origin,
+            id, projectId, displayName, uploadedAt, RecordingFileStore.sha256Hex(source), source.length(), origin,
             path = relativePath(filesDir, target),
             pendingFrom = relativePath(filesDir, source),
-            pendingOp = RecordingRecord.OP_PUBLISH,
-            // A34: a restored or imported recording claims its own claim, never its allocated name.
-            claimedName = claimedName ?: desiredName
+            pendingOp = RecordingRecord.OP_PUBLISH
         )
         catalog?.putRecord(record)
         try {
@@ -101,132 +100,68 @@ internal object RecordingTransitions {
         target
     }
 
-    /**
-     * Rename, move to Trash or restore from Trash: [pick] chooses the free target
-     * under the lock; the record keeps its id and time and changes only its path and,
-     * when [renamesTo] gives one, its file name. A file with no record is stamped first.
-     */
-    suspend fun move(
-        catalog: RecordingCatalog?,
-        filesDir: File,
-        from: File,
-        projectId: String,
-        displayName: String,
-        pick: () -> File,
-        renamesTo: (File) -> String?,
-        userClaim: Boolean = false
-    ): File? = namespace.withLock { moveLocked(catalog, filesDir, from, projectId, pick, renamesTo, expectedId = null, userClaim = userClaim) }
+    /** Moves a live recording to Trash at [trashedAt]; the file keeps its id name. Null when it is not a known recording. */
+    suspend fun moveToTrash(catalog: RecordingCatalog?, filesDir: File, file: File, projectId: String, trashedAt: Long): File? =
+        namespace.withLock { moveLocked(catalog, filesDir, file, projectId, toTrash = true, trashedAt = trashedAt) }
 
-    /** [move] under the held lock; with [expectedId], only when the file there is still that recording. */
+    /** Moves a recording from Trash back to the song's memo folder. Null when it is not a known recording. */
+    suspend fun restoreFromTrash(catalog: RecordingCatalog?, filesDir: File, file: File, projectId: String): File? =
+        namespace.withLock { moveLocked(catalog, filesDir, file, projectId, toTrash = false, trashedAt = null) }
+
     private suspend fun moveLocked(
         catalog: RecordingCatalog?,
         filesDir: File,
         from: File,
         projectId: String,
-        pick: () -> File,
-        renamesTo: (File) -> String?,
-        expectedId: String?,
-        userClaim: Boolean = false
+        toTrash: Boolean,
+        trashedAt: Long?
     ): File? {
         catalog?.let { reconcileLocked(it, filesDir) }
-        val record = catalog?.let { recordForLocked(it, filesDir, from, projectId) ?: return null }
-        if (expectedId != null && record?.id != expectedId) return null
-        val target = pick()
-        renamesTo(target)?.let { SyncIdentity.validateFileName(it) }
-        // Never replace a file: a taken target fails the move.
+        if (catalog == null) {
+            // Tests without a catalog: the file already carries its id name.
+            val id = RecordingFiles.idOf(from) ?: return null
+            val target = if (toTrash) RecordingFiles.trashFile(filesDir, projectId, id, from.name) else RecordingFiles.memoFile(filesDir, projectId, id, from.name)
+            target.parentFile?.mkdirs()
+            return target.takeIf { !it.exists() && from.renameTo(it) }
+        }
+        // Adoption hashes the song's files: the record is for these exact bytes.
+        val record = recordForLocked(catalog, filesDir, from, projectId) ?: return null
+        // Adoption may just have given a pre-A36 file its id name: move the file where it is now.
+        val current = File(filesDir, record.path ?: return null)
+        val target = if (toTrash) RecordingFiles.trashFile(filesDir, projectId, record.id, record.displayName)
+        else RecordingFiles.memoFile(filesDir, projectId, record.id, record.displayName)
+        // Never replace a file.
         if (target.exists() || isRegularFileStrictly(target)) return null
-        record?.let { beforeBytesMove?.invoke(setOf(it.id)) }
-        val newName = renamesTo(target)
-        val intent = record?.copy(
-            fileName = newName ?: record.fileName,
-            // A30/A34: only a rename the user asked for changes the claim; any other move keeps
-            // the effective claim (an absent claim meant the old file name), never the new name.
-            claimedName = if (userClaim && newName != null) newName else record.claimedName ?: record.fileName,
+        beforeBytesMove?.invoke(setOf(record.id))
+        val intent = record.copy(
             path = relativePath(filesDir, target),
+            trashedAt = trashedAt,
             pendingFrom = record.path,
-            pendingFromName = record.fileName,
+            pendingTrashedAt = record.trashedAt,
             pendingOp = RecordingRecord.OP_MOVE
         )
-        if (intent != null) catalog.putRecord(intent)
+        catalog.putRecord(intent)
         target.parentFile?.let { if (!it.exists()) it.mkdirs() }
-        if (!from.renameTo(target)) {
-            if (record != null) catalog.putRecord(record)
+        if (!current.renameTo(target)) {
+            catalog.putRecord(record)
             return null
         }
-        if (intent != null) catalog.putRecord(intent.copy(pendingFrom = null, pendingFromName = null, pendingOp = null))
+        catalog.putRecord(intent.copy(pendingFrom = null, pendingTrashedAt = null, pendingOp = null))
         return target
     }
 
     /**
-     * A30: renames live recordings to their converged [names] (id to file name). Each
-     * rename checks, under the same lock that moves the file, that the file is still
-     * that recording ([renameIfOwned]); a recording that moved meanwhile is replanned.
-     * A name held by another recording being renamed frees up on a later pass; when
-     * names only swap among themselves, one recording is parked in
-     * `voice-memos-parking/` to break the cycle. A name held by anything else is left
-     * alone, never replaced. A parked recording left by an interrupted run returns to
-     * its name (or a free variant) on the next call, which runs at every launch.
+     * A rename is metadata only (A36): the record's display name changes, nothing on
+     * disk does. Gated like every other change (A33). Null when the file has no record.
      */
-    suspend fun applyNames(catalog: RecordingCatalog, filesDir: File, names: Map<String, String>) {
-        val trashPrefix = relativePath(filesDir, RecordingFiles.trashRoot(filesDir)) + File.separator
-        val parkingPrefix = relativePath(filesDir, RecordingFiles.parkingRoot(filesDir)) + File.separator
-        while (true) {
-            val pending = namespace.withLock {
-                reconcileLocked(catalog, filesDir)
-                catalog.recordingRecords().mapNotNull { record ->
-                    val path = record.path ?: return@mapNotNull null
-                    val wanted = names[record.id] ?: record.fileName.takeIf { path.startsWith(parkingPrefix) } ?: return@mapNotNull null
-                    if (path.startsWith(trashPrefix) || (wanted == record.fileName && !path.startsWith(parkingPrefix))) null
-                    else record to wanted
-                }
-            }
-            if (pending.isEmpty()) return
-            fun targetOf(record: RecordingRecord, wanted: String) = File(RecordingFiles.memoDirectory(filesDir, record.projectId), wanted)
-            var progress = false
-            for ((record, wanted) in pending) {
-                if (renameIfOwned(catalog, filesDir, record.id, record.path!!, targetOf(record, wanted)) != null) progress = true
-            }
-            if (progress) continue
-            // Nothing moved. If names only swap among these recordings, park one that holds
-            // another's name so the rest can move; otherwise stop.
-            val wantedPaths = pending.mapTo(HashSet()) { (record, wanted) -> relativePath(filesDir, targetOf(record, wanted)) }
-            val blocker = pending.firstOrNull { (record, _) -> !record.path!!.startsWith(parkingPrefix) && record.path in wantedPaths }
-            if (blocker == null) {
-                // A parked recording whose name is held by something else takes a free variant.
-                for ((record, wanted) in pending.filter { it.first.path!!.startsWith(parkingPrefix) }) {
-                    val dir = RecordingFiles.memoDirectory(filesDir, record.projectId)
-                    val free = RecordingFiles.resolveCollision(dir, wanted.substringBeforeLast('.'), wanted.substringAfterLast('.', "m4a"))
-                    renameIfOwned(catalog, filesDir, record.id, record.path!!, free)
-                }
-                return
-            }
-            val (record, _) = blocker
-            val ext = record.fileName.substringAfterLast('.', "m4a")
-            val parked = File(RecordingFiles.parkingDirectory(filesDir, record.projectId), "${record.id}.$ext")
-            if (renameIfOwned(catalog, filesDir, record.id, record.path!!, parked, keepName = true) == null) return
+    suspend fun rename(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String, displayName: String): RecordingRecord? =
+        namespace.withLock {
+            SyncIdentity.validateFileName(displayName)
+            val record = recordForLocked(catalog, filesDir, file, projectId) ?: return@withLock null
+            val renamed = record.copy(displayName = displayName, displayNameChanged = true)
+            catalog.putRecord(renamed)
+            renamed
         }
-    }
-
-    /**
-     * Moves recording [id] from [expectedPath] to [target] only if, under the lock, the
-     * file at [expectedPath] is still that recording with its recorded bytes. Returns
-     * null when ownership changed (the caller replans) or the target is taken.
-     */
-    internal suspend fun renameIfOwned(
-        catalog: RecordingCatalog,
-        filesDir: File,
-        id: String,
-        expectedPath: String,
-        target: File,
-        keepName: Boolean = false
-    ): File? = namespace.withLock {
-        reconcileLocked(catalog, filesDir)
-        val current = catalog.recordingRecords().firstOrNull { it.id == id }
-        if (current?.path != expectedPath) return@withLock null
-        val from = File(filesDir, expectedPath)
-        if (!isRegularFileStrictly(from) || RecordingFileStore.sha256Hex(from) != current.sha256) return@withLock null
-        moveLocked(catalog, filesDir, from, current.projectId, pick = { target }, renamesTo = { if (keepName) null else it.name }, expectedId = id)
-    }
 
     /**
      * A28: runs [start] with the verified id of the recording at [file] while holding the
@@ -242,7 +177,7 @@ internal object RecordingTransitions {
         file: File,
         projectId: String,
         deletions: suspend () -> List<SyncDeletion>,
-        start: suspend (String) -> T
+        start: suspend (id: String, file: File) -> T
     ): T? = namespace.withLock {
         val record = try {
             recordForLocked(catalog, filesDir, file, projectId)
@@ -259,60 +194,87 @@ internal object RecordingTransitions {
         } catch (_: Exception) {
             true
         }
-        if (removed) null else start(record.id)
+        if (removed) null else start(record.id, File(filesDir, record.path ?: return@withLock null))
     }
 
     /**
-     * Permanently deletes [file] if, under the lock and after reconciliation, it is still
-     * recording [id] with its recorded bytes; the record goes with it. False otherwise.
+     * Permanently deletes recording [id]'s file if, under the lock and after reconciliation,
+     * it still holds the recorded bytes; the record goes with it. False otherwise.
      */
-    suspend fun deleteVerified(catalog: RecordingCatalog, filesDir: File, file: File, id: String): Boolean = namespace.withLock {
+    suspend fun deleteVerified(catalog: RecordingCatalog, filesDir: File, id: String): Boolean = namespace.withLock {
         reconcileLocked(catalog, filesDir)
-        val path = relativePath(filesDir, file)
-        val record = catalog.recordingRecords().firstOrNull { it.id == id && it.path == path } ?: return@withLock false
+        val record = catalog.recordingRecords().firstOrNull { it.id == id } ?: return@withLock false
+        val file = File(filesDir, record.path ?: return@withLock false)
         if (!isRegularFileStrictly(file) || RecordingFileStore.sha256Hex(file) != record.sha256) return@withLock false
+        beforeBytesMove?.invoke(setOf(id))
         if (!file.delete()) return@withLock false
         catalog.removeRecord(id)
         true
     }
 
     /**
+     * Whole-song cleanup after a song deletion committed: under the lock, the song's live
+     * and Trash files are adopted (hashed) and only recordings a winning tombstone in
+     * [deletions] removes are deleted, each verified by its digest just now. Any other
+     * bytes (a take that finished after the deletion, a file dropped in) are kept.
+     * Returns true when nothing of the song is left in its live and Trash folders.
+     */
+    suspend fun cleanUpDeletedSong(
+        catalog: RecordingCatalog,
+        filesDir: File,
+        projectId: String,
+        deletions: List<SyncDeletion>
+    ): Boolean = namespace.withLock {
+        val tombstones = SyncMerger.Tombstones(deletions)
+        val scan = snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
+        val covered = scan.files.filter { tombstones.removes(it.entry) }
+        if (covered.isNotEmpty()) beforeBytesMove?.invoke(covered.mapTo(HashSet()) { it.entry.id })
+        for (item in covered) {
+            if (!item.file.delete()) return@withLock false
+        }
+        val ids = covered.mapTo(HashSet()) { it.entry.id }
+        if (ids.isNotEmpty()) catalog.updateRecordingRecords { records -> records.filterNot { it.id in ids } }
+        val live = RecordingFiles.memoDirectory(filesDir, projectId)
+        val trash = RecordingFiles.trashDirectory(filesDir, projectId)
+        val left = listStrictly(live) + listStrictly(trash)
+        if (left.isNotEmpty() || scan.files.size != covered.size || scan.leftInPlace.isNotEmpty()) return@withLock false
+        live.delete()
+        trash.delete()
+        true
+    }
+
+    /**
      * The record of the file at [file], adopting its song's files first (used before a
-     * permanent delete). Null when the file turned out to be a duplicate copy and was
-     * moved to quarantine (A26).
+     * move or a permanent delete). Null when the file turned out to be a duplicate copy
+     * and was moved to quarantine (A26), or is a pre-A36 file left in place.
      */
     suspend fun recordFor(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? =
         namespace.withLock { recordForLocked(catalog, filesDir, file, projectId) }
 
     /**
-     * Gives every live and Trash file of [projectIds] a record before a song deletion
-     * or expiry builds its recording tombstones from the records. All or nothing: an
-     * unreadable file or folder throws, and the caller must not delete anything.
+     * Gives every live and Trash file of [projectIds] a record (and its id name) before a
+     * song deletion or expiry builds its recording tombstones from the records. All or
+     * nothing: an unreadable file or folder throws, and the caller must not delete anything.
      */
     suspend fun adopt(catalog: RecordingCatalog, filesDir: File, projectIds: Set<String>) {
         if (projectIds.isNotEmpty()) snapshot(catalog, filesDir, emptySet(), projectIds)
     }
 
-    private suspend fun recordForLocked(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? {
-        val path = relativePath(filesDir, file)
-        // A parked file is not listed by a scan; its record is found by path.
-        if (path.startsWith(relativePath(filesDir, RecordingFiles.parkingRoot(filesDir)) + File.separator)) {
-            return catalog.recordingRecords().firstOrNull { it.path == path }
-        }
-        snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
-        return catalog.recordingRecords().firstOrNull { it.path == path }
-    }
+    /**
+     * A36 migration, run at every launch (idempotent, journaled through the move intents):
+     * every pre-A36 file gets its id name with its old name as display name. Returns the
+     * files left in place because their id name is taken by different bytes.
+     */
+    suspend fun migrate(catalog: RecordingCatalog, filesDir: File): List<File> =
+        namespace.withLock { snapshotLocked(catalog, filesDir, emptySet(), null).leftInPlace }
 
-    private fun stamp(item: Hashed, id: String, uploadedAt: Long) = RecordingRecord(
-        id = id,
-        projectId = item.projectId,
-        fileName = item.displayName,
-        uploadedAt = uploadedAt,
-        sha256 = item.sha,
-        bytes = item.size,
-        origin = RecordingRecord.ADOPTED,
-        path = item.path
-    )
+    private suspend fun recordForLocked(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? {
+        val scan = snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
+        // The file may just have been given its id name.
+        val path = relativePath(filesDir, file)
+        return scan.files.firstOrNull { relativePath(filesDir, it.file) == path || it.originalPath == path }
+            ?.let { found -> catalog.recordingRecords().firstOrNull { it.id == found.entry.id } }
+    }
 
     /**
      * A28: paths of recordings that a known winning tombstone removes. They stay hidden
@@ -335,23 +297,27 @@ internal object RecordingTransitions {
         pendingDeletionIds: Set<String>
     ): Int = namespace.withLock {
         val tombstones = SyncMerger.Tombstones(deletions)
-        val gone = snapshotLocked(catalog, filesDir, pendingDeletionIds, null).filter { tombstones.removes(it.entry) }
+        val gone = snapshotLocked(catalog, filesDir, pendingDeletionIds, null).files.filter { tombstones.removes(it.entry) }
         if (gone.isEmpty()) return@withLock 0
         beforeBytesMove?.invoke(gone.mapTo(HashSet()) { it.entry.id })
         // Bytes first: a record left behind for a moved file is dropped by the next snapshot.
-        gone.forEach { quarantine(filesDir, it.file, it.entry.projectId, it.entry.fileName) }
+        gone.forEach { quarantine(filesDir, it.file, it.entry.projectId, it.entry.id) }
         val ids = gone.mapTo(HashSet()) { it.entry.id }
         catalog.updateRecordingRecords { records -> records.filterNot { it.id in ids } }
         gone.size
     }
 
-    /** Moves a duplicate or deleted recording's bytes out of the library, keeping them (A26/A28). */
-    internal fun quarantine(filesDir: File, file: File, projectId: String, displayName: String): File {
-        val dir = RecordingFiles.quarantineDirectory(filesDir, projectId)
-        if (!dir.exists() && !dir.mkdirs()) throw IOException("Could not create recording quarantine folder")
+    /**
+     * Moves a duplicate or deleted recording's bytes out of the library, keeping them
+     * (A26/A28), as `<id>.<ext>` in a folder of its own, so two kept copies never collide.
+     */
+    internal fun quarantine(filesDir: File, file: File, projectId: String, id: String): File {
+        val root = RecordingFiles.quarantineDirectory(filesDir, projectId)
         var stamp = System.currentTimeMillis()
-        var target = File(dir, "${stamp}__$displayName")
-        while (target.exists()) target = File(dir, "${++stamp}__$displayName")
+        var dir = File(root, stamp.toString())
+        while (dir.exists()) dir = File(root, (++stamp).toString())
+        if (!dir.mkdirs()) throw IOException("Could not create recording quarantine folder")
+        val target = File(dir, RecordingFiles.idFileName(id, file.name))
         Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
         return target
     }
@@ -384,7 +350,7 @@ internal object RecordingTransitions {
     suspend fun reconcile(catalog: RecordingCatalog, filesDir: File) = namespace.withLock { reconcileLocked(catalog, filesDir) }
 
     private suspend fun reconcileLocked(catalog: RecordingCatalog, filesDir: File) {
-        // A33: every adoption, reconciliation and quarantine starts here; none runs on unreadable tombstones.
+        // A33: every adoption, reconciliation and move starts here; none runs on unreadable tombstones.
         catalog.requireDeletionsReadable()
         if (catalog.recordingRecords().none { it.pendingOp != null }) return
         catalog.updateRecordingRecords { records ->
@@ -393,15 +359,16 @@ internal object RecordingTransitions {
                 val target = record.path?.let { File(filesDir, it) }
                 val source = record.pendingFrom?.let { File(filesDir, it) }
                 when {
-                    // Strict checks: a file that cannot be examined throws here and nothing is committed.
+                    // The expected id's bytes at the target: the move happened. Strict checks: a file
+                    // that cannot be examined throws here and nothing is committed.
                     target != null && isRegularFileStrictly(target) && RecordingFileStore.sha256Hex(target) == record.sha256 ->
-                        record.copy(pendingFrom = null, pendingFromName = null, pendingOp = null)
+                        record.copy(pendingFrom = null, pendingTrashedAt = null, pendingOp = null)
                     // Undo only onto the same bytes; anything else at the source is adopted on its own.
                     record.pendingOp == RecordingRecord.OP_MOVE && source != null && isRegularFileStrictly(source) &&
                         RecordingFileStore.sha256Hex(source) == record.sha256 -> record.copy(
                         path = record.pendingFrom,
-                        fileName = record.pendingFromName ?: record.fileName,
-                        pendingFrom = null, pendingFromName = null, pendingOp = null
+                        trashedAt = record.pendingTrashedAt,
+                        pendingFrom = null, pendingTrashedAt = null, pendingOp = null
                     )
                     else -> null
                 }
@@ -410,21 +377,22 @@ internal object RecordingTransitions {
     }
 
     /**
-     * Live and Trash recordings with their records. A file seen for the first time
-     * (no record at its path with its hash) is a pre-v4 recording: it gets the derived
-     * legacy id and is stamped once with its file time. Copies sharing one legacy
-     * identity are one recording (A26): the live copy keeps the id and the others move
-     * to quarantine, so the id never depends on which copy was seen first. Apart from
-     * finishing or undoing an interrupted transition first ([reconcile]), this is the
-     * only local write a backup makes. All or nothing: an unreadable file or folder
-     * throws. Staging and quarantine are never read.
+     * Live and Trash recordings with their records. A file named by an id whose record
+     * matches its bytes is that recording. Any other file is adopted: a pre-A36 file keeps
+     * the id its record had at that path, else gets the derived legacy id (A21), and is
+     * renamed to `<id>.<ext>` with its old name as display name (A36 migration); a file
+     * whose bytes differ from its id's record is adopted on its own. Copies sharing one id
+     * are one recording (A26): the live copy, else the most recently trashed, stays and the
+     * others move to quarantine. An adopted file's time is the earliest file time among its
+     * new copies; a stamped time never changes (A20). All or nothing: an unreadable file or
+     * folder throws. Staging and quarantine are never read.
      */
     suspend fun snapshot(
         catalog: RecordingCatalog,
         filesDir: File,
         pendingDeletionIds: Set<String>,
         onlyProjects: Set<String>? = null
-    ): List<LocalRecordingFile> = namespace.withLock { snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects) }
+    ): List<LocalRecordingFile> = namespace.withLock { snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects).files.map { it.toLocal() } }
 
     /** A missing folder is empty; any other failure to list it throws. */
     internal fun listStrictly(dir: File): List<File> = try {
@@ -433,90 +401,156 @@ internal object RecordingTransitions {
         emptyList()
     }
 
+    private class Scan(val files: List<ScannedFile>, val leftInPlace: List<File>)
+
+    /** A listed recording; [originalPath] is where it was before a migration rename in this scan. */
+    private class ScannedFile(val entry: RecordingManifestEntry, val file: File, val inTrash: Boolean, val originalPath: String) {
+        fun toLocal() = LocalRecordingFile(entry, file, inTrash)
+    }
+
+    private class Item(
+        val file: File,
+        val path: String,
+        val projectId: String,
+        val idName: String?,
+        val name: String,
+        val sha: String,
+        val inTrash: Boolean,
+        val trashedAt: Long?,
+        val size: Long,
+        val modifiedAt: Long
+    )
+
+    private class Planned(val record: RecordingRecord, val item: Item, val target: File)
+
     private suspend fun snapshotLocked(
         catalog: RecordingCatalog,
         filesDir: File,
         pendingDeletionIds: Set<String>,
         onlyProjects: Set<String>?
-    ): List<LocalRecordingFile> {
+    ): Scan {
         reconcileLocked(catalog, filesDir)
-        val hashed = mutableListOf<Hashed>()
+        val items = mutableListOf<Item>()
         for ((root, inTrash) in listOf(RecordingFiles.memosRoot(filesDir) to false, RecordingFiles.trashRoot(filesDir) to true)) {
             for (dir in listStrictly(root)) {
                 if (dir.name in pendingDeletionIds || (onlyProjects != null && dir.name !in onlyProjects)) continue
                 // Throwing metadata reads: a file whose attributes cannot be read aborts adoption.
                 if (!Files.readAttributes(dir.toPath(), BasicFileAttributes::class.java).isDirectory) continue
+                SyncIdentity.validateProjectId(dir.name)
                 for (file in listStrictly(dir)) {
                     val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
                     if (!attributes.isRegularFile || file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
-                    val parsed = if (inTrash) VoiceMemoService.parseTrashedName(file.name) ?: continue else null
-                    val displayName = parsed?.second ?: file.name
-                    RecordingFiles.memoFile(filesDir, dir.name, displayName) // validates the names; throws
-                    hashed += Hashed(file, relativePath(filesDir, file), dir.name, displayName,
-                        RecordingFileStore.sha256Hex(file), inTrash, parsed?.first ?: 0L,
-                        attributes.size(), attributes.lastModifiedTime().toMillis())
+                    val idName = RecordingFiles.idOf(file)
+                    // A pre-A36 Trash file carries its trash time and original name in its name.
+                    val legacyTrash = if (inTrash && idName == null) VoiceMemoService.parseTrashedName(file.name) ?: continue else null
+                    val name = legacyTrash?.second ?: file.name
+                    if (idName == null) SyncIdentity.validateFileName(name)
+                    items += Item(file, relativePath(filesDir, file), dir.name, idName, name, RecordingFileStore.sha256Hex(file),
+                        inTrash, legacyTrash?.first, attributes.size(), attributes.lastModifiedTime().toMillis())
                 }
             }
         }
-        val result = mutableListOf<LocalRecordingFile>()
-        val quarantined = mutableListOf<Hashed>()
+        val listed = mutableListOf<ScannedFile>()
+        val planned = mutableListOf<Planned>()
+        val quarantined = mutableListOf<Pair<Item, String>>()
+        val leftInPlace = mutableListOf<File>()
         catalog.updateRecordingRecords { records ->
-            result.clear()
-            quarantined.clear()
+            listed.clear(); planned.clear(); quarantined.clear(); leftInPlace.clear()
+            val byId = records.associateBy { it.id }
             val byPath = records.filter { it.path != null }.associateBy { it.path }
-            val hashedPaths = hashed.mapTo(HashSet()) { it.path }
-            fun matches(item: Hashed) = byPath[item.path]?.takeIf { it.sha256 == item.sha && it.bytes == item.size }
+            val itemPaths = items.mapTo(HashSet()) { it.path }
+            fun intact(record: RecordingRecord?, item: Item) = record != null && record.sha256 == item.sha && record.bytes == item.size
             // A record not matched by this scan goes only when its file is confirmed absent; a song
             // outside this scan (or pending deletion) keeps its records unexamined.
             val kept = records.filter { record ->
                 val path = record.path ?: return@filter false
                 when {
-                    path in hashedPaths -> false
+                    path in itemPaths -> false
                     record.projectId in pendingDeletionIds || (onlyProjects != null && record.projectId !in onlyProjects) -> true
                     else -> isRegularFileStrictly(File(filesDir, path))
                 }
             }.associateByTo(LinkedHashMap()) { it.id }
-            // A26: every copy of one recording, matched or seen for the first time, is a candidate.
-            val groups = hashed.groupBy { item ->
-                matches(item)?.id ?: RecordingManifestEntry.legacyRecordingId(item.projectId, item.displayName, item.sha)
+            // Each file's recording id, and whether its record already matches it at this path.
+            fun idOf(item: Item): Pair<String, RecordingRecord?> {
+                val atPath = byPath[item.path]?.takeIf { intact(it, item) }
+                if (atPath != null) return atPath.id to atPath
+                val named = item.idName?.let { byId[it] }
+                return when {
+                    item.idName != null && (named == null || intact(named, item)) -> item.idName to named
+                    // Other bytes under an id's name: adopted on their own.
+                    item.idName != null -> RecordingManifestEntry.legacyRecordingId(item.projectId, named!!.displayName, item.sha) to null
+                    else -> RecordingManifestEntry.legacyRecordingId(item.projectId, item.name, item.sha) to null
+                }
             }
-            for ((id, candidates) in groups) {
-                // Order-independent choice: a live copy, else the most recently trashed, then by name.
+            // An id-named Trash file's trash time is in its record; a pre-A36 one's in its name.
+            fun trashTime(item: Item) = item.trashedAt ?: byPath[item.path]?.takeIf { intact(it, item) }?.trashedAt ?: 0L
+            val groups = items.groupBy { idOf(it).first }
+            for ((id, all) in groups) {
+                // Copies of one id are the same bytes: those of its record, else of the file named by
+                // the id. A pre-A36 file whose derived id names other bytes is left in place, reported.
+                val sha = byId[id]?.sha256?.takeIf { known -> all.any { it.sha == known } }
+                    ?: all.firstOrNull { it.idName == id }?.sha ?: all.first().sha
+                val candidates = all.filter { it.sha == sha }
+                all.filter { it.sha != sha }.forEach { leftInPlace += it.file }
                 val canonical = candidates.sortedWith(
-                    compareBy<Hashed> { it.inTrash }.thenByDescending { it.trashedAt }.thenBy { it.path }
+                    compareBy<Item> { it.inTrash }.thenByDescending { trashTime(it) }.thenBy { it.path }
                 ).first()
-                quarantined += candidates.filter { it !== canonical }
-                val existing = kept[id] ?: candidates.firstNotNullOfOrNull { matches(it) }
+                candidates.filter { it !== canonical }.forEach { quarantined += it to id }
+                val existing = kept[id] ?: byId[id]?.takeIf { intact(it, canonical) } ?: candidates.firstNotNullOfOrNull { idOf(it).second }
                 // A20: a stamped time never moves with a file time; only copies seen for the first time count.
-                val earliest = candidates.filter { matches(it) == null }.minOfOrNull { it.modifiedAt }
-                val record = when {
-                    existing == null -> stamp(canonical, id, earliest!!)
-                    // An adopted file's time is the earliest of its copies; other times are kept as stored.
+                val newCopies = candidates.filter { idOf(it).second == null }
+                val earliest = newCopies.minOfOrNull { it.modifiedAt }
+                val displayName = existing?.displayName ?: if (canonical.idName == null) canonical.name else canonical.file.name
+                val trashedAt = if (canonical.inTrash) trashTime(canonical).takeIf { it > 0L } ?: existing?.trashedAt ?: canonical.modifiedAt else null
+                var record = when {
+                    existing == null -> RecordingRecord(
+                        id, canonical.projectId, displayName, earliest!!, canonical.sha, canonical.size,
+                        RecordingRecord.ADOPTED, path = canonical.path, trashedAt = trashedAt
+                    )
                     existing.origin == RecordingRecord.ADOPTED -> existing.copy(
-                        path = canonical.path, fileName = canonical.displayName,
+                        path = canonical.path, trashedAt = trashedAt,
                         uploadedAt = earliest?.let { minOf(existing.uploadedAt, it) } ?: existing.uploadedAt
                     )
-                    existing.path == canonical.path -> existing
-                    else -> existing.copy(path = canonical.path, fileName = canonical.displayName)
+                    else -> existing.copy(path = canonical.path, trashedAt = trashedAt)
+                }
+                // A36 migration: the file takes its id name, journaled as a move intent.
+                val target = if (canonical.inTrash) RecordingFiles.trashFile(filesDir, canonical.projectId, id, displayName)
+                else RecordingFiles.memoFile(filesDir, canonical.projectId, id, displayName)
+                val targetPath = relativePath(filesDir, target)
+                if (targetPath != canonical.path) {
+                    // A duplicate copy of this same recording at the target is quarantined first.
+                    val heldByCopy = candidates.any { it !== canonical && it.path == targetPath }
+                    if (!heldByCopy && (target.exists() || isRegularFileStrictly(target))) {
+                        // The id's name is taken by other bytes: left where it is, reported, never deleted.
+                        leftInPlace += canonical.file
+                        continue
+                    }
+                    record = record.copy(path = targetPath, pendingFrom = canonical.path, pendingTrashedAt = trashedAt, pendingOp = RecordingRecord.OP_MOVE)
+                    planned += Planned(record, canonical, target)
                 }
                 kept[id] = record
-                result += LocalRecordingFile(record.toEntry(), canonical.file, canonical.inTrash)
+                listed += ScannedFile(record.toEntry(), target, canonical.inTrash, canonical.path)
             }
             kept.values.toList()
         }
-        for (item in quarantined) quarantine(filesDir, item.file, item.projectId, item.displayName)
-        return result.sortedWith(compareBy<LocalRecordingFile> { it.inTrash }.thenBy { it.entry.projectId }.thenBy { it.entry.fileName })
+        if (planned.isNotEmpty() || quarantined.isNotEmpty()) {
+            beforeBytesMove?.invoke((planned.map { it.record.id } + quarantined.map { it.second }).toSet())
+        }
+        // Duplicates leave first, so a canonical copy can take a name a duplicate held.
+        for ((item, id) in quarantined) quarantine(filesDir, item.file, item.projectId, id)
+        if (planned.isNotEmpty()) {
+            for (move in planned) {
+                move.target.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                Files.move(move.item.file.toPath(), move.target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            }
+            val done = planned.mapTo(HashSet()) { it.record.id }
+            catalog.updateRecordingRecords { records ->
+                records.map { if (it.id in done) it.copy(pendingFrom = null, pendingTrashedAt = null, pendingOp = null) else it }
+            }
+        }
+        return Scan(
+            listed.sortedWith(compareBy<ScannedFile> { it.inTrash }.thenBy { it.entry.projectId }.thenBy { it.entry.fileName }),
+            leftInPlace.toList()
+        )
     }
-
-    private class Hashed(
-        val file: File,
-        val path: String,
-        val projectId: String,
-        val displayName: String,
-        val sha: String,
-        val inTrash: Boolean,
-        val trashedAt: Long,
-        val size: Long,
-        val modifiedAt: Long
-    )
 }

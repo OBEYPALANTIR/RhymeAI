@@ -40,12 +40,10 @@ class BackupArchiveTest {
     )
 
     private fun memo(filesDir: File, projectId: String, fileName: String, bytes: ByteArray): LocalRecordingFile {
-        val file = RecordingFileStore.targetFile(filesDir, projectId, fileName).also { it.parentFile!!.mkdirs() }
+        val entry = RecordingManifestEntry(projectId, fileName, sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes))
+        val file = RecordingFileStore.targetFile(filesDir, projectId, entry.id, fileName).also { it.parentFile!!.mkdirs() }
         file.writeBytes(bytes)
-        return LocalRecordingFile(
-            RecordingManifestEntry(projectId, fileName, sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes)),
-            file
-        )
+        return LocalRecordingFile(entry, file)
     }
 
     private val library = SyncBlob(
@@ -96,7 +94,7 @@ class BackupArchiveTest {
         assertEquals(setOf("a", "b", "local"), projects.keys)
         assertEquals("Newer here", projects.getValue("a").title)
         assertEquals(listOf("c"), repo.trashedProjectsFlow.first().map { it.project.id })
-        assertContentEquals("audio".toByteArray(), RecordingFileStore.targetFile(targetDir, "a", "take.m4a").readBytes())
+        assertContentEquals("audio".toByteArray(), RecordingFileStore.targetFile(targetDir, "a", take.entry.id, "take.m4a").readBytes())
         assertEquals(1, summary.recordingsAdded)
     }
 
@@ -229,11 +227,37 @@ class BackupArchiveTest {
 
         assertEquals(listOf("Edited"), third.projectsFlow.first().map { it.title })
         assertEquals(0, summary.recordingsAdded)
-        assertFalse(RecordingFileStore.targetFile(thirdDir, "x", "take.m4a").exists())
+        assertFalse(RecordingFiles.memoDirectory(thirdDir, "x").exists())
     }
 
     @Test
     fun exportFileNameUsesTheLocalDate() {
         assertEquals("WritersBlock-backup-2026-10-22.zip", BackupArchive.fileName(1_792_702_991_000L, ZoneOffset.UTC))
+    }
+
+    @Test
+    fun eachDamagedMissingOrOversizedRecordingIsCountedOnceFromReadToImport() = runBlocking<Unit> {
+        fun listed(name: String, bytes: ByteArray, size: Long = bytes.size.toLong()) =
+            RecordingManifestEntry("a", name, sizeBytes = size, modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 5L)
+        val good = listed("good.m4a", "good".toByteArray())
+        val corrupt = listed("corrupt.m4a", "expected".toByteArray())
+        val missing = listed("missing.m4a", "missing".toByteArray())
+        val oversized = listed("long.m4a", "long".toByteArray(), RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1)
+        val manifest = SyncBlob(projects = listOf(SongProject(id = "a", updatedAt = 1L)), recordings = listOf(good, corrupt, missing, oversized))
+        val zipFile = File(root, "damaged.zip")
+        ZipOutputStream(zipFile.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("manifest.json")); zip.write(BackupManifest.encode(manifest, 1L, "device")); zip.closeEntry()
+            zip.putNextEntry(ZipEntry("recordings/a/good.m4a")); zip.write("good".toByteArray()); zip.closeEntry()
+            zip.putNextEntry(ZipEntry("recordings/a/corrupt.m4a")); zip.write("tampered".toByteArray()); zip.closeEntry()
+        }
+
+        val contents = BackupArchive.read(zipFile)
+        assertEquals(setOf(corrupt.id), contents.damagedIds)
+        val summary = BackupArchive.import(contents, repository("counts"), File(root, "counts").also { it.mkdirs() })
+
+        assertEquals(1, summary.recordingsAdded)
+        // corrupt + missing, each once; the oversized one only as a size skip.
+        assertEquals(2, summary.damagedRecordings)
+        assertEquals(1, summary.skippedLargeRecordings)
     }
 }

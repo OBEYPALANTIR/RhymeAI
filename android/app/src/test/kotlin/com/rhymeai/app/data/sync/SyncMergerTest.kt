@@ -196,19 +196,17 @@ class SyncMergerTest {
     }
 
     @Test
-    fun threeRecordingsClaimingOneNameGetTheSameNamesInEveryArrivalOrder() {
-        fun claim(id: String, time: Long) = RecordingManifestEntry("p", "take.m4a", sizeBytes = 1L, modifiedAt = 0L,
+    fun recordingsSharingADisplayNameAllSurviveMergeWithTheirNamesUnchanged() {
+        fun take(id: String, time: Long) = RecordingManifestEntry("p", "take.m4a", sizeBytes = 1L, modifiedAt = 0L,
             sha256 = "a".repeat(64), uploadedAt = time, id = id)
-        val a = claim("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", 10L)
-        val b = claim("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2", 20L)
-        val c = claim("b2a1c3d4-e5f6-4789-8abc-def012345678", 30L)
-        val expected = mapOf(a.id to "take.m4a", b.id to "take 2.m4a", c.id to "take 3.m4a")
-        val orders = listOf(listOf(a, b, c), listOf(a, c, b), listOf(b, a, c), listOf(b, c, a), listOf(c, a, b), listOf(c, b, a))
-        for (order in orders) {
-            val named = SyncMerger.assignNames(order)
-            assertEquals(expected, named.associate { it.id to it.fileName })
-            // Once devices hold the allocated names, those names are stable (never "take 2 2").
-            assertEquals(expected, SyncMerger.assignNames(named.reversed()).associate { it.id to it.fileName })
+        val a = take("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", 10L)
+        val b = take("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2", 20L)
+        val c = take("b2a1c3d4-e5f6-4789-8abc-def012345678", 30L)
+        val expected = mapOf(a.id to "take.m4a", b.id to "take.m4a", c.id to "take.m4a")
+        // A36: display names are metadata; duplicates are kept as-is and never renamed by merge.
+        for ((local, remote) in listOf(listOf(a, b) to listOf(c), listOf(c) to listOf(b, a), listOf(b, c) to listOf(a, b))) {
+            val merged = SyncMerger.merge(SyncBlob(recordings = local), SyncBlob(recordings = remote))
+            assertEquals(expected, merged.recordings.associate { it.id to it.fileName })
         }
     }
 }

@@ -45,6 +45,8 @@ object BackupManifest {
     const val RECORDING_MIME_TYPE = "application/octet-stream"
     const val PLATFORM = "android"
     const val HASH_KEY = "manifestSha256"
+    const val PRECEDENCE_REPAIRED = "precedenceRepaired"
+    const val TRASHED_AT_REPAIRED = "trashedAtRepaired"
     const val DAMAGED_MESSAGE = "Backup file is damaged; it was not merged."
 
     private val sha256Pattern = Regex("[0-9a-f]{64}")
@@ -63,7 +65,8 @@ object BackupManifest {
             putJsonArray("projects") { blob.projects.forEach { add(projectJson(it)) } }
             putJsonArray("trashed") {
                 blob.trashed.forEach { entry ->
-                    add(JsonObject(projectJson(entry.project) + ("trashedAt" to JsonPrimitive(entry.deletedAt))))
+                    val fields = projectJson(entry.project) + ("trashedAt" to JsonPrimitive(entry.deletedAt))
+                    add(JsonObject(if (entry.deletedAtRepaired) fields + (TRASHED_AT_REPAIRED to JsonPrimitive(true)) else fields))
                 }
             }
             putJsonArray("recordings") {
@@ -75,8 +78,7 @@ object BackupManifest {
                         put("bytes", entry.sizeBytes)
                         put("sha256", entry.sha256)
                         put("uploadedAt", entry.uploadedAt)
-                        // A34: present only when the claim differs from the allocated name.
-                        entry.claimedName?.takeIf { it != entry.fileName }?.let { put("claimedName", it) }
+                        if (entry.precedenceRepaired) put(PRECEDENCE_REPAIRED, true)
                     }
                 }
             }
@@ -120,7 +122,7 @@ object BackupManifest {
                 projects = root.array("projects").map { projectFrom(it.jsonObject) },
                 trashed = root.array("trashed").map { element ->
                     val fields = element.jsonObject
-                    TrashedSongProject(projectFrom(fields), deletedAt = fields.long("trashedAt"))
+                    TrashedSongProject(projectFrom(fields), deletedAt = fields.long("trashedAt"), deletedAtRepaired = fields.flag(TRASHED_AT_REPAIRED))
                 },
                 recordings = root.array("recordings").map { element ->
                     val fields = element.jsonObject
@@ -135,8 +137,7 @@ object BackupManifest {
                         // A32: an absent time is unknown (0) and gets its first-seen time before any merge.
                         uploadedAt = if (fields.containsKey("uploadedAt")) fields.long("uploadedAt") else 0L,
                         id = fields.string("id"),
-                        claimedName = fields["claimedName"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content
-                            ?: throw IllegalArgumentException("Invalid claimedName") }
+                        precedenceRepaired = fields.flag(PRECEDENCE_REPAIRED)
                     )
                 },
                 deletions = root.array("deletions").map { element ->
@@ -186,6 +187,7 @@ object BackupManifest {
         put("lyrics", project.lyrics)
         put("theme", project.theme)
         put("updatedAt", project.updatedAt)
+        if (project.precedenceRepaired) put(PRECEDENCE_REPAIRED, true)
     }
 
     private fun projectFrom(fields: JsonObject) = SongProject(
@@ -193,8 +195,19 @@ object BackupManifest {
         title = fields.string("title"),
         lyrics = fields.string("lyrics"),
         theme = fields.string("theme"),
-        updatedAt = fields.long("updatedAt")
+        updatedAt = fields.long("updatedAt"),
+        precedenceRepaired = fields.flag(PRECEDENCE_REPAIRED)
     )
+
+    /**
+     * A37: `precedenceRepaired: true` on a song or recording (`trashedAtRepaired: true` for a
+     * Trash entry's time) marks a first-seen repair; written only when true, so a manifest
+     * without repairs is byte-identical to one written before the flags existed.
+     */
+    private fun JsonObject.flag(key: String): Boolean = when (val value = this[key]) {
+        null -> false
+        else -> value.jsonPrimitive.also { require(!it.isString && it.content in setOf("true", "false")) { "$key must be a boolean" } }.content == "true"
+    }
 
     private fun JsonObject.array(key: String): JsonArray = getValue(key).jsonArray
 

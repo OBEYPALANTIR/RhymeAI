@@ -84,7 +84,8 @@ class PlaybackGuardInstrumentedTest {
     }
 
     @Before fun placeTheTake() {
-        val file = File(RecordingFiles.memoDirectory(owned, "song").apply { mkdirs() }, "take.m4a")
+        // A36: on disk the take is named by its id; "take.m4a" is its display name.
+        val file = File(RecordingFiles.memoDirectory(owned, "song").apply { mkdirs() }, "$id.m4a")
         longTake.copyTo(file)
         catalog.records = listOf(
             RecordingRecord(id, "song", "take.m4a", 1_000L, RecordingFileStore.sha256Hex(file), file.length(), RecordingRecord.RECORDED,
@@ -157,16 +158,28 @@ class PlaybackGuardInstrumentedTest {
         assertNull(service.playingFile)
     }
 
-    @Test fun aRenameStopsPlaybackBeforeTheMoveAndNoPlayStartsWhileItsIntentIsBeingWritten() = runBlocking<Unit> {
+    @Test fun aRenameIsMetadataOnlyAndLeavesPlaybackRunning() = runBlocking<Unit> {
+        play()
+        settle()
+        assertEquals(memo.file, service.playingFile)
+
+        val renamed = RecordingTransitions.rename(catalog, owned, memo.file, "song", "Renamed.m4a")
+        settle()
+
+        assertEquals("Renamed.m4a", renamed?.displayName)
+        assertEquals(memo.file, service.playingFile)
+        assertTrue(memo.file.exists())
+    }
+
+    @Test fun aMoveToTrashStopsPlaybackBeforeTheMoveAndNoPlayStartsWhileItsIntentIsBeingWritten() = runBlocking<Unit> {
         play()
         settle()
         assertEquals(memo.file, service.playingFile)
 
         catalog.gateWrites = true
-        // The transition itself (not the service's own pre-rename stop) must stop playback.
-        val rename = async(Dispatchers.IO) {
-            RecordingTransitions.move(catalog, owned, memo.file, "song", memo.file.name,
-                pick = { File(memo.file.parentFile, "Renamed.m4a") }, renamesTo = { it.name })
+        // The transition itself (not the service's own pre-trash stop) must stop playback.
+        val trash = async(Dispatchers.IO) {
+            RecordingTransitions.moveToTrash(catalog, owned, memo.file, "song", System.currentTimeMillis())
         }
         // The move's intent is being written: the stop hook has run and the bytes have not moved.
         withTimeout(10_000) { catalog.writeEntered.await() }
@@ -177,9 +190,10 @@ class PlaybackGuardInstrumentedTest {
         Thread.sleep(500)
         assertNull(service.playingFile)
         catalog.writeGate.complete(Unit)
-        val renamed = withTimeout(10_000) { rename.await() }
+        val trashed = withTimeout(10_000) { trash.await() }
         settle()
-        assertEquals("Renamed.m4a", renamed?.name)
+        assertEquals("$id.m4a", trashed?.name)
+        assertEquals(RecordingFiles.trashDirectory(owned, "song").canonicalFile, trashed?.parentFile?.canonicalFile)
         assertNull(service.playingFile)
     }
 }

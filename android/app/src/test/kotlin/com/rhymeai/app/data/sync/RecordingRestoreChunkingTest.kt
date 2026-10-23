@@ -122,9 +122,9 @@ class RecordingRestoreChunkingTest {
                 commitChunk(catalog, root, chunks[1]) { ByteArray(8) }
             }
 
-            assertContentEquals(contents[0], RecordingFileStore.targetFile(root, "project-0", "clip.m4a").readBytes())
-            assertContentEquals(contents[1], RecordingFileStore.targetFile(root, "project-1", "clip.m4a").readBytes())
-            assertFalse(RecordingFileStore.targetFile(root, "project-2", "clip.m4a").exists())
+            assertContentEquals(contents[0], RecordingFileStore.targetFile(root, "project-0", remote[0].id, "clip.m4a").readBytes())
+            assertContentEquals(contents[1], RecordingFileStore.targetFile(root, "project-1", remote[1].id, "clip.m4a").readBytes())
+            assertFalse(RecordingFileStore.targetFile(root, "project-2", remote[2].id, "clip.m4a").exists())
             assertEquals(
                 emptyList(),
                 root.listFiles()!!.filter { it.name.startsWith(RecordingFileStore.RESTORE_STAGE_PREFIX) }
