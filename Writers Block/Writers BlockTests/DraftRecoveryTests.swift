@@ -16,22 +16,22 @@ struct DraftRecoveryTests {
         let viewModel = harness.makeViewModel(service: service)
         viewModel.loadProject(project)
 
-        Task { await viewModel.restoreBackupNow() }
+        Task { await viewModel.backUpNow() }
         try await service.waitUntilStarted()
+        // A backup only reads the library, so an edit typed while it runs is saved
+        // by the ordinary autosave, with no recovery copy needed.
         viewModel.lyrics = "typed during backup"
         viewModel.triggerAutoSave()
-        #expect(try harness.projects().first?.lyrics == "saved A")
-
-        let relaunched = harness.makeViewModel()
-
-        let projects = try harness.projects()
-        #expect(projects.count == 1)
-        #expect(projects.first?.id == "song-a")
-        #expect(projects.first?.lyrics == "typed during backup")
-        #expect(relaunched.currentProjectId == "song-a")
-        #expect(relaunched.lyrics == "typed during backup")
-        #expect(!relaunched.showWelcome)
+        for _ in 0..<500 where try harness.projects().first?.lyrics != "typed during backup" { try await Task.sleep(for: .milliseconds(10)) }
         #expect(!harness.recoveryCopyExists)
+
+        // The process dies: a new container opens the same store; the edit is there.
+        let disk = try harness.reopened()
+        _ = disk.makeViewModel()
+        let projects = try disk.projects()
+        #expect(projects.count == 1)
+        #expect(projects.first?.id == "song-a" && projects.first?.lyrics == "typed during backup")
+        #expect(!disk.recoveryCopyExists)
     }
 
     @Test func editsTypedDuringRestoreSurviveKillWithoutOverwritingRestoredSong() async throws {
@@ -53,20 +53,23 @@ struct DraftRecoveryTests {
         viewModel.lyrics = "typed during restore"
         viewModel.triggerAutoSave()
 
-        let relaunched = harness.makeViewModel()
+        // The process dies: a new container opens the same store and recovery file.
+        let disk = try harness.reopened()
+        let relaunched = disk.makeViewModel()
 
-        var projects = try harness.projects()
+        var projects = try disk.projects()
         #expect(projects.count == 2)
         #expect(projects.first(where: { $0.id == "song-a" })?.lyrics == "remote A")
         let recovered = try #require(projects.first(where: { $0.id != "song-a" }))
         #expect(recovered.lyrics == "typed during restore")
         #expect(relaunched.currentProjectId == recovered.id)
         #expect(relaunched.lyrics == "typed during restore")
-        #expect(!harness.recoveryCopyExists)
+        #expect(!disk.recoveryCopyExists)
 
         // A second launch finds nothing left to recover.
-        _ = harness.makeViewModel()
-        projects = try harness.projects()
+        let again = try harness.reopened()
+        _ = again.makeViewModel()
+        projects = try again.projects()
         #expect(projects.count == 2)
     }
 
@@ -609,9 +612,18 @@ private struct RecoveryHarness {
     }
 
     init() throws {
+        try self.init(root: FileManager.default.temporaryDirectory
+            .appendingPathComponent("DraftRecoveryTests-\(UUID().uuidString)", isDirectory: true))
+    }
+
+    /// The same store file, recordings and recovery file opened by a new container,
+    /// as after the process was killed and relaunched (T6.85, T6.86).
+    func reopened() throws -> RecoveryHarness {
+        try RecoveryHarness(root: recoveryURL.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
+    private init(root: URL) throws {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DraftRecoveryTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         // On disk: recovery is skipped for in-memory libraries.
         let configuration = ModelConfiguration(

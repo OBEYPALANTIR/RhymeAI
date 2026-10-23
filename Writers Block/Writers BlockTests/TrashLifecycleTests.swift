@@ -715,3 +715,111 @@ struct TrashLifecycleTests {
         }
     }
 }
+
+/// Round 13 audit regressions for expiry.
+extension TrashLifecycleTests {
+    /// BLOCKER 11 (T2.45): an expired Trash copy of a song that is also active and
+    /// newer is resolved first: the stale copy goes, with no tombstone, and the
+    /// song's recordings stay.
+    @MainActor
+    @Test func anExpiredTrashCopyOfANewerActiveSongWritesNoTombstone() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("StaleTrashCopy")
+        _ = container
+        let now = Date()
+        context.insert(SongProject(id: "s", title: "Active", updatedAt: now))
+        context.insert(TrashedSongProject(id: "s", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000),
+                                          deletedAt: Date(timeIntervalSince1970: 2_000), deleteAfter: now.addingTimeInterval(-60)))
+        try context.save()
+        let memo = library.memosRoot.appendingPathComponent("s/take.m4a")
+        try FileManager.default.createDirectory(at: memo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([2, 2]).write(to: memo)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["s"])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: library.memosRoot.appendingPathComponent("s").path).count == 1)
+    }
+
+    /// BLOCKER 10 (T2.44): an oversized Trash recording whose ledger time is zero
+    /// gets a real time (persisted) and full retention; it is not expired at once.
+    @MainActor
+    @Test func anOversizedTrashRecordingWithAZeroTimeIsNotExpiredAtOnce() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("ZeroOversized")
+        _ = container
+        library.context = context
+        try await library.reconcile(context: context)
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("big-\(UUID().uuidString).m4a")
+        try Data(repeating: 3, count: Int(SyncRecording.maxBytes) + 1).write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        // An earlier build left it in the Trash with no time.
+        let place = library.trashRoot.appendingPathComponent("song/\(id).m4a")
+        try FileManager.default.createDirectory(at: place.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: live, to: place)
+        var entry = try #require(OversizedRecordings.read(for: library.memosRoot)[id])
+        entry.trashedAt = 0
+        entry.completed = true
+        entry.source = nil
+        try OversizedRecordings.record(id: id, entry: entry, for: library.memosRoot)
+        let before = Date().addingTimeInterval(-1).epochMilliseconds
+
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(FileManager.default.fileExists(atPath: place.path))
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+        let repaired = try #require(OversizedRecordings.read(for: library.memosRoot)[id])
+        #expect(try #require(repaired.trashedAt) >= before && repaired.trashedAtRepaired == true)
+    }
+}
+
+/// Launch-time work runs after the editor is usable (coordinator item 3).
+extension TrashLifecycleTests {
+    /// An edit typed into a song before the launch check applies a stored tombstone
+    /// is saved first and stands against it; nothing typed is lost.
+    @MainActor
+    @Test func anEditTypedBeforeLaunchDeletionsRunIsKept() async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("LaunchRace")
+        _ = container
+        let song = SongProject(id: "s", title: "Song", lyrics: "old line", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        context.insert(song)
+        context.insert(SyncDeletionRecord(projectId: "s", deletedAt: 2_000_000))
+        try context.save()
+
+        // The launch check is started but has not run yet (it waits for the main actor).
+        viewModel.modelContext = context
+        viewModel.loadProject(song)
+        viewModel.lyrics = "typed at launch"
+        viewModel.triggerAutoSave()
+        await viewModel.recordingsLaunchTask?.value
+
+        let kept = try #require(try context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "s" })
+        #expect(kept.lyrics == "typed at launch")
+        #expect(viewModel.currentProjectId == "s" && viewModel.lyrics == "typed at launch")
+    }
+
+    /// A41: a song a stored tombstone removes at launch while its time is a repair is
+    /// kept in the song recovery folder first.
+    @MainActor
+    @Test func aRepairedSongRemovedAtLaunchIsKeptInTheRecoveryFolder() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("LaunchRepaired")
+        _ = container
+        let song = SongProject(id: "r", title: "Repaired", lyrics: "keep me", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000))
+        song.precedenceRepaired = true
+        context.insert(song)
+        context.insert(SyncDeletionRecord(projectId: "r", deletedAt: 2_000_000))
+        try context.save()
+
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try SongRecoveryStore.all(memosRoot: library.memosRoot).map { $0.project?.lyrics } == ["keep me"])
+    }
+}
