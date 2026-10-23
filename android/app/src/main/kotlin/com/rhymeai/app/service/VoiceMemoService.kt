@@ -36,6 +36,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.log10
 
 data class VoiceMemo(
@@ -494,6 +495,46 @@ class VoiceMemoService(private val context: Context) {
     }
 
     private fun markerFor(take: File) = File(take.parentFile, take.name + MARKER_SUFFIX)
+
+    /**
+     * A36 for staging: a waiting take still under a pre-A36 name moves to `<id>.<ext>`, the
+     * id from its marker. The new marker is written first, then the take moves, then the old
+     * marker goes, so after a crash at any point the take has a marker naming its id and the
+     * next run finishes. A take whose marker cannot be read, or whose id name is taken, stays
+     * as it is and is returned. Run at launch, under the recording lock.
+     */
+    suspend fun migrateStaging(): List<File> = withContext(Dispatchers.IO) {
+        RecordingTransitions.namespace.withLock {
+            val left = mutableListOf<File>()
+            for (dir in RecordingTransitions.listStrictly(RecordingFiles.stagingRoot(context.filesDir))) {
+                if (!RecordingTransitions.isDirectoryStrictly(dir)) continue
+                for (file in RecordingTransitions.listStrictly(dir)) {
+                    if (file == recordingFile || RecordingFiles.idOf(file) != null) continue
+                    if (file.name.endsWith(MARKER_SUFFIX)) {
+                        // An old marker left by a run that moved its take: its id's take has its own marker.
+                        val take = File(dir, file.name.removeSuffix(MARKER_SUFFIX))
+                        val marker = readMarker(take) as? Marker.Read ?: continue
+                        val moved = File(dir, RecordingFiles.idFileName(marker.id, take.name))
+                        if (RecordingTransitions.isConfirmedAbsent(take) && moved.exists() && markerFor(moved).exists()) file.delete()
+                        continue
+                    }
+                    if (!RecordingTransitions.isRegularFileStrictly(file) ||
+                        file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
+                    val marker = when (val read = readMarker(file)) {
+                        is Marker.Read -> read
+                        Marker.Absent -> continue
+                        Marker.Unreadable -> { left += file; continue }
+                    }
+                    val target = File(dir, RecordingFiles.idFileName(marker.id, file.name))
+                    if (target.exists()) { left += file; continue }
+                    writeMarker(target, marker.id, marker.state, marker.recordedAt)
+                    java.nio.file.Files.move(file.toPath(), target.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                    markerFor(file).delete()
+                }
+            }
+            left
+        }
+    }
 
     private fun writeMarker(take: File, id: String, state: String, recordedAt: Long) {
         val marker = markerFor(take)

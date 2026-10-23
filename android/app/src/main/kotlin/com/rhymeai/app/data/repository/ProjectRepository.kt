@@ -383,6 +383,9 @@ class ProjectRepository internal constructor(
     }
 
     suspend fun purgeExpiredTrashedProjects(now: Long, adopt: suspend (Set<String>) -> Unit = {}): TrashPurge {
+        // A32/A37: a Trash entry without a time gets its first-seen time (and a deadline from it)
+        // before anything is chosen for expiry, so a zero deadline never expires it at once.
+        establishPrecedence(emptyList(), now)
         val expiring = trashedProjectsStore.decode(dataStore.data.first()[TRASHED_PROJECTS_KEY] ?: "[]")
             .filter { it.deleteAfter <= now }.mapTo(HashSet()) { it.project.id }
         adopt(expiring)
@@ -393,6 +396,8 @@ class ProjectRepository internal constructor(
     private suspend fun purgeAdopted(now: Long, adopted: Set<String>): TrashPurge = projectSaveMutex.withLock {
         lateinit var committed: TrashPurge
         dataStore.edit { prefs ->
+            // The same repair inside the deciding transaction: whatever was stored meanwhile is fixed first.
+            normalizePrecedence(prefs, emptyList(), now)
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val expired = trash.filter { it.deleteAfter <= now && it.project.id in adopted }.map { it.project.id }
             val retained = trash.filterNot { it.project.id in expired }
@@ -447,10 +452,15 @@ class ProjectRepository internal constructor(
             seeSong(t.project)
             see("trash:${t.project.id}", t.deletedAt, t.deletedAtRepaired)
         }
+        // A37: a real time for a recording this device only holds a repair for replaces it here,
+        // so lists, playback and quarantine compare what the merge compares.
+        val realRecordingTimes = HashMap<String, Long>()
         for (blob in inputs) {
             blob.projects.forEach(::seeSong)
             blob.trashed.forEach(::seeTrash)
             blob.recordings.forEach { see("rec:${it.id}", it.precedenceTime, it.precedenceRepaired) }
+            blob.recordings.filter { it.precedenceTime > 0L && !it.precedenceRepaired }
+                .forEach { realRecordingTimes.putIfAbsent(it.id, it.precedenceTime) }
         }
         projects.forEach(::seeSong)
         trash.forEach(::seeTrash)
@@ -466,8 +476,11 @@ class ProjectRepository internal constructor(
             val at = repairs.getValue("trash:${t.project.id}")
             return withSong.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, deletedAtRepaired = true)
         }
-        fun record(r: RecordingRecord) =
-            if (r.uploadedAt > 0L && !r.precedenceRepaired) r else r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+        fun record(r: RecordingRecord) = when {
+            r.uploadedAt > 0L && !r.precedenceRepaired -> r
+            r.id in realRecordingTimes -> r.copy(uploadedAt = realRecordingTimes.getValue(r.id), precedenceRepaired = false)
+            else -> r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+        }
         projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = json.encodeToString(it) }
         trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(it) }
         records.map(::record).let { if (it != records) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(it) }

@@ -150,6 +150,11 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         1 -> "1 recording is over 16 MB and was skipped."
         else -> "${result.skippedLargeRecordings} recordings are over 16 MB and were skipped."
     },
+    when (result.unmigratedRecordings) {
+        0 -> null
+        1 -> "1 recording still has its old file name and was left out. Reopen the app to finish updating it."
+        else -> "${result.unmigratedRecordings} recordings still have their old file names and were left out. Reopen the app to finish updating them."
+    },
     when (result.damagedRecordings) {
         0 -> null
         1 -> "1 recording did not match its backup checksum and was not saved."
@@ -911,7 +916,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backupNotice = try {
                 val summary = withContext(Dispatchers.IO) {
                     val base = repo.snapshotLocalSyncBase()
-                    val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds).filterNot { it.inTrash }
+                    // Export only reads: no file is renamed or quarantined (A17).
+                    val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds, moveFiles = false).filterNot { it.inTrash }
                     // A32: an export carries established precedence times, never an unknown one.
                     val established = repo.establishPrecedence(listOf(base.blob.copy(recordings = snapshot.map { it.entry })), System.currentTimeMillis()).single()
                     val byId = established.recordings.associateBy { it.id }
@@ -1215,7 +1221,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 voiceMemoService.maintenance = {
                     // A32: this device's own missing times are fixed before anything compares them.
                     repo.establishPrecedence(emptyList(), System.currentTimeMillis())
-                    val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir)
+                    val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir) +
+                        voiceMemoService.migrateStaging()
                     if (left.isNotEmpty() && !leftReported) {
                         leftReported = true
                         withContext(Dispatchers.Main) {

@@ -441,4 +441,41 @@ class RecordingIdentityTest {
         assertEquals(setOf("new take", "dropped"), left)
         assertEquals(2, catalog.records.size)
     }
+
+    @Test
+    fun aRecordWhoseMigrationTargetIsTakenKeepsItsIdentityUntilTheMoveCanHappen() = runBlocking<Unit> {
+        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
+        val r = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val take = File(dir, "take.m4a").apply { writeBytes("the take".toByteArray()) }
+        val record = RecordingRecord(r, "song", "take.m4a", 1_000L, BackupManifest.sha256Hex(take.readBytes()), take.length(),
+            RecordingRecord.RECORDED, path = "voice-memos/song/take.m4a")
+        catalog.records = listOf(record)
+        // Other bytes already sit at R's id name.
+        File(dir, "$r.m4a").writeBytes("squatter".toByteArray())
+
+        val left = RecordingTransitions.migrate(catalog, filesDir)
+
+        assertEquals(listOf(take.canonicalFile), left.map { it.canonicalFile })
+        assertEquals(record, catalog.records.single { it.id == r })
+        assertTrue(take.exists())
+        // The squatter was adopted on its own and moved off R's name, so the next run moves R.
+        assertEquals(emptyList(), RecordingTransitions.migrate(catalog, filesDir))
+        val moved = catalog.records.single { it.id == r }
+        assertEquals(Triple("take.m4a", 1_000L, "voice-memos/song/$r.m4a"), Triple(moved.displayName, moved.uploadedAt, moved.path))
+        assertEquals("the take", File(dir, "$r.m4a").readText())
+        assertEquals(setOf("the take", "squatter"), dir.listFiles()!!.map { it.readText() }.toSet())
+    }
+
+    @Test
+    fun preA36QuarantineCopiesMoveToTheirIdNamesAndNothingIsReplaced() = runBlocking<Unit> {
+        val q = RecordingFiles.quarantineDirectory(filesDir, "song").apply { mkdirs() }
+        File(q, "1700__take.m4a").writeBytes("kept copy".toByteArray())
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex("kept copy".toByteArray()))
+
+        RecordingTransitions.migrate(catalog, filesDir)
+        RecordingTransitions.migrate(catalog, filesDir)
+
+        assertEquals(listOf("1700/$id.m4a"), q.walk().filter { it.isFile }.map { it.relativeTo(q).path }.toList())
+        assertEquals("kept copy", File(q, "1700/$id.m4a").readText())
+    }
 }

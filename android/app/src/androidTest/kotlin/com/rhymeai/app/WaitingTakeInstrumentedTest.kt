@@ -195,4 +195,25 @@ class WaitingTakeInstrumentedTest {
         assertFalse(service.maintenanceFailed)
         assertTrue(service.trashedMemos().isEmpty())
     }
+
+    @Test fun waitingTakesUnderPreA36NamesMoveToTheirIdsWithTheirMarkers() = runBlocking<Unit> {
+        val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val b = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"
+        TestRecordings.recordFinalizedM4a(context, File(staging, "1700000000000.m4a"))
+        File(staging, "1700000000000.m4a.take").writeText("$a\nfinished\n1700000000500\n")
+        // An earlier run moved this take and its marker but died before removing the old marker.
+        TestRecordings.recordFinalizedM4a(context, File(staging, "$b.m4a"))
+        File(staging, "$b.m4a.take").writeText("$b\nfinished\n1700000000600\n")
+        File(staging, "1700000009000.m4a.take").writeText("$b\nfinished\n1700000000600\n")
+
+        assertTrue(service.migrateStaging().isEmpty())
+        assertTrue(service.migrateStaging().isEmpty())
+
+        assertEquals(setOf("$a.m4a", "$a.m4a.take", "$b.m4a", "$b.m4a.take"), staging.list()!!.toSet())
+        val waiting = service.waitingTakes("song")
+        assertEquals(setOf(a, b), waiting.map { it.id }.toSet())
+        assertTrue(waiting.all { it.finished })
+        assertEquals(2, service.retryWaitingTakes("song"))
+        assertEquals(1_700_000_000_500L, catalog.records.single { it.id == a }.uploadedAt)
+    }
 }
