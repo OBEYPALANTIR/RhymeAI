@@ -152,6 +152,29 @@ class RecordingImportInstrumentedTest {
         }
     }
 
+    @Test fun anUnreadableTrashFolderIsNeverTreatedAsEmpty() = runBlocking<Unit> {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val trash = RecordingFiles.trashDirectory(owned, "song").apply { mkdirs() }
+        val expired = File(trash, "1500__old.m4a").apply { writeBytes(wav()) }
+        trash.setReadable(false)
+        trash.setExecutable(false)
+        try {
+            org.junit.Assume.assumeTrue("permissions are not enforced here", trash.list() == null)
+            assertTrue(runCatching { service.trashedMemos() }.isFailure)
+            // Expiry reports the failure instead of succeeding over an "empty" Trash.
+            val purge = runCatching { service.purgeExpiredTrashedMemos(Long.MAX_VALUE) }
+            assertTrue(purge.isFailure || purge.getOrNull() == false)
+        } finally {
+            trash.setReadable(true)
+            trash.setExecutable(true)
+            service.release()
+        }
+        assertTrue(expired.exists())
+        owned.deleteRecursively()
+    }
+
     @Test fun rejectsRenamedTextAndLeavesNoImportedRecording() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }

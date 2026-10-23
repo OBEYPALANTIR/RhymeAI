@@ -110,6 +110,10 @@ class VoiceMemoService(private val context: Context) {
     private var recordingStartMs = 0L
 
     private var player: MediaPlayer? = null
+    /** The pending playback check, owned so Stop, release and deletions cancel it. */
+    private var playJob: Job? = null
+    /** The id of the recording playing, so it is found again after its path changes. */
+    @Volatile private var playingRecordingId: String? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var tickJob: Job? = null
@@ -321,11 +325,12 @@ class VoiceMemoService(private val context: Context) {
 
     /** Takes in staging that are not saved yet, for one song or all; the take being recorded is not one. */
     suspend fun waitingTakes(projectId: String? = null): List<WaitingTake> = withContext(Dispatchers.IO) {
+        // Strict: a staging folder that cannot be read throws instead of hiding its takes.
         val root = RecordingFiles.stagingRoot(context.filesDir)
-        root.listFiles().orEmpty()
-            .filter { it.isDirectory && (projectId == null || it.name == projectId) }
+        RecordingTransitions.listStrictly(root)
+            .filter { (projectId == null || it.name == projectId) && RecordingTransitions.isDirectoryStrictly(it) }
             .flatMap { dir ->
-                dir.listFiles().orEmpty().filter { it.name.endsWith(MARKER_SUFFIX) }.mapNotNull { markerFile ->
+                RecordingTransitions.listStrictly(dir).filter { it.name.endsWith(MARKER_SUFFIX) }.mapNotNull { markerFile ->
                     val take = File(dir, markerFile.name.removeSuffix(MARKER_SUFFIX))
                     if (take == recordingFile) return@mapNotNull null
                     val sessionFinish = finishedInSession[take.path]
@@ -392,35 +397,95 @@ class VoiceMemoService(private val context: Context) {
     }
 
     /**
-     * Whether the recorder finalized [file]: its MPEG-4 index is intact and lists only
-     * samples inside the media data ([Mp4Integrity]), and the extractor reads every one
-     * of them to the end of the stream. Unreadable now is [Inspection.CANNOT_INSPECT].
+     * Whether the recorder finalized [file]. Structure first ([Mp4Integrity]): an intact
+     * index whose every sample lies inside the media data. Then content, on the audio
+     * track the index validated: the extractor must see that same track and return every
+     * sample at its declared size, no AAC access unit may be all zeros (a valid one always
+     * ends with an END element), and the decoder must decode to the end of the stream
+     * with a frame count within 2048 frames (encoder delay) of the declared duration.
+     * A file or decoder that cannot be used right now is [Inspection.CANNOT_INSPECT].
      */
     internal fun inspectFinalized(file: File): Inspection {
-        val audio = try {
-            Mp4Integrity.check(file).first { it.handler == "soun" && it.sampleCount > 0 }
+        val tracks = try {
+            Mp4Integrity.check(file)
         } catch (_: Mp4Integrity.InvalidMp4) {
             return Inspection.INVALID
         } catch (_: java.io.IOException) {
             return Inspection.CANNOT_INSPECT
         }
+        val trackIndex = tracks.indexOfFirst { it.handler == "soun" && it.sampleCount > 0 }
+        val audio = tracks[trackIndex]
         val extractor = MediaExtractor()
-        return try {
+        var codec: android.media.MediaCodec? = null
+        try {
             extractor.setDataSource(file.absolutePath)
-            val track = (0 until extractor.trackCount).firstOrNull { index ->
-                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
-            } ?: return Inspection.INVALID
-            extractor.selectTrack(track)
-            val buffer = java.nio.ByteBuffer.allocate(1 shl 20)
-            var samples = 0
-            while (extractor.readSampleData(buffer, 0) >= 0) {
-                samples++
-                extractor.advance()
+            // Bind to the validated track: the extractor lists the same tracks in index order.
+            if (extractor.trackCount != tracks.size) return Inspection.INVALID
+            val format = extractor.getTrackFormat(trackIndex)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return Inspection.INVALID
+            if (!mime.startsWith("audio/")) return Inspection.INVALID
+            extractor.selectTrack(trackIndex)
+            val decoder = try {
+                android.media.MediaCodec.createDecoderByType(mime)
+            } catch (_: Exception) {
+                return Inspection.CANNOT_INSPECT
             }
-            if (samples == audio.sampleCount) Inspection.FINALIZED else Inspection.INVALID
+            codec = decoder
+            decoder.configure(format, null, null, 0)
+            decoder.start()
+            val info = android.media.MediaCodec.BufferInfo()
+            var sample = 0
+            var inputDone = false
+            var frames = 0L
+            var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var bytesPerSample = 2
+            val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val deadline = System.currentTimeMillis() + 60_000L
+            while (true) {
+                if (System.currentTimeMillis() > deadline) return Inspection.CANNOT_INSPECT
+                if (!inputDone) {
+                    val inIndex = decoder.dequeueInputBuffer(10_000L)
+                    if (inIndex >= 0) {
+                        val buffer = decoder.getInputBuffer(inIndex)!!
+                        val size = extractor.readSampleData(buffer, 0)
+                        if (size < 0) {
+                            if (sample != audio.sampleCount) return Inspection.INVALID
+                            decoder.queueInputBuffer(inIndex, 0, 0, 0L, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            if (sample >= audio.sampleCount || size.toLong() != audio.sampleSizes[sample]) return Inspection.INVALID
+                            if (mime == MediaFormat.MIMETYPE_AUDIO_AAC && (0 until size).all { buffer.get(it) == 0.toByte() }) {
+                                return Inspection.INVALID
+                            }
+                            decoder.queueInputBuffer(inIndex, 0, size, extractor.sampleTime, 0)
+                            sample++
+                            extractor.advance()
+                        }
+                    }
+                }
+                val outIndex = decoder.dequeueOutputBuffer(info, 10_000L)
+                when {
+                    outIndex >= 0 -> {
+                        frames += info.size / (channels * bytesPerSample)
+                        decoder.releaseOutputBuffer(outIndex, false)
+                        if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+                    }
+                    outIndex == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val output = decoder.outputFormat
+                        channels = output.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        if (output.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
+                            output.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
+                        ) bytesPerSample = 4
+                    }
+                }
+            }
+            val declared = audio.duration * sampleRate / audio.timescale
+            return if (kotlin.math.abs(frames - declared) <= 2_048L) Inspection.FINALIZED else Inspection.INVALID
         } catch (_: Exception) {
-            Inspection.CANNOT_INSPECT
+            // A decoder or extractor error is not proof of a malformed take; it stays retryable.
+            return Inspection.CANNOT_INSPECT
         } finally {
+            codec?.let { runCatching { it.stop() }; it.release() }
             extractor.release()
         }
     }
@@ -507,17 +572,34 @@ class VoiceMemoService(private val context: Context) {
      */
     fun play(memo: VoiceMemo) {
         stopPlayback()
-        // A28: a recording a known tombstone removes is never played (unknown counts as removed).
-        scope.launch {
-            val removed = withContext(Dispatchers.IO) {
-                runCatching { RecordingTransitions.relativePath(context.filesDir, memo.file) in deletedPaths() }.getOrDefault(true)
-            }
-            if (!removed) startPlayer(memo)
+        // A28: checked off the main thread first; Stop, release and a deletion cancel the check.
+        playJob = scope.launch {
+            val id = withContext(Dispatchers.IO) { playableRecordingId(memo.file) } ?: return@launch
+            startPlayer(memo, id.ifEmpty { null })
         }
     }
 
-    private fun startPlayer(memo: VoiceMemo) {
-        stopPlayback()
+    /**
+     * The id of the recording at [file] ("" when it has no record yet), or null when a
+     * known tombstone removes it or that cannot be read (fails closed).
+     */
+    private suspend fun playableRecordingId(file: File): String? = try {
+        val path = RecordingTransitions.relativePath(context.filesDir, file)
+        val records = catalog?.recordingRecords().orEmpty()
+        when {
+            path in deletedPaths() -> null
+            // A move or save not yet reconciled (for example after a failed reconcile) is not playable yet.
+            records.any { it.pendingOp != null && (it.path == path || it.pendingFrom == path) } -> null
+            else -> records.firstOrNull { it.path == path }?.id ?: ""
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun startPlayer(memo: VoiceMemo, recordingId: String?) {
+        releasePlayer()
         val mp = MediaPlayer()
         try {
             mp.setDataSource(memo.file.absolutePath)
@@ -538,19 +620,36 @@ class VoiceMemoService(private val context: Context) {
         }
 
         player = mp
+        playingRecordingId = recordingId
         playingFile = memo.file
     }
 
-    /** Stop playback if it is in progress. Idempotent. */
+    /** Stop playback, and any playback still being checked. Idempotent. */
     fun stopPlayback() {
+        playJob?.cancel()
+        playJob = null
+        releasePlayer()
+    }
+
+    private fun releasePlayer() {
         val mp = player
         player = null
         playingFile = null
+        playingRecordingId = null
 
         if (mp != null) {
             runCatching { mp.stop() }
             mp.release()
         }
+    }
+
+    /**
+     * Called before the bytes of recordings [ids] move (quarantine, A30 rename): playback
+     * of them stops first, and a playback still being checked is cancelled.
+     */
+    suspend fun stopPlayingIds(ids: Set<String>) = withContext(Dispatchers.Main) {
+        playJob?.takeIf { it.isActive }?.cancel()
+        if (playingRecordingId in ids) stopPlayback()
     }
 
     // ---------------------------------------------------------------------------
@@ -650,19 +749,21 @@ class VoiceMemoService(private val context: Context) {
 
     /** All trashed recordings across every project, newest deletion first. */
     suspend fun trashedMemos(): List<TrashedVoiceMemo> = withContext(Dispatchers.IO) {
+        // Strict: a Trash folder that cannot be read throws, so expiry reports it unfinished.
         val root = RecordingFiles.trashRoot(context.filesDir)
-        if (!root.exists()) return@withContext emptyList()
         val hidden = deletedPaths()
-        root.listFiles()
-            ?.filter { it.isDirectory }
-            ?.flatMap { dir ->
-                dir.listFiles()
-                    ?.filter { RecordingFiles.isMemoFile(it) && RecordingTransitions.relativePath(context.filesDir, it) !in hidden }
-                    ?.mapNotNull { file -> trashedMemoFromFile(file, dir.name) }
-                    ?: emptyList()
+        RecordingTransitions.listStrictly(root)
+            .filter { RecordingTransitions.isDirectoryStrictly(it) }
+            .flatMap { dir ->
+                RecordingTransitions.listStrictly(dir)
+                    .filter {
+                        RecordingTransitions.isRegularFileStrictly(it) &&
+                            it.extension.lowercase(Locale.ROOT) in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS &&
+                            RecordingTransitions.relativePath(context.filesDir, it) !in hidden
+                    }
+                    .mapNotNull { file -> trashedMemoFromFile(file, dir.name) }
             }
-            ?.sortedByDescending { it.deletedAt }
-            ?: emptyList()
+            .sortedByDescending { it.deletedAt }
     }
 
     /**
@@ -727,9 +828,26 @@ class VoiceMemoService(private val context: Context) {
     /** Call when the sync tombstones change: lists refresh and a removed recording stops playing. */
     suspend fun onDeletionsChanged() {
         deletionChangeEvents.tryEmit(Unit)
+        // A playback still being checked may have read the tombstones before this change.
+        withContext(Dispatchers.Main) { playJob?.takeIf { it.isActive }?.cancel() }
         val playing = playingFile ?: return
+        val id = playingRecordingId
         val removed = withContext(Dispatchers.IO) {
-            runCatching { RecordingTransitions.relativePath(context.filesDir, playing) in deletedPaths() }.getOrDefault(true)
+            try {
+                val deletions = deletionsProvider?.invoke() ?: emptyList()
+                val records = catalog?.recordingRecords().orEmpty()
+                if (id != null) {
+                    // By id: a record that is gone (quarantined) or that a tombstone removes.
+                    val record = records.firstOrNull { it.id == id }
+                    record == null || com.rhymeai.app.data.sync.SyncMerger.Tombstones(deletions).removes(record.toEntry())
+                } else {
+                    RecordingTransitions.relativePath(context.filesDir, playing) in RecordingTransitions.deletedPaths(records, deletions)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                true
+            }
         }
         if (removed) withContext(Dispatchers.Main) { if (playingFile == playing) stopPlayback() }
     }
@@ -839,8 +957,9 @@ class VoiceMemoService(private val context: Context) {
         }
 
         return withContext(Dispatchers.IO) {
-            val liveRemoved = !dir.exists() || dir.deleteRecursively()
-            val trashRemoved = !trash.exists() || trash.deleteRecursively()
+            // Only confirmed absence counts as removed; a folder that cannot be read is retried.
+            val liveRemoved = RecordingTransitions.isConfirmedAbsent(dir) || dir.deleteRecursively()
+            val trashRemoved = RecordingTransitions.isConfirmedAbsent(trash) || trash.deleteRecursively()
             liveRemoved && trashRemoved
         }
     }

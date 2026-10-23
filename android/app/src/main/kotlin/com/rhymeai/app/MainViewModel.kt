@@ -200,6 +200,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Recording records (id, time, location) live beside the songs (A20/A21).
         it.catalog = repo
         it.deletionsProvider = repo::syncDeletions
+        // Playback of a recording stops before its bytes move to quarantine or another name.
+        com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = it::stopPlayingIds
     }
 
     // Editor state
@@ -1203,6 +1205,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // or failed move after Restore or Import); until then the lists hide them.
             launch(Dispatchers.IO) {
                 try {
+                    // A recording parked by an interrupted name swap returns to its name first (A30).
+                    com.rhymeai.app.data.recording.RecordingTransitions.applyNames(repo, getApplication<Application>().filesDir, emptyMap())
                     com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, getApplication<Application>().filesDir)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -1792,8 +1796,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun adoptRecordings(projectIds: Set<String>) =
+    // Adoption hashes the song's recordings: never on the main thread.
+    private suspend fun adoptRecordings(projectIds: Set<String>) = withContext(Dispatchers.IO) {
         com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, projectIds)
+    }
 
     fun permanentlyDeleteTrashedProject(id: String) {
         if (restoringDraft || savingBeforeNavigation) return
@@ -1836,7 +1842,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // Finish interrupted moves and give every expiring song's recordings a record
                 // before the expiry builds their tombstones.
-                com.rhymeai.app.data.recording.RecordingTransitions.reconcile(repo, getApplication<Application>().filesDir)
+                withContext(Dispatchers.IO) {
+                    com.rhymeai.app.data.recording.RecordingTransitions.reconcile(repo, getApplication<Application>().filesDir)
+                }
                 val committed = repo.purgeExpiredTrashedProjects(now, adopt = ::adoptRecordings)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
@@ -2341,6 +2349,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             localModelService.close()
         } finally {
+            com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = null
             voiceMemoService.release()
             super.onCleared()
         }

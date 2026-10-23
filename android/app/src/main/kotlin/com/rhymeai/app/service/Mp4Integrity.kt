@@ -16,7 +16,8 @@ internal object Mp4Integrity {
 
     class Box(val type: String, val offset: Long, val size: Long, val headerSize: Int)
 
-    class Track(val handler: String, val sampleCount: Int, val duration: Long, val timescale: Long)
+    /** One `trak`, in index order; [sampleSizes] are the sizes its sample table declares. */
+    class Track(val handler: String, val sampleCount: Int, val duration: Long, val timescale: Long, val sampleSizes: LongArray)
 
     private const val MAX_INDEX_BYTES = 16L * 1024 * 1024
 
@@ -136,13 +137,16 @@ internal object Mp4Integrity {
             var offset = chunkOffset
             repeat(perChunk) {
                 if (sample >= sampleCount) throw InvalidMp4("Chunks list more samples than the size table")
-                val end = offset + sampleSize(sample)
+                val size = sampleSize(sample)
+                // Checked arithmetic: an offset near Long.MAX_VALUE must not wrap around.
+                if (offset < 0 || size > Long.MAX_VALUE - offset) throw InvalidMp4("Sample $sample offset overflows")
+                val end = offset + size
                 if (mdats.none { offset >= it.first && end <= it.last + 1 }) throw InvalidMp4("Sample $sample lies outside the media data")
                 offset = end
                 sample++
             }
         }
         if (sample != sampleCount) throw InvalidMp4("Chunks cover $sample of $sampleCount samples")
-        return Track(handler, sampleCount, duration, timescale)
+        return Track(handler, sampleCount, duration, timescale, LongArray(sampleCount) { sampleSize(it) })
     }
 }

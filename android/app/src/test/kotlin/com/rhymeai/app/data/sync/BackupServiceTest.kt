@@ -3,6 +3,7 @@ package com.rhymeai.app.data.sync
 import com.rhymeai.app.data.recording.RecordingFiles
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.repository.ProjectRepository
@@ -25,6 +26,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -38,10 +40,8 @@ class BackupServiceTest {
     private val filesDir = File(root, "files").also { it.mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val keys = MemoryKeyStore()
-    private val repository = ProjectRepository(
-        PreferenceDataStoreFactory.create(scope = scope) { File(root, "prefs.preferences_pb") },
-        keys
-    )
+    private val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(root, "prefs.preferences_pb") }
+    private val repository = ProjectRepository(dataStore, keys)
     private val drive = FakeDrive()
     private val auth = FakeAuthorizer()
     private val clock = 1_792_702_991_000L
@@ -982,6 +982,59 @@ class BackupServiceTest {
         assertEquals("take 2.m4a", named[existingVariant.id])
         assertEquals("take 3.m4a", named[b.id])
         assertEquals("take 4.m4a", named[a.id])
+    }
+
+    @Test
+    fun precedenceTimesAreFixedBeforeNamingSoRepeatedBackupsKeepContestedNames() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        // Here, A under take.m4a at 2000. Drive lists B under the same name with no time at all,
+        // and C under another contested name, also without a time (a v4 entry carries no file time).
+        val a = writeMemo("p", "take.m4a", "a take".toByteArray(), modifiedAt = 2_000L)
+        writeMemo("p", "verse.m4a", "local verse".toByteArray(), modifiedAt = 3_000L)
+        val bBytes = "b take".toByteArray()
+        val b = RecordingManifestEntry("p", "take.m4a", sizeBytes = bBytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bBytes), uploadedAt = 0L)
+        val cBytes = "c verse".toByteArray()
+        val c = RecordingManifestEntry("p", "verse.m4a", sizeBytes = cBytes.size.toLong(), modifiedAt = 1_500L, sha256 = BackupManifest.sha256Hex(cBytes), uploadedAt = 0L)
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(b, c)))
+        putRaw(b, bBytes)
+        putRaw(c, cBytes)
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        val first = remote().recordings.associate { it.id to (it.fileName to it.uploadedAt) }
+        assertEquals("take.m4a" to 0L, first[b.id])
+        assertEquals("take 2.m4a" to 2_000L, first[a.id])
+        assertEquals("verse.m4a" to 0L, first[c.id])
+        repeat(3) {
+            assertIs<SyncResult.Success>(service.backUp(repository))
+            assertEquals(first, remote().recordings.associate { it.id to (it.fileName to it.uploadedAt) })
+        }
+    }
+
+    @Test
+    fun unreadableTombstonesStopAdoptionDeletionAndMovesBeforeAnythingChanges() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("gone"), song("kept")))
+        repository.moveProjectToTrash("gone", 10L)
+        val bytes = "old take".toByteArray()
+        val live = File(RecordingFiles.memoDirectory(filesDir, "gone").apply { mkdirs() }, "take.m4a").apply { writeBytes(bytes) }
+        val trashed = File(RecordingFiles.trashDirectory(filesDir, "gone").apply { mkdirs() }, "1500__take.m4a").apply { writeBytes(bytes) }
+        val other = File(RecordingFiles.memoDirectory(filesDir, "kept").apply { mkdirs() }, "verse.m4a").apply { writeBytes("verse".toByteArray()) }
+        dataStore.edit { it[androidx.datastore.preferences.core.stringPreferencesKey("sync_deletions_json")] = "{not json" }
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+
+        assertFails { repository.permanentlyDeleteTrashedProject("gone", now = 5_000L, adopt = adopt) }
+        assertFails {
+            com.rhymeai.app.data.recording.RecordingTransitions.move(
+                repository, filesDir, other, "kept", other.name, pick = { File(other.parentFile, "renamed.m4a") }, renamesTo = { it.name }
+            )
+        }
+
+        // Nothing was stamped, quarantined, deleted or moved.
+        assertTrue(repository.recordingRecords().isEmpty())
+        assertTrue(live.exists())
+        assertTrue(trashed.exists())
+        assertTrue(other.exists())
+        assertFalse(RecordingFiles.quarantineRoot(filesDir).exists())
+        assertEquals(listOf("gone"), repository.trashedProjectsFlow.first().map { it.project.id })
     }
 
     @Test

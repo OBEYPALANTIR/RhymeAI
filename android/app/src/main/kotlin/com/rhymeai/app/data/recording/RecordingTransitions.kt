@@ -23,6 +23,12 @@ interface RecordingCatalog {
 
     /** Replaces the records in one write; throws when the write fails. */
     suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>)
+
+    /**
+     * A33: throws unless the sync deletions (the tombstones that are also the quarantine
+     * intent) can be read. No adoption, reconciliation or quarantine happens otherwise.
+     */
+    suspend fun requireDeletionsReadable() {}
 }
 
 internal suspend fun RecordingCatalog.putRecord(record: RecordingRecord) =
@@ -40,6 +46,13 @@ internal suspend fun RecordingCatalog.removeRecord(id: String) =
  */
 internal object RecordingTransitions {
     val namespace = Mutex()
+
+    /**
+     * Called before a recording's bytes move to quarantine or to another name, with the
+     * ids concerned, so playback of them stops first. Set by the app to the voice memo
+     * service; null in tests.
+     */
+    @Volatile var beforeBytesMove: (suspend (Set<String>) -> Unit)? = null
 
     fun relativePath(filesDir: File, file: File): String = file.canonicalFile.relativeTo(filesDir.canonicalFile).path
 
@@ -98,13 +111,26 @@ internal object RecordingTransitions {
         displayName: String,
         pick: () -> File,
         renamesTo: (File) -> String?
-    ): File? = namespace.withLock {
+    ): File? = namespace.withLock { moveLocked(catalog, filesDir, from, projectId, pick, renamesTo, expectedId = null) }
+
+    /** [move] under the held lock; with [expectedId], only when the file there is still that recording. */
+    private suspend fun moveLocked(
+        catalog: RecordingCatalog?,
+        filesDir: File,
+        from: File,
+        projectId: String,
+        pick: () -> File,
+        renamesTo: (File) -> String?,
+        expectedId: String?
+    ): File? {
         catalog?.let { reconcileLocked(it, filesDir) }
-        val record = catalog?.let { recordForLocked(it, filesDir, from, projectId) ?: return@withLock null }
+        val record = catalog?.let { recordForLocked(it, filesDir, from, projectId) ?: return null }
+        if (expectedId != null && record?.id != expectedId) return null
         val target = pick()
         renamesTo(target)?.let { SyncIdentity.validateFileName(it) }
         // Never replace a file: a taken target fails the move.
-        if (target.exists() || isRegularFileStrictly(target)) return@withLock null
+        if (target.exists() || isRegularFileStrictly(target)) return null
+        record?.let { beforeBytesMove?.invoke(setOf(it.id)) }
         val intent = record?.copy(
             fileName = renamesTo(target) ?: record.fileName,
             path = relativePath(filesDir, target),
@@ -113,38 +139,84 @@ internal object RecordingTransitions {
             pendingOp = RecordingRecord.OP_MOVE
         )
         if (intent != null) catalog.putRecord(intent)
+        target.parentFile?.let { if (!it.exists()) it.mkdirs() }
         if (!from.renameTo(target)) {
             if (record != null) catalog.putRecord(record)
-            return@withLock null
+            return null
         }
         if (intent != null) catalog.putRecord(intent.copy(pendingFrom = null, pendingFromName = null, pendingOp = null))
-        target
+        return target
     }
 
     /**
-     * A30: renames live recordings to their converged [names] (id to file name) where the
-     * name is free. A name held by another recording that is itself being renamed frees
-     * up on a later pass; a name held by anything else is left alone, never replaced.
+     * A30: renames live recordings to their converged [names] (id to file name). Each
+     * rename checks, under the same lock that moves the file, that the file is still
+     * that recording ([renameIfOwned]); a recording that moved meanwhile is replanned.
+     * A name held by another recording being renamed frees up on a later pass; when
+     * names only swap among themselves, one recording is parked in
+     * `voice-memos-parking/` to break the cycle. A name held by anything else is left
+     * alone, never replaced. A parked recording left by an interrupted run returns to
+     * its name (or a free variant) on the next call, which runs at every launch.
      */
     suspend fun applyNames(catalog: RecordingCatalog, filesDir: File, names: Map<String, String>) {
         val trashPrefix = relativePath(filesDir, RecordingFiles.trashRoot(filesDir)) + File.separator
-        do {
+        val parkingPrefix = relativePath(filesDir, RecordingFiles.parkingRoot(filesDir)) + File.separator
+        while (true) {
             val pending = namespace.withLock {
                 reconcileLocked(catalog, filesDir)
-                catalog.recordingRecords().filter { record ->
-                    val path = record.path ?: return@filter false
-                    !path.startsWith(trashPrefix) && names[record.id]?.let { it != record.fileName } == true
+                catalog.recordingRecords().mapNotNull { record ->
+                    val path = record.path ?: return@mapNotNull null
+                    val wanted = names[record.id] ?: record.fileName.takeIf { path.startsWith(parkingPrefix) } ?: return@mapNotNull null
+                    if (path.startsWith(trashPrefix) || (wanted == record.fileName && !path.startsWith(parkingPrefix))) null
+                    else record to wanted
                 }
             }
+            if (pending.isEmpty()) return
+            fun targetOf(record: RecordingRecord, wanted: String) = File(RecordingFiles.memoDirectory(filesDir, record.projectId), wanted)
             var progress = false
-            for (record in pending) {
-                val from = File(filesDir, record.path!!)
-                val target = File(from.parentFile, names.getValue(record.id))
-                if (move(catalog, filesDir, from, record.projectId, record.fileName, pick = { target }, renamesTo = { it.name }) != null) {
-                    progress = true
-                }
+            for ((record, wanted) in pending) {
+                if (renameIfOwned(catalog, filesDir, record.id, record.path!!, targetOf(record, wanted)) != null) progress = true
             }
-        } while (progress)
+            if (progress) continue
+            // Nothing moved. If names only swap among these recordings, park one that holds
+            // another's name so the rest can move; otherwise stop.
+            val wantedPaths = pending.mapTo(HashSet()) { (record, wanted) -> relativePath(filesDir, targetOf(record, wanted)) }
+            val blocker = pending.firstOrNull { (record, _) -> !record.path!!.startsWith(parkingPrefix) && record.path in wantedPaths }
+            if (blocker == null) {
+                // A parked recording whose name is held by something else takes a free variant.
+                for ((record, wanted) in pending.filter { it.first.path!!.startsWith(parkingPrefix) }) {
+                    val dir = RecordingFiles.memoDirectory(filesDir, record.projectId)
+                    val free = RecordingFiles.resolveCollision(dir, wanted.substringBeforeLast('.'), wanted.substringAfterLast('.', "m4a"))
+                    renameIfOwned(catalog, filesDir, record.id, record.path!!, free)
+                }
+                return
+            }
+            val (record, _) = blocker
+            val ext = record.fileName.substringAfterLast('.', "m4a")
+            val parked = File(RecordingFiles.parkingDirectory(filesDir, record.projectId), "${record.id}.$ext")
+            if (renameIfOwned(catalog, filesDir, record.id, record.path!!, parked, keepName = true) == null) return
+        }
+    }
+
+    /**
+     * Moves recording [id] from [expectedPath] to [target] only if, under the lock, the
+     * file at [expectedPath] is still that recording with its recorded bytes. Returns
+     * null when ownership changed (the caller replans) or the target is taken.
+     */
+    internal suspend fun renameIfOwned(
+        catalog: RecordingCatalog,
+        filesDir: File,
+        id: String,
+        expectedPath: String,
+        target: File,
+        keepName: Boolean = false
+    ): File? = namespace.withLock {
+        reconcileLocked(catalog, filesDir)
+        val current = catalog.recordingRecords().firstOrNull { it.id == id }
+        if (current?.path != expectedPath) return@withLock null
+        val from = File(filesDir, expectedPath)
+        if (!isRegularFileStrictly(from) || RecordingFileStore.sha256Hex(from) != current.sha256) return@withLock null
+        moveLocked(catalog, filesDir, from, current.projectId, pick = { target }, renamesTo = { if (keepName) null else it.name }, expectedId = id)
     }
 
     /**
@@ -165,8 +237,12 @@ internal object RecordingTransitions {
     }
 
     private suspend fun recordForLocked(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? {
-        snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
         val path = relativePath(filesDir, file)
+        // A parked file is not listed by a scan; its record is found by path.
+        if (path.startsWith(relativePath(filesDir, RecordingFiles.parkingRoot(filesDir)) + File.separator)) {
+            return catalog.recordingRecords().firstOrNull { it.path == path }
+        }
+        snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
         return catalog.recordingRecords().firstOrNull { it.path == path }
     }
 
@@ -204,6 +280,7 @@ internal object RecordingTransitions {
         val tombstones = SyncMerger.Tombstones(deletions)
         val gone = snapshotLocked(catalog, filesDir, pendingDeletionIds, null).filter { tombstones.removes(it.entry) }
         if (gone.isEmpty()) return@withLock 0
+        beforeBytesMove?.invoke(gone.mapTo(HashSet()) { it.entry.id })
         // Bytes first: a record left behind for a moved file is dropped by the next snapshot.
         gone.forEach { quarantine(filesDir, it.file, it.entry.projectId, it.entry.fileName) }
         val ids = gone.mapTo(HashSet()) { it.entry.id }
@@ -229,10 +306,29 @@ internal object RecordingTransitions {
         false
     }
 
+    /** Whether [file] is a directory; only confirmed absence is false, a failed read throws. */
+    internal fun isDirectoryStrictly(file: File): Boolean = try {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java).isDirectory
+    } catch (_: java.nio.file.NoSuchFileException) {
+        false
+    }
+
+    /** True only when [file] is confirmed not to exist; a file that cannot be examined is not absent. */
+    internal fun isConfirmedAbsent(file: File): Boolean = try {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+        false
+    } catch (_: java.nio.file.NoSuchFileException) {
+        true
+    } catch (_: IOException) {
+        false
+    }
+
     /** A24: finishes a move whose file reached its target, undoes one that did not. */
     suspend fun reconcile(catalog: RecordingCatalog, filesDir: File) = namespace.withLock { reconcileLocked(catalog, filesDir) }
 
     private suspend fun reconcileLocked(catalog: RecordingCatalog, filesDir: File) {
+        // A33: every adoption, reconciliation and quarantine starts here; none runs on unreadable tombstones.
+        catalog.requireDeletionsReadable()
         if (catalog.recordingRecords().none { it.pendingOp != null }) return
         catalog.updateRecordingRecords { records ->
             records.mapNotNull { record ->
@@ -272,7 +368,7 @@ internal object RecordingTransitions {
     ): List<LocalRecordingFile> = namespace.withLock { snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects) }
 
     /** A missing folder is empty; any other failure to list it throws. */
-    private fun listStrictly(dir: File): List<File> = try {
+    internal fun listStrictly(dir: File): List<File> = try {
         Files.newDirectoryStream(dir.toPath()).use { entries -> entries.map { it.toFile() } }
     } catch (_: java.nio.file.NoSuchFileException) {
         emptyList()

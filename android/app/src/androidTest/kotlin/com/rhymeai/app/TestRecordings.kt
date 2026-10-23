@@ -53,7 +53,48 @@ internal object TestRecordings {
         return target
     }
 
+    /** Same length and index, every media-data byte zeroed. */
+    fun zeroedMediaData(source: File, target: File): File {
+        val bytes = source.readBytes()
+        for (box in Mp4Integrity.topLevelBoxes(source).filter { it.type == "mdat" }) {
+            for (i in (box.offset + box.headerSize).toInt() until (box.offset + box.size).toInt()) bytes[i] = 0
+        }
+        target.writeBytes(bytes)
+        return target
+    }
+
     /** The marker startRecording writes before recording: the take's id, not yet finished. */
     fun startMarker(take: File, id: String): File =
         File(take.parentFile, take.name + ".take").apply { writeText("$id\nrecording\n0\n") }
+}
+
+/** An in-memory Drive for tests that run the app's real Restore. */
+internal class InMemoryDrive : com.rhymeai.app.data.sync.DriveClient {
+    private val files = LinkedHashMap<String, Pair<String, ByteArray>>()
+    private var nextId = 0
+
+    fun put(name: String, bytes: ByteArray) {
+        val id = files.entries.firstOrNull { it.value.first == name }?.key ?: "id-${nextId++}"
+        files[id] = name to bytes
+    }
+
+    fun bytes(name: String): ByteArray? = files.values.firstOrNull { it.first == name }?.second
+
+    override suspend fun findFileByName(accessToken: String, name: String) =
+        files.entries.firstOrNull { it.value.first == name }?.let { com.rhymeai.app.data.sync.DriveFileMetadata(it.key, name, version = it.value.second.size.toString()) }
+    override suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String) =
+        files.filter { it.value.first.startsWith(namePrefix) }.map { com.rhymeai.app.data.sync.DriveFileMetadata(it.key, it.value.first, version = it.value.second.size.toString()) }
+    override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long) = files.getValue(fileId).second
+    override suspend fun uploadNewFile(
+        accessToken: String, name: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
+    ): String = "id-${nextId++}".also { files[it] = name to content }
+    override suspend fun updateFile(
+        accessToken: String, fileId: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
+    ) {
+        files[fileId] = files.getValue(fileId).first to content
+    }
+    override suspend fun deleteFile(accessToken: String, fileId: String) {
+        files.remove(fileId)
+    }
+    override suspend fun revokeToken(token: String) {}
 }

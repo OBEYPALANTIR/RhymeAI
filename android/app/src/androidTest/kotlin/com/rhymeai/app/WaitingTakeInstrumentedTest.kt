@@ -66,6 +66,8 @@ class WaitingTakeInstrumentedTest {
             VoiceMemoService.Inspection.INVALID,
             service.inspectFinalized(TestRecordings.mediaDataShortenedKeepingIndex(full, File(owned, "short.m4a")))
         )
+        // Same length, intact index, every audio byte zeroed: rejected by content.
+        assertEquals(VoiceMemoService.Inspection.INVALID, service.inspectFinalized(TestRecordings.zeroedMediaData(full, File(owned, "zeroed.m4a"))))
     }
 
     @Test fun aFinishedTakeWhoseSaveFailedWaitsAcrossARestartAndALaterTakeUntilRetrySavesIt() = runBlocking {

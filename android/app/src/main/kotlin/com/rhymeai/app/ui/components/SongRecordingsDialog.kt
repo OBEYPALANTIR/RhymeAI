@@ -87,7 +87,15 @@ fun SongRecordingsDialog(
     LaunchedEffect(service) { service.deletionChanges.collect { revision++ } }
     // A27: finished takes whose save failed stay listed here until Retry saves them.
     val waitingTakes by produceState(emptyList<VoiceMemoService.WaitingTake>(), projectId, revision, service.isRecording) {
-        value = service.waitingTakes(projectId)
+        value = try {
+            service.waitingTakes(projectId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A staging folder that cannot be read is reported, never shown as no waiting takes.
+            listFailed = true
+            value
+        }
     }
     val waiting = waitingTakes.count { it.finished }
     val unsaved = waitingTakes.size - waiting

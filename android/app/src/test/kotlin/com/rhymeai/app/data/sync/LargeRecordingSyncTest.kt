@@ -22,7 +22,8 @@ class LargeRecordingSyncTest {
         fileName = fileName,
         sizeBytes = sizeBytes,
         modifiedAt = modifiedAt,
-        sha256 = sha256
+        sha256 = sha256,
+        uploadedAt = modifiedAt
     )
 
     private class Merged(val merged: SyncBlob)
