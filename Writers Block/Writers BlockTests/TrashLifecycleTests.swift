@@ -1287,3 +1287,40 @@ extension TrashLifecycleTests {
         #expect(FileManager.default.fileExists(atPath: live.path))
     }
 }
+
+/// Round 17.
+extension TrashLifecycleTests {
+    /// A recording over the cap from before ids (migrated to its id) that is playing
+    /// stops when a tombstone without a time arrives naming it by its old name; it
+    /// cannot be played again, and its bytes are kept.
+    @MainActor
+    @Test func playbackOfAMigratedRecordingOverTheCapStopsForAHoldByName() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("HeldByName")
+        _ = container
+        let legacy = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try AudioFixtures.large(at: legacy)
+        let bytes = try RecordingFiles.facts(legacy).size
+        try #require(bytes > SyncRecording.maxBytes)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let (id, entry) = try #require(try OversizedRecordings.read(for: library.memosRoot).first)
+        #expect(entry.fileName == "long.m4a")
+        let live = library.memosRoot.appendingPathComponent("song/\(id).m4a")
+        #expect(FileManager.default.fileExists(atPath: live.path) && !FileManager.default.fileExists(atPath: legacy.path))
+        viewModel.voiceMemoService.togglePlayback(url: live)
+        for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
+        try #require(viewModel.voiceMemoService.isPlaying)
+
+        // A tombstone by the old name, with no time.
+        context.insert(SyncDeletionRecord(projectId: "song", fileName: "long.m4a", deletedAt: 0))
+        try context.save()
+        _ = await viewModel.reconcileRecordings()
+
+        #expect(!viewModel.voiceMemoService.isPlaying)
+        viewModel.voiceMemoService.togglePlayback(url: live)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(!viewModel.voiceMemoService.isPlaying, "playing it again is refused")
+        #expect(try RecordingFiles.facts(live).size == bytes)
+    }
+}
