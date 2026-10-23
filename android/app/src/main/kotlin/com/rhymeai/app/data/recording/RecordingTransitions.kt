@@ -71,7 +71,9 @@ internal object RecordingTransitions {
         id: String,
         uploadedAt: Long,
         origin: String,
-        skipIfPresent: Boolean = false
+        skipIfPresent: Boolean = false,
+        /** A37: [uploadedAt] is a first-seen repair; it stays one through publication. */
+        repaired: Boolean = false
     ): File? = namespace.withLock {
         catalog?.let { reconcileLocked(it, filesDir) }
         if (skipIfPresent && catalog?.recordingRecords()?.any { it.id == id && it.path != null } == true) {
@@ -85,6 +87,7 @@ internal object RecordingTransitions {
         if (target.exists() || isRegularFileStrictly(target)) throw IOException("Recording $id is already on this device")
         val record = RecordingRecord(
             id, projectId, displayName, uploadedAt, RecordingFileStore.sha256Hex(source), source.length(), origin,
+            precedenceRepaired = repaired,
             path = relativePath(filesDir, target),
             pendingFrom = relativePath(filesDir, source),
             pendingOp = RecordingRecord.OP_PUBLISH
@@ -266,7 +269,32 @@ internal object RecordingTransitions {
      * files left in place because their id name is taken by different bytes.
      */
     suspend fun migrate(catalog: RecordingCatalog, filesDir: File): List<File> =
-        namespace.withLock { snapshotLocked(catalog, filesDir, emptySet(), null).leftInPlace }
+        namespace.withLock { migrateQuarantineLocked(filesDir) + snapshotLocked(catalog, filesDir, emptySet(), null).leftInPlace }
+
+    /**
+     * A36 for quarantine: a pre-A36 kept copy `<movedAt>__<name>` moves to
+     * `<movedAt>/<id>.<ext>` in its song's quarantine folder (the derived A21 id of its name
+     * and bytes). One atomic rename that never replaces a file; one whose target exists stays.
+     */
+    private fun migrateQuarantineLocked(filesDir: File): List<File> {
+        val left = mutableListOf<File>()
+        for (dir in listStrictly(RecordingFiles.quarantineRoot(filesDir))) {
+            if (!isDirectoryStrictly(dir)) continue
+            for (file in listStrictly(dir)) {
+                if (!isRegularFileStrictly(file)) continue
+                val (movedAt, name) = VoiceMemoService.parseTrashedName(file.name) ?: (file.lastModified() to file.name)
+                val id = RecordingManifestEntry.legacyRecordingId(dir.name, name, RecordingFileStore.sha256Hex(file))
+                val target = File(File(dir, movedAt.toString()), RecordingFiles.idFileName(id, name))
+                if (target.exists() || isRegularFileStrictly(target)) {
+                    left += file
+                    continue
+                }
+                target.parentFile?.mkdirs()
+                Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            }
+        }
+        return left
+    }
 
     private suspend fun recordForLocked(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? {
         val scan = snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
@@ -362,13 +390,14 @@ internal object RecordingTransitions {
                     // The expected id's bytes at the target: the move happened. Strict checks: a file
                     // that cannot be examined throws here and nothing is committed.
                     target != null && isRegularFileStrictly(target) && RecordingFileStore.sha256Hex(target) == record.sha256 ->
-                        record.copy(pendingFrom = null, pendingTrashedAt = null, pendingOp = null)
+                        record.copy(pendingFrom = null, pendingTrashedAt = null, pendingOp = null, pendingFromName = null)
                     // Undo only onto the same bytes; anything else at the source is adopted on its own.
                     record.pendingOp == RecordingRecord.OP_MOVE && source != null && isRegularFileStrictly(source) &&
                         RecordingFileStore.sha256Hex(source) == record.sha256 -> record.copy(
                         path = record.pendingFrom,
                         trashedAt = record.pendingTrashedAt,
-                        pendingFrom = null, pendingTrashedAt = null, pendingOp = null
+                        displayName = record.pendingFromName ?: record.displayName,
+                        pendingFrom = null, pendingTrashedAt = null, pendingOp = null, pendingFromName = null
                     )
                     else -> null
                 }
@@ -386,13 +415,23 @@ internal object RecordingTransitions {
      * others move to quarantine. An adopted file's time is the earliest file time among its
      * new copies; a stamped time never changes (A20). All or nothing: an unreadable file or
      * folder throws. Staging and quarantine are never read.
+     *
+     * With [moveFiles] false (Back up, export: A17, the file system is read only) nothing is
+     * migrated or quarantined: a file that would need a move is left out, its record kept as
+     * it is, and added to [notListed]; only records are stamped.
      */
     suspend fun snapshot(
         catalog: RecordingCatalog,
         filesDir: File,
         pendingDeletionIds: Set<String>,
-        onlyProjects: Set<String>? = null
-    ): List<LocalRecordingFile> = namespace.withLock { snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects).files.map { it.toLocal() } }
+        onlyProjects: Set<String>? = null,
+        moveFiles: Boolean = true,
+        notListed: MutableList<File>? = null
+    ): List<LocalRecordingFile> = namespace.withLock {
+        val scan = snapshotLocked(catalog, filesDir, pendingDeletionIds, onlyProjects, moveFiles)
+        notListed?.addAll(scan.leftInPlace)
+        scan.files.map { it.toLocal() }
+    }
 
     /** A missing folder is empty; any other failure to list it throws. */
     internal fun listStrictly(dir: File): List<File> = try {
@@ -427,7 +466,8 @@ internal object RecordingTransitions {
         catalog: RecordingCatalog,
         filesDir: File,
         pendingDeletionIds: Set<String>,
-        onlyProjects: Set<String>?
+        onlyProjects: Set<String>?,
+        moveFiles: Boolean = true
     ): Scan {
         reconcileLocked(catalog, filesDir)
         val items = mutableListOf<Item>()
@@ -495,7 +535,7 @@ internal object RecordingTransitions {
                 val canonical = candidates.sortedWith(
                     compareBy<Item> { it.inTrash }.thenByDescending { trashTime(it) }.thenBy { it.path }
                 ).first()
-                candidates.filter { it !== canonical }.forEach { quarantined += it to id }
+                if (moveFiles) candidates.filter { it !== canonical }.forEach { quarantined += it to id }
                 val existing = kept[id] ?: byId[id]?.takeIf { intact(it, canonical) } ?: candidates.firstNotNullOfOrNull { idOf(it).second }
                 // A20: a stamped time never moves with a file time; only copies seen for the first time count.
                 val newCopies = candidates.filter { idOf(it).second == null }
@@ -519,9 +559,12 @@ internal object RecordingTransitions {
                 val targetPath = relativePath(filesDir, target)
                 if (targetPath != canonical.path) {
                     // A duplicate copy of this same recording at the target is quarantined first.
-                    val heldByCopy = candidates.any { it !== canonical && it.path == targetPath }
-                    if (!heldByCopy && (target.exists() || isRegularFileStrictly(target))) {
-                        // The id's name is taken by other bytes: left where it is, reported, never deleted.
+                    val heldByCopy = moveFiles && candidates.any { it !== canonical && it.path == targetPath }
+                    if (!moveFiles || (!heldByCopy && (target.exists() || isRegularFileStrictly(target)))) {
+                        // Not moved now (the id's name is taken by other bytes, or nothing may move):
+                        // left where it is, reported, never deleted, and its record kept unchanged
+                        // so its identity, time and tombstone protection survive the next scan.
+                        byPath[canonical.path]?.takeIf { intact(it, canonical) }?.let { kept[it.id] = it }
                         leftInPlace += canonical.file
                         continue
                     }

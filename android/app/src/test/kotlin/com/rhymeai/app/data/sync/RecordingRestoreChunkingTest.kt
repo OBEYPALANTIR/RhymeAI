@@ -156,8 +156,8 @@ class RecordingRestoreChunkingTest {
             RecordingFileStore.RESTORE_STAGE_PREFIX
         ).toFile()
         try {
-            val staged = chunk.mapIndexed { index, restore ->
-                RecordingFileStore.stageRestore(stageDirectory, index, restore.entry, download(restore.remoteFileId))
+            val staged = chunk.map { restore ->
+                RecordingFileStore.stageRestore(stageDirectory, restore.entry, download(restore.remoteFileId))
             }
             kotlinx.coroutines.runBlocking { RecordingFileStore.commitStagedRestores(catalog, filesDir, staged) }
         } finally {

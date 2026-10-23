@@ -273,8 +273,8 @@ class RecordingSyncTest {
             val planned = recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
             val other = recording("p1", "other.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
             val staged = listOf(
-                RecordingFileStore.stageRestore(stage, 0, planned, bytes),
-                RecordingFileStore.stageRestore(stage, 1, other, bytes)
+                RecordingFileStore.stageRestore(stage, planned, bytes),
+                RecordingFileStore.stageRestore(stage, other, bytes)
             )
             // A file with the planned display name appears while the download runs.
             val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
@@ -302,7 +302,7 @@ class RecordingSyncTest {
             firstTarget.writeText("original")
             val bytes = "download".toByteArray()
             val newEntry = recording("p1", "new.m4a", 2L, sha256Hex(bytes), bytes.size.toLong())
-            val stagedNew = RecordingFileStore.stageRestore(stage, 1, newEntry, bytes)
+            val stagedNew = RecordingFileStore.stageRestore(stage, newEntry, bytes)
             val missingThird = RecordingFileStore.StagedRecording(
                 recording("p2", "third.m4a", 3L, sha256Hex("third".toByteArray()), 5L),
                 File(stage, "missing.tmp")
@@ -327,7 +327,7 @@ class RecordingSyncTest {
         val stage = Files.createTempDirectory(root.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         try {
             val bytes = "download".toByteArray()
-            RecordingFileStore.stageRestore(stage, 0, recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
+            RecordingFileStore.stageRestore(stage, recording("p1", "take.m4a", 2L, sha256Hex(bytes), bytes.size.toLong()), bytes)
             // A legacy memo with the planned display name, present while the restore was interrupted.
             val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
             target.writeText("user memo")
@@ -395,6 +395,18 @@ class RecordingSyncTest {
         } finally {
             root.deleteRecursively()
             external.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun restorePayloadsAreStagedUnderTheirIds() {
+        val stage = Files.createTempDirectory("rhymeai-stage-names").toFile()
+        try {
+            val bytes = "download".toByteArray()
+            val entry = recording("p1", "Take.WAV", 2L, sha256Hex(bytes), bytes.size.toLong())
+            assertEquals("${entry.id}.wav", RecordingFileStore.stageRestore(stage, entry, bytes).file.name)
+        } finally {
+            stage.deleteRecursively()
         }
     }
 

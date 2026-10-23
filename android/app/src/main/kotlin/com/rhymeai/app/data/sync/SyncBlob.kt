@@ -12,6 +12,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNames
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
@@ -255,11 +256,13 @@ data class RecordingManifestEntry(
  * interrupted move can be finished or undone at the next launch (A24).
  * [displayNameChanged] marks a rename made here that a backup has not written yet.
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class RecordingRecord(
     val id: String,
     val projectId: String,
-    val displayName: String,
+    /** Rows written before A36 call it `fileName` (the name the file had); read as the display name. */
+    @JsonNames("fileName") val displayName: String,
     val uploadedAt: Long,
     val sha256: String,
     val bytes: Long,
@@ -271,7 +274,9 @@ data class RecordingRecord(
     val pendingTrashedAt: Long? = null,
     val displayNameChanged: Boolean = false,
     /** A37: [uploadedAt] is a first-seen repair of a missing time (A32). */
-    val precedenceRepaired: Boolean = false
+    val precedenceRepaired: Boolean = false,
+    /** Pre-A36 rename intents only: the name to return to if that rename is undone. */
+    val pendingFromName: String? = null
 ) {
     fun toEntry() = RecordingManifestEntry(
         projectId = projectId, fileName = displayName, sizeBytes = bytes, modifiedAt = 0L,
@@ -513,12 +518,10 @@ object SyncMerger {
         val restoredIds = trashed
             .filter { trash ->
                 val activeProject = activeById[trash.project.id]
-                // A37: a real time beats a repair; otherwise the newer side stays.
-                activeProject != null && if (activeProject.precedenceRepaired != trash.deletedAtRepaired) {
-                    !activeProject.precedenceRepaired
-                } else {
-                    activeProject.updatedAt > trash.deletedAt
-                }
+                // A37: a real time beats a repair, of two repairs the smaller wins, of two real
+                // times the newer; on a tie the Trash entry stays.
+                activeProject != null &&
+                    supersedes(activeProject.updatedAt, activeProject.precedenceRepaired, trash.deletedAt, trash.deletedAtRepaired)
             }
             .mapTo(mutableSetOf()) { it.project.id }
 

@@ -209,4 +209,19 @@ class SyncMergerTest {
             assertEquals(expected, merged.recordings.associate { it.id to it.fileName })
         }
     }
+
+    @Test
+    fun activeVersusTrashUsesTheRepairAwareOrderInEitherInputOrder() {
+        fun active(time: Long) = SongProject(id = "s", title = "active", updatedAt = time, precedenceRepaired = true)
+        fun trashed(time: Long) = TrashedSongProject(SongProject(id = "s", title = "trashed", updatedAt = 1L), deletedAt = time, deletedAtRepaired = true)
+        for ((a, t, trashWins) in listOf(Triple(2_000L, 1_000L, true), Triple(1_000L, 2_000L, false))) {
+            for (swap in listOf(false, true)) {
+                val one = SyncBlob(projects = listOf(active(a)))
+                val two = SyncBlob(trashed = listOf(trashed(t)))
+                val merged = if (swap) SyncMerger.merge(two, one) else SyncMerger.merge(one, two)
+                assertEquals(trashWins, merged.trashed.isNotEmpty(), "active $a trash $t swap $swap")
+                assertEquals(!trashWins, merged.projects.isNotEmpty(), "active $a trash $t swap $swap")
+            }
+        }
+    }
 }
