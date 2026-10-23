@@ -99,6 +99,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -705,14 +706,17 @@ internal fun RecordingMemoRow(
                 TextButton(onClick = {
                     actionScope.launch {
                         val renamed = service.renameMemo(memo, renameText)
-                        pendingRename = false
-                        if (renamed != null) {
-                            onMemoListChanged()
-                        } else {
-                            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_rename_failed))
+                        // UI state and the snackbar on the main thread, whatever thread the rename resumed on.
+                        withContext(Dispatchers.Main) {
+                            pendingRename = false
+                            if (renamed != null) {
+                                onMemoListChanged()
+                            } else {
+                                snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_rename_failed))
+                            }
                         }
                     }
-                }) { Text("OK") }
+                }, modifier = Modifier.testTag("renameRecordingConfirm")) { Text("OK") }
             },
             dismissButton = {
                 TextButton(onClick = { pendingRename = false }) { Text("Cancel") }
