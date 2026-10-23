@@ -36,6 +36,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
@@ -226,6 +227,25 @@ class BackupFlowInstrumentedTest {
             zip.delete()
             source.delete()
             com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "solo").deleteRecursively()
+        }
+    }
+
+    @Test fun exportLeavesOutAndReportsARecordingStillAwaitingItsNewName() {
+        val vm = launchConnectedWithEmptyLibrary()
+        val dir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "export-legacy").also { it.mkdirs() }
+        val legacy = java.io.File(dir, "take.m4a").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        // Other bytes hold its id name, so no launch check can rename it while this runs.
+        val id = com.rhymeai.app.data.sync.RecordingManifestEntry.legacyRecordingId("export-legacy", "take.m4a", BackupManifest.sha256Hex(legacy.readBytes()))
+        java.io.File(dir, "$id.m4a").writeBytes(byteArrayOf(9, 9))
+        val zip = java.io.File(context.cacheDir, "export-legacy.zip")
+        try {
+            instrumentation.runOnMainSync { vm.exportBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Exported") == true }
+            assertTrue(vm.backupNotice!!, vm.backupNotice!!.contains("1 recording with an old file name left out."))
+            assertTrue(legacy.exists())
+        } finally {
+            zip.delete()
+            dir.deleteRecursively()
         }
     }
 

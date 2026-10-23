@@ -368,30 +368,8 @@ class VoiceMemoService(private val context: Context) {
         var saved = 0
         var failure: RecordingNotSavedException? = null
         for (listed in waitingTakes(projectId)) {
-            val id = listed.id
-            if (id == null) {
-                failure = RecordingNotSavedException(listed.projectId, java.io.IOException("The take's marker could not be read"))
-                continue
-            }
             try {
-                val take = if (listed.finished) listed else when (inspectFinalized(listed.file)) {
-                    Inspection.FINALIZED -> {
-                        try {
-                            writeMarker(listed.file, id, STATE_FINISHED, listed.recordedAt)
-                        } catch (e: Exception) {
-                            throw RecordingNotSavedException(listed.projectId, e)
-                        }
-                        WaitingTake(listed.file, listed.projectId, id, listed.recordedAt, finished = true)
-                    }
-                    Inspection.INVALID -> {
-                        runCatching { writeMarker(listed.file, id, STATE_FAILED, 0L) }
-                        throw RecordingNotSavedException(listed.projectId, java.io.IOException("The recording did not finish"))
-                    }
-                    Inspection.CANNOT_INSPECT ->
-                        throw RecordingNotSavedException(listed.projectId, java.io.IOException("The recording could not be read"))
-                }
-                publishTake(take, id)
-                saved++
+                if (saveListedTake(listed)) saved++
             } catch (e: RecordingNotSavedException) {
                 failure = e
             }
@@ -399,6 +377,37 @@ class VoiceMemoService(private val context: Context) {
         failure?.let { throw it }
         saved
     }
+
+    /**
+     * Saves one listed waiting take; true only once it is published and verified. The take
+     * is found by its id where it is now: staging migration may have moved it to its id
+     * name since it was listed.
+     */
+    internal suspend fun saveListedTake(listed: WaitingTake): Boolean {
+        val id = listed.id ?: throw RecordingNotSavedException(listed.projectId, java.io.IOException("The take's marker could not be read"))
+        val file = currentTakeFile(listed.file, id)
+        val take = if (listed.finished) WaitingTake(file, listed.projectId, id, listed.recordedAt, finished = true) else when (inspectFinalized(file)) {
+            Inspection.FINALIZED -> {
+                try {
+                    writeMarker(file, id, STATE_FINISHED, listed.recordedAt)
+                } catch (e: Exception) {
+                    throw RecordingNotSavedException(listed.projectId, e)
+                }
+                WaitingTake(file, listed.projectId, id, listed.recordedAt, finished = true)
+            }
+            Inspection.INVALID -> {
+                runCatching { writeMarker(file, id, STATE_FAILED, 0L) }
+                throw RecordingNotSavedException(listed.projectId, java.io.IOException("The recording did not finish"))
+            }
+            Inspection.CANNOT_INSPECT ->
+                throw RecordingNotSavedException(listed.projectId, java.io.IOException("The recording could not be read"))
+        }
+        return publishTake(take, id) != null
+    }
+
+    /** [file], or its id-named successor in the same staging folder once migration moved it. */
+    private fun currentTakeFile(file: File, id: String): File =
+        if (file.exists()) file else File(file.parentFile, RecordingFiles.idFileName(id, file.name)).takeIf { it.exists() } ?: file
 
     /**
      * Whether the recorder finalized [file]. Structure first ([Mp4Integrity]): an intact
@@ -498,26 +507,44 @@ class VoiceMemoService(private val context: Context) {
 
     /**
      * A36 for staging: a waiting take still under a pre-A36 name moves to `<id>.<ext>`, the
-     * id from its marker. The new marker is written first, then the take moves, then the old
-     * marker goes, so after a crash at any point the take has a marker naming its id and the
-     * next run finishes. A take whose marker cannot be read, or whose id name is taken, stays
-     * as it is and is returned. Run at launch, under the recording lock.
+     * id from its marker. Each move is journaled first in `<target>.migrate` (source and
+     * target names, expected SHA-256 and length); the source is verified against it right
+     * before a move that never replaces a file, then the marker follows and the journal goes.
+     * A run after a crash finishes a move whose target holds the journaled bytes, or undoes
+     * one whose source still does. A take whose marker cannot be read, whose id name is
+     * taken, or whose journal matches neither file stays as it is and is returned. Run at
+     * launch, under the recording lock, only when the deletion state is readable (A33).
      */
     suspend fun migrateStaging(): List<File> = withContext(Dispatchers.IO) {
         RecordingTransitions.namespace.withLock {
+            catalog?.requireDeletionsReadable()
             val left = mutableListOf<File>()
             for (dir in RecordingTransitions.listStrictly(RecordingFiles.stagingRoot(context.filesDir))) {
                 if (!RecordingTransitions.isDirectoryStrictly(dir)) continue
+                // Finish or undo journaled moves first.
+                for (journal in RecordingTransitions.listStrictly(dir).filter { it.name.endsWith(MIGRATION_SUFFIX) }) {
+                    val lines = journal.readLines()
+                    val source = File(dir, lines.getOrNull(0) ?: continue)
+                    val target = File(dir, lines.getOrNull(1) ?: continue)
+                    val sha = lines.getOrNull(2) ?: continue
+                    val length = lines.getOrNull(3)?.toLongOrNull() ?: continue
+                    fun holds(file: File) = RecordingTransitions.isRegularFileStrictly(file) && file.length() == length &&
+                        com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) == sha
+                    // An empty target is the exclusive claim of an interrupted move.
+                    if (length > 0L && RecordingTransitions.isRegularFileStrictly(target) && target.length() == 0L) target.delete()
+                    when {
+                        holds(target) -> {
+                            val marker = readMarker(source)
+                            if (marker is Marker.Read && !markerFor(target).exists()) writeMarker(target, marker.id, marker.state, marker.recordedAt)
+                            if (markerFor(target).exists()) markerFor(source).delete()
+                            journal.delete()
+                        }
+                        holds(source) -> journal.delete()
+                        else -> left += source
+                    }
+                }
                 for (file in RecordingTransitions.listStrictly(dir)) {
                     if (file == recordingFile || RecordingFiles.idOf(file) != null) continue
-                    if (file.name.endsWith(MARKER_SUFFIX)) {
-                        // An old marker left by a run that moved its take: its id's take has its own marker.
-                        val take = File(dir, file.name.removeSuffix(MARKER_SUFFIX))
-                        val marker = readMarker(take) as? Marker.Read ?: continue
-                        val moved = File(dir, RecordingFiles.idFileName(marker.id, take.name))
-                        if (RecordingTransitions.isConfirmedAbsent(take) && moved.exists() && markerFor(moved).exists()) file.delete()
-                        continue
-                    }
                     if (!RecordingTransitions.isRegularFileStrictly(file) ||
                         file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
                     val marker = when (val read = readMarker(file)) {
@@ -526,10 +553,29 @@ class VoiceMemoService(private val context: Context) {
                         Marker.Unreadable -> { left += file; continue }
                     }
                     val target = File(dir, RecordingFiles.idFileName(marker.id, file.name))
-                    if (target.exists()) { left += file; continue }
+                    val journal = File(dir, target.name + MIGRATION_SUFFIX)
+                    if (target.exists() || journal.exists()) { left += file; continue }
+                    val sha = com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file)
+                    val length = file.length()
+                    val temp = File(dir, journal.name + ".tmp")
+                    temp.writeText("${file.name}\n${target.name}\n$sha\n$length\n")
+                    java.nio.file.Files.move(temp.toPath(), journal.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                    // Verified right before the move: the journal names exactly these bytes.
+                    if (file.length() != length || com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) != sha) {
+                        journal.delete()
+                        left += file
+                        continue
+                    }
+                    try {
+                        RecordingTransitions.moveNoReplace(file, target)
+                    } catch (_: java.nio.file.FileAlreadyExistsException) {
+                        journal.delete()
+                        left += file
+                        continue
+                    }
                     writeMarker(target, marker.id, marker.state, marker.recordedAt)
-                    java.nio.file.Files.move(file.toPath(), target.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
                     markerFor(file).delete()
+                    journal.delete()
                 }
             }
             left
@@ -574,6 +620,9 @@ class VoiceMemoService(private val context: Context) {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            // Moved to its id name by staging migration between finding it and the save: save it there.
+            val moved = currentTakeFile(take.file, id)
+            if (moved != take.file) return publishTake(WaitingTake(moved, take.projectId, id, take.recordedAt, take.finished), id)
             val intentKept = runCatching { catalog?.recordingRecords()?.any { it.id == id } }.getOrNull() != false
             if (!take.file.exists() && !intentKept) {
                 // Nothing left to save: the bytes are gone and no record holds the id.
@@ -1112,6 +1161,7 @@ class VoiceMemoService(private val context: Context) {
 
         /** Beside each staged take: its id, state and finish time (A27). */
         private const val MARKER_SUFFIX = ".take"
+        private const val MIGRATION_SUFFIX = ".migrate"
         private const val STATE_RECORDING = "recording"
         private const val STATE_FINISHED = "finished"
         private const val STATE_FAILED = "failed"

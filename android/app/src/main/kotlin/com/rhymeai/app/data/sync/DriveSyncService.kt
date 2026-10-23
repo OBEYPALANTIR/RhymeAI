@@ -608,10 +608,15 @@ object RecordingFileStore {
         try {
             val staged = stageRestore(stage, entry, bytes)
             syncFile(staged.file)
-            return RecordingTransitions.publish(
-                catalog, filesDir, staged.file, entry.projectId, entry.fileName, entry.id, entry.precedenceTime, origin,
-                skipIfPresent = true, repaired = entry.precedenceRepaired
-            ) != null
+            return try {
+                RecordingTransitions.publish(
+                    catalog, filesDir, staged.file, entry.projectId, entry.fileName, entry.id, entry.precedenceTime, origin,
+                    skipIfPresent = true, repaired = entry.precedenceRepaired
+                ) != null
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // A file is already at the recording's id name: it is kept, nothing is placed.
+                false
+            }
         } finally {
             stage.deleteRecursively()
         }
@@ -663,10 +668,15 @@ object RecordingFileStore {
         for (item in staged) {
             if (item.entry.modifiedAt > 0L) item.file.setLastModified(item.entry.modifiedAt)
             syncFile(item.file)
-            val target = RecordingTransitions.publish(
-                catalog, filesDir, item.file, item.entry.projectId, item.entry.fileName, item.entry.id,
-                item.entry.precedenceTime, origin, skipIfPresent = true, repaired = item.entry.precedenceRepaired
-            ) ?: continue
+            val target = try {
+                RecordingTransitions.publish(
+                    catalog, filesDir, item.file, item.entry.projectId, item.entry.fileName, item.entry.id,
+                    item.entry.precedenceTime, origin, skipIfPresent = true, repaired = item.entry.precedenceRepaired
+                )
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // A file appeared at the recording's id name: it is kept, and this download is not placed.
+                null
+            } ?: continue
             target.parentFile?.let(::syncDirectory)
             placed += item.entry
         }

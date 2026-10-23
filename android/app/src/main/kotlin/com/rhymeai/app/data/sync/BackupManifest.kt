@@ -122,7 +122,7 @@ object BackupManifest {
                 projects = root.array("projects").map { projectFrom(it.jsonObject) },
                 trashed = root.array("trashed").map { element ->
                     val fields = element.jsonObject
-                    TrashedSongProject(projectFrom(fields), deletedAt = fields.long("trashedAt"), deletedAtRepaired = fields.flag(TRASHED_AT_REPAIRED))
+                    TrashedSongProject(projectFrom(fields), deletedAt = fields.timeOrUnknown("trashedAt"), deletedAtRepaired = fields.flag(TRASHED_AT_REPAIRED))
                 },
                 recordings = root.array("recordings").map { element ->
                     val fields = element.jsonObject
@@ -135,7 +135,7 @@ object BackupManifest {
                         modifiedAt = 0L,
                         sha256 = sha,
                         // A32: an absent time is unknown (0) and gets its first-seen time before any merge.
-                        uploadedAt = if (fields.containsKey("uploadedAt")) fields.long("uploadedAt") else 0L,
+                        uploadedAt = fields.timeOrUnknown("uploadedAt"),
                         id = fields.string("id"),
                         precedenceRepaired = fields.flag(PRECEDENCE_REPAIRED)
                     )
@@ -195,7 +195,7 @@ object BackupManifest {
         title = fields.string("title"),
         lyrics = fields.string("lyrics"),
         theme = fields.string("theme"),
-        updatedAt = fields.long("updatedAt"),
+        updatedAt = fields.timeOrUnknown("updatedAt"),
         precedenceRepaired = fields.flag(PRECEDENCE_REPAIRED)
     )
 
@@ -216,6 +216,9 @@ object BackupManifest {
 
     private fun JsonObject.long(key: String): Long =
         getValue(key).jsonPrimitive.also { require(!it.isString) { "$key must be a number" } }.long
+
+    /** A32/A38: an absent precedence time is unknown (0) and is repaired before any merge; a wrong type is refused. */
+    private fun JsonObject.timeOrUnknown(key: String): Long = if (containsKey(key)) long(key) else 0L
 
     private fun writeCanonical(element: JsonElement, out: StringBuilder) {
         when (element) {

@@ -4,6 +4,7 @@ import com.rhymeai.app.data.model.SongProject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assume.assumeTrue
@@ -157,6 +158,36 @@ class BackupManifestTest {
             }
         } finally {
             dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aTrashEntryCarriesBothRepairFlagsAndAbsentTimesReadAsUnknown() {
+        val trashed = com.rhymeai.app.data.model.TrashedSongProject(
+            SongProject(id = "t", title = "T", updatedAt = 10L, precedenceRepaired = true), deletedAt = 20L, deletedAtRepaired = true
+        )
+        val bytes = BackupManifest.encode(SyncBlob(projects = listOf(SongProject(id = "p", updatedAt = 5L)), trashed = listOf(trashed)), 1_000L, "x")
+        val text = String(bytes)
+        // A38: the Trash entry's own time and its song's time each carry their flag; a real time carries none.
+        assertTrue("\"trashedAtRepaired\":true" in text && text.split("\"precedenceRepaired\":true").size == 2, text)
+        val back = BackupManifest.decode(bytes).trashed.single()
+        assertEquals(true to true, back.project.precedenceRepaired to back.deletedAtRepaired)
+
+        // A correctly hashed manifest without updatedAt or trashedAt reads them as unknown (0); a wrong type is refused.
+        fun rehash(edit: (JsonObject) -> JsonObject): ByteArray {
+            val root = Json.parseToJsonElement(text).jsonObject
+            val body = edit(JsonObject(root - BackupManifest.HASH_KEY))
+            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to JsonPrimitive(hash)))).toByteArray()
+        }
+        fun edited(array: String, change: (JsonObject) -> JsonObject) = rehash { body ->
+            JsonObject(body + (array to kotlinx.serialization.json.JsonArray(body.getValue(array).jsonArray.map { change(it.jsonObject) })))
+        }
+        assertEquals(0L, BackupManifest.decode(edited("projects") { JsonObject(it - "updatedAt") }).projects.single().updatedAt)
+        val noTimes = BackupManifest.decode(edited("trashed") { JsonObject(it - "trashedAt" - "updatedAt") }).trashed.single()
+        assertEquals(0L to 0L, noTimes.deletedAt to noTimes.project.updatedAt)
+        assertFailsWith<DamagedBackupException> {
+            BackupManifest.decode(edited("projects") { JsonObject(it + ("updatedAt" to JsonPrimitive("soon"))) })
         }
     }
 }

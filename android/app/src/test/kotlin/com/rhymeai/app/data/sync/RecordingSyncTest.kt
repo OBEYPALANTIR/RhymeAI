@@ -276,17 +276,16 @@ class RecordingSyncTest {
                 RecordingFileStore.stageRestore(stage, planned, bytes),
                 RecordingFileStore.stageRestore(stage, other, bytes)
             )
-            // A file with the planned display name appears while the download runs.
-            val target = File(RecordingFiles.memoDirectory(root, "p1").apply { mkdirs() }, "take.m4a")
-            target.writeText("renamed memo")
+            // A file appears at the planned recording's own id name while the download runs.
+            val target = RecordingFileStore.targetFile(root, "p1", planned.id, "take.m4a").apply { parentFile!!.mkdirs() }
+            target.writeText("appeared meanwhile")
 
-            assertEquals(listOf(planned, other), RecordingFileStore.commitStagedRestores(catalog, root, staged))
+            assertEquals(listOf(other), RecordingFileStore.commitStagedRestores(catalog, root, staged))
 
-            // Both are kept: downloads are named by id, display names never collide on disk.
-            assertEquals("renamed memo", target.readText())
-            assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", planned.id, "take.m4a").readText())
+            // Nothing in place is replaced: that download is not placed and has no record.
+            assertEquals("appeared meanwhile", target.readText())
             assertEquals("downloaded", RecordingFileStore.targetFile(root, "p1", other.id, "other.m4a").readText())
-            assertEquals(setOf(planned.id, other.id), catalog.records.mapTo(HashSet()) { it.id })
+            assertEquals(setOf(other.id), catalog.records.mapTo(HashSet()) { it.id })
             assertFalse(stage.exists())
         } finally {
             root.deleteRecursively()
@@ -407,6 +406,37 @@ class RecordingSyncTest {
             assertEquals("${entry.id}.wav", RecordingFileStore.stageRestore(stage, entry, bytes).file.name)
         } finally {
             stage.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theNoReplaceMoveRefusesAnExistingTargetAndAnInterruptedClaimIsCleared() = kotlinx.coroutines.runBlocking<Unit> {
+        val root = Files.createTempDirectory("rhymeai-no-replace").toFile()
+        try {
+            val source = File(root, "source.m4a").apply { writeText("mine") }
+            val target = File(root, "target.m4a").apply { writeText("theirs") }
+            assertFailsWith<java.nio.file.FileAlreadyExistsException> {
+                com.rhymeai.app.data.recording.RecordingTransitions.moveNoReplace(source, target)
+            }
+            assertEquals("mine", source.readText())
+            assertEquals("theirs", target.readText())
+
+            // A publish interrupted between its claim and its rename: the empty claim is removed
+            // at reconciliation and the journaled publish is undone.
+            val staged = File(RecordingFiles.stagingDirectory(root, "p1").apply { mkdirs() }, "$ID.m4a").apply { writeText("take") }
+            val claim = RecordingFiles.memoFile(root, "p1", ID, "take.m4a").apply { parentFile!!.mkdirs(); createNewFile() }
+            val catalog = MemoryCatalog().apply {
+                records = listOf(RecordingRecord(ID, "p1", "take.m4a", 1L, sha256Hex("take".toByteArray()), 4L, RecordingRecord.RECORDED,
+                    path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(root, claim),
+                    pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(root, staged),
+                    pendingOp = RecordingRecord.OP_PUBLISH))
+            }
+            com.rhymeai.app.data.recording.RecordingTransitions.reconcile(catalog, root)
+            assertFalse(claim.exists())
+            assertTrue(catalog.records.isEmpty())
+            assertEquals("take", staged.readText())
+        } finally {
+            root.deleteRecursively()
         }
     }
 

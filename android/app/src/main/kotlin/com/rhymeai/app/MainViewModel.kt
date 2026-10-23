@@ -914,10 +914,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupBusyLabel = "Exporting…"
         viewModelScope.launch {
             backupNotice = try {
+                // Live recordings still awaiting their A36 name: left out of the export and reported.
+                var notExported = 0
                 val summary = withContext(Dispatchers.IO) {
                     val base = repo.snapshotLocalSyncBase()
                     // Export only reads: no file is renamed or quarantined (A17).
-                    val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds, moveFiles = false).filterNot { it.inTrash }
+                    val notListed = mutableListOf<java.io.File>()
+                    val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds, moveFiles = false, notListed = notListed)
+                        .filterNot { it.inTrash }
+                    val liveRoot = com.rhymeai.app.data.recording.RecordingFiles.memosRoot(app.filesDir)
+                    notExported = notListed.count { it.parentFile?.parentFile == liveRoot }
                     // A32: an export carries established precedence times, never an unknown one.
                     val established = repo.establishPrecedence(listOf(base.blob.copy(recordings = snapshot.map { it.entry })), System.currentTimeMillis()).single()
                     val byId = established.recordings.associateBy { it.id }
@@ -935,6 +941,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     append("Exported ${plural(summary.songs, "song")} and ${plural(summary.recordings, "recording")}.")
                     if (summary.skippedLargeRecordings > 0) {
                         append(" ${plural(summary.skippedLargeRecordings, "recording")} over 16 MB left out.")
+                    }
+                    if (notExported > 0) {
+                        append(" ${plural(notExported, "recording")} with an old file name left out. Reopen the app to finish updating ${if (notExported == 1) "it" else "them"}.")
                     }
                 }
             } catch (cancelled: CancellationException) {

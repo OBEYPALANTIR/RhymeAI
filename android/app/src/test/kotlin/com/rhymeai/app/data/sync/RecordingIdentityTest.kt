@@ -478,4 +478,18 @@ class RecordingIdentityTest {
         assertEquals(listOf("1700/$id.m4a"), q.walk().filter { it.isFile }.map { it.relativeTo(q).path }.toList())
         assertEquals("kept copy", File(q, "1700/$id.m4a").readText())
     }
+
+    @Test
+    fun nothingMigratesQuarantineIncludedWhenTheTombstonesCannotBeRead() = runBlocking<Unit> {
+        val q = RecordingFiles.quarantineDirectory(filesDir, "song").apply { mkdirs() }
+        val kept = File(q, "1700__take.m4a").apply { writeBytes("kept copy".toByteArray()) }
+        val live = File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a").apply { writeBytes("live".toByteArray()) }
+        catalog.deletionsUnreadable = true
+
+        assertFailsWith<IOException> { RecordingTransitions.migrate(catalog, filesDir) }
+
+        assertTrue(kept.exists())
+        assertTrue(live.exists())
+        assertEquals(listOf("1700__take.m4a"), q.list()!!.toList())
+    }
 }
