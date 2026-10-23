@@ -10,7 +10,9 @@ same archive path for every recording:
 - It splits into stem and extension at its last "." (none when there is no dot).
 - Each recording takes "<stem><ext>"; when that is taken, "<stem> 2<ext>", "<stem> 3<ext>",
   ... (the first free counter from 2). Nothing is reserved ahead of its turn.
-- "Taken" compares names NFC-normalized and case-folded.
+- "Taken" compares names NFC-normalized, then lowercased with Unicode default
+  lowercasing (Python str.lower(), Kotlin lowercase(Locale.ROOT), Swift lowercased()),
+  not full case folding: "İ", "ı" and "i" stay three different names.
 - Before suffixing, the stem is cut so the whole UTF-8 name is at most 240 bytes,
   never splitting a code point.
 - The archive path is "recordings/<projectId>/<name>". Import finds each file by
@@ -44,7 +46,7 @@ def fit(text: str, max_bytes: int) -> str:
 
 
 def key(name: str) -> str:
-    return unicodedata.normalize("NFC", name).casefold()
+    return unicodedata.normalize("NFC", name).lower()
 
 
 def allocate(entries):
@@ -98,6 +100,10 @@ def build() -> dict:
         entry(13, "song-e", 5000, "hook.m4a"),
         # The same name in another song is free there.
         entry(15, "song-f", 1000, "take.m4a"),
+        # Dotted capital I, dotless i and i are three different names.
+        entry(16, "song-g", 1000, "\u0130.m4a"),
+        entry(17, "song-g", 2000, "\u0131.m4a"),
+        entry(18, "song-g", 3000, "i.m4a"),
     ]
     names = allocate(inputs)
     return {
