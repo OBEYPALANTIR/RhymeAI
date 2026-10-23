@@ -80,7 +80,12 @@ below is the contract it must meet, not verified behaviour.
   `savedAt` (ISO-8601 UTC with milliseconds, `2026-10-22T21:00:05.123Z`),
   `savedByClientId`, `platform`, `projects`, `trashed` (project fields plus
   `trashedAt`), `recordings` (`id`, `projectId`, `fileName`, `bytes`, `sha256`,
-  `uploadedAt`), `deletions` and `manifestSha256`. Every precedence time
+  `uploadedAt`), `deletions` and `manifestSha256`. A recording's `fileName` is
+  its display name (A36). A37 adds optional booleans, written only when true:
+  `precedenceRepaired` on a song, a Trash entry's song or a recording (its
+  `updatedAt` or `uploadedAt` is a first-seen repair) and `trashedAtRepaired` on
+  a Trash entry; a manifest without repairs is byte-identical to one written
+  before the flags existed. Every precedence time
   (`updatedAt`, `trashedAt`, `uploadedAt`, `deletedAt`) is an integer of epoch
   milliseconds; nothing is floored (A23). A song tombstone is `{projectId,
   fileName: null, deletedAt}`; a recording tombstone adds `recordingId` beside
@@ -104,15 +109,13 @@ below is the contract it must meet, not verified behaviour.
   or first seen. A pre-v4 entry's id is the name-based UUID (version 3, MD5) of
   `rhymeai-legacy-recording:<projectId>/<fileName>/<sha256>`, so every device
   derives the same one. Merge, tombstones, presence checks, restores and
-  imports key on the id: a rename changes only the file name (the device holding
-  the recording names it in the manifest); a live and a Trash recording with the
-  same name are two recordings with two records; a different recording that
-  arrives under a taken name is placed under a free variant (`take 2.m4a`), so
-  nothing is ever replaced; byte-identical audio imported again after a deletion
-  is a new recording with a new id and time, and the old id's tombstone still
-  applies only to the old id.
+  imports key on the id: a rename changes only the display name; a live and a
+  Trash recording with the same name are two recordings with two records; two
+  recordings may share a display name and nothing is renamed or replaced;
+  byte-identical audio imported again after a deletion is a new recording with a
+  new id and time, and the old id's tombstone still applies only to the old id.
 - Stored precedence time (A20): each device keeps a record per recording id in
-  DataStore beside the songs (`fileName`, `uploadedAt`, `sha256`, `bytes`,
+  DataStore beside the songs (`displayName`, `uploadedAt`, `sha256`, `bytes`,
   origin recorded/restored/imported/migrated, and where its bytes are now, live
   or in Trash). It is written when a take is recorded or imported from audio
   (that moment), restored or imported from an archive (the entry's own
@@ -147,7 +150,10 @@ below is the contract it must meet, not verified behaviour.
   recordings and Trash lists hide every recording a known tombstone removes. The
   lists refresh when the tombstones change, playback refuses such a recording, and
   one that is playing stops. If the tombstones or records cannot be read, the
-  lists show nothing and playback is refused (fails closed, A31).
+  lists show nothing and playback is refused (fails closed, A31). If the launch
+  check (repair, migration, quarantine) fails, both the song's recordings and the
+  Trash recordings show "could not be read" instead of an empty list, and opening
+  either retries the check; when it succeeds both lists come back.
 - Name-only tombstones (pre-v4): migration turns each into an id tombstone for
   the older recording it names and drops it. One that names no older entry
   removes only a recording whose id is the pre-v4 id of that name and the
@@ -183,9 +189,7 @@ below is the contract it must meet, not verified behaviour.
   take. If the record cannot be written the operation fails and nothing moves;
   the UI says so (a finished take waits in staging, see A27). Every transition, deletion and snapshot first finishes or undoes an
   interrupted move from its intent, so an interrupted move never yields a new id.
-  Collision variants (`take 2.m4a`) are shortened to stay within the 240-byte
-  name limit, an empty stem (`.m4a`) gets "Recording 2.m4a", and the final name
-  is validated before the intent is written.
+  A display name is validated (240-byte limit) before its record is written.
 - Oversized recordings (A29): this device never lists a recording too large for
   it to move unless Drive's manifest already lists it, and then it only keeps
   that existing entry. Keeping an entry is not verifying it: the recording counts
@@ -200,19 +204,45 @@ below is the contract it must meet, not verified behaviour.
   (`first_seen_precedence_json`) and then written into the manifest; it never
   changes afterwards. An older tombstone therefore cannot delete a recording or
   song only because its time was unknown.
+- Repairs converge (A37): a time established that way is a repair and is marked
+  (`precedenceRepaired`, `trashedAtRepaired`; Android keeps the flag on
+  `SongProject`, `TrashedSongProject`, the manifest entry and the recording
+  record). For one identity, a real time (an edit) beats any repair and clears
+  the flag; of two repairs the smaller wins everywhere (manifest, local state and
+  the first-seen map), so two replicas that repaired one time-less song at tA <
+  tB both settle on tA and a tombstone between them wins. A Trash deadline is
+  always recomputed from the repaired `trashedAt`. Android applies this in
+  `SyncMerger.supersedes` (songs, Trash, recordings and the active/Trash choice)
+  and in `ProjectRepository.normalizePrecedence`.
 - Valid tombstones first (A33): tombstones are validated where they are read
   (Android `ProjectRepository`'s deletion store runs `SyncDeletion.validate` on
   every entry; iOS validates at its store too), so a malformed one makes the
   deletion state unreadable. No adoption, reconciliation, move, quarantine or
   pending song-folder deletion happens unless that state is readable and valid,
   and the recordings lists show nothing and playback is refused otherwise.
+- Recording files (A36): on disk every recording is `<recordingId>.<ext>`
+  (lowercase UUID; `m4a` for the app's takes, the audio's own extension for
+  imports) in the live, Trash, staging and quarantine folders, and
+  `rec_<recordingId>` on Drive. The name the user sees is the record's
+  `displayName`, carried as `fileName` in the manifest. A rename writes the record
+  only and moves nothing, so it never stops playback. Two recordings may share a
+  display name; nothing collides, nothing is allocated and no suffix is
+  generated. Export is the only place a display name becomes a file name. The
+  only moves are staging to live, live to and from Trash, live or Trash to
+  quarantine, and the migration; each keeps its journaled intent and digest check.
+- Migration (A36), at every launch until done (idempotent): a file in the live
+  or Trash folder not named by an id gets one, from its record at that path when
+  the bytes match, else the A21 derived id, and is moved to `<id>.<ext>` in the
+  same folder with its old name (a pre-A36 Trash name `<deletedAt>__<name>`
+  gives the name and the Trash time) as its display name. Each move is journaled
+  as a move intent, so a crash resumes from it. A file whose id name is taken by
+  other bytes is left where it is and reported ("N older recording file(s) could
+  not be renamed…"); migration deletes nothing. iOS performs the same migration.
 - Local folders (Android, under the app's files directory): `voice-memos/`
-  (live), `voice-memos-trash/` (`<deletedAt>__<name>`), `voice-memos-staging/`
-  (takes being recorded or waiting), `voice-memos-quarantine/` (duplicates and
-  deleted recordings, `<movedAt>__<name>`, never deleted), `voice-memos-parking/`
-  (one recording at a time while A30 names swap, `<id>.<ext>`; back to its name, or
-  a free variant, at the next launch if interrupted). iOS uses its own
-  "recording-parking" and quarantine folders for the same purposes.
+  (live), `voice-memos-trash/` (Trash time in the record), `voice-memos-staging/`
+  (takes being recorded or waiting), `voice-memos-quarantine/<projectId>/<movedAt>/<id>.<ext>`
+  (duplicates and deleted recordings, never deleted; a folder per move so two
+  kept copies never collide).
 - Take marker (Android): `<take>.take` beside the staging file, UTF-8 text with
   three lines: the recording id (lowercase UUID), the state (`recording`,
   `finished` or `failed`) and the finish time in epoch milliseconds (0 until
@@ -223,28 +253,6 @@ below is the contract it must meet, not verified behaviour.
   then tap Retry." (save failed, with Retry); in the recordings sheet "N
   recording(s) waiting to be saved" and "N recording(s) could not be saved" with
   Retry.
-- Name collisions (A30/A34): each manifest entry may carry `claimedName`, the
-  name the user chose, when it differs from its allocated `fileName` (absent means
-  the claim is `fileName`). Names are allocated from claims over the whole
-  collision group of a song, identically on backup and restore: the claim with
-  the earlier `uploadedAt` (then the smaller id) keeps the name, each other takes
-  the first free "<stem> 2<ext>", "<stem> 3<ext>" from its claim's stem, never from
-  an allocated name (Android `SyncMerger.assignNames`, iOS
-  `SyncMerger.allocateNames`). A device's claim for a recording it holds is its
-  own when the user changed it since the device last wrote it (a new recording,
-  or a rename), else the manifest's claim (A35: Android compares with the
-  record's `syncedName`, iOS with a per-recording last-synced claim kept in the
-  backup's UserDefaults, not in iCloud). After each manifest write a device takes
-  the written claim as both its claim and its synced name, so an accepted remote
-  rename is followed instead of flipping back. A device with no baseline for a
-  recording Drive lists (a reinstall or cleared store) follows Drive's claim
-  rather than reading its own name as a rename; an automatic rename (Restore,
-  Import, parking) keeps the recording's claim and changes only its file name.
-  Back up writes the allocated names and renames no local file; Restore and Import rename local recordings to their
-  allocated names (a move with its record, never replacing a file, through
-  parking when names swap) before placing downloads. A restored or imported
-  recording claims its `claimedName`, never its allocated name. A path belongs
-  to the recording whose id and bytes the record verified.
 - Precedence on every path (A32): Android also fixes missing times for each
   duplicate manifest before they are compared, for a conflicting read-back, for
   the restore offer's probe, and for this device's own state inside the
@@ -262,8 +270,14 @@ below is the contract it must meet, not verified behaviour.
   the bytes at the source still have the record's hash; other bytes there are
   adopted on their own and nothing is moved. Delete Forever of a recording writes
   its tombstone after adoption and deletes the bytes only if, under the recording
-  lock, they are still that recording (`RecordingTransitions.deleteVerified`); a
-  song folder is deleted only with valid tombstones and no unreconciled move.
+  lock, they are still that recording (`RecordingTransitions.deleteVerified`).
+  After a song's deletion commits, its folders are cleaned under the recording
+  lock (`RecordingTransitions.cleanUpDeletedSong`): every file is adopted and
+  hashed, only recordings a winning tombstone removes are deleted, and any other
+  bytes (a take finished after the deletion, a dropped-in file) are kept, so the
+  song stays pending until they are dealt with. The decision is read under the
+  repository lock and the cleanup runs outside it (lock order: recording lock,
+  then repository).
   iOS stores digests in every move record (quarantine, Trash detach) and verifies
   them at replay.
 - Takes of any size (Android) go through one journal: the `.take` marker (finish
@@ -279,23 +293,26 @@ below is the contract it must meet, not verified behaviour.
   iOS keeps an oversized journal (source and a completed flag) and finishes an
   interrupted move at retry.
 - Import: both platforms find archive audio by recording id and verify it before
-  writing it under the allocated name; iOS reports missing audio instead of
-  skipping it.
+  writing it as `<id>.<ext>` with its display name; each recording that is
+  damaged, missing from the archive or too large is counted once.
 - Playback (A28): Android starts playback under the recording lock with a
   verified id (adopting a file seen for the first time), and every transition
   that moves bytes calls `RecordingTransitions.beforeBytesMove` under the same
-  lock first, so playback stops before a quarantine, rename or parking move and
-  no play can start in between; iOS stops playback through its `willMove` hook.
+  lock first, so playback stops before a Trash, restore, migration or quarantine
+  move and no play can start in between; a rename moves nothing and playback
+  continues. iOS stops playback through its `willMove` hook.
 - iOS specifics (round 6): recording tombstones by id live in the CloudKit
   record type `SyncRecordingDeletion` (`SyncDeletionRecord` keeps song and
-  legacy name tombstones, without a recording id); iOS rows carry `claimedName`
-  separate from the allocated `fileName`; `pending-moves.json` also records
+  legacy name tombstones, without a recording id); iOS drops `claimedName` and
+  adds `displayName` on its CloudKit `Recording` type (A36); `pending-moves.json` also records
   Trash-detach intents (id, source, destination) before the deciding save; and
   `oversized-recordings.json` records an oversized take's id, name and finish
-  time before its move. The manifest's only addition is the optional
-  `claimedName` (A34); the shared fixture is unchanged.
+  time before its move. The manifest's only additions are the optional A37
+  repair flags; the shared fixture is unchanged and its `fileName` values read as
+  display names.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
-  Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
+  Drive's entry wins; per tombstone identity the newest `deletedAt` wins; a real
+  time beats a repair and of two repairs the smaller wins (A37).
   Tombstones apply by timestamp: a song tombstone removes the song only when
   `deletedAt` is newer than its `updatedAt` (and, in Trash, its `trashedAt`); a
   recording tombstone, or its song's, removes a recording only when newer than
@@ -316,7 +333,13 @@ below is the contract it must meet, not verified behaviour.
   could not move) shape tombstones but are listed only if Drive already lists
   them. A raw file counts as present only when its `appProperties` hash and size
   both match; otherwise this device's own bytes for that id are uploaded again,
-  and never another recording's.
+  and never another recording's. Several raw objects under one `rec_<id>` name
+  (after a race) are all candidates: a download tries the one whose
+  `appProperties` match first, then the others, and uses the first whose bytes
+  match the manifest's size and digest, whatever order Drive lists them in.
+  Android never deletes a raw `rec_` object (it only overwrites one with this
+  device's own verified bytes for that id), so no unlisted object is ever judged
+  covered by a tombstone.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and change no songs or recordings here (reconciliation and the
   first-seen stamping above are their only local writes). Restore merges both ways, uploads local-only
@@ -384,7 +407,10 @@ below is the contract it must meet, not verified behaviour.
   printable ASCII characters).
 - Export all songs / Import from file: one zip `WritersBlock-backup-<date>.zip`
   with `manifest.json` (v4), `songs/<title or id>.txt`, `songs/<id>.json` and
-  `recordings/<projectId>/<fileName>`, through the system save sheet; import
+  `recordings/<projectId>/<displayName>` (recordings sharing a display name in
+  one song get " 2", " 3" by precedence time, then id, within the 240-byte
+  limit; the reader applies the same rule, and the names never feed back),
+  through the system save sheet; import
   takes that zip or a bare v4 `manifest.json`, rejects any archive with a `..`,
   absolute, drive-letter or backslash path or an entry outside those three
   places, and merges, adding only missing recordings that match their hash

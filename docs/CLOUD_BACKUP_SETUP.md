@@ -45,7 +45,9 @@ Create one OAuth client per signing certificate:
 
 Drive holds `rhymeai-manifest.json` (plain UTF-8 JSON, `version` 4) and one raw
 file per recording named `rec_<recordingId>` (each recording has a stable UUID), uploaded with Drive
-`appProperties` `id`, `projectId`, `fileName`, `sha256` and `bytes`. The manifest's
+`appProperties` `id`, `projectId`, `fileName`, `sha256` and `bytes`. A recording's
+`fileName` is its display name; on the device every recording file is named
+`<recordingId>.m4a` and a rename changes only the record (A36). The manifest's
 `manifestSha256` covers its canonical form; a manifest whose hash does not match
 is refused ("Backup file is damaged; it was not merged.") and never overwritten,
 and so is one with a `version` above 4. The full field list, canonical rules and
@@ -69,21 +71,18 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   downloads recordings this device lacks, keeping any edit saved meanwhile.
   Destination protection: a download is written only where no file exists when
   it commits, so it never replaces a file already in place; one whose SHA-256
-  does not match the manifest is discarded and counted. Separately, Restore (and
-  Import) may move local files: a recording whose name another, earlier
-  recording claims is renamed to its "<stem> 2" variant (A30, through
-  `voice-memos-parking/` when names swap), and a recording whose deletion won is
-  moved to `voice-memos-quarantine/` (A28). Neither deletes bytes. Back up never
-  renames local files; it writes the allocated names and each recording's
-  `claimedName` (A34) to the manifest. Recordings over
-  16 MiB are skipped with a visible count.
+  does not match the manifest is discarded and counted. Downloads land as
+  `<id>.m4a` with their display name in the record (A36), so two recordings with
+  the same name sit side by side and nothing is renamed. Separately, Restore (and
+  Import) move a recording whose deletion won to `voice-memos-quarantine/` (A28),
+  which deletes no bytes. Recordings over 16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, iOS with the refresh token) and
   always clears local state. Only a successful revoke counts; otherwise it says
   "Disconnected on this device, but Google still lists the app; remove it at
   myaccount.google.com/permissions."
 - **Export all songs…** writes `WritersBlock-backup-<date>.zip` (`manifest.json`,
-  `songs/<title or id>.txt`, `songs/<id>.json`, `recordings/<projectId>/<fileName>`)
+  `songs/<title or id>.txt`, `songs/<id>.json`, `recordings/<projectId>/<display name>`, " 2", " 3" for repeated names in one song)
   through the system save sheet, for any storage provider. **Import from file…**
   takes that zip or a bare v4 `manifest.json`, refuses archives with unsafe or
   unexpected entry names, and merges it.

@@ -107,13 +107,17 @@ finishing or undoing an interrupted recording move (metadata reconciliation); it
 never touches restore staging. After Restore or Import, a recording whose
 deletion won moves to quarantine; if that move fails it is retried at the next
 launch, and meanwhile the recordings and Trash lists hide it (refreshing when the
-tombstones change) and playback refuses it. When two recordings of one song claim
-one name, the earlier keeps it and the other becomes "<stem> 2" on every device;
-the manifest keeps each recording's claimed name (`claimedName`, A34) beside its
-allocated one, Back up renames no local file, and Restore and Import rename local
-files to match, never replacing one. A missing precedence time becomes the time
-this device first saw the song or recording, persisted before any comparison
-(A32). Tombstones are validated when read; with a malformed or unreadable one,
+tombstones change) and playback refuses it. Recording files are named by their
+id (`<id>.m4a`) everywhere on disk and the name the user sees is metadata (the
+record's display name, the manifest's `fileName`), so a rename moves nothing and
+two recordings may share a name; only an export turns names into file names
+(" 2", " 3" for repeats). Older files are renamed to their ids once, journaled,
+at launch, with their old name kept as the display name; a file whose id name is
+taken by other bytes is left in place and reported, and nothing is deleted
+(A36). A missing precedence time becomes the time this device first saw the song
+or recording, persisted before any comparison (A32); such a time is marked as a
+repair, a real edit beats it, and of two repairs the smaller wins everywhere
+(A37). Tombstones are validated when read; with a malformed or unreadable one,
 nothing is adopted, moved, quarantined or deleted (A33). A name-only tombstone from before v4 removes only a recording
 whose id is the pre-v4 id of that name and its own bytes, never a v4 recording
 that reuses the name. Unfinished recordings stay in a staging folder until the
