@@ -1002,7 +1002,7 @@ final class BackupService {
         var damagedOnDrive: [String] = []
         if restore {
             // The commit resolves the current local state with the original inputs, once.
-            let applied = try apply(inputs: inputs, to: modelContext)
+            let applied = try apply(inputs: inputs, to: modelContext, report: &report)
             (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(try applied.recordings.filter(listable), remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
             report.damagedRecordings = damagedOnDrive
             try await library.reconcile(context: modelContext)
@@ -1483,7 +1483,7 @@ final class BackupService {
         try await library.reconcile(context: modelContext)
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = library.oversizedCount
-        let merged = try apply(inputs: [imported], to: modelContext)
+        let merged = try apply(inputs: [imported], to: modelContext, report: &report)
         // Decided by id: a recording this device lacks is written to its id; its bytes
         // must match hash and declared size. The archive holds each recording under
         // the name the export gave it (its display name, numbered where names repeat),
@@ -1715,12 +1715,15 @@ final class BackupService {
     }
 
     @discardableResult
-    private func apply(inputs: [SyncBlob], to modelContext: ModelContext) throws -> SyncBlob {
+    private func apply(inputs: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport) throws -> SyncBlob {
         // After the network waits: the recordings' last check must still hold, and the
         // tombstones and move record read now, before anything changes (finding 7).
         try library.requireChecked(modelContext)
         let blob = try resolve(inputs, with: modelContext)
         try blob.validate()
+        // A41: every repaired song this apply removes (held here or in an input) is
+        // kept and read back first; a failure stops the run before anything is deleted.
+        try preserveRepairedSongLosers(from: [try makeSnapshot(modelContext: modelContext)] + inputs, merged: blob, report: &report)
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
         let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
         let mergedActiveIds = Set(blob.projects.map(\.id))
@@ -1744,6 +1747,7 @@ final class BackupService {
         // bytes are kept first: its file to quarantine, or its row's audio written
         // there when no file holds it (T1.44).
         for row in try modelContext.fetch(FetchDescriptor<Recording>()) where !row.isDeleted {
+            library.establishTimes(row)
             guard blob.deletions.contains(where: { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime, repaired: row.precedenceIsRepair) }) else { continue }
             var holds = false
             if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot), try RecordingFiles.exists(file) {
@@ -1890,14 +1894,28 @@ nonisolated enum SongRecoveryStore {
         return decoder
     }()
 
-    /// Written once per content (a repeat finds it), never over another file, and read back.
+    /// Written once per content (a repeat finds it), never over another file, and read
+    /// back: the decoded song, repair flags included, must equal what was kept.
     static func keep(_ song: Song, memosRoot: URL) throws {
+        // Times are kept to the millisecond, as written.
+        var song = song
+        func ms(_ date: Date) -> Date { Date(millisecondsSince1970: date.epochMilliseconds) }
+        if var project = song.project {
+            project.updatedAt = ms(project.updatedAt)
+            song.project = project
+        }
+        if var trashed = song.trashed {
+            trashed.updatedAt = ms(trashed.updatedAt)
+            trashed.deletedAt = ms(trashed.deletedAt)
+            trashed.deleteAfter = ms(trashed.deleteAfter)
+            song.trashed = trashed
+        }
         let data = try encoder.encode(song)
         let folder = root(for: memosRoot)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("\(song.id)-\(RecordingBackupManifest.sha256Hex(data).prefix(16)).json")
         if (try? Data(contentsOf: file)) != data { try data.write(to: file, options: .withoutOverwriting) }
-        guard try encoder.encode(decoder.decode(Song.self, from: Data(contentsOf: file))) == data else { throw SyncValidationError.invalidVersionShape }
+        guard try decoder.decode(Song.self, from: Data(contentsOf: file)) == song else { throw SyncValidationError.invalidVersionShape }
     }
 
     static func all(memosRoot: URL) throws -> [Song] {

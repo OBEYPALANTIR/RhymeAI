@@ -157,7 +157,7 @@ struct SyncSongProject: Codable, Equatable, Sendable {
         return model
     }
 
-    enum CodingKeys: String, CodingKey { case id, title, lyrics, theme, updatedAt }
+    enum CodingKeys: String, CodingKey { case id, title, lyrics, theme, updatedAt, precedenceRepaired }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -166,8 +166,10 @@ struct SyncSongProject: Codable, Equatable, Sendable {
         lyrics = try container.decode(String.self, forKey: .lyrics)
         theme = try container.decode(String.self, forKey: .theme)
         updatedAt = try container.decodeEpochMilliseconds(forKey: .updatedAt)
+        precedenceRepaired = try container.decodeIfPresent(Bool.self, forKey: .precedenceRepaired) ?? false
     }
 
+    /// The repair mark is written only when set, so older readers see the shape they know.
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -175,6 +177,7 @@ struct SyncSongProject: Codable, Equatable, Sendable {
         try container.encode(lyrics, forKey: .lyrics)
         try container.encode(theme, forKey: .theme)
         try container.encodeEpochMilliseconds(updatedAt, forKey: .updatedAt)
+        if precedenceRepaired { try container.encode(true, forKey: .precedenceRepaired) }
     }
 }
 
@@ -225,7 +228,7 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
         return model
     }
 
-    enum CodingKeys: String, CodingKey { case project, deletedAt, deleteAfter }
+    enum CodingKeys: String, CodingKey { case project, deletedAt, deleteAfter, trashedAtRepaired }
     enum ProjectCodingKeys: String, CodingKey { case id, title, lyrics, theme, updatedAt }
     enum LegacyFlatCodingKeys: String, CodingKey { case id, title, lyrics, theme, updatedAt, deletedAt, deleteAfter }
 
@@ -238,8 +241,10 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
             lyrics = project.lyrics
             theme = project.theme
             updatedAt = project.updatedAt
+            precedenceRepaired = project.precedenceRepaired
             deletedAt = try container.decodeEpochMilliseconds(forKey: .deletedAt)
             deleteAfter = try container.decodeEpochMilliseconds(forKey: .deleteAfter)
+            trashedAtRepaired = try container.decodeIfPresent(Bool.self, forKey: .trashedAtRepaired) ?? false
         } else {
             // Defensive compatibility with pre-Drive iOS test builds only. Android
             // has always encoded trash as { project, deletedAt, deleteAfter }.
@@ -256,10 +261,11 @@ struct SyncTrashedSongProject: Codable, Equatable, Sendable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        let project = SyncSongProject(id: id, title: title, lyrics: lyrics, theme: theme, updatedAt: updatedAt)
+        let project = SyncSongProject(id: id, title: title, lyrics: lyrics, theme: theme, updatedAt: updatedAt, precedenceRepaired: precedenceRepaired)
         try container.encode(project, forKey: .project)
         try container.encodeEpochMilliseconds(deletedAt, forKey: .deletedAt)
         try container.encodeEpochMilliseconds(deleteAfter, forKey: .deleteAfter)
+        if trashedAtRepaired { try container.encode(true, forKey: .trashedAtRepaired) }
     }
 }
 
@@ -905,7 +911,7 @@ enum SyncMerger {
         return Array(byId.values)
     }
 
-    private static func mergeTrash(local: [SyncTrashedSongProject], remote: [SyncTrashedSongProject]) -> [SyncTrashedSongProject] {
+    static func mergeTrash(local: [SyncTrashedSongProject], remote: [SyncTrashedSongProject]) -> [SyncTrashedSongProject] {
         var byId: [String: SyncTrashedSongProject] = [:]
         for trashed in local + remote {
             guard var merged = byId[trashed.id] else {
