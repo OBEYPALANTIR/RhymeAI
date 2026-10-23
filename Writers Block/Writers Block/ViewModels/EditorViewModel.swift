@@ -571,6 +571,7 @@ final class EditorViewModel: ObservableObject {
             }
             recoverInterruptedDraftIfNeeded()
             seedTrashProjectForUITestsIfNeeded()
+            seedFailedTakeForUITestsIfNeeded()
             refreshCloudBackupState()
             Task { await checkFirstRunRestoreOffer(afterConnecting: false) }
         }
@@ -1726,11 +1727,15 @@ final class EditorViewModel: ObservableObject {
         // A Trash entry is expired only after it is resolved against a live copy of the
         // same song (A38: the song's edit time against the Trash deletion time); stale
         // Trash copies beside a newer song just go, with no tombstone and no files (T2.45).
-        let active = Dictionary(((try? context.fetch(FetchDescriptor<SongProject>())) ?? []).map { ($0.id, $0) }) { first, _ in first }
+        // Every active copy of a song is resolved too (A37: an edit beats a repair, of
+        // two edits the later), so a newer copy is what the Trash entry meets.
+        let activeCopies = Dictionary(grouping: (try? context.fetch(FetchDescriptor<SongProject>())) ?? [], by: \.id)
+        let active = Dictionary(SyncMerger.mergeProjects(local: activeCopies.values.joined().map { SyncSongProject(project: $0) }, remote: [])
+            .map { ($0.id, $0) }) { first, _ in first }
         var stale: [TrashedSongProject] = []
         let resolvedDue = dueProjects.filter { trash in
             guard let song = active[trash.id] else { return true }
-            if SyncMerger.activeWins(SyncSongProject(project: song), over: trash) {
+            if SyncMerger.activeWins(song, over: trash) {
                 stale += trashCopies[trash.id] ?? []
                 return false
             }
@@ -1763,8 +1768,8 @@ final class EditorViewModel: ObservableObject {
             for projectId in projectIDs {
                 try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
                 _ = try recordingLibrary?.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context)
-                // A superseded live copy of an expired song goes with it.
-                if let song = active[projectId] { context.delete(song) }
+                // Superseded live copies of an expired song go with it.
+                (activeCopies[projectId] ?? []).forEach(context.delete)
             }
             var memoProofs: [(TrashedVoiceMemo, String, Int64)] = []
             for memo in expiredMemos {
@@ -2089,6 +2094,21 @@ final class EditorViewModel: ObservableObject {
         saveStatus = .saved
         showWelcome = false
         showProjectsSheet = false
+    }
+
+    private func seedFailedTakeForUITestsIfNeeded() {
+        guard UITestFlags.isEnabled(UITestFlags.seedFailedTake), UITestFlags.isEnabled(UITestFlags.inMemoryStore),
+              let context = modelContext, currentProjectId == nil else { return }
+        let project = SongProject(id: "ui-failed-take-song", title: "UI Failed Take", lyrics: "kept words")
+        context.insert(project)
+        try? context.save()
+        let take = RecordingFiles.recorderStagingURL(for: project.id, takeId: "0c0ffee0-0000-4000-8000-000000000001", root: voiceMemoService.stagingRoot)
+        try? FileManager.default.removeItem(at: take.deletingLastPathComponent())
+        try? FileManager.default.createDirectory(at: take.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("not audio".utf8).write(to: take)
+        try? Data().write(to: take.deletingLastPathComponent().appendingPathComponent(RecordingFiles.failedTakeMarker))
+        voiceMemoService.refreshPendingTakes()
+        loadProject(project)
     }
 
     @discardableResult
@@ -2518,6 +2538,9 @@ final class EditorViewModel: ObservableObject {
         guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
               let deletions = try? DeletionStore.all(in: modelContext) else { return false }
         guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
+        // A tombstone without a time names it: kept, not played (T5.24).
+        guard let held = try? recordingLibrary.held(in: modelContext),
+              !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { return false }
         // A row just delivered may not have its time fixed yet: it is fixed and kept
         // now, as a repair, so it never plays against a tombstone that beats it (T2.55).
         if recordingLibrary.establishTimes(row) { try? saveModelContext(modelContext) }
@@ -2562,6 +2585,10 @@ final class EditorViewModel: ObservableObject {
 
     private func recordingNotes(from library: RecordingLibrary) -> [String] {
         var notes = library.stateIssues
+        if let context = modelContext, let undated = try? DeletionStore.undated(in: context), !undated.isEmpty {
+            let named = undated.map { $0.recordingId.map { "recording \($0)" } ?? $0.fileName.map { "\($0)" } ?? "song \($0.projectId)" }
+            notes.append("\(undated.count) deletion \(undated.count == 1 ? "record has" : "records have") no time, so what \(undated.count == 1 ? "it names is" : "they name is") kept as it is and not shown until a deletion with a time arrives: \(named.sorted().joined(separator: ", ")).")
+        }
         if !library.identityConflicts.isEmpty {
             notes.append("\(library.identityConflicts.count) \(library.identityConflicts.count == 1 ? "recording is" : "recordings are") held twice with different audio; both copies are kept: \(library.identityConflicts.joined(separator: ", ")).")
         }
@@ -2604,7 +2631,7 @@ final class EditorViewModel: ObservableObject {
         }
         _ = await reconcileRecordings()
         if suspended > 0 {
-            recordingNotes.append("\(suspended) deletion \(suspended == 1 ? "record has" : "records have") no usable time, so recordings stay paused. Nothing was deleted; the \(suspended == 1 ? "record is" : "records are") kept as \(suspended == 1 ? "it is" : "they are").")
+            recordingNotes.append("Nothing was deleted: \(suspended) deletion \(suspended == 1 ? "record without a time is" : "records without a time are") kept as \(suspended == 1 ? "it is" : "they are") and never given one.")
         }
     }
 

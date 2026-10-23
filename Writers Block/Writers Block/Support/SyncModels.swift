@@ -893,7 +893,7 @@ enum SyncMerger {
         return byIdentity.values.sorted { $0.identity < $1.identity }
     }
 
-    private static func mergeProjects(local: [SyncSongProject], remote: [SyncSongProject]) -> [SyncSongProject] {
+    static func mergeProjects(local: [SyncSongProject], remote: [SyncSongProject]) -> [SyncSongProject] {
         var byId: [String: SyncSongProject] = [:]
         for project in local + remote {
             if let existing = byId[project.id] {
