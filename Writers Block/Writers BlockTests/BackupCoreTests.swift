@@ -736,7 +736,7 @@ struct BackupCoreTests {
     }
 
     @MainActor
-    @Test func theDeviceHoldingTheBytesSetsTheNameInARenameConflict() async throws {
+    @Test func withoutASyncedBaselineTheManifestNameIsAdopted() async throws {
         let harness = try await makeHarness()
         harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
         try harness.context.save()
@@ -750,8 +750,13 @@ struct BackupCoreTests {
         try await harness.service.backupNow(modelContext: harness.context)
 
         let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
-        #expect(manifest.recordings.map(\.fileName) == ["renamed here.m4a"])
+        // A35: with no claim synced from here yet, the manifest's claim stands and
+        // this device takes it on its next reconcile (a backup changes no files).
+        #expect(manifest.recordings.map(\.fileName) == ["renamed elsewhere.m4a"])
         #expect(manifest.recordings.map(\.uploadedAt) == [Date(timeIntervalSince1970: 1_000)], "the backed-up copy keeps its time")
+        #expect(FileManager.default.fileExists(atPath: harness.memosRoot.appendingPathComponent("song/renamed here.m4a").path))
+        try await harness.service.library.reconcile(context: harness.context)
+        #expect(try harness.rowId("renamed elsewhere.m4a") == id)
     }
 
     // MARK: Lost updates between devices
@@ -996,10 +1001,74 @@ struct BackupCoreTests {
             names.append(try #require(manifest.recordings.first).claim)
         }
         #expect(names == ["foo.m4a", "bar.m4a", "bar.m4a", "bar.m4a"])
-        // A follows on its next restore.
-        try await deviceA.service.restoreNow(modelContext: deviceA.context)
+        func driveClaim() throws -> String {
+            let data = try #require(drive.content(named: SyncBlob.driveFileName))
+            return try #require(SyncBlob.decodeManifest(data).recordings.first).claim
+        }
+        // Another backup from A before it reconciles: still bar.
+        try await deviceA.service.backupNow(modelContext: deviceA.context)
+        #expect(try driveClaim() == "bar.m4a")
+        // A reconcile alone takes bar on A, file included.
+        try await deviceA.service.library.reconcile(context: deviceA.context)
         let row = try #require(deviceA.context.fetch(FetchDescriptor<Recording>()).first)
         #expect(row.claim == "bar.m4a" && row.fileName == "bar.m4a")
+        #expect(FileManager.default.fileExists(atPath: deviceA.memosRoot.appendingPathComponent("song/bar.m4a").path))
+        // Cleared settings mean "take the manifest's", not "renamed here".
+        deviceA.service.forgetLocalSyncState()
+        try await deviceA.service.backupNow(modelContext: deviceA.context)
+        #expect(try driveClaim() == "bar.m4a")
+        // Restore keeps it, on the device and on Drive.
+        try await deviceA.service.restoreNow(modelContext: deviceA.context)
+        #expect(row.claim == "bar.m4a" && row.fileName == "bar.m4a")
+        #expect(try driveClaim() == "bar.m4a")
+    }
+
+    @MainActor
+    @Test func aSongWithoutATimeIsStampedOnTheRowOnce() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 0)))
+        try harness.context.save()
+        try await harness.service.backupNow(modelContext: harness.context)
+        let song = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first)
+        let stamped = song.updatedAt
+        #expect(stamped.epochMilliseconds > 0)
+        // Settings lost: the row keeps its time, and so does the manifest.
+        harness.service.forgetLocalSyncState()
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(song.updatedAt == stamped)
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.projects.first?.updatedAt == stamped)
+    }
+
+    @MainActor
+    @Test func restoreAppliesNothingWhenTheRecordingsCannotBeCheckedAfterTheNetworkWait() async throws {
+        let harness = try await makeHarness()
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "remote", title: "Remote", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 5))]
+        ).encodedManifest())
+        let record = RecordingFiles.quarantineRoot(for: harness.memosRoot).appendingPathComponent("pending-moves.json")
+        // During the restore's network work the move record becomes unreadable.
+        harness.drive.beforeManifestWrite = {
+            try FileManager.default.createDirectory(at: record.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("{".utf8).write(to: record)
+        }
+        await #expect(throws: (any Error).self) { try await harness.service.restoreNow(modelContext: harness.context) }
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func anArchiveWithOneRecordingIdTwiceIsRefusedWhole() async throws {
+        let harness = try await makeHarness()
+        let sha = RecordingBackupManifest.sha256Hex(Data([1]))
+        let first = SyncRecording(id: "dup", projectId: "song", fileName: "old.m4a", bytes: 1, sha256: sha, uploadedAt: Date(timeIntervalSince1970: 1))
+        var second = first
+        second.fileName = "new.m4a"
+        let manifest = try SyncBlob(projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+                                    recordings: [first, second]).encodedManifest()
+        let archive = try BackupArchive.zip([("manifest.json", manifest), ("recordings/song/old.m4a", Data([1])), ("recordings/song/new.m4a", Data([1]))])
+        await #expect(throws: BackupError.damagedManifest) { try await harness.service.importArchive(archive, modelContext: harness.context) }
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
     }
 
     @MainActor

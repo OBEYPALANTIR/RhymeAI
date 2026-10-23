@@ -1653,20 +1653,23 @@ final class EditorViewModel: ObservableObject {
     private func applyPersistedDeletions() {
         guard let context = modelContext else { return }
         do {
+            // A32: songs without a time get the time first seen here, saved on the rows
+            // before any tombstone is compared, whether or not there are tombstones.
+            var repaired = false
+            for project in try context.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
+                project.updatedAt = firstSeenTime("project:\(project.id)")
+                repaired = true
+            }
+            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) {
+                if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = firstSeenTime("project:\(project.id)"); repaired = true }
+                if project.deletedAt.epochMilliseconds <= 0 { project.deletedAt = firstSeenTime("trashed:\(project.id)"); repaired = true }
+            }
+            if repaired { try saveModelContext(context) }
             let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: context))
             guard !deletions.isEmpty else { return }
             // A tombstone removes a song only when it is newer than the song's last change.
             let tombstones = Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
             var deletedProjects = Set(tombstones.keys)
-            // A32: a song without a time gets the time it was first seen here, before
-            // any comparison, kept and written back.
-            for project in try context.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
-                project.updatedAt = firstSeenTime("project:\(project.id)")
-            }
-            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) {
-                if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = firstSeenTime("project:\(project.id)") }
-                if project.deletedAt.epochMilliseconds <= 0 { project.deletedAt = firstSeenTime("trashed:\(project.id)") }
-            }
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
                 if tombstones[project.id]! > project.updatedAt.epochMilliseconds {
                     context.delete(project)
