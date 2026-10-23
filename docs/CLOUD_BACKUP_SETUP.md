@@ -66,10 +66,14 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   three times, then "Backup conflict, will retry").
   Failures retry after 1, 2, 4, 8 … minutes, capped at an hour.
 - **Restore from backup** merges both ways, uploads local-only items, then
-  downloads recordings this device lacks, keeping any edit saved meanwhile. A
-  download is written only where no file exists when it commits, and nothing
-  already in place is ever replaced or removed; one whose
-  SHA-256 does not match the manifest is discarded and counted. Recordings over
+  downloads recordings this device lacks, keeping any edit saved meanwhile.
+  Destination protection: a download is written only where no file exists when
+  it commits, so it never replaces a file already in place; one whose SHA-256
+  does not match the manifest is discarded and counted. Separately, Restore (and
+  Import) may move local files: a recording whose name another, earlier
+  recording claims is renamed to its "<stem> 2" variant (A30, through
+  `voice-memos-parking/` when names swap), and a recording whose deletion won is
+  moved to `voice-memos-quarantine/` (A28). Neither deletes bytes. Recordings over
   16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, iOS with the refresh token) and
