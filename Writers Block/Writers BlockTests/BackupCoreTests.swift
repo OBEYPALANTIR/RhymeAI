@@ -1263,6 +1263,67 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func cleanupKeepsAnUnlistedUploadOfATombstonedId() async throws {
+        let harness = try await makeHarness()
+        let audio = Data([3])
+        let id = UUID().uuidString.lowercased()
+        let upload = SyncRecording(id: id, projectId: "S", fileName: "take.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 9_000))
+        // Drive has a tombstone for this very id, and an upload of it whose manifest
+        // another device has not written yet: its time is unknown here.
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            deletions: [SyncDeletion(projectId: "S", recordingId: id, fileName: "take.m4a", deletedAt: 5_000_000)]
+        ).encodedManifest())
+        harness.drive.seedRecording(upload, content: audio)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.drive.content(named: upload.driveName) == audio)
+    }
+
+    @MainActor
+    @Test func exportNamesTheRecordingsItLeavesOut() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([1]), projectId: "song", fileName: "kept.m4a")
+        // A file whose id's name holds other bytes: neither is taken in.
+        let id = RecordingBackupManifest.legacyRecordingId(projectId: "song", fileName: "blocked.m4a", sha256: RecordingBackupManifest.sha256Hex(Data([2])))
+        try harness.writeFile(Data([2]), projectId: "song", fileName: "blocked.m4a")
+        try harness.writeFile(Data([9]), projectId: "song", fileName: "\(id).m4a")
+        try await harness.service.library.reconcile(context: harness.context)
+
+        let archive = try harness.service.exportArchive(modelContext: harness.context, now: Date())
+        #expect(try BackupArchive.unzip(archive.data).keys.filter { $0.hasPrefix("recordings/") } == ["recordings/song/kept.m4a"])
+        #expect(Set(harness.service.lastReport?.leftOutRecordings ?? []) == ["blocked.m4a", "\(id).m4a"])
+    }
+
+    @MainActor
+    @Test func aRecordingWithoutATimeOnDriveIsRepairedNotRefused() async throws {
+        let harness = try await makeHarness()
+        let audio = Data([2, 2])
+        let entry = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio),
+                                  uploadedAt: Date(timeIntervalSince1970: 5))
+        var fields = try #require(try JSONSerialization.jsonObject(with: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))], recordings: [entry]
+        ).encodedManifest()) as? [String: Any])
+        fields.removeValue(forKey: "manifestSha256")
+        var recordings = try #require(fields["recordings"] as? [[String: Any]])
+        recordings[0].removeValue(forKey: "uploadedAt")
+        fields["recordings"] = recordings
+        fields["manifestSha256"] = CanonicalJSON.sha256Hex(try JSONValue(any: fields))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try JSONSerialization.data(withJSONObject: fields))
+        harness.drive.seedRecording(entry, content: audio)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        let row = try #require(harness.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.precedenceRepaired && row.precedenceTime.epochMilliseconds > 0)
+        let written = try #require(harness.drive.content(named: SyncBlob.driveFileName))
+        #expect(try SyncBlob.decodeManifest(written).recordings.first?.precedenceRepaired == true)
+    }
+
+    @MainActor
     @Test func duplicateRawObjectsGiveTheVerifiedCopyAndAreAllCleanedUp() async throws {
         for damagedFirst in [true, false] {
             let harness = try await makeHarness()
@@ -1329,7 +1390,7 @@ struct BackupCoreTests {
         let blob = SyncBlob(trashed: [trashed])
         func check(_ harness: BackupHarness) async throws {
             let row = try #require(harness.context.fetch(FetchDescriptor<TrashedSongProject>()).first)
-            #expect(row.deletedAt.epochMilliseconds > 0 && row.precedenceRepaired)
+            #expect(row.deletedAt.epochMilliseconds > 0 && row.trashedAtRepaired && row.precedenceRepaired)
             #expect(row.deleteAfter == row.deletedAt.addingTimeInterval(trashRetentionInterval))
             let viewModel = EditorViewModel(recordingLibrary: harness.service.library)
             viewModel.modelContext = harness.context

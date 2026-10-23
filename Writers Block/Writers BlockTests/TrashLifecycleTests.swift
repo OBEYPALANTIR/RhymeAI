@@ -486,11 +486,30 @@ struct TrashLifecycleTests {
         await viewModel.recordingsLaunchTask?.value
 
         let row = try #require(context.fetch(FetchDescriptor<TrashedSongProject>()).first)
-        #expect(row.deletedAt >= before.addingTimeInterval(-1) && row.precedenceRepaired)
+        #expect(row.deletedAt >= before.addingTimeInterval(-1) && row.trashedAtRepaired && row.precedenceRepaired)
         #expect(row.deleteAfter == row.deletedAt.addingTimeInterval(trashRetentionInterval))
         #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
         let trashed = try library.trashedRecordings(in: context)
         #expect(trashed.map(\.recordingId) == [id] && trashed[0].deleteAfter > Date().addingTimeInterval(trashRetentionInterval - 60))
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func aFirstLaunchFromFilesAloneKeepsAZeroTimeTrashRecording() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("ZeroTrashFile")
+        _ = container
+        // Only a file on disk: a Trash name with no time, and no file date either.
+        let file = library.trashRoot.appendingPathComponent("song/0__take.m4a")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([4]).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: file.path)
+        let before = Date().addingTimeInterval(-1)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(try #require(row.trashedAt) >= before && row.displayName == "take.m4a")
+        #expect(FileManager.default.fileExists(atPath: library.trashRoot.appendingPathComponent("song/\(row.id).m4a").path))
         #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
     }
 

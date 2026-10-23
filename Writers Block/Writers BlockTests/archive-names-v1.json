@@ -1,0 +1,111 @@
+{
+  "description": "A39 export-archive names; see scripts/generate-archive-names-fixture.py for the rule.",
+  "maxNameBytes": 240,
+  "cases": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "projectId": "song-a",
+      "precedenceTime": 1000,
+      "displayName": "take.m4a",
+      "archivePath": "recordings/song-a/take.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "projectId": "song-a",
+      "precedenceTime": 2000,
+      "displayName": "take.m4a",
+      "archivePath": "recordings/song-a/take 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "projectId": "song-a",
+      "precedenceTime": 3000,
+      "displayName": "take 2.m4a",
+      "archivePath": "recordings/song-a/take 2 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "projectId": "song-b",
+      "precedenceTime": 1000,
+      "displayName": "Take.m4a",
+      "archivePath": "recordings/song-b/Take.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "projectId": "song-b",
+      "precedenceTime": 2000,
+      "displayName": "take.m4a",
+      "archivePath": "recordings/song-b/take 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "projectId": "song-b",
+      "precedenceTime": 3000,
+      "displayName": "Café.m4a",
+      "archivePath": "recordings/song-b/Café.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "projectId": "song-b",
+      "precedenceTime": 4000,
+      "displayName": "CAFÉ.m4a",
+      "archivePath": "recordings/song-b/CAFÉ 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000008",
+      "projectId": "song-c",
+      "precedenceTime": 1000,
+      "displayName": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé.m4a",
+      "archivePath": "recordings/song-c/éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000009",
+      "projectId": "song-c",
+      "precedenceTime": 2000,
+      "displayName": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé.m4a",
+      "archivePath": "recordings/song-c/ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "projectId": "song-d",
+      "precedenceTime": 1000,
+      "displayName": "../verse/idea.m4a",
+      "archivePath": "recordings/song-d/___verse_idea.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000011",
+      "projectId": "song-d",
+      "precedenceTime": 2000,
+      "displayName": ".hidden.m4a",
+      "archivePath": "recordings/song-d/_hidden.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000012",
+      "projectId": "song-d",
+      "precedenceTime": 3000,
+      "displayName": "no extension",
+      "archivePath": "recordings/song-d/no extension"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000014",
+      "projectId": "song-e",
+      "precedenceTime": 5000,
+      "displayName": "hook.m4a",
+      "archivePath": "recordings/song-e/hook 2.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000013",
+      "projectId": "song-e",
+      "precedenceTime": 5000,
+      "displayName": "hook.m4a",
+      "archivePath": "recordings/song-e/hook.m4a"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000015",
+      "projectId": "song-f",
+      "precedenceTime": 1000,
+      "displayName": "take.m4a",
+      "archivePath": "recordings/song-f/take.m4a"
+    }
+  ]
+}
