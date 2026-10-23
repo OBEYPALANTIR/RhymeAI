@@ -852,7 +852,7 @@ final class BackupService {
         )
         // Backup reads the library as it is; restore first brings it up to date.
         if restore { try library.reconcile(context: modelContext) }
-        report.oversizedRecordings = unpreservedOversizedCount(remote: remoteRecordings)
+        report.oversizedRecordings = try unpreservedOversizedCount(remote: remoteRecordings)
 
         // Every remote-side input seen in this run, unresolved, in the order seen:
         // each candidate gathers them all with the current local snapshot and
@@ -865,7 +865,21 @@ final class BackupService {
             let blob = try await downloadManifest(file, accessToken: accessToken)
             if seen.insert(blob.manifestSha256).inserted { inputs.append(blob) }
         }
-        func candidate() throws -> SyncBlob { finalizedBlob(try resolve(inputs, with: modelContext)) }
+        let legacyAudioIds = Set(legacy?.audio.keys.map { $0 } ?? [])
+        let legacyOnlyIds = Set(legacy?.allRecordings.map(\.id) ?? []).subtracting(legacyAudioIds)
+        /// An old recording whose audio could not be opened is listed only when this
+        /// device or Drive holds its bytes; it still took part in the resolution.
+        func listable(_ entry: SyncRecording) throws -> Bool {
+            guard legacyOnlyIds.contains(entry.id) else { return true }
+            if let properties = remoteRecordings[entry.driveName]?.appProperties,
+               properties["sha256"] == entry.sha256, properties["bytes"] == String(entry.bytes) { return true }
+            return try modelContext.fetch(FetchDescriptor<Recording>()).contains { $0.id == entry.id && $0.sha256 == entry.sha256 }
+        }
+        func candidate() throws -> SyncBlob {
+            var resolved = try resolve(inputs, with: modelContext)
+            resolved.recordings = try resolved.recordings.filter(listable)
+            return finalizedBlob(resolved)
+        }
         /// Folds in any manifest written since the last look; true when something new arrived.
         func absorbFreshManifests() async throws -> Bool {
             var changed = false
@@ -929,7 +943,7 @@ final class BackupService {
         if restore {
             // The commit resolves the current local state with the original inputs, once.
             let applied = try apply(inputs: inputs, to: modelContext)
-            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(applied.recordings, remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
+            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(try applied.recordings.filter(listable), remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
             report.damagedRecordings = damagedOnDrive
             try library.reconcile(context: modelContext)
         }
@@ -1025,9 +1039,9 @@ final class BackupService {
                 }
                 audio[legacyRecordingId(entry)] = opened
             }
-            var opened = upgraded
-            opened.recordings = upgraded.recordings.filter { audio[$0.key] != nil }
-            return LegacyBackup(blob: opened, allRecordings: upgraded.recordings, audio: audio, unmovedRecordings: unmoved)
+            // Every listed recording takes part in resolution (A18); whether its audio
+            // could be opened is tracked apart, in `audio`.
+            return LegacyBackup(blob: upgraded, allRecordings: upgraded.recordings, audio: audio, unmovedRecordings: unmoved)
         }
     }
 
@@ -1096,11 +1110,11 @@ final class BackupService {
 
     /// Recordings over the cap that Drive does not hold: an oversized file counts
     /// as backed up only when a raw Drive object has its SHA-256 and size (A29).
-    private func unpreservedOversizedCount(remote: RemoteFiles) -> Int {
-        library.oversizedFiles.filter { file in
-            guard let audio = try? Data(contentsOf: file, options: .mappedIfSafe) else { return true }
-            let digest = RecordingBackupManifest.sha256Hex(audio)
-            return !remote.values.contains { $0.appProperties?["sha256"] == digest && $0.appProperties?["bytes"] == String(audio.count) }
+    /// Live and Trash files are inventoried now, on every run.
+    private func unpreservedOversizedCount(remote: RemoteFiles) throws -> Int {
+        try library.oversizedInventory().filter { file in
+            guard let size = try? RecordingFiles.facts(file).size, let digest = try? RecordingFiles.sha256(of: file) else { return true }
+            return !remote.values.contains { $0.appProperties?["sha256"] == digest && $0.appProperties?["bytes"] == String(size) }
         }.count
     }
 
