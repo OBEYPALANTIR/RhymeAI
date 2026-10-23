@@ -46,6 +46,8 @@ data class SyncBlob(
         projects.forEach { SyncIdentity.validateProjectId(it.id) }
         trashed.forEach { SyncIdentity.validateProjectId(it.project.id) }
         recordings.forEach(RecordingManifestEntry::validate)
+        // One entry per recording id: duplicates are refused before anything is applied.
+        require(recordings.mapTo(HashSet()) { it.id }.size == recordings.size) { "Duplicate recording id" }
         deletions.forEach(SyncDeletion::validate)
     }
 }
@@ -68,13 +70,16 @@ data class SyncDeletion(
     val identity: String
         get() = recordingId?.let { "id:$it" } ?: "name:$projectId/${fileName.orEmpty()}"
 
+    /** A song tombstone names neither a recording id nor a file; anything else is a recording tombstone. */
+    val isSongTombstone: Boolean
+        get() = recordingId == null && fileName == null
+
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
         fileName?.let(SyncIdentity::validateFileName)
-        recordingId?.let {
-            SyncIdentity.validateRecordingId(it)
-            require(fileName != null) { "A recording tombstone needs its file name" }
-        }
+        recordingId?.let(SyncIdentity::validateRecordingId)
+        // A33: a deletion time must be a real time; zero or negative never wins anything.
+        require(deletedAt > 0L) { "Invalid deletion time" }
     }
 }
 
@@ -400,7 +405,7 @@ object SyncMerger {
         val survivingIds = keptRecordings.mapTo(HashSet()) { it.id }
         val keptDeletions = allDeletions.filterNot { deletion ->
             when {
-                deletion.fileName == null -> deletion.projectId in survivingSongs
+                deletion.isSongTombstone -> deletion.projectId in survivingSongs
                 deletion.recordingId != null -> deletion.recordingId in survivingIds
                 else -> keptRecordings.any { Tombstones.namesLegacy(deletion, it) }
             }
@@ -454,8 +459,11 @@ object SyncMerger {
      * v4 recording that reuses the name (A21).
      */
     class Tombstones(deletions: List<SyncDeletion>) {
-        val songs: Map<String, SyncDeletion> = deletions.filter { it.fileName == null }.associateBy { it.projectId }
-        private val byId = deletions.filter { it.recordingId != null }.associateBy { it.recordingId!! }
+        // Duplicates of one identity: the newest deletion counts, whatever the order.
+        val songs: Map<String, SyncDeletion> = deletions.filter { it.isSongTombstone }
+            .groupBy { it.projectId }.mapValues { (_, d) -> d.maxBy { it.deletedAt } }
+        private val byId = deletions.filter { it.recordingId != null }
+            .groupBy { it.recordingId!! }.mapValues { (_, d) -> d.maxBy { it.deletedAt } }
         private val byProjectNames = deletions.filter { it.fileName != null && it.recordingId == null }
             .groupBy { it.projectId }
 

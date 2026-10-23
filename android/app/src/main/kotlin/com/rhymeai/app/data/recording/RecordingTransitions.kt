@@ -139,8 +139,9 @@ internal object RecordingTransitions {
         val newName = renamesTo(target)
         val intent = record?.copy(
             fileName = newName ?: record.fileName,
-            // A30: only a rename the user asked for changes the name the recording claims.
-            claimedName = if (userClaim && newName != null) newName else record.claimedName,
+            // A30/A34: only a rename the user asked for changes the claim; any other move keeps
+            // the effective claim (an absent claim meant the old file name), never the new name.
+            claimedName = if (userClaim && newName != null) newName else record.claimedName ?: record.fileName,
             path = relativePath(filesDir, target),
             pendingFrom = record.path,
             pendingFromName = record.fileName,
@@ -259,6 +260,20 @@ internal object RecordingTransitions {
             true
         }
         if (removed) null else start(record.id)
+    }
+
+    /**
+     * Permanently deletes [file] if, under the lock and after reconciliation, it is still
+     * recording [id] with its recorded bytes; the record goes with it. False otherwise.
+     */
+    suspend fun deleteVerified(catalog: RecordingCatalog, filesDir: File, file: File, id: String): Boolean = namespace.withLock {
+        reconcileLocked(catalog, filesDir)
+        val path = relativePath(filesDir, file)
+        val record = catalog.recordingRecords().firstOrNull { it.id == id && it.path == path } ?: return@withLock false
+        if (!isRegularFileStrictly(file) || RecordingFileStore.sha256Hex(file) != record.sha256) return@withLock false
+        if (!file.delete()) return@withLock false
+        catalog.removeRecord(id)
+        true
     }
 
     /**
@@ -381,7 +396,9 @@ internal object RecordingTransitions {
                     // Strict checks: a file that cannot be examined throws here and nothing is committed.
                     target != null && isRegularFileStrictly(target) && RecordingFileStore.sha256Hex(target) == record.sha256 ->
                         record.copy(pendingFrom = null, pendingFromName = null, pendingOp = null)
-                    record.pendingOp == RecordingRecord.OP_MOVE && source != null && isRegularFileStrictly(source) -> record.copy(
+                    // Undo only onto the same bytes; anything else at the source is adopted on its own.
+                    record.pendingOp == RecordingRecord.OP_MOVE && source != null && isRegularFileStrictly(source) &&
+                        RecordingFileStore.sha256Hex(source) == record.sha256 -> record.copy(
                         path = record.pendingFrom,
                         fileName = record.pendingFromName ?: record.fileName,
                         pendingFrom = null, pendingFromName = null, pendingOp = null

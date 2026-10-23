@@ -724,7 +724,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupNotice = null
         backupBusyLabel = "Connecting…"
         viewModelScope.launch {
-            val result = backupMutex.withLock { driveSyncService.probe() }
+            val result = backupMutex.withLock { driveSyncService.probe(repo) }
             backupBusyLabel = null
             when (result) {
                 is ProbeResult.Ready -> {
@@ -821,7 +821,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun checkBackupAtLaunch() {
         viewModelScope.launch {
-            val result = backupMutex.withLock { driveSyncService.probe() }
+            val result = backupMutex.withLock { driveSyncService.probe(repo) }
             if (result !is ProbeResult.Ready) return@launch
             legacyBackupPresent = result.probe.legacyBackupPresent
             if (projects.isEmpty() && result.probe.projectCount > 0) restoreOffer = result.probe
@@ -911,12 +911,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backupNotice = try {
                 val summary = withContext(Dispatchers.IO) {
                     val base = repo.snapshotLocalSyncBase()
-                    val files = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds).filterNot { it.inTrash }
+                    val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds).filterNot { it.inTrash }
+                    // A32: an export carries established precedence times, never an unknown one.
+                    val established = repo.establishPrecedence(listOf(base.blob.copy(recordings = snapshot.map { it.entry })), System.currentTimeMillis()).single()
+                    val byId = established.recordings.associateBy { it.id }
+                    val files = snapshot.map { it.copy(entry = byId.getValue(it.entry.id)) }
                     val allowed = recordingsAllowedForUpload(files.map { it.entry }, base.blob.deletions, emptyList())
                         .mapTo(HashSet()) { it.identityKey }
                     app.contentResolver.openOutputStream(uri)?.use { output ->
                         BackupArchive.write(
-                            output, base.blob, files.filter { it.entry.identityKey in allowed },
+                            output, established, files.filter { it.entry.identityKey in allowed },
                             System.currentTimeMillis(), backupClientId
                         )
                     } ?: throw java.io.IOException("The export file could not be opened")

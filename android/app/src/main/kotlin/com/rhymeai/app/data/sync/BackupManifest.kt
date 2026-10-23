@@ -132,7 +132,8 @@ object BackupManifest {
                         sizeBytes = fields.long("bytes"),
                         modifiedAt = 0L,
                         sha256 = sha,
-                        uploadedAt = fields.long("uploadedAt"),
+                        // A32: an absent time is unknown (0) and gets its first-seen time before any merge.
+                        uploadedAt = if (fields.containsKey("uploadedAt")) fields.long("uploadedAt") else 0L,
                         id = fields.string("id"),
                         claimedName = fields["claimedName"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content
                             ?: throw IllegalArgumentException("Invalid claimedName") }
@@ -143,9 +144,10 @@ object BackupManifest {
                     val fileName = fields["fileName"] ?: throw IllegalArgumentException("Missing fileName")
                     SyncDeletion(
                         projectId = fields.string("projectId"),
+                        // An id tombstone may carry an empty file name; it is never a song tombstone.
                         fileName = if (fileName is JsonNull) null else fileName.jsonPrimitive.also {
                             require(it.isString) { "Invalid fileName" }
-                        }.content,
+                        }.content.takeUnless { it.isEmpty() && fields["recordingId"].let { r -> r != null && r !is JsonNull } },
                         deletedAt = fields.long("deletedAt"),
                         recordingId = fields["recordingId"]?.takeUnless { it is JsonNull }?.jsonPrimitive
                             ?.also { require(it.isString) { "Invalid recordingId" } }?.content
