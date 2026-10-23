@@ -3486,3 +3486,33 @@ extension BackupCoreTests {
         #expect(!exported.deletions.contains { $0.recordingId == heldId })
     }
 }
+
+
+extension BackupCoreTests {
+    /// SHOULD 3: a tombstone without a time that arrives while a restore downloads
+    /// the recording it names keeps that recording from being restored.
+    @MainActor
+    @Test func anUndatedTombstoneArrivingDuringTheDownloadKeepsTheRecordingOut() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        let audio = Data([8, 2])
+        let entry = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "song", fileName: "late.m4a", bytes: 2,
+                                  sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+            recordings: [entry]
+        ).encodedManifest())
+        harness.drive.seedRecording(entry, content: audio)
+        let context = harness.context
+        harness.drive.afterManifestWrite = {
+            context.insert(SyncRecordingDeletion(projectId: "song", recordingId: entry.id, fileName: "late.m4a", deletedAt: 0))
+            try context.save()
+        }
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: harness.file(entry.id, "song").path))
+    }
+}

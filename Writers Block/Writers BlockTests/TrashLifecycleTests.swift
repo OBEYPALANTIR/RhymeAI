@@ -1191,3 +1191,99 @@ extension TrashLifecycleTests {
         #expect(!viewModel.recordingNotes.contains { $0.contains(heldId) })
     }
 }
+
+
+/// Round 16.
+extension TrashLifecycleTests {
+    /// The state for an expired Trash entry (recorded deletion time) that beats two
+    /// repaired active copies with other words, and a recording with a repaired time.
+    @MainActor
+    private func resolvingExpiry(_ name: String, blockRecovery: Bool = false) async throws -> (viewModel: EditorViewModel, library: RecordingLibrary, context: ModelContext, container: ModelContainer, recordingId: String) {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel(name)
+        let now = Date()
+        let deletedAt = now.addingTimeInterval(-trashRetentionInterval - 600)
+        for (lyrics, offset) in [("first repaired words", 60.0), ("second repaired words", 120.0)] {
+            let song = SongProject(id: "s", title: "Active", lyrics: lyrics, theme: "", updatedAt: deletedAt.addingTimeInterval(offset))
+            song.precedenceRepaired = true
+            context.insert(song)
+        }
+        context.insert(TrashedSongProject(id: "s", title: "Binned", lyrics: "binned words", theme: "", updatedAt: deletedAt.addingTimeInterval(-60),
+                                          deletedAt: deletedAt, deleteAfter: deletedAt.addingTimeInterval(trashRetentionInterval)))
+        // A recording with no time: repaired when first seen, so the deletion beats it (A41).
+        let take = Recording(projectId: "s", displayName: "take.m4a", audio: Data([7, 3, 7]), recordedAt: Date(timeIntervalSince1970: 0))
+        take.uploadedAt = nil
+        context.insert(take)
+        try context.save()
+        if blockRecovery {
+            // The recovery folder cannot be made: a file stands at its path.
+            let root = SongRecoveryStore.root(for: library.memosRoot)
+            try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([0]).write(to: root)
+        }
+        // The launch check runs expiry too.
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        return (viewModel, library, context, container, take.id)
+    }
+
+    /// BLOCKER 1: expiry that beats repaired active copies keeps each of them in the
+    /// song recovery folder first, and moves the recording it removes to quarantine
+    /// with its exact bytes; nothing is unlinked.
+    @MainActor
+    @Test func expiryKeepsTheRepairedCopiesItBeatsAndQuarantinesTheirRecording() async throws {
+        let (viewModel, library, context, container, recordingId) = try await resolvingExpiry("ResolvingExpiry")
+        _ = container
+        let file = library.memosRoot.appendingPathComponent("s/\(recordingId).m4a")
+        // The launch check already ran expiry; running it again changes nothing more.
+        viewModel.purgeExpiredTrashedProjects()
+        _ = await viewModel.reconcileRecordings()
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).isEmpty && context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        let kept = try SongRecoveryStore.all(memosRoot: library.memosRoot)
+        #expect(Set(kept.compactMap { $0.project?.lyrics }) == ["first repaired words", "second repaired words"])
+        let quarantined = RecordingFiles.quarantineRoot(for: library.memosRoot).appendingPathComponent("s/\(recordingId).m4a")
+        #expect((try? Data(contentsOf: quarantined)) == Data([7, 3, 7]), "its exact bytes are kept in quarantine")
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// BLOCKER 1: when the recovery copy cannot be written, expiry changes nothing.
+    @MainActor
+    @Test func expiryChangesNothingWhenTheRecoveryCopyFails() async throws {
+        let (viewModel, library, context, container, recordingId) = try await resolvingExpiry("ResolvingExpiryFails", blockRecovery: true)
+        _ = container
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).count == 2)
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+        #expect(try Data(contentsOf: library.memosRoot.appendingPathComponent("s/\(recordingId).m4a")) == Data([7, 3, 7]))
+    }
+
+    /// SHOULD 3: a recording over the cap (no row) that is playing stops when a
+    /// tombstone without a time for it arrives, and is not played again; it is kept.
+    @MainActor
+    @Test func playbackOfAHeldRecordingOverTheCapStops() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("HeldPlayback")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("large-\(UUID().uuidString).m4a")
+        try AudioFixtures.large(at: staged)
+        try #require(try RecordingFiles.facts(staged).size > SyncRecording.maxBytes)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        viewModel.voiceMemoService.togglePlayback(url: live)
+        for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
+        try #require(viewModel.voiceMemoService.isPlaying)
+
+        context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "long.m4a", deletedAt: 0))
+        try context.save()
+        _ = await viewModel.reconcileRecordings()
+
+        #expect(!viewModel.voiceMemoService.isPlaying)
+        #expect(!viewModel.isPlayableRecording(live))
+        #expect(FileManager.default.fileExists(atPath: live.path))
+    }
+}

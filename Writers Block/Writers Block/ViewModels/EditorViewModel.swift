@@ -1765,9 +1765,30 @@ final class EditorViewModel: ObservableObject {
         }
         let projectIDs = expiredProjects.map(\.id)
         do {
+            // A41: a repaired active copy the Trash entry beat is kept in the song
+            // recovery folder first, read back; a failure stops expiry before anything
+            // changes.
+            let recoveryRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
+            for projectId in projectIDs {
+                for song in activeCopies[projectId] ?? [] where song.precedenceRepaired {
+                    try SongRecoveryStore.keep(.init(project: SyncSongProject(project: song)), memosRoot: recoveryRoot)
+                }
+            }
+            var resolvedAway: [(url: URL, sha256: String, recordingId: String)] = []
             for projectId in projectIDs {
                 try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
-                _ = try recordingLibrary?.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context)
+                let removed = try recordingLibrary?.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context) ?? []
+                if let library = recordingLibrary, !(activeCopies[projectId] ?? []).isEmpty {
+                    // The song met an active copy, so this is a resolution, not only an
+                    // expiry: the recordings it removes go to quarantine (never unlinked),
+                    // and nothing else in its folders is unlinked.
+                    for row in removed {
+                        if let file = row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot), (try? RecordingFiles.exists(file)) == true {
+                            resolvedAway.append((file, row.sha256, row.id))
+                        }
+                    }
+                    plans[projectId] = []
+                }
                 // Superseded live copies of an expired song go with it.
                 (activeCopies[projectId] ?? []).forEach(context.delete)
             }
@@ -1777,7 +1798,11 @@ final class EditorViewModel: ObservableObject {
                 memoProofs.append((memo, try RecordingFiles.sha256(of: memo.url), try RecordingFiles.facts(memo.url).size))
             }
             for projectId in projectIDs { (trashCopies[projectId] ?? []).forEach(context.delete) }
-            try saveModelContext(context)
+            if let library = recordingLibrary, !resolvedAway.isEmpty {
+                try library.saveRecordingMoves(quarantine: resolvedAway, in: context) { try saveModelContext(context) }
+            } else {
+                try saveModelContext(context)
+            }
             projectIDs.forEach(stopPlaybackOfSong)
             for projectId in projectIDs {
                 removeSongFiles(projectId, plan: plans[projectId] ?? [], message: "Expired writing was removed, but some local recordings were kept because they changed. Writers Block will retry.")
@@ -2537,10 +2562,14 @@ final class EditorViewModel: ObservableObject {
               (try? RecordingFiles.exists(url)) == true else { return false }
         guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
               let deletions = try? DeletionStore.all(in: modelContext) else { return false }
-        guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
-        // A tombstone without a time names it: kept, not played (T5.24).
-        guard let held = try? recordingLibrary.held(in: modelContext),
-              !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { return false }
+        // What a tombstone without a time names is kept and not played (T5.24), a file
+        // with no row (over the cap) by its id too.
+        guard let held = try? recordingLibrary.held(in: modelContext) else { return false }
+        guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else {
+            return !held.contains(projectId: url.deletingLastPathComponent().lastPathComponent, recordingId: RecordingFiles.storedId(of: url),
+                                  displayName: url.lastPathComponent)
+        }
+        guard !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { return false }
         // A row just delivered may not have its time fixed yet: it is fixed and kept
         // now, as a repair, so it never plays against a tombstone that beats it (T2.55).
         if recordingLibrary.establishTimes(row) { try? saveModelContext(modelContext) }
