@@ -51,10 +51,7 @@ enum DeletionStore {
     static func all(in context: ModelContext) throws -> [SyncDeletion] {
         let deletions = try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletion)
             + context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletion)
-        for deletion in deletions {
-            try deletion.validate()
-            guard deletion.deletedAt > 0 else { throw SyncValidationError.invalidVersionShape }
-        }
+        for deletion in deletions { try deletion.validate() }
         return deletions
     }
 
