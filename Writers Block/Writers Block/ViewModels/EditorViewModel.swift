@@ -139,8 +139,8 @@ final class OpenRecordingSnapshot {
     /// have none) is no names; present but unreadable is reported, not taken for absence.
     private func displayNames() -> [String: String] {
         let file = snapshotFolder.appendingPathComponent(Self.namesFile)
-        guard let data = try? Data(contentsOf: file) else { return [:] }
-        guard let names = try? JSONDecoder().decode([String: String].self, from: data) else {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
+        guard let data = try? Data(contentsOf: file), let names = try? JSONDecoder().decode([String: String].self, from: data) else {
             namesDamaged = true
             return [:]
         }
@@ -224,9 +224,7 @@ final class OpenRecordingSnapshot {
             try? FileManager.default.removeItem(at: file.url)
         }
         // A folder this copy created goes too, but only once nothing else is in it.
-        if let folder, (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
-            try? FileManager.default.removeItem(at: folder)
-        }
+        if let folder { rmdir(folder.path) } // only when empty
     }
 
     /// Removes the snapshot only when every recording in it is preserved elsewhere:
@@ -1698,15 +1696,12 @@ final class EditorViewModel: ObservableObject {
     }
 
     /// The song's verified files go (each only while it holds the planned bytes),
-    /// then its empty folders; without the library (tests of the editor alone) the
-    /// folders go as before.
+    /// then its empty folders. Without the library nothing proves the bytes, so no
+    /// file is removed (T1.4).
     private func removeSongFiles(_ projectId: String, plan: [RecordingFiles.DeletionPlan.Item], message: String) {
-        if let recordingLibrary {
-            if let kept = try? recordingLibrary.deleteSongFiles(projectId, plan: plan), kept.isEmpty { return }
-            errorMessage = message
-        } else if !RecordingFiles.deleteMemosFolder(for: projectId) {
-            errorMessage = message
-        }
+        guard let recordingLibrary else { return }
+        if let kept = try? recordingLibrary.deleteSongFiles(projectId, plan: plan), kept.isEmpty { return }
+        errorMessage = message
     }
 
     func purgeExpiredTrashedProjects() {
@@ -1717,23 +1712,26 @@ final class EditorViewModel: ObservableObject {
         normalizeTrashDeadlines(in: context)
         let now = Date()
         let expiredMemos = trashedRecordings().filter { $0.deleteAfter <= now }
-        let descriptor = FetchDescriptor<TrashedSongProject>(
-            predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
-        )
+        // Every Trash copy of a song is resolved first (A38: deletion time and edit
+        // time settled apart, each with its flag), so a newer copy is never expired
+        // because an older copy of the same id is due (T2.45).
+        let trashCopies = Dictionary(grouping: (try? context.fetch(FetchDescriptor<TrashedSongProject>())) ?? [], by: \.id)
+        let resolvedTrash = SyncMerger.mergeTrash(local: trashCopies.values.joined().map { SyncTrashedSongProject(trashed: $0) }, remote: [])
         // Chosen on the normalized deadline: a row without a deletion time is never
-        // expired, and a repaired row's deadline is its repaired time plus retention (A37).
-        let dueProjects = ((try? context.fetch(descriptor)) ?? []).filter {
-            $0.deletedAt.epochMilliseconds > 0 && (!$0.trashedAtRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
-        }
+        // expired, and a repaired deletion time's deadline is that time plus retention (A37).
+        let dueProjects = resolvedTrash.filter {
+            $0.deleteAfter <= now && $0.deletedAt.epochMilliseconds > 0
+                && (!$0.trashedAtRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
+        }.sorted { $0.id < $1.id }
         // A Trash entry is expired only after it is resolved against a live copy of the
-        // same song (A38: the song's edit time against the Trash deletion time); a stale
-        // Trash copy beside a newer song just goes, with no tombstone and no files (T2.45).
+        // same song (A38: the song's edit time against the Trash deletion time); stale
+        // Trash copies beside a newer song just go, with no tombstone and no files (T2.45).
         let active = Dictionary(((try? context.fetch(FetchDescriptor<SongProject>())) ?? []).map { ($0.id, $0) }) { first, _ in first }
         var stale: [TrashedSongProject] = []
         let resolvedDue = dueProjects.filter { trash in
             guard let song = active[trash.id] else { return true }
-            if SyncMerger.activeWins(SyncSongProject(project: song), over: SyncTrashedSongProject(trashed: trash)) {
-                stale.append(trash)
+            if SyncMerger.activeWins(SyncSongProject(project: song), over: trash) {
+                stale += trashCopies[trash.id] ?? []
                 return false
             }
             return true
@@ -1773,7 +1771,7 @@ final class EditorViewModel: ObservableObject {
                 try tombstoneTrashedMemo(memo, deletedAt: now, in: context)
                 memoProofs.append((memo, try RecordingFiles.sha256(of: memo.url), try RecordingFiles.facts(memo.url).size))
             }
-            expiredProjects.forEach(context.delete)
+            for projectId in projectIDs { (trashCopies[projectId] ?? []).forEach(context.delete) }
             try saveModelContext(context)
             projectIDs.forEach(stopPlaybackOfSong)
             for projectId in projectIDs {
@@ -1874,7 +1872,14 @@ final class EditorViewModel: ObservableObject {
             // An edit to the open song typed before this launch-time work ran (the
             // editor is usable at once) is saved first: its new time then stands
             // against the tombstone instead of the edit being lost with the song.
-            if let open = currentProjectId, tombstones[open] != nil, activeCloudEditorOperation == nil { _ = flushCurrentDraft() }
+            // If that save fails nothing is deleted and the editor keeps the draft; the
+            // tombstones are applied again on the next check.
+            if let open = currentProjectId, tombstones[open] != nil {
+                guard activeCloudEditorOperation == nil, flushCurrentDraft() else {
+                    errorMessage = "Couldn't save the open song before applying deletions from another device. Your edits remain open; Writers Block will retry."
+                    return
+                }
+            }
             var deletedProjects = Set(tombstones.keys)
             let memosRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
@@ -2513,8 +2518,9 @@ final class EditorViewModel: ObservableObject {
         guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
               let deletions = try? DeletionStore.all(in: modelContext) else { return false }
         guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
-        // A row just delivered may not have its time fixed yet: an unknown time is a
-        // repair here too, so it never plays against a tombstone that beats it (T2.55).
+        // A row just delivered may not have its time fixed yet: it is fixed and kept
+        // now, as a repair, so it never plays against a tombstone that beats it (T2.55).
+        if recordingLibrary.establishTimes(row) { try? saveModelContext(modelContext) }
         return !deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime, repaired: row.precedenceIsRepair) }
     }
 
@@ -2562,33 +2568,44 @@ final class EditorViewModel: ObservableObject {
         if !library.unmaterialized.isEmpty {
             notes.append("\(library.unmaterialized.count) \(library.unmaterialized.count == 1 ? "recording" : "recordings") could not be written to this device; the audio stays in the library: \(library.unmaterialized.joined(separator: ", ")).")
         }
+        // Each file by where it is kept: its recordings folder, song folder and name (T5.9).
+        func location(_ url: URL) -> String { url.pathComponents.suffix(3).joined(separator: "/") }
         if !library.deferredFiles.isEmpty {
-            notes.append("Waiting to be read into the library: \(library.deferredFiles.map(\.lastPathComponent).joined(separator: ", ")).")
+            notes.append("Waiting to be read into the library: \(library.deferredFiles.map(location).joined(separator: ", ")).")
         }
         let unrecognized = library.skippedFiles + library.unrecognizedFiles()
         if !unrecognized.isEmpty {
-            notes.append("Files in the recordings folders that are not recordings here are left as they are: \(unrecognized.map(\.lastPathComponent).joined(separator: ", ")).")
+            notes.append("Files in the recordings folders that are not recordings here are left where they are: \(unrecognized.map(location).joined(separator: ", ")).")
         }
         return notes
     }
 
     /// Repairs damaged recording records so the check can run again (T5.2, T5.24):
     /// a move record that cannot be read is set aside (kept for diagnosis; every file
-    /// stays where it is), and tombstones that do not validate are repaired or set
-    /// aside (`DeletionStore.repairInvalid`). Then the recordings are checked again.
+    /// stays where it is; a record from an earlier build is upgraded instead), and
+    /// tombstones naming nothing that can be found are set aside. A tombstone without
+    /// a usable time is never given one (A41): it stays and keeps the recordings
+    /// paused, and Settings says so (`DeletionStore.repairInvalid`). Then the
+    /// recordings are checked again.
     func repairRecordingRecords() async {
         guard let recordingLibrary, let modelContext else { return }
+        let suspended: Int
         do {
-            if (try? RecordingFiles.readPendingMoves(for: recordingLibrary.memosRoot)) == nil {
-                _ = try RecordingFiles.setAsidePendingMoves(for: recordingLibrary.memosRoot)
+            let root = recordingLibrary.memosRoot
+            try? RecordingFiles.upgradePendingMoves(for: root, now: Date().epochMilliseconds) { _ in "Recording.m4a" }
+            if (try? RecordingFiles.readPendingMoves(for: root)) == nil {
+                _ = try RecordingFiles.setAsidePendingMoves(for: root)
             }
-            try DeletionStore.repairInvalid(in: modelContext,
-                                            setAside: RecordingFiles.quarantineRoot(for: recordingLibrary.memosRoot).appendingPathComponent("invalid-tombstones.json"))
+            suspended = try DeletionStore.repairInvalid(in: modelContext,
+                                                        setAside: RecordingFiles.quarantineRoot(for: root).appendingPathComponent("invalid-tombstones.json")).suspended
         } catch {
             errorMessage = "Couldn't repair the recordings records. Everything is kept as it is."
             return
         }
         _ = await reconcileRecordings()
+        if suspended > 0 {
+            recordingNotes.append("\(suspended) deletion \(suspended == 1 ? "record has" : "records have") no usable time, so recordings stay paused. Nothing was deleted; the \(suspended == 1 ? "record is" : "records are") kept as \(suspended == 1 ? "it is" : "they are").")
+        }
     }
 
     /// Keeps a reported file as a recording of its own under a new id; the other

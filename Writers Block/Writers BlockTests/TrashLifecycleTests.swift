@@ -823,3 +823,266 @@ extension TrashLifecycleTests {
         #expect(try SongRecoveryStore.all(memosRoot: library.memosRoot).map { $0.project?.lyrics } == ["keep me"])
     }
 }
+
+/// Round 14 regressions.
+extension TrashLifecycleTests {
+    /// BLOCKER 1 (T2.45): an expired Trash copy of a song is not expired while a
+    /// newer Trash copy of the same id is not due; the song's recordings stay.
+    @MainActor
+    @Test func anOlderExpiredTrashCopyDoesNotExpireANewerOne() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("TwoTrashCopies")
+        _ = container
+        let now = Date()
+        context.insert(TrashedSongProject(id: "s", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000),
+                                          deletedAt: now.addingTimeInterval(-trashRetentionInterval - 60), deleteAfter: now.addingTimeInterval(-60)))
+        context.insert(TrashedSongProject(id: "s", title: "New", lyrics: "newer words", theme: "", updatedAt: now.addingTimeInterval(-10),
+                                          deletedAt: now.addingTimeInterval(-5), deleteAfter: now.addingTimeInterval(trashRetentionInterval - 5)))
+        try context.save()
+        let memo = library.memosRoot.appendingPathComponent("s/take.m4a")
+        try FileManager.default.createDirectory(at: memo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([3, 3]).write(to: memo)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).contains { $0.lyrics == "newer words" })
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([3, 3])])
+    }
+
+    /// BLOCKER 3: when the open song's edit cannot be saved before a launch-time
+    /// deletion, nothing is deleted and the editor keeps the edit; a later save works.
+    @MainActor
+    @Test func aLaunchDeletionWaitsWhenTheOpenEditCannotBeSaved() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("LaunchSaveFails-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "LaunchSaveFails-\(scratch.lastPathComponent)")!)
+        // Only the next save fails (the draft's); every later one works, so a deletion
+        // that went ahead anyway would be saved.
+        let failSaves = HookBox(false)
+        let viewModel = EditorViewModel(recordingLibrary: library, saveModelContext: { context in
+            if failSaves.value {
+                failSaves.value = false
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try context.save()
+        })
+        let context = container.mainContext
+        let song = SongProject(id: "s", title: "Song", lyrics: "old line", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        context.insert(song)
+        context.insert(SyncDeletionRecord(projectId: "s", deletedAt: 2_000_000))
+        try context.save()
+
+        viewModel.modelContext = context
+        viewModel.loadProject(song)
+        viewModel.lyrics = "typed at launch"
+        failSaves.value = true
+        await viewModel.recordingsLaunchTask?.value
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["s"])
+        #expect(viewModel.currentProjectId == "s" && viewModel.lyrics == "typed at launch")
+        #expect(viewModel.flushCurrentDraft())
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).first?.lyrics == "typed at launch")
+    }
+
+    /// BLOCKER 4 (T5.24): repairing the records never gives a tombstone a time: a
+    /// tombstone with none stays (recordings stay paused) and deletes nothing.
+    @MainActor
+    @Test func repairingRecordsNeverDeletesALiveSongOrRecording() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("RepairNoAuthority")
+        _ = container
+        context.insert(SongProject(id: "s", title: "Live", lyrics: "keep", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000)))
+        try context.save()
+        let memo = library.memosRoot.appendingPathComponent("s/take.m4a")
+        try FileManager.default.createDirectory(at: memo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([5]).write(to: memo)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let recordingId = try #require(try context.fetch(FetchDescriptor<Recording>()).first).id
+        // Tombstones whose time was lost (valid ids, no time).
+        context.insert(SyncDeletionRecord(projectId: "s", deletedAt: 0))
+        context.insert(SyncRecordingDeletion(projectId: "s", recordingId: recordingId, fileName: "take.m4a", deletedAt: 0))
+        try context.save()
+
+        await viewModel.repairRecordingRecords()
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["keep"])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.id) == [recordingId])
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletedAt) == [0])
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletedAt) == [0])
+        #expect(try Data(contentsOf: library.memosRoot.appendingPathComponent("s/\(recordingId).m4a")) == Data([5]))
+        #expect(viewModel.recordingRecordsDamaged && viewModel.recordingNotes.contains { $0.contains("no usable time") })
+    }
+}
+
+/// Round 14: times that arrive after launch, damaged records and reports.
+extension TrashLifecycleTests {
+    /// T2.50: a Trash entry delivered after launch with no deletion time is given one
+    /// (kept, as a repair) before expiry looks at it; it is not expired at once.
+    @MainActor
+    @Test func aTrashEntryArrivingWithNoTimeIsFixedBeforeExpiry() async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("LateTrashTime")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let before = Date().addingTimeInterval(-1)
+        // A fresh id: the editor's first-seen record lives in shared settings.
+        context.insert(TrashedSongProject(id: "late-\(UUID().uuidString)", title: "Late", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                          deletedAt: Date(timeIntervalSince1970: 0), deleteAfter: Date(timeIntervalSince1970: 0)))
+        try context.save()
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        let kept = try #require(try context.fetch(FetchDescriptor<TrashedSongProject>()).first)
+        #expect(kept.trashedAtRepaired && kept.deletedAt >= before)
+        #expect(kept.deleteAfter == kept.deletedAt.addingTimeInterval(trashRetentionInterval))
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+    }
+
+    /// T2.52: an oversized Trash record whose time is lost after launch is fixed and
+    /// kept when listed; its file is not expired.
+    @MainActor
+    @Test func anOversizedTrashRecordLosingItsTimeAfterLaunchIsNotExpired() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("LateLedgerTime")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("big-\(UUID().uuidString).m4a")
+        try Data(repeating: 2, count: Int(SyncRecording.maxBytes) + 1).write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        let trashed = try library.trashRecording(at: live, trashedAt: Date())
+        var entry = try #require(OversizedRecordings.read(for: library.memosRoot)[id])
+        entry.trashedAt = 0
+        try OversizedRecordings.record(id: id, entry: entry, for: library.memosRoot)
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(FileManager.default.fileExists(atPath: trashed.url.path))
+        let fixed = try #require(OversizedRecordings.read(for: library.memosRoot)[id])
+        #expect((fixed.trashedAt ?? 0) > 0 && fixed.trashedAtRepaired == true)
+    }
+
+    /// T2.50: a recordings Trash row delivered after launch with no Trash time is
+    /// fixed and kept when listed; it is not expired at once.
+    @MainActor
+    @Test func aTrashRowArrivingWithNoTimeIsFixedBeforeExpiry() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("LateRowTrashTime")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("take-\(UUID().uuidString).m4a")
+        try Data([7, 7]).write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "take.m4a", origin: .recorded)
+        let trashed = try library.trashRecording(at: live, trashedAt: Date())
+        let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        row.trashedAt = Date(timeIntervalSince1970: 0)
+        try context.save()
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(FileManager.default.fileExists(atPath: trashed.url.path))
+        #expect(row.trashedAtRepaired && (row.trashedAt?.epochMilliseconds ?? 0) > 0 && !context.hasChanges)
+    }
+
+    /// T2.55: a row delivered without a time is fixed and kept when its playability
+    /// is judged; as a repair it loses to a tombstone (A41) and does not play.
+    @MainActor
+    @Test func aRowWithoutATimeIsFixedWhenJudgedForPlayback() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("PlayUnknownTime")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("take-\(UUID().uuidString).m4a")
+        try Data([1, 2]).write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "take.m4a", origin: .recorded)
+        let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        row.uploadedAt = nil
+        row.recordedAt = Date(timeIntervalSince1970: 0)
+        context.insert(SyncRecordingDeletion(projectId: "song", recordingId: row.id, fileName: "take.m4a", deletedAt: 1_000))
+        try context.save()
+
+        #expect(!viewModel.isPlayableRecording(live))
+
+        #expect(row.precedenceRepaired && row.precedenceTime.epochMilliseconds > 0)
+        #expect(!context.hasChanges, "the fixed time was saved")
+    }
+
+    /// T3.36: a damaged record of the editor's first-seen times is set aside and
+    /// reported; the song still gets a time.
+    @MainActor
+    @Test func aDamagedEditorTimeRecordIsSetAsideAndReported() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let defaults = UserDefaults(suiteName: "EditorTimes-\(UUID().uuidString)")!
+        defaults.set("garbage", forKey: "editor-first-seen-times")
+        let viewModel = EditorViewModel(defaults: defaults)
+        let context = container.mainContext
+        let song = SongProject(id: "s", title: "S", updatedAt: Date(timeIntervalSince1970: 0))
+        context.insert(song)
+        try context.save()
+
+        viewModel.modelContext = context
+
+        #expect(defaults.string(forKey: "editor-first-seen-times.damaged") == "garbage")
+        #expect(viewModel.errorMessage?.contains("damaged") == true)
+        #expect(song.precedenceRepaired && song.updatedAt.epochMilliseconds > 0)
+    }
+
+    /// T5.2: a damaged move record stops the check; Repair sets it aside (kept) and
+    /// the check runs again with every file where it was.
+    @MainActor
+    @Test func repairingADamagedMoveRecordLetsTheCheckRunAgain() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("RepairMoves")
+        _ = container
+        let memo = library.memosRoot.appendingPathComponent("song/take.m4a")
+        try FileManager.default.createDirectory(at: memo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([4]).write(to: memo)
+        let record = RecordingFiles.quarantineRoot(for: library.memosRoot).appendingPathComponent("pending-moves.json")
+        try FileManager.default.createDirectory(at: record.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{\"quarantine\": 7}".utf8).write(to: record)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        #expect(viewModel.recordingRecordsDamaged)
+
+        await viewModel.repairRecordingRecords()
+
+        #expect(!viewModel.recordingRecordsDamaged)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: record.deletingLastPathComponent().path).filter { $0.hasPrefix("pending-moves.damaged-") }
+        #expect(aside.count == 1)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([4])])
+    }
+
+    /// T5.8, T5.9: files left waiting and files that are not recordings are named in
+    /// Settings by where they are kept; checking again takes the waiting ones in.
+    @MainActor
+    @Test func waitingAndUnrecognizedFilesAreNamedByLocationAndCheckingAgainTakesThemIn() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("Deferred")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        library.adoptionBudget = 1
+        for index in 0..<70 {
+            let url = library.memosRoot.appendingPathComponent("song/take-\(index).m4a")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([UInt8(index), 1]).write(to: url)
+        }
+        try Data("notes".utf8).write(to: library.memosRoot.appendingPathComponent("song/readme.txt"))
+        // One run takes at most 64 passes of one file each: six are left waiting.
+        _ = await viewModel.reconcileRecordings()
+        let first = viewModel.recordingNotes.joined(separator: " ")
+        #expect(first.contains("voice-memos/song/readme.txt"))
+        #expect(first.contains("Waiting to be read into the library: voice-memos/song/take-"))
+
+        for _ in 0..<5 where try context.fetch(FetchDescriptor<Recording>()).count < 70 { _ = await viewModel.reconcileRecordings() }
+
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 70)
+        #expect(!viewModel.recordingNotes.joined().contains("Waiting to be read"))
+    }
+}

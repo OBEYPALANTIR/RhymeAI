@@ -601,7 +601,7 @@ struct SettingsCloudBackupSection: View {
             }
             if viewModel.recordingRecordsDamaged {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("A record of recordings changes is damaged, so recordings can't be changed. Every file is kept. Repairing sets the damaged record aside.")
+                    Text("A record of recordings changes is damaged, so recordings can't be changed. Every file is kept. Repairing sets a damaged move record aside; a deletion record without a time is never given one, so it is kept.")
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
                         .fixedSize(horizontal: false, vertical: true)

@@ -764,3 +764,55 @@ private final class GatedBackupService: CloudBackupServicing {
         for await _ in gate {}
     }
 }
+
+/// Round 14 regressions for draft recovery and the snapshot sweep.
+extension DraftRecoveryTests {
+    /// T2.56: a stored song whose newer time is only a repair is not a newer edit:
+    /// the typed draft is recovered into it in place, with no separate copy.
+    @Test func aRepairedStoredTimeDoesNotForceASeparateCopy() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        try await harness.leaveRecoveryCopy(for: project, typing: "typed during restore")
+        // iCloud repaired the stored song's missing time after the draft was typed.
+        project.updatedAt = Date().addingTimeInterval(3_600)
+        project.precedenceRepaired = true
+        try harness.context.save()
+
+        let disk = try harness.reopened()
+        let relaunched = disk.makeViewModel()
+
+        let projects = try disk.projects()
+        #expect(projects.count == 1)
+        #expect(projects.first?.lyrics == "typed during restore" && relaunched.currentProjectId == "song-a")
+    }
+
+    /// T1.33, T4.5: the sweep re-checks under the library's gate: a recording change
+    /// made while it waits (here the live copy goes) keeps the snapshot.
+    @Test func theSnapshotSweepRechecksUnderTheGate() async throws {
+        let harness = try RecoveryHarness()
+        let library = RecordingLibrary(memosRoot: harness.memosRoot,
+                                       trashRoot: harness.memosRoot.deletingLastPathComponent().appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "Sweep-\(UUID().uuidString)")!)
+        try harness.writeRecording(Data([1]), named: "a.m4a", projectId: "song")
+        let snapshot = OpenRecordingSnapshot.stagingRoot(for: harness.memosRoot).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        try Data([1]).write(to: snapshot.appendingPathComponent("a.m4a"))
+        let (released, release) = AsyncStream<Void>.makeStream()
+        let holder = Task { @MainActor in await library.withGate { for await _ in released { break } } }
+        while !library.isBusy { try await Task.sleep(for: .milliseconds(5)) }
+        let service = GatedBackupService()
+        service.recordingRecoveryRoot = harness.memosRoot
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: service, recordingLibrary: library,
+                                        draftRecoveryURL: harness.recoveryURL)
+        viewModel.modelContext = harness.context
+        // The sweep has hashed its candidates and waits for the gate; meanwhile the
+        // only other copy of the audio goes.
+        try await Task.sleep(for: .milliseconds(300))
+        try FileManager.default.removeItem(at: harness.memosRoot.appendingPathComponent("song/a.m4a"))
+        release.yield()
+        await holder.value
+        await viewModel.waitForRecordingSnapshotSweepForTesting()
+
+        #expect(try Data(contentsOf: snapshot.appendingPathComponent("a.m4a")) == Data([1]))
+    }
+}
