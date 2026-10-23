@@ -173,7 +173,18 @@ below is the contract it must meet, not verified behaviour.
   recording's own bytes, never a v4 recording that reuses the name.
 - Song deletion and expiry first give every live and Trash file of the song a
   record (first-seen stamping), then commit the song's and each recording's
-  tombstones in one write. Startup reconciles and adopts before its purge.
+  tombstones in one write, a record whose file still awaits its A36 name
+  included. A file left under its old name without a record of its bytes cannot
+  be tombstoned, so the deletion stops (nothing changes) until migration can
+  identify it.
+- Empty recordings: a recording of zero bytes is refused everywhere (recording,
+  audio import, manifest validation, archive import, Drive restore), and an empty
+  file is never adopted as a recording.
+- One id, one digest (A40), also between devices: a recording held here whose
+  bytes differ from Drive's entry for its id is reported (as "not uploaded
+  because Google Drive holds different audio") by Back up and Restore alike;
+  Drive's entry and raw object stay, this device's audio stays, and neither is
+  uploaded or downloaded over the other. Startup reconciles and adopts before its purge.
 - Unfinished recordings (A22): the recorder writes into a staging folder; the
   take is moved into the song's folder, with its record, only when the recorder
   finishes it (`MediaRecorder.stop()` succeeds). A take whose stop fails is left
@@ -200,8 +211,10 @@ below is the contract it must meet, not verified behaviour.
   restore from Trash write the record's intent (id, name, time, hash, size, new
   and old location) before the file moves, under one lock that snapshots also
   take. If the record cannot be written the operation fails and nothing moves;
-  the UI says so (a finished take waits in staging, see A27). Every transition, deletion and snapshot first finishes or undoes an
-  interrupted move from its intent, so an interrupted move never yields a new id.
+  the UI says so (a finished take waits in staging, see A27). Every transition, deletion and moving snapshot (launch,
+  Restore, Import) first finishes or undoes an interrupted move from its intent,
+  so an interrupted move never yields a new id; a read-only snapshot (Back up,
+  export) leaves an intent whose target is still an empty claim pending.
   A display name is metadata, validated as any non-empty text without NUL of at
   most 1024 UTF-8 bytes (separators, long names and names without an extension
   are allowed, A39) before its record is written; only file names, which are
@@ -218,15 +231,22 @@ below is the contract it must meet, not verified behaviour.
   song, trashed song and recording whose precedence time is missing (zero) gets
   the time this device first saw it, by identity, persisted locally
   (`first_seen_precedence_json`) and then written into the manifest; it never
-  changes afterwards. An older tombstone therefore cannot delete a recording or
-  song only because its time was unknown.
+  changes afterwards. Such a time is a repair (A37/A38): a tombstone, always a
+  real time, beats it whatever the numbers, so an item whose time was unknown
+  never outlives a deletion.
 - Repair flags per time (A38): a song and a recording carry `precedenceRepaired`
   for their own time; a Trash entry carries two, `precedenceRepaired` for its
   song's `updatedAt` and `trashedAtRepaired` for its `trashedAt` (Android keeps
   them on `TrashedSongProject.project` and `TrashedSongProject.deletedAtRepaired`).
   Each comparison uses the flag of the time it compares (active versus Trash:
   the song's `updatedAt` against the Trash entry's `trashedAt`, each with its own
-  flag). Keys are written only when true. In a correctly hashed manifest an
+  flag). A tombstone is a real time: against an active song it compares with
+  the song's `updatedAt`, against a Trash entry with its `trashedAt` only, and
+  against a recording with its `uploadedAt`, each with its flag, so a repaired
+  time always loses to a tombstone and a real one loses only to a newer
+  tombstone (Android `SyncMerger.deletes`). When two Trash copies of one song
+  merge, the Trash time and the song inside are settled independently, each by
+  its own flag. Keys are written only when true. In a correctly hashed manifest an
   absent `updatedAt`, `trashedAt` or `uploadedAt` reads as unknown (0) and is
   repaired; a value of the wrong type is refused. A tombstone's `deletedAt`
   stays required and positive (A33).
@@ -482,7 +502,9 @@ below is the contract it must meet, not verified behaviour.
   compares names NFC-normalized, then with Unicode default lowercasing (Kotlin
   `lowercase(Locale.ROOT)`, Swift `lowercased()`, Python `str.lower()`; not full
   case folding, so "İ", "ı" and "i" stay distinct); nothing is reserved ahead of its turn; the
-  stem is cut so the whole name fits 240 UTF-8 bytes. Pinned by
+  extension is the text after the last dot only when it is 1–16 UTF-8 bytes and
+  leaves a stem (otherwise the whole name is the stem); the stem is cut so stem +
+  suffix + extension fits 240 UTF-8 bytes, never below one code point. Pinned by
   `shared/fixtures/archive-names-v1.json` (`scripts/generate-archive-names-fixture.py`,
   stdlib, `--check`); iOS keeps a byte-identical copy at
   `Writers Block/Writers BlockTests/archive-names-v1.json`, and Android
