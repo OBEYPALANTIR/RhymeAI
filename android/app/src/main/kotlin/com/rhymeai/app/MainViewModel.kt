@@ -46,6 +46,7 @@ import com.rhymeai.app.data.sync.RealDriveClient
 import com.rhymeai.app.data.sync.SyncResult
 import com.rhymeai.app.data.sync.UnsupportedBackupVersionException
 import com.rhymeai.app.data.sync.recordingsAllowedForUpload
+import com.rhymeai.app.data.sync.resumesAfterConsent
 import com.rhymeai.app.data.sync.snapshotLocalRecordings
 import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
@@ -887,7 +888,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Play Services also returns RESULT_CANCELED when it refused the request (unregistered OAuth
             // client), so ask it once more: its own status says "cancelled", anything else does not.
             val auth = backupMutex.withLock { driveAuthorizer.authorize() }
-            if (auth is DriveAuthorization.Granted) return@launch retryAfterDriveAuthorization()
+            if (auth is DriveAuthorization.Granted) {
+                // Disconnect may have landed while Play Services answered; then the saved action is dropped, not run.
+                if (resumesAfterConsent(isBackupConnected(), pendingAuthAction, BackupAction.Connect)) {
+                    retryAfterDriveAuthorization()
+                } else {
+                    pendingAuthAction = null
+                    pendingMigrationPassphrase = null
+                }
+                return@launch
+            }
             // After process death there is no pending action; while disconnected only Connect shows the notice.
             val fallback = if (isBackupConnected()) BackupAction.BackUp else BackupAction.Connect
             val action = actionAfterAuthorization(pendingAuthAction, fallback)
