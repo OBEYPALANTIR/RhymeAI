@@ -280,7 +280,7 @@ final class VoiceMemoService {
     /// Returns the trashed record on success (usable for undo), nil on failure.
     @discardableResult
     func trashMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
-        if activePlayURL == url { stopPlayback() }
+        stopPlayback(ifPlayingAnyOf: [url])
         let folder = RecordingFiles.trashFolder(for: projectId)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -333,7 +333,7 @@ final class VoiceMemoService {
     /// Permanently delete a trashed recording.
     @discardableResult
     func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
-        if activePlayURL == trashed.url { stopPlayback() }
+        stopPlayback(ifPlayingAnyOf: [trashed.url])
         do {
             try SyncIdentity.validateProjectId(trashed.projectId)
             try SyncIdentity.validateFileName(trashed.originalName)
@@ -549,10 +549,16 @@ final class VoiceMemoService {
             lastError = "This recording was deleted and can't be played."
             return
         }
+        // A verified identity first: what plays can always be found and stopped.
+        let identity = playbackIdentity?(url)
+        guard playbackIdentity == nil || identity != nil else {
+            lastError = "This recording could not be read, so it can't be played."
+            return
+        }
         if isRecording || recordingActivationRevision != nil { stopRecording() }
         stopPlayback()
         pendingPlayURL = url
-        playingIdentity = playbackIdentity?(url)
+        playingIdentity = identity
         let playbackRevision = audioIntentRevision
         sessionTransitions.activatePlayback { [weak self] result in
             Task { @MainActor [weak self] in
@@ -597,6 +603,12 @@ final class VoiceMemoService {
         isPlaying = true
     }
 
+    /// Stops playback (or a pending start) of any of these files.
+    func stopPlayback(ifPlayingAnyOf files: [URL]) {
+        let paths = Set(files.map(RecordingFiles.canonicalPath))
+        if let playing = activePlayURL ?? pendingPlayURL, paths.contains(RecordingFiles.canonicalPath(playing)) { stopPlayback() }
+    }
+
     func stopPlayback() {
         audioIntentRevision &+= 1
         playingIdentity = nil
@@ -613,7 +625,7 @@ final class VoiceMemoService {
     // MARK: - Delete
 
     func deleteMemo(at url: URL) {
-        if activePlayURL == url { stopPlayback() }
+        stopPlayback(ifPlayingAnyOf: [url])
         do {
             try FileManager.default.removeItem(at: url)
             onFilesChanged?()
@@ -639,7 +651,7 @@ final class VoiceMemoService {
         guard targetURL != url else { return url }
 
         // If active playback is on this file, stop it before rename.
-        if activePlayURL == url { stopPlayback() }
+        stopPlayback(ifPlayingAnyOf: [url])
 
         if let publisher {
             try publisher.renameRecording(at: url, to: targetURL)

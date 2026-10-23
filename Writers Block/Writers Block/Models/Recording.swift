@@ -167,6 +167,12 @@ final class RecordingLibrary: RecordingPublishing {
     /// True after a run succeeded, false after one failed: changes made outside a
     /// run need it (A33).
     private(set) var lastRunSucceeded = false
+    /// Called on the main actor right before memo or Trash files move, in the same
+    /// turn as the move, so playback of them stops first and no Play can start in
+    /// between (playback starts on the main actor too).
+    var willMove: (([URL]) -> Void)?
+    /// Tests: called at the move boundary, after `willMove`, for each file.
+    var atMoveBoundary: ((URL) -> Void)?
     private var running = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
@@ -229,6 +235,12 @@ final class RecordingLibrary: RecordingPublishing {
     }
 
     private func url(of row: Recording) -> URL? { row.fileURL(memosRoot: memosRoot, trashRoot: trashRoot) }
+
+    private func aboutToMove(_ files: [URL]) {
+        guard !files.isEmpty else { return }
+        willMove?(files)
+        files.forEach { atMoveBoundary?($0) }
+    }
 
     /// Records a verified live path for a row whose audio was just placed there.
     private func markVerified(_ row: Recording, removing old: URL? = nil) {
@@ -598,6 +610,7 @@ final class RecordingLibrary: RecordingPublishing {
         // Moves go through a parking folder so a swap of names never overwrites.
         let parking = RecordingFiles.parkingRoot(for: memosRoot)
         if !moves.isEmpty { try FileManager.default.createDirectory(at: parking, withIntermediateDirectories: true) }
+        aboutToMove(moves.map(\.from.url))
         var parked: [(row: Recording, at: URL, to: URL)] = []
         for move in moves {
             let spot = parking.appendingPathComponent("\(UUID().uuidString.lowercased()).\(move.from.url.pathExtension)")
@@ -686,6 +699,7 @@ final class RecordingLibrary: RecordingPublishing {
         guard var moves = try? RecordingFiles.readPendingMoves(for: memosRoot), moves != RecordingFiles.PendingMoves(),
               let rows = try? context.fetch(FetchDescriptor<Recording>()) else { return }
         let referenced = Dictionary(rows.compactMap { row in url(of: row).map { (RecordingFiles.canonicalPath($0), row.sha256) } }) { first, _ in first }
+        aboutToMove((moves.quarantine + moves.detach.map(\.source).filter { !$0.isEmpty }).map { URL(fileURLWithPath: $0) })
         var remaining: [String] = []
         for path in moves.quarantine {
             let file = URL(fileURLWithPath: path)
@@ -838,6 +852,7 @@ final class RecordingLibrary: RecordingPublishing {
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
         guard let row = try verifiedRow(at: url, in: context) else {
+            aboutToMove([url])
             try FileManager.default.moveItem(at: url, to: target)
             try OversizedRecordings.renamed(from: url, to: target, for: memosRoot)
             return
@@ -852,6 +867,7 @@ final class RecordingLibrary: RecordingPublishing {
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
         guard let row = try verifiedRow(at: url, in: context) else {
+            aboutToMove([url])
             try FileManager.default.moveItem(at: url, to: trashURL)
             return
         }
@@ -929,6 +945,7 @@ final class RecordingLibrary: RecordingPublishing {
         }
         do {
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            aboutToMove([source])
             try FileManager.default.moveItem(at: source, to: target)
         } catch {
             revert()

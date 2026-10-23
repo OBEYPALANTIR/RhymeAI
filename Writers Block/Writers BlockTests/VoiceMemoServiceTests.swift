@@ -593,6 +593,16 @@ enum AudioFixtures {
         let truncatedBeforeIndex: Data
     }
 
+    /// A real AAC recording of the given length (a quiet tone).
+    static func long(seconds: Int, at url: URL) throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
+        let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1])
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100))
+        buffer.frameLength = 44_100
+        for frame in 0..<44_100 { buffer.floatChannelData![0][frame] = Float(sin(Double(frame) * 2 * .pi * 220 / 44_100)) * 0.05 }
+        for _ in 0..<seconds { try file.write(from: buffer) }
+    }
+
     static func make(in folder: URL) async throws -> Set {
         let recorded = folder.appendingPathComponent("recorded.m4a")
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
