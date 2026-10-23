@@ -779,6 +779,41 @@ enum SyncMerger {
         )
     }
 
+    /// A30 across devices: within each song, the earliest recording (then the
+    /// smaller id) claiming a name gets it; the others are allocated
+    /// "<claim stem> 2<ext>", 3, … in that order. `claim` is the name a recording
+    /// asks for: the stem its owner chose where this device knows it, else its
+    /// manifest name. The same rule names rows locally, so names converge.
+    static func allocateNames(_ recordings: [SyncRecording], claim: (SyncRecording) -> String) -> [SyncRecording] {
+        var allocated: [String: String] = [:]
+        for (_, song) in Dictionary(grouping: recordings, by: \.projectId) {
+            let ordered = song.sorted { ($0.uploadedAt, $0.id) < ($1.uploadedAt, $1.id) }
+            func usable(_ name: String, _ taken: Set<String>) -> Bool {
+                !taken.contains(name) && (try? SyncIdentity.validateFileName(name)) != nil
+            }
+            var taken = Set<String>()
+            for entry in ordered where usable(claim(entry), taken) {
+                taken.insert(claim(entry))
+                allocated[entry.id] = claim(entry)
+            }
+            for entry in ordered where allocated[entry.id] == nil {
+                var number = 2
+                var name = RecordingFiles.numberedName(claim(entry), number)
+                while !usable(name, taken) && number < 1000 {
+                    number += 1
+                    name = RecordingFiles.numberedName(claim(entry), number)
+                }
+                taken.insert(name)
+                allocated[entry.id] = name
+            }
+        }
+        return recordings.map { entry in
+            var named = entry
+            if let name = allocated[entry.id] { named.fileName = name }
+            return named
+        }
+    }
+
     /// The newest tombstone per identity.
     static func mergeDeletions(_ deletions: [SyncDeletion]) throws -> [SyncDeletion] {
         for deletion in deletions { try deletion.validate() }

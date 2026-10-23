@@ -872,6 +872,21 @@ struct RecordingLibraryTests {
         #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).count == 1)
     }
 
+    @Test func anInvalidTombstoneStopsTheCheckBeforeAnyBytesAreTouched() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        try write(Data([1]), "song", "take.m4a", root: store.root)
+        try await store.library.reconcile(context: context)
+        context.insert(SyncRecordingDeletion(projectId: "../song", recordingId: "", fileName: "take.m4a", deletedAt: 4_000_000_000_000))
+        try context.save()
+
+        #expect(throws: (any Error).self) { _ = try DeletionStore.all(in: context) }
+        await #expect(throws: (any Error).self) { try await store.library.reconcile(context: context) }
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
+        #expect(FileManager.default.fileExists(atPath: store.root.appendingPathComponent("song/take.m4a").path))
+        #expect(!store.library.lastRunSucceeded)
+    }
+
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {
         let store = try await makeStore(onDisk: true)
         let context = store.container.mainContext

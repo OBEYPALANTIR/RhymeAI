@@ -1357,15 +1357,17 @@ final class BackupService {
     private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
         // Precedence times are fixed before anything is compared (A32).
         let snapshot = fixingPrecedence(try makeSnapshot(modelContext: modelContext))
-        var gathered = try SyncMerger.gather([snapshot] + inputs.map(fixingPrecedence))
-        let held = Dictionary(snapshot.recordings.map { ($0.id, $0) }) { first, _ in first }
-        gathered.recordings = gathered.recordings.map { entry in
-            guard let local = held[entry.id], local.sha256 == entry.sha256 else { return entry }
-            var named = entry
-            named.fileName = local.fileName
-            return named
-        }
-        return try SyncMerger.resolve(gathered)
+        let gathered = try SyncMerger.gather([snapshot] + inputs.map(fixingPrecedence))
+        // The device holding the bytes says what name a recording claims; names are
+        // then allocated over each whole collision group (A30), so every device writes
+        // the same names whatever subset it holds.
+        let claims = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.sha256, $0.claim)) }) { first, _ in first }
+        var resolved = try SyncMerger.resolve(gathered)
+        resolved.recordings = SyncMerger.allocateNames(resolved.recordings) { entry in
+            guard let local = claims[entry.id], local.0 == entry.sha256 else { return entry.fileName }
+            return local.1
+        }.sorted { ($0.projectId, $0.fileName, $0.id) < ($1.projectId, $1.fileName, $1.id) }
+        return resolved
     }
 
     @discardableResult

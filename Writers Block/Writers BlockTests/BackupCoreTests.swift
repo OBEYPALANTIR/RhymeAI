@@ -1000,7 +1000,9 @@ struct BackupCoreTests {
         let older = SyncRecording(id: "o", projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 5))
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
             projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 0))],
-            recordings: [zero, older]
+            recordings: [zero, older],
+            // An older positive tombstone does not beat a time that was missing.
+            deletions: [SyncDeletion(projectId: "song", recordingId: "z", fileName: "take.m4a", deletedAt: 1_000)]
         ).encodedManifest())
         harness.drive.seedRecording(zero, content: audio)
         harness.drive.seedRecording(older, content: audio)
@@ -1013,10 +1015,45 @@ struct BackupCoreTests {
         let first = try #require(manifests.first)
         #expect(first.recordings.first { $0.id == "z" }.map { $0.uploadedAt.epochMilliseconds > 0 } == true)
         #expect(first.projects.first.map { $0.updatedAt.epochMilliseconds > 0 } == true)
+        #expect(Set(first.recordings.map(\.id)) == ["z", "o"])
+        #expect(Dictionary(uniqueKeysWithValues: first.recordings.map { ($0.id, $0.fileName) }) == ["o": "take.m4a", "z": "take 2.m4a"])
         for manifest in manifests.dropFirst() {
             #expect(manifest.recordings == first.recordings)
             #expect(manifest.projects == first.projects)
         }
+    }
+
+    @MainActor
+    @Test func alternatingBackupsFromTwoDevicesConvergeOnNames() async throws {
+        let drive = FakeDriveClient()
+        let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let deviceB = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        func entry(_ id: String, _ name: String, _ seconds: TimeInterval, _ byte: UInt8) -> (SyncRecording, Data) {
+            let audio = Data([byte, byte])
+            return (SyncRecording(id: id, projectId: "song", fileName: name, bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: seconds)), audio)
+        }
+        for harness in [deviceA, deviceB] {
+            harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+            try harness.context.save()
+        }
+        // A, after a restore: a = take, b = take 2. B, offline: b = take, c = take 2.
+        for (recording, audio) in [entry("a", "take.m4a", 10, 1), entry("b", "take 2.m4a", 20, 2)] {
+            try deviceA.service.library.commitRestored(audio, entry: recording, origin: .restored, context: deviceA.context)
+        }
+        for (recording, audio) in [entry("b", "take.m4a", 20, 2), entry("c", "take.m4a", 30, 3)] {
+            try deviceB.service.library.commitRestored(audio, entry: recording, origin: .restored, context: deviceB.context)
+        }
+        try await deviceA.service.library.reconcile(context: deviceA.context)
+        try await deviceB.service.library.reconcile(context: deviceB.context)
+
+        var names: [[String: String]] = []
+        for harness in [deviceA, deviceB, deviceA, deviceB] {
+            try await harness.service.backupNow(modelContext: harness.context)
+            let manifest = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+            names.append(Dictionary(uniqueKeysWithValues: manifest.recordings.map { ($0.id, $0.fileName) }))
+        }
+        #expect(names[1] == ["a": "take.m4a", "b": "take 2.m4a", "c": "take 3.m4a"])
+        #expect(names[2] == names[1] && names[3] == names[1])
     }
 
     @MainActor
@@ -2003,13 +2040,13 @@ struct BackupCoreTests {
     }
 
     @MainActor
-    private func makeHarness(oauthProvider: OAuthAccessTokenProvider) async throws -> BackupHarness {
+    private func makeHarness(oauthProvider: OAuthAccessTokenProvider, drive shared: FakeDriveClient? = nil) async throws -> BackupHarness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("BackupCoreTests-\(UUID().uuidString)", isDirectory: true)
         let memosRoot = scratch.appendingPathComponent("voice-memos", isDirectory: true)
-        let drive = FakeDriveClient()
+        let drive = shared ?? FakeDriveClient()
         let secrets = FakeBackupSecretStore()
         let service = BackupService(
             driveClient: drive,
