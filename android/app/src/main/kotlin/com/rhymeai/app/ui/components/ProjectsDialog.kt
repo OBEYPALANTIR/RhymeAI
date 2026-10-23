@@ -951,6 +951,10 @@ private fun TrashBinPage(
         }
     }
     if (service != null) LaunchedEffect(service) { service.deletionChanges.collect { trashedMemoVersion++ } }
+    // T5.12: Trash files this version cannot identify are listed by name and size, never hidden.
+    val unreadableTrash by produceState(emptyList<java.io.File>(), service, trashedMemoVersion) {
+        value = runCatching { service?.unreadableTrashFiles().orEmpty() }.getOrDefault(emptyList())
+    }
     val memoPaths = remember(trashedMemos) {
         trashedMemos.orEmpty().map { it.file.absolutePath }
     }
@@ -1104,6 +1108,28 @@ private fun TrashBinPage(
                         }
                     }
                 } else {
+                    if (unreadableTrash.isNotEmpty()) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.sm)
+                                .testTag("unreadableTrashFiles")
+                        ) {
+                            Text(
+                                if (unreadableTrash.size == 1) "1 file here has a name this version cannot read. It was kept:"
+                                else "${unreadableTrash.size} files here have names this version cannot read. They were kept:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colorScheme.onSurface
+                            )
+                            unreadableTrash.forEach { file ->
+                                Text(
+                                    "${file.name} · ${android.text.format.Formatter.formatShortFileSize(LocalContext.current, file.length())}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                     when {
                         trashedMemos == null -> {
                             Box(

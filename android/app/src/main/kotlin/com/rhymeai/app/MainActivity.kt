@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen().setKeepOnScreenCondition { !mainViewModel.appearanceLoaded }
+        installSplashScreen().setKeepOnScreenCondition { !mainViewModel.initialized }
         super.onCreate(savedInstanceState)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {

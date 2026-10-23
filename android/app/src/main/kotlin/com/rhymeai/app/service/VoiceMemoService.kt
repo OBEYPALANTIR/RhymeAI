@@ -225,6 +225,7 @@ class VoiceMemoService(private val context: Context) {
             file.delete()
             throw e
         }
+        duringStartForTest?.invoke()
 
         val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
@@ -268,6 +269,9 @@ class VoiceMemoService(private val context: Context) {
 
     /** Start, stop and cancel change the recorder and its take one at a time (T4.5). */
     private val recorderLock = Any()
+
+    /** Runs inside a start, holding the recorder lock (tests only; null in the app). */
+    @Volatile internal var duringStartForTest: (() -> Unit)? = null
 
     /**
      * Stop an in-progress recording and return the saved [VoiceMemo], or null if
@@ -684,6 +688,16 @@ class VoiceMemoService(private val context: Context) {
         player = mp
         playingRecordingId = recordingId
         playingFile = memo.file
+        playersStarted++
+    }
+
+    /** How many players were started (tests observe that a refused play started none). */
+    @Volatile internal var playersStarted = 0
+        private set
+
+    /** Returns once the latest play request has been authorized or refused (tests only). */
+    internal suspend fun awaitPlayCheck() {
+        playJob?.join()
     }
 
     /** Stop playback, and any playback still being checked. Idempotent. */
@@ -722,11 +736,25 @@ class VoiceMemoService(private val context: Context) {
     suspend fun memosForProject(projectId: String): List<VoiceMemo> = withContext(Dispatchers.IO) {
         val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)
         // Fails closed: an unfinished move or unreadable tombstones show nothing until they recover.
-        val records = currentRecords()
+        var records = currentRecords()
+        val listed = { RecordingTransitions.listStrictly(dir).filter { RecordingFiles.isMemoFile(it) && it != recordingFile } }
+        // T2.45: a file that appeared after launch gets its record (and first-seen time) before
+        // anything orders it; it is never ordered by its file time.
+        val catalog = catalog
+        if (catalog != null && listed().any { file -> records.none { it.path == RecordingTransitions.relativePath(context.filesDir, file) } }) {
+            try {
+                RecordingTransitions.snapshot(catalog, context.filesDir, emptySet(), setOf(projectId))
+                records = catalog.recordingRecords()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Its record cannot be written now: still listed (so it can be played, renamed or
+                // trashed, each reporting the failure), ordered by its file time until adopted.
+            }
+        }
         val hidden = deletedPaths()
         val byPath = records.filter { it.path != null }.associateBy { it.path }
-        RecordingTransitions.listStrictly(dir)
-            .filter { RecordingFiles.isMemoFile(it) && it != recordingFile }
+        listed()
             .map { it to byPath[RecordingTransitions.relativePath(context.filesDir, it)] }
             .filter { (file, _) -> RecordingTransitions.relativePath(context.filesDir, file) !in hidden }
             .sortedByDescending { (file, record) -> record?.uploadedAt ?: file.lastModified() }
@@ -853,6 +881,24 @@ class VoiceMemoService(private val context: Context) {
                     .mapNotNull { file -> trashedMemoFromFile(file, dir.name, byPath[RecordingTransitions.relativePath(context.filesDir, file)]) }
             }
             .sortedByDescending { it.deletedAt }
+    }
+
+    /**
+     * T5.12: files in the recordings Trash this version cannot identify (neither an id name nor
+     * a `<time>__<name>` name). They are kept and listed by name and size for inspection, never
+     * shown as an empty Trash or removed.
+     */
+    suspend fun unreadableTrashFiles(): List<File> = withContext(Dispatchers.IO) {
+        RecordingTransitions.listStrictly(RecordingFiles.trashRoot(context.filesDir))
+            .filter { RecordingTransitions.isDirectoryStrictly(it) }
+            .flatMap { dir ->
+                RecordingTransitions.listStrictly(dir).filter {
+                    RecordingTransitions.isRegularFileStrictly(it) && it.length() > 0L &&
+                        it.extension.lowercase(Locale.ROOT) in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS &&
+                        RecordingFiles.idOf(it) == null && parseTrashedName(it.name) == null
+                }
+            }
+            .sortedBy { it.name }
     }
 
     /** Move a trashed recording back into its project's live memo folder; its id name is its own. */

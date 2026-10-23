@@ -40,7 +40,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rhymeai_prefs")
+internal val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "rhymeai_prefs")
 
 internal class CorruptLibraryException(
     val area: String,
@@ -58,12 +58,21 @@ internal class MissingActiveProjectException(id: String) :
  */
 @kotlinx.serialization.Serializable
 internal data class RecoveredSong(
+    /** The song as it was, with its own repair flag (`precedenceRepaired`) for `updatedAt`. */
     val project: SongProject,
     val wasInTrash: Boolean,
+    /** The winning tombstone's time. */
     val deletedAt: Long,
     val keptAt: Long,
-    val recordingIds: List<String> = emptyList()
-)
+    val recordingIds: List<String> = emptyList(),
+    /** For a Trash entry: its Trash time and that time's repair flag. */
+    val trashedAt: Long? = null,
+    val trashedAtRepaired: Boolean = false
+) {
+    /** The same kept song, whenever it was kept. */
+    fun sameAs(other: RecoveredSong) =
+        project == other.project && wasInTrash == other.wasInTrash && trashedAt == other.trashedAt && trashedAtRepaired == other.trashedAtRepaired
+}
 
 internal data class LocalSyncBase(
     val blob: SyncBlob,
@@ -499,7 +508,12 @@ class ProjectRepository internal constructor(
             // The same repair inside the deciding transaction: whatever was stored meanwhile is fixed first.
             normalizePrecedence(prefs, emptyList(), now)
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-            val expired = trash.filter { it.deleteAfter <= now && it.project.id in adopted }.map { it.project.id }
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]").mapTo(HashSet()) { it.id }
+            // A song expires only when every version of its id has: none active, and every Trash
+            // copy past its deadline. A newer copy never loses to the tombstone an older one writes.
+            val expired = trash.groupBy { it.project.id }
+                .filter { (id, versions) -> id in adopted && id !in active && versions.all { it.deleteAfter <= now } }
+                .keys.toList()
             val retained = trash.filterNot { it.project.id in expired }
             if (expired.isNotEmpty()) {
                 val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
@@ -604,6 +618,55 @@ class ProjectRepository internal constructor(
         }
     }
 
+    /**
+     * A41: every song among [gathered] (any input: this device, Drive, an archive, an older
+     * backup) whose repaired time lost to a tombstone in [resolved] is kept in the recovery
+     * store before any input it came from is overwritten. Songs in [heldHere] stay in this
+     * device's lists until the transactional apply removes them, which keeps them then.
+     * Returns how many were added.
+     */
+    internal suspend fun setAsideRepairedLosers(gathered: SyncBlob, resolved: SyncBlob, heldHere: Set<String>): Int = projectSaveMutex.withLock {
+        var kept = KeptLosers(emptyList(), 0)
+        dataStore.edit { prefs -> kept = keepRepairedLosers(prefs, gathered, resolved, heldHere) }
+        verifyKept(kept.losers)
+        kept.added
+    }
+
+    private class KeptLosers(val losers: List<RecoveredSong>, val added: Int)
+
+    /**
+     * Read back from a fresh read of the store: every song to keep is there with the decoded
+     * values it was kept with (both repair flags included). Otherwise the run stops (throws)
+     * before anything that held the song is overwritten or reported done.
+     */
+    private suspend fun verifyKept(losers: List<RecoveredSong>) {
+        if (losers.isEmpty()) return
+        val stored = recoveredSongsStore.decode(dataStore.data.first()[RECOVERED_SONGS_KEY] ?: "[]")
+        if (losers.any { loser -> stored.none { it.sameAs(loser) } }) throw java.io.IOException("Songs kept aside could not be saved")
+    }
+
+    private fun keepRepairedLosers(prefs: MutablePreferences, gathered: SyncBlob, resolved: SyncBlob, heldHere: Set<String> = emptySet()): KeptLosers {
+        val tombstones = SyncMerger.Tombstones(resolved.deletions).songs
+        val keptIds = resolved.projects.mapTo(HashSet()) { it.id } + resolved.trashed.map { it.project.id } + heldHere
+        fun kept(song: SongProject, trash: TrashedSongProject?) = RecoveredSong(
+            song, trash != null, tombstones.getValue(song.id).deletedAt, System.currentTimeMillis(),
+            gathered.recordings.filter { it.projectId == song.id }.map { it.id },
+            trashedAt = trash?.deletedAt, trashedAtRepaired = trash?.deletedAtRepaired == true
+        )
+        val losers = gathered.projects
+            .filter { it.precedenceRepaired && it.id !in keptIds && it.id in tombstones }
+            .map { kept(it, null) } +
+            gathered.trashed
+                .filter { it.deletedAtRepaired && it.project.id !in keptIds && it.project.id in tombstones }
+                .map { kept(it.project, it) }
+        if (losers.isEmpty()) return KeptLosers(emptyList(), 0)
+        val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
+        // The same content kept twice (a retried write, a later Restore) is kept once.
+        val fresh = losers.filterNot { loser -> stored.any { it.sameAs(loser) } }
+        if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = json.encodeToString(stored + fresh)
+        return KeptLosers(losers, fresh.size)
+    }
+
     /** Songs kept aside after their repaired time lost to a deletion (A41), oldest first. */
     internal suspend fun recoveredSongs(): List<RecoveredSong> =
         recoveredSongsStore.decode(dataStore.data.first()[RECOVERED_SONGS_KEY] ?: "[]")
@@ -664,6 +727,7 @@ class ProjectRepository internal constructor(
     internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase): SyncBlob =
         projectSaveMutex.withLock {
             lateinit var committed: SyncBlob
+            var keptHere = emptyList<RecoveredSong>()
             dataStore.edit { prefs ->
                 // Live and Trash recordings known here join the inputs, so a song tombstone
                 // being applied also tombstones takes this device holds only in Trash.
@@ -681,31 +745,17 @@ class ProjectRepository internal constructor(
                 val incoming = normalizePrecedence(prefs, listOf(merged), System.currentTimeMillis()).single()
                 // A25: a song deleted here after the snapshot stays deleted only if its
                 // tombstone is newer than the incoming version; timestamps decide, not membership.
-                val resolved = SyncMerger.merge(current, incoming)
+                val gatheredHere = SyncMerger.gather(current, incoming)
+                val resolved = SyncMerger.resolve(gatheredHere)
                 val nextProjects = resolved.projects
                 val nextTrash = resolved.trashed
                 val writtenIds = buildSet {
                     nextProjects.forEach { add(it.id) }
                     nextTrash.forEach { add(it.project.id) }
                 }
-                // A41: a song here whose repaired time lost to a tombstone is kept aside, not erased;
-                // one that lost with a real time is a genuine deletion.
-                val songTombstones = SyncMerger.Tombstones(resolved.deletions).songs
-                val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
-                fun kept(song: SongProject, inTrash: Boolean) = RecoveredSong(
-                    song, inTrash, songTombstones.getValue(song.id).deletedAt, System.currentTimeMillis(),
-                    records.filter { it.projectId == song.id }.map { it.id }
-                )
-                val setAside = current.projects
-                    .filter { it.id !in writtenIds && it.precedenceRepaired && it.id in songTombstones }
-                    .map { kept(it, false) } +
-                    current.trashed
-                        .filter { it.project.id !in writtenIds && it.deletedAtRepaired && it.project.id in songTombstones }
-                        .map { kept(it.project, true) }
-                if (setAside.isNotEmpty()) {
-                    val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
-                    prefs[RECOVERED_SONGS_KEY] = json.encodeToString(stored + setAside)
-                }
+                // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
+                // in the same edit, not erased; one that lost with a real time is a genuine deletion.
+                keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
                 prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
@@ -713,6 +763,8 @@ class ProjectRepository internal constructor(
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
                 committed = resolved
             }
+            // A41: the songs kept aside in that edit are read back before the run goes on.
+            verifyKept(keptHere)
             committed
         }
 
