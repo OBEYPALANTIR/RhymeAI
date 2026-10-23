@@ -339,7 +339,8 @@ struct DraftRecoveryTests {
         #expect(recovered.id != "song-a")
         #expect(recovered.lyrics == "typed during restore")
         #expect(relaunched.currentProjectId == recovered.id)
-        #expect(try harness.recordings(for: recovered.id) == ["100.m4a": audio])
+        // A copy is a recording of its own, named by its id (A36).
+        #expect(try Array(harness.recordings(for: recovered.id).values) == [audio])
         #expect(try harness.stagedSnapshots().isEmpty)
         #expect(!harness.recoveryCopyExists)
     }
@@ -364,7 +365,8 @@ struct DraftRecoveryTests {
 
         let recovered = try #require(try harness.projects().first)
         #expect(recovered.lyrics == "typed during restore")
-        #expect(try harness.recordings(for: recovered.id) == ["100.m4a": audio])
+        // A copy is a recording of its own, named by its id (A36).
+        #expect(try Array(harness.recordings(for: recovered.id).values) == [audio])
         #expect(try harness.stagedSnapshots().isEmpty)
     }
 
