@@ -418,20 +418,29 @@ enum RecordingFiles {
     /// recordings removed on another device going to the recordings Trash. A
     /// detached Trash entry stays recorded, so it is never adopted again.
     nonisolated struct PendingMoves: Codable, Equatable, Sendable {
-        var quarantine: [String] = []
+        var quarantine: [Quarantine] = []
         var detach: [Detach] = []
+
+        /// A file going to quarantine, with the digest it was decided on: at replay
+        /// other bytes there are not moved (they are adopted on their own).
+        nonisolated struct Quarantine: Codable, Equatable, Hashable, Sendable {
+            var path: String
+            var sha256: String
+        }
 
         nonisolated struct Detach: Codable, Equatable, Hashable, Sendable {
             var recordingId: String
             /// Empty once the move is done.
             var source: String
             var destination: String
+            /// The removed recording's digest: only those bytes are moved.
+            var sha256: String
         }
 
         /// Never adopted: waiting for quarantine, or a detached entry either side of its move.
-        var adoptionHidden: Set<String> { Set(quarantine + detach.flatMap { [$0.source, $0.destination] }.filter { !$0.isEmpty }) }
+        var adoptionHidden: Set<String> { Set(quarantine.map(\.path) + detach.flatMap { [$0.source, $0.destination] }.filter { !$0.isEmpty }) }
         /// Not listed or played: waiting for quarantine, or still at its source.
-        var listingHidden: Set<String> { Set(quarantine + detach.map(\.source).filter { !$0.isEmpty }) }
+        var listingHidden: Set<String> { Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }) }
     }
 
     /// `root` is the memo or the Trash root; both sit in the same folder. A missing
@@ -457,10 +466,10 @@ enum RecordingFiles {
         (try? readPendingMoves(for: root))?.listingHidden
     }
 
-    /// Records files for quarantine (tests and callers outside a reconcile).
+    /// Records files for quarantine with their current digests (tests).
     nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
         var moves = try readPendingMoves(for: root)
-        moves.quarantine = paths.sorted()
+        moves.quarantine = try paths.sorted().map { PendingMoves.Quarantine(path: $0, sha256: try sha256(of: URL(fileURLWithPath: $0))) }
         try writePendingMoves(moves, for: root)
     }
 
@@ -486,6 +495,24 @@ enum RecordingFiles {
     /// anything still staged never reached the memo folders, so it is dropped.
     nonisolated static func clearStaging(for memosRoot: URL) {
         try? FileManager.default.removeItem(at: stagingRoot(for: memosRoot))
+    }
+
+    /// Writes `data` to a new staging file, reads it back and checks its digest;
+    /// runs off the main actor. The caller moves it into place or removes it.
+    nonisolated static func stageVerified(_ data: Data, sha256: String, in staging: URL, modifiedAt: Date) throws -> URL {
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let staged = staging.appendingPathComponent("\(UUID().uuidString).partial")
+        do {
+            try data.write(to: staged, options: .atomic)
+            guard try RecordingFiles.sha256(of: staged) == sha256, try facts(staged).size == Int64(data.count) else {
+                throw SyncValidationError.invalidRecording
+            }
+            try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: staged.path)
+            return staged
+        } catch {
+            try? FileManager.default.removeItem(at: staged)
+            throw error
+        }
     }
 
     /// Stages `data`, verifies the staged bytes, then moves them to `target` only

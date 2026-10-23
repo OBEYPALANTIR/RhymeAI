@@ -844,7 +844,8 @@ struct RecordingLibraryTests {
         let source = store.root.appendingPathComponent("song/take.m4a")
         let destination = store.trash.appendingPathComponent("song/50000__take.m4a")
         var moves = RecordingFiles.PendingMoves()
-        moves.detach = [.init(recordingId: "gone", source: RecordingFiles.canonicalPath(source), destination: RecordingFiles.canonicalPath(destination))]
+        moves.detach = [.init(recordingId: "gone", source: RecordingFiles.canonicalPath(source), destination: RecordingFiles.canonicalPath(destination),
+                              sha256: RecordingBackupManifest.sha256Hex(Data([5])))]
         try RecordingFiles.writePendingMoves(moves, for: store.root)
 
         try await store.library.reconcile(context: context)
@@ -900,6 +901,91 @@ struct RecordingLibraryTests {
         #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
         #expect(FileManager.default.fileExists(atPath: store.root.appendingPathComponent("song/take.m4a").path))
         #expect(!store.library.lastRunSucceeded)
+    }
+
+    @Test func equalLengthReplacementAtARemovedRecordingsPathIsAdoptedNotDetached() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        context.insert(Recording(id: "r", projectId: "song", fileName: "take.m4a", audio: Data([1, 1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        // R is removed elsewhere; the same file is rewritten in place with other bytes
+        // of the same length and its date put back (the cached digest would match).
+        for row in try context.fetch(FetchDescriptor<Recording>()) { context.delete(row) }
+        try context.save()
+        let path = store.root.appendingPathComponent("song/take.m4a")
+        let before = try RecordingFiles.facts(path)
+        let handle = try FileHandle(forWritingTo: path)
+        try handle.write(contentsOf: Data([2, 2]))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: before.modified], ofItemAtPath: path.path)
+        #expect(try RecordingFiles.facts(path).inode == before.inode)
+
+        try await store.library.reconcile(context: context)
+
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        #expect(rows.count == 1 && rows[0].id != "r" && rows[0].audio == Data([2, 2]))
+        #expect(RecordingFiles.trashedMemos(in: store.trash).isEmpty)
+    }
+
+    @Test func aRecordedMoveNeverTakesBytesItWasNotDecidedOn() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        try write(Data([1]), "song", "take.m4a", root: store.root)
+        let path = store.root.appendingPathComponent("song/take.m4a")
+        // Recorded for quarantine with its digest; then other bytes took the place.
+        try RecordingFiles.setPendingQuarantine([RecordingFiles.canonicalPath(path)], for: store.root)
+        try Data([7, 7]).write(to: path)
+
+        try await store.library.reconcile(context: context)
+        try await store.library.reconcile(context: context)
+
+        #expect(try Data(contentsOf: path) == Data([7, 7]))
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([7, 7])])
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).quarantine.isEmpty)
+    }
+
+    @Test func aFileWithoutATimeIsNotDecidedByAnOlderTombstone() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        try write(Data([4]), "song", "old.m4a", root: store.root)
+        let path = store.root.appendingPathComponent("song/old.m4a")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: path.path)
+        let id = RecordingBackupManifest.legacyRecordingId(projectId: "song", fileName: "old.m4a", sha256: RecordingBackupManifest.sha256Hex(Data([4])))
+        context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "old.m4a", deletedAt: 1_000))
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.id == id && row.precedenceTime.epochMilliseconds > 1_000)
+        #expect(FileManager.default.fileExists(atPath: path.path))
+    }
+
+    @Test func choosingTheAllocatedNameMakesItTheClaim() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        store.library.context = context
+        let entry = SyncRecording(id: "b", projectId: "song", fileName: "take 2.m4a", bytes: 1, sha256: RecordingBackupManifest.sha256Hex(Data([2])),
+                                  uploadedAt: Date(timeIntervalSince1970: 20), claimedName: "take.m4a")
+        context.insert(Recording(id: "a", projectId: "song", fileName: "take.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        try store.library.commitRestored(Data([2]), entry: entry, origin: .restored, context: context)
+        try await store.library.reconcile(context: context)
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first { $0.id == "b" })
+        #expect(row.fileName == "take 2.m4a" && row.claim == "take.m4a")
+
+        let service = VoiceMemoService(stagingRoot: store.root.deletingLastPathComponent().appendingPathComponent("staging"))
+        service.publisher = store.library
+        let url = store.root.appendingPathComponent("song/take 2.m4a")
+        #expect(try service.renameMemo(at: url, to: "take 2") == url)
+        #expect(row.claim == "take 2.m4a" && row.fileName == "take 2.m4a")
+        // With the earlier recording gone it keeps the name it was given.
+        for gone in try context.fetch(FetchDescriptor<Recording>()) where gone.id == "a" { context.delete(gone) }
+        try context.save()
+        try await store.library.reconcile(context: context)
+        #expect(row.fileName == "take 2.m4a")
     }
 
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {
