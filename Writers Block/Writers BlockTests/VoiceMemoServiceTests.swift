@@ -836,3 +836,26 @@ extension PendingTakeTests {
         #expect(!FileManager.default.fileExists(atPath: abandonedFolder.path))
     }
 }
+
+extension PendingTakeTests {
+    /// T4.6: a running import registers its id before its folder exists and keeps it
+    /// until it ends, so recovery never takes its folder.
+    @Test func aRunningImportOwnsItsFolderUntilItEnds() async throws {
+        let store = try await makeStore()
+        let fixtures = try await AudioFixtures.make(in: store.scratch)
+        let source = store.scratch.appendingPathComponent("Owned.m4a")
+        try fixtures.complete.write(to: source)
+        let importRoot = store.scratch.appendingPathComponent("recording-import", isDirectory: true)
+        let owned = HookBox<(id: String, registered: Bool)?>(nil)
+        try await withBoundaryHook(scope: importRoot, { point, source, _ in
+            guard point == .beforeCheck, owned.value == nil else { return }
+            let id = source.deletingLastPathComponent().lastPathComponent
+            owned.value = (id, VoiceMemoService.activeImports.withLock { $0.contains(id) })
+        }) {
+            _ = try await VoiceMemoService.importMemo(from: source, projectId: "song", publisher: store.library, importRoot: importRoot)
+        }
+        let id = try #require(owned.value?.id)
+        #expect(owned.value?.registered == true)
+        #expect(!VoiceMemoService.activeImports.withLock { $0.contains(id) })
+    }
+}

@@ -74,7 +74,7 @@ struct HistoricalStoreTests {
         try await library.reconcile(context: context)
 
         let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
-        #expect(row.id == id && row.displayName == "Verse idea.m4a" && row.legacyClaimedName.isEmpty)
+        #expect(row.id == id && row.displayName == "Verse idea.m4a" && row.claimedName.isEmpty)
         #expect(row.uploadedAt == Date(timeIntervalSince1970: 2_000) && !row.precedenceRepaired && !row.trashedAtRepaired)
         #expect(try Data(contentsOf: memos.appendingPathComponent("song/\(id).m4a")) == audio)
         #expect(RecordingFiles.storedId(of: memos.appendingPathComponent("song/\(id).m4a")) != nil)

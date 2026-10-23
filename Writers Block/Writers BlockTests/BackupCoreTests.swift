@@ -450,8 +450,12 @@ struct BackupCoreTests {
         }
         #expect(harness.drive.content(named: entry.driveName) != nil)
 
-        // The retry runs after a relaunch, from the persisted proof only (T6.56).
+        // The retry runs after a relaunch, from the persisted proof only (T6.56): new
+        // store objects and settings, which still hold the tombstone and the proof.
         let relaunched = try await harness.reopened()
+        #expect(relaunched.container !== harness.container && relaunched.defaults !== harness.defaults)
+        #expect(try relaunched.context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.projectId) == ["gone"])
+        #expect(relaunched.defaults.data(forKey: "backup-proven-covered-recordings") != nil, "the proof was persisted before the failed delete")
         try await relaunched.service.restoreNow(modelContext: relaunched.context)
 
         #expect(harness.drive.content(named: entry.driveName) == nil)
@@ -3274,10 +3278,15 @@ extension BackupCoreTests {
         let harness = try await makeHarness()
         harness.secrets.setString(passphrase, for: "drive-sync-passphrase")
         harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 5_000_000))
+        harness.context.insert(SyncDeletionRecord(projectId: "binned", deletedAt: 5_000_000))
         try harness.context.save()
         let legacy = LegacySyncBlob(
             projects: [SyncSongProject(id: "kept", title: "Kept", lyrics: "a", theme: "", updatedAt: Date(timeIntervalSince1970: 0)),
                        SyncSongProject(id: "gone", title: "Gone", lyrics: "only in the old backup", theme: "", updatedAt: Date(timeIntervalSince1970: 0))],
+            // A Trash entry with no deletion time but a recorded edit time: its deletion
+            // time is the repair the tombstone beats (A38), not its edit time.
+            trashed: [SyncTrashedSongProject(id: "binned", title: "Binned", lyrics: "old trash", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000),
+                                             deletedAt: Date(timeIntervalSince1970: 0), deleteAfter: Date(timeIntervalSince1970: 0))],
             recordings: [], savedAt: Date(timeIntervalSince1970: 1_700_000_000), savedByClientId: "old-device"
         )
         harness.drive.seed(name: LegacySyncBlob.driveFileName, content: try SyncRepairContractChecks.rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"))
@@ -3289,7 +3298,10 @@ extension BackupCoreTests {
         #expect(manifest.projects.first.map { $0.precedenceRepaired && $0.updatedAt.epochMilliseconds > 0 } == true)
         #expect(harness.service.lastReport?.migratedLegacyBackup == true)
         #expect(harness.drive.content(named: LegacySyncBlob.driveFileName) == nil)
-        #expect(try SongRecoveryStore.all(memosRoot: harness.memosRoot).map { $0.project?.lyrics } == ["only in the old backup"])
+        let kept = try SongRecoveryStore.all(memosRoot: harness.memosRoot)
+        #expect(Set(kept.map { $0.project?.lyrics ?? $0.trashed?.lyrics ?? "" }) == ["only in the old backup", "old trash"])
+        #expect(kept.first { $0.id == "binned" }?.trashed.map { $0.trashedAtRepaired && !$0.precedenceRepaired } == true)
+        #expect(manifest.trashed.isEmpty)
     }
 
     /// T2.40: export fixes a missing time on the row itself (kept) before writing.
@@ -3367,5 +3379,110 @@ extension BackupCoreTests {
         #expect(harness.drive.content(named: entry.driveName) == audio)
         #expect(harness.service.lastReport?.cleanupDeferred == true)
         #expect(harness.defaults.data(forKey: "backup-proven-covered-recordings") == Data("garbage".utf8))
+    }
+}
+
+extension BackupCoreTests {
+    /// A song held here and a different version of it on Drive (its Trash copy, with
+    /// other words), both with repaired times, removed by a tombstone: each version is
+    /// kept by its content, not skipped because the id is held here.
+    @MainActor
+    @Test func everyVersionOfARemovedRepairedSongIsKeptByContent() async throws {
+        let harness = try await makeHarness()
+        let local = SongProject(id: "s", title: "Here", lyrics: "local words", theme: "", updatedAt: Date(timeIntervalSince1970: 9_000))
+        local.precedenceRepaired = true
+        harness.context.insert(local)
+        harness.context.insert(SyncDeletionRecord(projectId: "s", deletedAt: 5_000_000))
+        try harness.context.save()
+        let trashedAt = Date(timeIntervalSince1970: 9_600)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(trashed: [
+            SyncTrashedSongProject(id: "s", title: "There", lyrics: "drive words", theme: "", updatedAt: Date(timeIntervalSince1970: 9_500),
+                                   deletedAt: trashedAt, deleteAfter: trashedAt.addingTimeInterval(trashRetentionInterval),
+                                   precedenceRepaired: true, trashedAtRepaired: true),
+        ]).encodedManifest())
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.projects.isEmpty && manifest.trashed.isEmpty)
+        let kept = try SongRecoveryStore.all(memosRoot: harness.memosRoot)
+        #expect(Set(kept.map { $0.project?.lyrics ?? $0.trashed?.lyrics ?? "" }) == ["local words", "drive words"])
+        #expect(Set(harness.service.lastReport?.recoveredRepairedSongs ?? []) == ["Here", "There"])
+    }
+}
+
+
+/// Round 15: Import's inputs are normalized once, for resolution and recovery alike.
+extension BackupCoreTests {
+    /// A manifest whose songs carry no time at all, so no repair mark either.
+    @MainActor
+    private func timelessManifest(active: Bool) throws -> Data {
+        let song: [String: Any] = ["id": "s", "title": "Imported", "lyrics": "only in the archive", "theme": ""]
+        var fields: [String: Any] = ["version": 4, "savedAt": "2026-01-02T03:04:05.006Z", "savedByClientId": "other", "platform": "android",
+                                     "projects": active ? [song] : [], "trashed": active ? [] : [song], "recordings": [],
+                                     "deletions": [["projectId": "s", "deletedAt": 5_000_000]]]
+        fields["manifestSha256"] = CanonicalJSON.sha256Hex(try JSONValue(any: fields))
+        return try JSONSerialization.data(withJSONObject: fields)
+    }
+
+    /// SHOULD 2: a song only in the imported archive, with no time (so no repair mark
+    /// until it is normalized), that the archive's own tombstone removes, is kept.
+    @MainActor
+    @Test(arguments: [true, false])
+    func importKeepsATimelessSongOnlyInTheArchive(active: Bool) async throws {
+        let harness = try await makeHarness()
+
+        try await harness.service.importArchive(try timelessManifest(active: active), modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        let kept = try #require(try SongRecoveryStore.all(memosRoot: harness.memosRoot).first)
+        #expect((kept.project?.lyrics ?? kept.trashed?.lyrics) == "only in the archive")
+        #expect(kept.project?.precedenceRepaired ?? kept.trashed?.precedenceRepaired == true)
+    }
+
+    /// SHOULD 2: when that copy cannot be written, the import stops: no tombstone is stored.
+    @MainActor
+    @Test func anImportStopsWhenAnArchiveOnlySongCannotBeKept() async throws {
+        let harness = try await makeHarness()
+        let root = SongRecoveryStore.root(for: harness.memosRoot)
+        try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0]).write(to: root)
+
+        await #expect(throws: (any Error).self) { try await harness.service.importArchive(try timelessManifest(active: true), modelContext: harness.context) }
+
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+    }
+}
+
+extension BackupCoreTests {
+    /// SHOULD 3: a tombstone without a time is local state only. A Restore with one in
+    /// the store runs; the manifest it writes, and an export, never carry it; what it
+    /// names is not brought back from Drive; other tombstones apply.
+    @MainActor
+    @Test func anUndatedTombstoneStaysLocalThroughRestoreAndExport() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        let heldId = UUID().uuidString.lowercased()
+        harness.context.insert(SyncRecordingDeletion(projectId: "song", recordingId: heldId, fileName: "held.m4a", deletedAt: 0))
+        try harness.context.save()
+        let audio = Data([6, 6])
+        let held = SyncRecording(id: heldId, projectId: "song", fileName: "held.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio),
+                                 uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+            recordings: [held], deletions: [SyncDeletion(projectId: "gone", deletedAt: 5_000_000)]
+        ).encodedManifest())
+        harness.drive.seedRecording(held, content: audio)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(!manifest.deletions.contains { $0.recordingId == heldId })
+        #expect(manifest.deletions.map(\.projectId) == ["gone"])
+        #expect(!FileManager.default.fileExists(atPath: harness.file(heldId, "song").path), "what it names is not brought back")
+        #expect(try harness.context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletedAt) == [0])
+        let archive = try harness.service.exportArchive(modelContext: harness.context, now: Date())
+        let exported = try SyncBlob.decodeManifest(try #require(BackupArchive.unzip(archive.data)["manifest.json"]))
+        #expect(!exported.deletions.contains { $0.recordingId == heldId })
     }
 }

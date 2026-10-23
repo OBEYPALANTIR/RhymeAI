@@ -1846,6 +1846,36 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertEqual(disclosure.label, "Hide stress pattern")
     }
 
+    /// T5.12: a take that could not be saved is deleted only after the confirmation;
+    /// cancelling keeps it.
+    @MainActor
+    func testFailedRecordingIsDeletedOnlyAfterConfirmation() throws {
+        let app = isolatedUITestApp(arguments: ["--ui-test-seed-failed-take"])
+        app.launch()
+        let actions = app.buttons["songActionsButton"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 10))
+        actions.tap()
+        let recordings = app.buttons["Song Recordings"]
+        XCTAssertTrue(recordings.waitForExistence(timeout: 5))
+        recordings.tap()
+        let failed = app.descendants(matching: .any)["failedRecordings"]
+        XCTAssertTrue(failed.waitForExistence(timeout: 5))
+
+        app.buttons["deleteFailedRecording"].tap()
+        let confirm = app.buttons["Delete Recording"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "deleting asks first")
+        let cancel = app.buttons["Cancel"]
+        if cancel.exists { cancel.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap() }
+        XCTAssertTrue(failed.waitForExistence(timeout: 3), "cancelling keeps the recording")
+
+        app.buttons["deleteFailedRecording"].tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: failed)
+        waitForExpectations(timeout: 5)
+    }
+
     private func isolatedUITestApp(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"] + arguments
