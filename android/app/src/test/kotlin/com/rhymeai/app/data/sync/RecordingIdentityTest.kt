@@ -421,4 +421,39 @@ class RecordingIdentityTest {
         assertEquals(5_000L, second.uploadedAt)
         assertEquals(listOf(second.id), catalog.records.map { it.id })
     }
+
+    @Test
+    fun anUndoneMoveOntoDifferentBytesLeavesThemToIndependentAdoption() = runBlocking<Unit> {
+        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
+        // An interrupted move: the target never arrived and other bytes now sit at the source.
+        val source = File(dir, "before.m4a").apply { writeBytes("other bytes".toByteArray()) }
+        catalog.records = listOf(RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", "after.m4a", 1_000L,
+            BackupManifest.sha256Hex("the take".toByteArray()), 8L, RecordingRecord.RECORDED,
+            path = "voice-memos/song/after.m4a", pendingFrom = RecordingTransitions.relativePath(filesDir, source),
+            pendingFromName = "before.m4a", pendingOp = RecordingRecord.OP_MOVE))
+
+        val listed = snapshot().single()
+
+        // Not moved, not given the old id: the bytes are adopted on their own.
+        assertTrue(source.exists())
+        assertNotEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", listed.entry.id)
+        assertEquals(BackupManifest.sha256Hex("other bytes".toByteArray()), listed.entry.sha256)
+    }
+
+    @Test
+    fun aSameLengthRewriteWithItsOldTimeIsNotMovedByARemoteRename() = runBlocking<Unit> {
+        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
+        val file = File(dir, "take.m4a").apply { writeBytes("first take".toByteArray()); setLastModified(1_000L) }
+        val id = snapshot().single().entry.id
+        // Rewritten in place: same length, old modification time, record row kept.
+        file.writeBytes("other take".toByteArray())
+        file.setLastModified(1_000L)
+
+        RecordingTransitions.applyNames(catalog, filesDir, mapOf(id to "renamed.m4a"))
+
+        // Ownership needs the recorded bytes: nothing moved, and the bytes are their own recording.
+        assertTrue(file.exists())
+        assertFalse(File(dir, "renamed.m4a").exists())
+        assertNotEquals(id, snapshot().single().entry.id)
+    }
 }

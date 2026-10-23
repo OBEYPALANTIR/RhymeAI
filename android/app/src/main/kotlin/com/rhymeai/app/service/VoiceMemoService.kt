@@ -519,7 +519,14 @@ class VoiceMemoService(private val context: Context) {
             RecordingTransitions.publish(
                 catalog, context.filesDir, take.file, take.projectId, take.file.name,
                 id, take.recordedAt, RecordingRecord.RECORDED, skipIfPresent = true
-            ) ?: catalog?.recordingRecords()?.firstOrNull { it.id == id }?.path?.let { File(context.filesDir, it) }
+            ) ?: catalog?.recordingRecords()?.firstOrNull { it.id == id }?.let { record ->
+                // Already published counts only if its file is really there with the record's bytes.
+                val file = File(context.filesDir, record.path ?: throw java.io.IOException("The saved take is missing"))
+                if (!RecordingTransitions.isRegularFileStrictly(file) || com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) != record.sha256) {
+                    throw java.io.IOException("The saved take is missing")
+                }
+                file
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -870,6 +877,7 @@ class VoiceMemoService(private val context: Context) {
     /** Permanently delete a trashed recording. */
     suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
         if (playingFile == trashed.file) stopPlayback()
+        var recordId: String? = null
         try {
             val catalog = catalog
             if (catalog != null) {
@@ -880,6 +888,7 @@ class VoiceMemoService(private val context: Context) {
                     RecordingTransitions.recordFor(catalog, context.filesDir, trashed.file, trashed.projectId)
                 } ?: return true.also { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
                 recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, record.id, System.currentTimeMillis())
+                recordId = record.id
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -887,10 +896,16 @@ class VoiceMemoService(private val context: Context) {
             return false
         }
         return withContext(Dispatchers.IO) {
-            deleteMemoFile(trashed.file).also {
-                if (it) forgetRecord(trashed.file)
-                cleanUpEmptyTrashDir(trashed.file.parentFile)
+            val catalog = catalog
+            val id = recordId
+            // The bytes go only if, under the recording lock, they are still that recording.
+            val deleted = if (catalog != null && id != null) {
+                runCatching { RecordingTransitions.deleteVerified(catalog, context.filesDir, trashed.file, id) }.getOrDefault(false)
+            } else {
+                deleteMemoFile(trashed.file).also { if (it) forgetRecord(trashed.file) }
             }
+            cleanUpEmptyTrashDir(trashed.file.parentFile)
+            deleted
         }.also { if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
     }
 
@@ -958,6 +973,12 @@ class VoiceMemoService(private val context: Context) {
         }
 
         return withContext(Dispatchers.IO) {
+            // The full gate first: valid tombstones and no move left unreconciled (A33). Read-only,
+            // as the caller holds the repository lock; an unfinished move waits for reconciliation.
+            val gated = catalog?.let {
+                runCatching { it.requireDeletionsReadable(); it.recordingRecords().none { r -> r.pendingOp != null } }.getOrDefault(false)
+            } ?: true
+            if (!gated) return@withContext false
             // Only confirmed absence counts as removed; a folder that cannot be read is retried.
             val liveRemoved = RecordingTransitions.isConfirmedAbsent(dir) || dir.deleteRecursively()
             val trashRemoved = RecordingTransitions.isConfirmedAbsent(trash) || trash.deleteRecursively()

@@ -847,14 +847,14 @@ class DriveSyncService(
     fun hasLegacyPassphrase(): Boolean = secureKeyStore.getKey(LEGACY_PASSPHRASE_KEY).isNotEmpty()
 
     /** Reads what Drive holds without changing anything (first-run restore offer). */
-    suspend fun probe(): ProbeResult = withContext(Dispatchers.IO) {
+    suspend fun probe(repository: ProjectRepository? = null): ProbeResult = withContext(Dispatchers.IO) {
         guarded({ ProbeResult.Failed(it) }) {
             val token = when (val auth = authorizer.authorize()) {
                 is DriveAuthorization.Granted -> auth.accessToken
                 is DriveAuthorization.NeedsConsent -> return@guarded ProbeResult.Failed(SyncResult.AuthorizationRequired(auth.pendingIntent))
                 DriveAuthorization.Unavailable -> return@guarded ProbeResult.Failed(SyncResult.NotConfigured)
             }
-            val remote = readRemote(token).blob?.let(SyncMerger::resolve)
+            val remote = readRemote(token, repository).blob?.let(SyncMerger::resolve)
             val legacy = driveClient.findFileByName(token, SyncBlob.DRIVE_FILE_NAME) != null
             ProbeResult.Ready(BackupProbe(remote?.projects?.size ?: 0, remote?.recordings?.size ?: 0, legacy))
         }
@@ -968,15 +968,15 @@ class DriveSyncService(
             onFailure(SyncResult.UnknownError(e))
         }
 
-    private suspend fun readRemote(token: String): RemoteState {
+    private suspend fun readRemote(token: String, repository: ProjectRepository?): RemoteState {
         val files = driveClient.listFilesByNamePrefix(token, BackupManifest.FILE_NAME)
             .filter { it.name == BackupManifest.FILE_NAME }
             .sortedBy { it.modifiedTime ?: "" }
         if (files.isEmpty()) return RemoteState(null, emptyList(), null)
         // Gathered, not resolved: oldest first, so the newest manifest's recording entries win.
-        val blob = SyncMerger.gather(
-            *files.map { BackupManifest.decode(driveClient.downloadFile(token, it.id, MAX_SYNC_BLOB_BYTES)) }.toTypedArray()
-        )
+        val decoded = files.map { BackupManifest.decode(driveClient.downloadFile(token, it.id, MAX_SYNC_BLOB_BYTES)) }
+        // A32: each manifest's missing times are fixed before the duplicates are compared.
+        val blob = SyncMerger.gather(*(repository?.establishPrecedence(decoded, now()) ?: decoded).toTypedArray())
         return RemoteState(files.last(), files.dropLast(1), blob)
     }
 
@@ -1004,7 +1004,7 @@ class DriveSyncService(
             // Live, Trash and oversized recordings all join the inputs (unfiltered by
             // tombstones); resolution decides once, with every input present.
             val local = base.blob.copy(recordings = localFiles.map { it.entry }, savedByClientId = clientId())
-            val remote = readRemote(token)
+            val remote = readRemote(token, repository)
             if (requireRemote && remote.blob == null && extraRemote == null) return null
 
             // A32: missing precedence times are fixed (and persisted) before anything is compared.
@@ -1029,7 +1029,13 @@ class DriveSyncService(
                         val held = liveById[entry.id] ?: return@map entry
                         val record = recordsById[entry.id]
                         val localClaim = record?.claimedName ?: held.entry.fileName
-                        val claim = if (record?.syncedName == null || localClaim != record.syncedName) localClaim else entry.claim
+                        val claim = when {
+                            // A35: no baseline here (a new recording, or a reinstall or cleared store):
+                            // Drive's claim stands if Drive lists the recording; otherwise this one.
+                            record?.syncedName == null -> if (entry.id in listedRemotely) entry.claim else localClaim
+                            localClaim != record.syncedName -> localClaim
+                            else -> entry.claim
+                        }
                         entry.copy(claimedName = claim)
                     }
                     // A30: a name two recordings claim goes to the earlier one on every device.
@@ -1077,18 +1083,25 @@ class DriveSyncService(
             // Read back: another device may have written between our read and our write.
             val readBack = driveClient.downloadFile(token, manifestId, MAX_SYNC_BLOB_BYTES)
             if (BackupManifest.hashOf(readBack) != BackupManifest.hashOf(bytes)) {
-                seen = SyncMerger.gather(gathered, BackupManifest.decode(readBack))
+                seen = SyncMerger.gather(*repository.establishPrecedence(listOf(gathered, BackupManifest.decode(readBack)), now()).toTypedArray())
                 return@repeat
             }
             remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
 
             var damaged = 0
             var committed = merged
-            // A34: this device has now written each held recording's claim; that claim stands
-            // here until the user changes it. Back up never renames local files.
+            // A35: the claim this device just wrote is now both its claim and its synced name for
+            // each recording it holds, so an accepted remote claim is not mistaken next time for a
+            // rename made here. Back up never renames local files.
             val claims = merged.recordings.associate { it.id to it.claim }
             repository.updateRecordingRecords { records ->
-                records.map { r -> claims[r.id]?.takeIf { r.path != null && it != r.syncedName }?.let { r.copy(syncedName = it) } ?: r }
+                records.map { r ->
+                    val claim = claims[r.id]?.takeIf { r.path != null } ?: return@map r
+                    // A rename made here while this backup ran is a newer claim; leave it to the next run.
+                    val before = recordsById[r.id]
+                    if (before != null && (r.claimedName ?: r.fileName) != (before.claimedName ?: before.fileName)) return@map r
+                    if (r.claimedName == claim && r.syncedName == claim) r else r.copy(claimedName = claim, syncedName = claim)
+                }
             }
             if (applyLocally) {
                 // A30: local recordings take their allocated names before downloads are placed.
@@ -1098,6 +1111,8 @@ class DriveSyncService(
                 )
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
+                // The apply needs the last reconciliation to still hold (it throws otherwise).
+                RecordingTransitions.reconcile(repository, filesDir)
                 committed = repository.applySyncResult(gathered, base)
                 quarantineDeletedRecordings(repository, filesDir)
             }
@@ -1203,7 +1218,7 @@ class DriveSyncService(
     private fun unpreservedLegacySongs(legacy: SyncBlob, written: SyncBlob): Int {
         val writtenById = written.projects.associateBy { it.id } + written.trashed.associate { it.project.id to it.project }
         val tombstones = SyncMerger.mergeDeletions(written.deletions + legacy.deletions)
-            .filter { it.fileName == null }.associateBy { it.projectId }
+            .filter { it.isSongTombstone }.associateBy { it.projectId }
         return (legacy.projects + legacy.trashed.map { it.project }).count { old ->
             if (tombstones[old.id]?.let { it.deletedAt > old.updatedAt } == true) return@count false
             val kept = writtenById[old.id] ?: return@count true

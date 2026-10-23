@@ -148,22 +148,30 @@ object BackupArchive {
         // A30: names two recordings claim converge; local recordings take theirs first.
         val names = SyncMerger.assignNames(merged.recordings).associate { it.id to it.fileName }
         RecordingTransitions.applyNames(repository, filesDir, names)
+        // The merged entry (with its established time), placed under its allocated name and
+        // keeping the archive's claim; its bytes are found by id and verified on publication.
         val wanted = merged.recordings
             .filter { it.id in imported && it.id !in local }
-            .map { imported.getValue(it.id) }
-            .map { entry -> names[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it), claimedName = entry.claim) } ?: entry }
+            .map { entry ->
+                val name = names[entry.id] ?: entry.fileName
+                entry.copy(fileName = name, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name), claimedName = imported.getValue(entry.id).claim)
+            }
         var added = 0
+        var missing = 0
         for (entry in wanted) {
-            val bytes = contents.recordings[entry.id] ?: continue
+            // Found by id; a listed recording whose audio is not in the archive is reported, not skipped silently.
+            val bytes = contents.recordings[entry.id] ?: run { missing++; null } ?: continue
             // Published with the archive entry's id and time, never the time it was written.
             if (RecordingFileStore.importVerified(repository, filesDir, entry, bytes, RecordingRecord.IMPORTED)) added++
         }
+        // The apply needs the last reconciliation to still hold (it throws otherwise).
+        RecordingTransitions.reconcile(repository, filesDir)
         repository.applySyncResult(gathered, base)
         quarantineDeletedRecordings(repository, filesDir)
         return ImportSummary(
             songs = contents.manifest.projects.size,
             recordingsAdded = added,
-            damagedRecordings = contents.damagedRecordings,
+            damagedRecordings = contents.damagedRecordings + missing,
             skippedLargeRecordings = contents.manifest.recordings.count { !it.isTransferable }
         )
     }

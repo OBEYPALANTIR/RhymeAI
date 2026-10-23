@@ -152,4 +152,28 @@ class WaitingTakeInstrumentedTest {
         assertTrue(after.waitingTakes("song").isEmpty())
         after.release()
     }
+
+    @Test fun aTakeInterruptedBetweenItsJournalAndItsMoveIsSavedByRetry() = runBlocking<Unit> {
+        // Any size goes through the same journal: the finish (marker) and the publish intent
+        // (record) are written, then the process died before the move.
+        val take = File(staging, "1700000000000.m4a").apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        File(staging, "1700000000000.m4a.take").writeText("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\nfinished\n1700000000500\n")
+        val target = File(RecordingFiles.memoDirectory(owned, "song").apply { mkdirs() }, take.name)
+        catalog.records = listOf(RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", take.name, 1_700_000_000_500L,
+            com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(take), take.length(), RecordingRecord.RECORDED,
+            path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(owned, target),
+            pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(owned, take),
+            pendingOp = RecordingRecord.OP_PUBLISH))
+
+        val after = restarted()
+        assertEquals(1, after.retryWaitingTakes("song"))
+
+        // Saved only once its file is really in place, with its id and finish time.
+        assertTrue(target.exists())
+        assertFalse(take.exists())
+        assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", catalog.records.single().id)
+        assertEquals(1_700_000_000_500L, catalog.records.single().uploadedAt)
+        assertNull(catalog.records.single().pendingOp)
+        after.release()
+    }
 }

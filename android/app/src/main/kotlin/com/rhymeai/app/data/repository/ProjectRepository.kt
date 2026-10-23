@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -132,7 +133,8 @@ class ProjectRepository internal constructor(
     // A33: every tombstone is validated where it is read; a malformed one makes the whole
     // deletion state unreadable, so mutations and lists that depend on it fail closed.
     private val deletionsStore = FailClosedStoredJson("sync deletions") {
-        json.decodeFromString<List<SyncDeletion>>(it).onEach(SyncDeletion::validate)
+        // Validated, and duplicates of one identity collapse to the newest deletion.
+        SyncMerger.mergeDeletions(json.decodeFromString<List<SyncDeletion>>(it))
     }
     private val firstSeenStore = FailClosedStoredJson("first-seen times") {
         json.decodeFromString<Map<String, Long>>(it)
@@ -414,25 +416,48 @@ class ProjectRepository internal constructor(
      * in the manifest. Returns the inputs with those times filled in.
      */
     suspend fun establishPrecedence(inputs: List<SyncBlob>, now: Long): List<SyncBlob> {
-        val needed = inputs.flatMap { blob ->
-            blob.projects.filter { it.updatedAt <= 0L }.map { "song:${it.id}" } +
-                blob.trashed.filter { it.deletedAt <= 0L }.map { "trash:${it.project.id}" } +
-                blob.recordings.filter { it.precedenceTime <= 0L }.map { "rec:${it.id}" }
-        }.toSet()
-        if (needed.isEmpty()) return inputs
-        var seen: Map<String, Long> = emptyMap()
+        var established = inputs
         projectSaveMutex.withLock {
-            dataStore.edit { prefs ->
-                val known = firstSeenStore.decode(prefs[FIRST_SEEN_KEY] ?: "{}")
-                val next = known + (needed - known.keys).associateWith { now }
-                if (next != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(next)
-                seen = next
+            dataStore.edit { prefs -> established = normalizePrecedence(prefs, inputs, now) }
+        }
+        return established
+    }
+
+    /**
+     * A32 within one edit: missing times among [inputs] and among this device's own songs,
+     * Trash and recording records get their first-seen times (kept by identity), and the
+     * local state stores them, so lists, playback, exports and later merges all use them.
+     */
+    private fun normalizePrecedence(prefs: MutablePreferences, inputs: List<SyncBlob>, now: Long): List<SyncBlob> {
+        val projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+        val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+        val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+        val needed = buildSet {
+            for (blob in inputs) {
+                blob.projects.filter { it.updatedAt <= 0L }.forEach { add("song:${it.id}") }
+                blob.trashed.filter { it.deletedAt <= 0L }.forEach { add("trash:${it.project.id}") }
+                blob.recordings.filter { it.precedenceTime <= 0L }.forEach { add("rec:${it.id}") }
             }
+            projects.filter { it.updatedAt <= 0L }.forEach { add("song:${it.id}") }
+            trash.filter { it.deletedAt <= 0L }.forEach { add("trash:${it.project.id}") }
+            records.filter { it.uploadedAt <= 0L }.forEach { add("rec:${it.id}") }
+        }
+        if (needed.isEmpty()) return inputs
+        val known = firstSeenStore.decode(prefs[FIRST_SEEN_KEY] ?: "{}")
+        val seen = known + (needed - known.keys).associateWith { now }
+        if (seen != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(seen)
+        fun song(p: SongProject) = if (p.updatedAt > 0L) p else p.copy(updatedAt = seen.getValue("song:${p.id}"))
+        fun trashed(t: TrashedSongProject) = if (t.deletedAt > 0L) t else seen.getValue("trash:${t.project.id}")
+            .let { at -> t.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS) }
+        if (projects.any { it.updatedAt <= 0L }) prefs[PROJECTS_KEY] = json.encodeToString(projects.map(::song))
+        if (trash.any { it.deletedAt <= 0L }) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(trash.map(::trashed))
+        if (records.any { it.uploadedAt <= 0L }) {
+            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records.map { r -> if (r.uploadedAt > 0L) r else r.copy(uploadedAt = seen.getValue("rec:${r.id}")) })
         }
         return inputs.map { blob ->
             blob.copy(
-                projects = blob.projects.map { p -> if (p.updatedAt > 0L) p else p.copy(updatedAt = seen.getValue("song:${p.id}")) },
-                trashed = blob.trashed.map { t -> if (t.deletedAt > 0L) t else seen.getValue("trash:${t.project.id}").let { at -> t.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS) } },
+                projects = blob.projects.map(::song),
+                trashed = blob.trashed.map(::trashed),
                 recordings = blob.recordings.map { r -> if (r.precedenceTime > 0L) r else r.copy(uploadedAt = seen.getValue("rec:${r.id}")) }
             )
         }
@@ -497,15 +522,19 @@ class ProjectRepository internal constructor(
             dataStore.edit { prefs ->
                 // Live and Trash recordings known here join the inputs, so a song tombstone
                 // being applied also tombstones takes this device holds only in Trash.
+                // A32: this device's current state and the incoming inputs get their first-seen
+                // times before anything is compared.
+                normalizePrecedence(prefs, emptyList(), System.currentTimeMillis())
                 val current = SyncBlob(
                     projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]"),
                     trashed = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]"),
                     recordings = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]").filter { it.path != null }.map { it.toEntry() },
                     deletions = SyncMerger.mergeDeletions(deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]"))
                 )
+                val incoming = normalizePrecedence(prefs, listOf(merged), System.currentTimeMillis()).single()
                 // A25: a song deleted here after the snapshot stays deleted only if its
                 // tombstone is newer than the incoming version; timestamps decide, not membership.
-                val resolved = SyncMerger.merge(current, merged)
+                val resolved = SyncMerger.merge(current, incoming)
                 val nextProjects = resolved.projects
                 val nextTrash = resolved.trashed
                 val writtenIds = buildSet {

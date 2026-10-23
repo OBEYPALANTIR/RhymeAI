@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -1165,6 +1166,227 @@ class BackupServiceTest {
         assertTrue(done.isFailure || done.getOrNull() == false)
         assertEquals(0, deleteCalls)
         assertTrue(take.exists())
+    }
+
+    private fun secondDevice(name: String): Pair<ProjectRepository, Pair<File, DriveSyncService>> {
+        val files = File(root, "$name-files").also { it.mkdirs() }
+        val repo = ProjectRepository(PreferenceDataStoreFactory.create(scope = scope) { File(root, "$name.preferences_pb") }, MemoryKeyStore())
+        return repo to (files to DriveSyncService(files, MemoryKeyStore(), drive, auth, clientId = { name }, now = { clock }))
+    }
+
+    private suspend fun holdRecording(
+        repo: ProjectRepository, dir: File, id: String, name: String, bytes: ByteArray, time: Long,
+        claimed: String? = null, synced: String? = null
+    ): RecordingRecord {
+        val file = RecordingFileStore.targetFile(dir, "p", name).apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+        val record = RecordingRecord(id, "p", name, time, BackupManifest.sha256Hex(bytes), bytes.size.toLong(),
+            RecordingRecord.RECORDED, path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(dir, file),
+            claimedName = claimed, syncedName = synced)
+        repo.updateRecordingRecords { it + record }
+        return record
+    }
+
+    @Test
+    fun aRenameOnOneDeviceWinsOnBothWithoutFlipFlopping() = runBlocking<Unit> {
+        val (otherRepo, otherSide) = secondDevice("other")
+        val (otherFiles, other) = otherSide
+        repository.saveProjects(listOf(song("p")))
+        otherRepo.saveProjects(listOf(song("p")))
+        val id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val bytes = "the take".toByteArray()
+        // Both devices synced it as old.m4a; then B's user renamed it to new.m4a.
+        holdRecording(repository, filesDir, id, "old.m4a", bytes, 10L, claimed = "old.m4a", synced = "old.m4a")
+        holdRecording(otherRepo, otherFiles, id, "new.m4a", bytes, 10L, claimed = "new.m4a", synced = "old.m4a")
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(
+            RecordingManifestEntry("p", "old.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 10L, id = id)
+        )))
+
+        val names = mutableListOf<String>()
+        repeat(2) {
+            assertIs<SyncResult.Success>(service.backUp(repository))
+            names += remote().recordings.single().fileName
+            assertIs<SyncResult.Success>(other.backUp(otherRepo))
+            names += remote().recordings.single().fileName
+        }
+        assertEquals(listOf("old.m4a", "new.m4a", "new.m4a", "new.m4a"), names)
+        // Another A backup still writes the new name, and A now claims it (no restore needed).
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("new.m4a", remote().recordings.single().fileName)
+        assertEquals("new.m4a", repository.recordingRecords().single().claimedName)
+        // A cleared store has no baseline: it follows Drive's claim instead of reading as a rename.
+        repository.updateRecordingRecords { records -> records.map { it.copy(claimedName = null, syncedName = null) } }
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("new.m4a", remote().recordings.single().fileName)
+        // The next Restore renames A's file to it.
+        assertIs<SyncResult.Success>(service.restore(repository))
+        assertEquals("new.m4a", repository.recordingRecords().single().fileName)
+        assertTrue(RecordingFileStore.targetFile(filesDir, "p", "new.m4a").exists())
+        assertEquals("new.m4a", remote().recordings.single().fileName)
+    }
+
+    @Test
+    fun anAutomaticRenameKeepsTheClaimSoLaterCollisionsAllocateFromIt() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        // An older recording here without a stored claim, and an earlier one in Drive under the same name.
+        val a = holdRecording(repository, filesDir, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "take.m4a", "a take".toByteArray(), 2_000L)
+        val bBytes = "b take".toByteArray()
+        val b = RecordingManifestEntry("p", "take.m4a", sizeBytes = bBytes.size.toLong(), modifiedAt = 0L,
+            sha256 = BackupManifest.sha256Hex(bBytes), uploadedAt = 1_000L, id = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2")
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(b)))
+        putRaw(b, bBytes)
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+        val renamed = repository.recordingRecords().single { it.id == a.id }
+        assertEquals("take 2.m4a", renamed.fileName)
+        assertEquals("take.m4a", renamed.claimedName)
+
+        // A third recording, later, also claims take.m4a: it gets take 3, a keeps take 2.
+        holdRecording(repository, filesDir, "b2a1c3d4-e5f6-4789-8abc-def012345678", "take 9.m4a", "c take".toByteArray(), 3_000L, claimed = "take.m4a")
+        repeat(2) { assertIs<SyncResult.Success>(service.backUp(repository)) }
+        val listed = remote().recordings.associateBy { it.id }
+        assertEquals("take.m4a" to "take.m4a", listed.getValue(b.id).fileName to listed.getValue(b.id).claim)
+        assertEquals("take 2.m4a" to "take.m4a", listed.getValue(a.id).fileName to listed.getValue(a.id).claim)
+        assertEquals("take 3.m4a" to "take.m4a", listed.getValue("b2a1c3d4-e5f6-4789-8abc-def012345678").let { it.fileName to it.claim })
+    }
+
+    @Test
+    fun anImportedRecordingWithoutATimeKeepsItsFirstSeenTimeThroughExportAndAFreshImport() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val bytes = "timeless".toByteArray()
+        val entry = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 0L)
+        BackupArchive.import(BackupArchive.Contents(SyncBlob(projects = listOf(song("p")), recordings = listOf(entry)), mapOf(entry.id to bytes), 0), repository, filesDir)
+
+        // The imported record has its first-seen time, so an older tombstone does not hide it.
+        val record = repository.recordingRecords().single()
+        val firstSeen = record.uploadedAt
+        assertTrue(firstSeen > 0L)
+        assertFalse(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", firstSeen - 1, recordingId = entry.id))).removes(record.toEntry()))
+
+        // Exported and imported into a fresh device: the same time.
+        val archive = File(root, "export.zip")
+        archive.outputStream().use { BackupArchive.write(it, SyncBlob(projects = listOf(song("p"))), snapshotLocalRecordingFiles(filesDir, emptySet(), repository), 2_000L, "device") }
+        val (fresh, freshSide) = secondDevice("fresh")
+        clock += 3_600_000L
+        BackupArchive.import(BackupArchive.read(archive), fresh, freshSide.first)
+        assertEquals(firstSeen, fresh.recordingRecords().single().uploadedAt)
+    }
+
+    @Test
+    fun duplicateManifestsAProbeAndTheApplyAllFixMissingTimesBeforeComparing() = runBlocking<Unit> {
+        // Two manifests: the same song at 500 and at no time; a song tombstone at 750.
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("p", updatedAt = 500L))), 1_000L, "a"))
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(
+            projects = listOf(song("p", updatedAt = 0L)), deletions = listOf(SyncDeletion("p", deletedAt = 750L))
+        ), 1_000L, "b"))
+
+        // The probe sees the song: first seen now, it outlives the tombstone.
+        val probe = assertIs<ProbeResult.Ready>(service.probe(repository)).probe
+        assertEquals(1, probe.projectCount)
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(listOf("p"), remote().projects.map { it.id })
+
+        // The transactional apply does the same for a song stored here without a time.
+        repository.saveProjects(listOf(song("q", updatedAt = 0L)))
+        repository.applySyncResult(SyncBlob(deletions = listOf(SyncDeletion("q", deletedAt = 750L))), repository.snapshotLocalSyncBase())
+        // Kept, with a first-seen time newer than the tombstone.
+        assertTrue(repository.projectsFlow.first().single { it.id == "q" }.updatedAt > 750L)
+    }
+
+    @Test
+    fun aManifestWithoutUploadedAtIsReadAsUnknownAndAMalformedOneIsRefused() = runBlocking<Unit> {
+        val bytes = "absent".toByteArray()
+        val entry = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 5L)
+        fun rehash(edit: (JsonObject) -> JsonObject): ByteArray {
+            val root = Json.parseToJsonElement(String(BackupManifest.encode(SyncBlob(projects = listOf(song("p")), recordings = listOf(entry)), 1_000L, "x"))).jsonObject
+            val body = edit(JsonObject(root - BackupManifest.HASH_KEY))
+            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray()
+        }
+        fun recordingsEdited(change: (JsonObject) -> JsonObject) = rehash { body ->
+            JsonObject(body + ("recordings" to kotlinx.serialization.json.JsonArray(body.getValue("recordings").jsonArray.map { change(it.jsonObject) })))
+        }
+        val absent = recordingsEdited { JsonObject(it - "uploadedAt") }
+        assertEquals(0L, BackupManifest.decode(absent).recordings.single().uploadedAt)
+        assertFailsWith<DamagedBackupException> {
+            BackupManifest.decode(recordingsEdited { JsonObject(it + ("uploadedAt" to kotlinx.serialization.json.JsonPrimitive("soon"))) })
+        }
+
+        // A backup gives the absent time its first-seen time.
+        repository.saveProjects(listOf(song("p")))
+        drive.put(BackupManifest.FILE_NAME, absent)
+        putRaw(entry, bytes)
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(clock, remote().recordings.single().uploadedAt)
+    }
+
+    @Test
+    fun deletionTimesMustBePositiveAndDuplicatesCountTheNewest() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val take = writeMemo("p", "take.m4a", "take".toByteArray(), modifiedAt = 5_000L)
+        val key = androidx.datastore.preferences.core.stringPreferencesKey("sync_deletions_json")
+        // Stored newest first, then an older duplicate of the same identity.
+        dataStore.edit {
+            it[key] = """[{"projectId":"p","fileName":"take.m4a","deletedAt":9000,"recordingId":"${take.id}"},""" +
+                """{"projectId":"p","fileName":"take.m4a","deletedAt":1000,"recordingId":"${take.id}"}]"""
+        }
+        assertEquals(listOf(9_000L), repository.syncDeletions().map { it.deletedAt })
+        // The listing hides it (the newest deletion, 9000, is newer than the take's 5000).
+        val path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, RecordingFileStore.targetFile(filesDir, "p", "take.m4a"))
+        assertEquals(setOf(path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
+        assertTrue(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", 9_000L, take.id), SyncDeletion("p", "take.m4a", 1_000L, take.id))).removes(take))
+
+        // A zero time is refused where it is written and where it is read.
+        assertFails { repository.recordRecordingDeletion("p", "take.m4a", take.id, 0L) }
+        dataStore.edit { it[key] = """[{"projectId":"p","fileName":null,"deletedAt":0}]""" }
+        assertFails { repository.syncDeletions() }
+    }
+
+    @Test
+    fun importPlacesArchiveBytesByIdUnderTheirAllocatedNameInEitherTimeOrder() = runBlocking<Unit> {
+        for ((label, yTime) in listOf("earlier" to 1_000L, "later" to 3_000L)) {
+            val (repo, side) = secondDevice("import-$label")
+            val dir = side.first
+            repo.saveProjects(listOf(song("p")))
+            holdRecording(repo, dir, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "take.m4a", "x take".toByteArray(), 2_000L)
+            val yBytes = "y take".toByteArray()
+            val y = RecordingManifestEntry("p", "take.m4a", sizeBytes = yBytes.size.toLong(), modifiedAt = 0L,
+                sha256 = BackupManifest.sha256Hex(yBytes), uploadedAt = yTime, id = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2")
+
+            BackupArchive.import(BackupArchive.Contents(SyncBlob(projects = listOf(song("p")), recordings = listOf(y)), mapOf(y.id to yBytes), 0), repo, dir)
+
+            val yName = if (yTime < 2_000L) "take.m4a" else "take 2.m4a"
+            assertContentEquals(yBytes, RecordingFileStore.targetFile(dir, "p", yName).readBytes(), label)
+            assertEquals(yName, repo.recordingRecords().single { it.id == y.id }.fileName, label)
+            assertEquals("take.m4a", repo.recordingRecords().single { it.id == y.id }.claimedName, label)
+        }
+    }
+
+    @Test
+    fun anIdTombstoneWithoutAFileNameIsNeverASongTombstone() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p", updatedAt = 100L)))
+        val take = writeMemo("p", "take.m4a", "take".toByteArray(), modifiedAt = 1_000L)
+        val idOnly = SyncDeletion("p", fileName = null, deletedAt = 5_000L, recordingId = take.id)
+        assertFalse(idOnly.isSongTombstone)
+
+        BackupArchive.import(BackupArchive.Contents(SyncBlob(deletions = listOf(idOnly)), emptyMap(), 0), repository, filesDir)
+        quarantineDeletedRecordings(repository, filesDir) // as at launch
+
+        // The song stays; only that recording leaves the library.
+        assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+        assertFalse(RecordingFileStore.targetFile(filesDir, "p", "take.m4a").exists())
+        assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "p").list().orEmpty().size)
+    }
+
+    @Test
+    fun aManifestOrArchiveWithADuplicateRecordingIdIsRefusedBeforeAnythingIsApplied() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val bytes = "take".toByteArray()
+        val entry = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 5L)
+        val twice = SyncBlob(projects = listOf(song("p"), song("new")), recordings = listOf(entry, entry.copy(fileName = "other.m4a", driveName = RecordingManifestEntry.driveNameFor("p", "other.m4a"))))
+        assertFails { twice.validate() }
+        assertFails { BackupArchive.import(BackupArchive.Contents(twice, mapOf(entry.id to bytes), 0), repository, filesDir) }
+        assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+        assertTrue(repository.recordingRecords().isEmpty())
     }
 
     @Test
