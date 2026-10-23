@@ -758,11 +758,15 @@ enum SyncMerger {
         }
         let survivingSongs = Set(projects.map(\.id) + trashed.map(\.id))
         let survivingIds = Set(recordings.map(\.id))
-        let survivingNames = Set(recordings.map { "\($0.projectId)/\($0.fileName)" })
         let deletions = try mergeDeletions(gathered.deletions + covered).filter { deletion in
             if deletion.isSongTombstone { return !survivingSongs.contains(deletion.projectId) }
             if let id = deletion.recordingId { return !survivingIds.contains(id) }
-            return !survivingNames.contains("\(deletion.projectId)/\(deletion.fileName ?? "")")
+            // A pre-v4 name tombstone goes only when the recording it names (the id
+            // derived for that name and audio) survived it.
+            return !recordings.contains { entry in
+                entry.projectId == deletion.projectId && entry.fileName == deletion.fileName
+                    && entry.id == RecordingBackupManifest.legacyRecordingId(projectId: entry.projectId, fileName: entry.fileName, sha256: entry.sha256)
+            }
         }
         return SyncBlob(
             projects: projects.sorted { ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id) },
@@ -852,7 +856,7 @@ enum RecordingBackupManifest {
     static func scanFiles(projectId: String, memosRoot: URL) throws -> [(fileName: String, url: URL)] {
         let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: memosRoot)
         // A folder that is not there has no recordings; one that cannot be read is an error.
-        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        guard try RecordingFiles.exists(folder) else { return [] }
         let urls = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: [.fileSizeKey],
