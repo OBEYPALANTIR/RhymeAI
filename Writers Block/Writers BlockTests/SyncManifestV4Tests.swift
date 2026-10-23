@@ -217,6 +217,53 @@ struct SyncManifestV4Tests {
         #expect(try Data(contentsOf: copy) == Data(contentsOf: Self.sharedArchiveNames))
     }
 
+    @Test func archiveNamesTakeOnlyAShortExtension() async throws {
+        // A 246-byte name whose text after its last dot is 241 bytes: all stem, cut to 240.
+        let long = "abcd." + String(repeating: "x", count: 241)
+        #expect(long.utf8.count == 246)
+        let first = RecordingBackupManifest.archiveName(long, number: nil)
+        let second = RecordingBackupManifest.archiveName(long, number: 2)
+        #expect(first.utf8.count == 240 && first.hasPrefix("abcd.xxx"))
+        #expect(second.utf8.count == 240 && second.hasSuffix(" 2"))
+        // A name ending in a dot has no extension.
+        #expect(RecordingBackupManifest.archiveName("take.", number: 2) == "take. 2")
+        // A 16-byte extension still counts; a 17-byte one does not.
+        #expect(RecordingBackupManifest.archiveName("a." + String(repeating: "e", count: 16), number: 2) == "a 2." + String(repeating: "e", count: 16))
+        #expect(RecordingBackupManifest.archiveName("a." + String(repeating: "e", count: 17), number: 2) == "a." + String(repeating: "e", count: 17) + " 2")
+        // The stem never goes below one code point.
+        #expect(RecordingBackupManifest.archiveName("\u{1F3B5}.m4a", number: 2) == "\u{1F3B5} 2.m4a")
+    }
+
+    @Test func aRecordedTombstoneBeatsARepairedTimeAndTrashCopiesSettleEachTime() async throws {
+        let trash = SyncTrashedSongProject(id: "t", title: "T", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 10),
+                                           deletedAt: Date(timeIntervalSince1970: 300), deleteAfter: Date(timeIntervalSince1970: 300).addingTimeInterval(trashRetentionInterval),
+                                           trashedAtRepaired: true)
+        let tombstone = SyncDeletion(projectId: "t", deletedAt: 200_000)
+        #expect(try SyncMerger.merge(local: SyncBlob(trashed: [trash]), remote: SyncBlob(deletions: [tombstone])).trashed.isEmpty)
+        let song = SyncSongProject(id: "s", title: "S", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 300), precedenceRepaired: true)
+        #expect(try SyncMerger.merge(local: SyncBlob(projects: [song]), remote: SyncBlob(deletions: [SyncDeletion(projectId: "s", deletedAt: 200_000)])).projects.isEmpty)
+
+        // Two Trash copies: deletion time and edit time settled apart.
+        let a = SyncTrashedSongProject(id: "m", title: "A", lyrics: "a", theme: "", updatedAt: Date(timeIntervalSince1970: 500),
+                                       deletedAt: Date(timeIntervalSince1970: 100), deleteAfter: Date(timeIntervalSince1970: 100).addingTimeInterval(trashRetentionInterval),
+                                       precedenceRepaired: true)
+        let b = SyncTrashedSongProject(id: "m", title: "B", lyrics: "b", theme: "", updatedAt: Date(timeIntervalSince1970: 400),
+                                       deletedAt: Date(timeIntervalSince1970: 300), deleteAfter: Date(timeIntervalSince1970: 300).addingTimeInterval(trashRetentionInterval),
+                                       trashedAtRepaired: true)
+        for (first, second) in [(a, b), (b, a)] {
+            let merged = try #require(SyncMerger.merge(local: SyncBlob(trashed: [first]), remote: SyncBlob(trashed: [second])).trashed.first)
+            #expect(merged.deletedAt == Date(timeIntervalSince1970: 100) && !merged.trashedAtRepaired)
+            #expect(merged.updatedAt == Date(timeIntervalSince1970: 400) && !merged.precedenceRepaired && merged.title == "B")
+            #expect(merged.deleteAfter == Date(timeIntervalSince1970: 100).addingTimeInterval(trashRetentionInterval))
+        }
+    }
+
+    @Test func anEmptyRecordingIsNeverOne() async throws {
+        let empty = SyncRecording(id: "e", projectId: "p", fileName: "take.m4a", bytes: 0, sha256: RecordingBackupManifest.sha256Hex(Data()), uploadedAt: Date(timeIntervalSince1970: 5))
+        #expect(throws: (any Error).self) { try empty.validate() }
+        #expect(throws: (any Error).self) { _ = try SyncBlob(recordings: [empty]).encodedManifest() }
+    }
+
     @Test func aDisplayNameIsMetadataNotAPath() async throws {
         for name in ["../verse/idea.m4a", "no extension", "line\nbreak", String(repeating: "\u{E9}", count: 512)] {
             #expect(throws: Never.self) { try SyncIdentity.validateDisplayName(name) }
@@ -751,7 +798,7 @@ struct RecordingLibraryTests {
         #expect(try RecordingFiles.readPendingMoves(for: store.root).quarantine.isEmpty)
     }
 
-    @Test func aFileWithoutATimeIsStampedFirstSeenAndNotDecidedByAnOlderTombstone() async throws {
+    @Test func aFileWithoutATimeLosesToARecordedTombstone() async throws {
         let store = try await makeStore()
         let context = store.container.mainContext
         try write(Data([4]), "song", "old.m4a", root: store.root, modified: 0)
@@ -759,8 +806,14 @@ struct RecordingLibraryTests {
         context.insert(SyncRecordingDeletion(projectId: "song", recordingId: id, fileName: "old.m4a", deletedAt: 1_000))
         try context.save()
         try await store.library.reconcile(context: context)
+        // A38: its first-seen time is a repair, and a recorded tombstone beats a repair.
+        #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(names(RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("song")) == ["\(id).m4a"])
+        // Without a tombstone it is stamped first-seen and marked.
+        try write(Data([5]), "song", "new.m4a", root: store.root, modified: 0)
+        try await store.library.reconcile(context: context)
         let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
-        #expect(row.id == id && row.precedenceTime.epochMilliseconds > 1_000 && row.precedenceRepaired)
+        #expect(row.precedenceTime.epochMilliseconds > 0 && row.precedenceRepaired)
     }
 
     @Test func aSongDeletionWritesRecordingTombstonesOnlyAsTheirOwnType() async throws {
@@ -1044,6 +1097,16 @@ struct RecordingLibraryTests {
 
         #expect(names(outside).isEmpty)
         #expect(FileManager.default.fileExists(atPath: file.path) && FileManager.default.fileExists(atPath: source.path))
+    }
+
+    @Test func emptyFilesAndEmptyAudioAreNeverTakenIn() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        try write(Data(), "song", "empty.m4a", root: store.root)
+        try await store.library.reconcile(context: context)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        let entry = SyncRecording(id: uuid(), projectId: "song", fileName: "take.m4a", bytes: 0, sha256: RecordingBackupManifest.sha256Hex(Data()), uploadedAt: Date(timeIntervalSince1970: 5))
+        #expect(throws: (any Error).self) { try store.library.commitRestored(Data(), entry: entry, origin: .restored, context: context) }
     }
 
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {

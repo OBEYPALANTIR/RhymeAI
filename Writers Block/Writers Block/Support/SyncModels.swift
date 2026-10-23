@@ -84,14 +84,20 @@ struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
     /// True when this tombstone names the recording (or its whole song) and is
     /// newer than the recording's precedence time.
     func covers(_ entry: SyncRecording) -> Bool {
-        covers(projectId: entry.projectId, recordingId: entry.id, sha256: entry.sha256, at: entry.uploadedAt)
+        covers(projectId: entry.projectId, recordingId: entry.id, sha256: entry.sha256, at: entry.uploadedAt, repaired: entry.precedenceRepaired)
+    }
+
+    /// A38: a tombstone (always a recorded time) against a time with its repair
+    /// flag: newer wins, and a recorded time beats a repaired one.
+    func wins(over time: Date, repaired: Bool) -> Bool {
+        repaired || deletedAt > time.epochMilliseconds
     }
 
     /// A pre-id name tombstone names only the recording that name had before v4:
     /// the one whose id is the legacy id derived from that name and its audio. It
     /// never matches another recording that later took the name.
-    func covers(projectId: String, recordingId: String, sha256: String, at time: Date) -> Bool {
-        guard self.projectId == projectId, deletedAt > time.epochMilliseconds else { return false }
+    func covers(projectId: String, recordingId: String, sha256: String, at time: Date, repaired: Bool = false) -> Bool {
+        guard self.projectId == projectId, wins(over: time, repaired: repaired) else { return false }
         if let id = self.recordingId { return id == recordingId }
         guard let fileName else { return true }
         return recordingId == RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: fileName, sha256: sha256)
@@ -406,7 +412,8 @@ struct SyncRecording: Codable, Equatable, Hashable, Sendable {
         try SyncIdentity.validateRecordingId(id)
         try SyncIdentity.validateProjectId(projectId)
         try SyncIdentity.validateDisplayName(fileName)
-        guard bytes >= 0, sha256.count == 64,
+        // An empty recording is never one (as recording and audio import refuse it).
+        guard bytes > 0, sha256.count == 64,
               sha256.unicodeScalars.allSatisfy({ "0123456789abcdef".unicodeScalars.contains($0) }) else {
             throw SyncValidationError.invalidRecording
         }
@@ -822,16 +829,16 @@ enum SyncMerger {
         let resolved = resolveActiveTrashConflicts(projects: gathered.projects, trashed: gathered.trashed)
         let songTombstones = Dictionary(gathered.deletions.filter(\.isSongTombstone).map { ($0.projectId, $0) }) { first, _ in first }
         let projects = resolved.projects.filter { project in
-            !(songTombstones[project.id].map { $0.deletedAt > project.updatedAt.epochMilliseconds } ?? false)
+            !(songTombstones[project.id].map { $0.wins(over: project.updatedAt, repaired: project.precedenceRepaired) } ?? false)
         }
         let trashed = resolved.trashed.filter { trash in
             // A38: against the Trash entry's deletion time only; its edit time never
             // overrides a tombstone.
-            !(songTombstones[trash.id].map { $0.deletedAt > trash.deletedAt.epochMilliseconds } ?? false)
+            !(songTombstones[trash.id].map { $0.wins(over: trash.deletedAt, repaired: trash.trashedAtRepaired) } ?? false)
         }
         let recordings = gathered.recordings.filter { entry in !gathered.deletions.contains { $0.covers(entry) } }
         let covered = gathered.recordings.compactMap { entry -> SyncDeletion? in
-            guard let song = songTombstones[entry.projectId], song.deletedAt > entry.uploadedAt.epochMilliseconds else { return nil }
+            guard let song = songTombstones[entry.projectId], song.wins(over: entry.uploadedAt, repaired: entry.precedenceRepaired) else { return nil }
             return SyncDeletion(projectId: entry.projectId, recordingId: entry.id, fileName: entry.fileName, deletedAt: song.deletedAt)
         }
         let survivingSongs = Set(projects.map(\.id) + trashed.map(\.id))
@@ -889,8 +896,26 @@ enum SyncMerger {
     private static func mergeTrash(local: [SyncTrashedSongProject], remote: [SyncTrashedSongProject]) -> [SyncTrashedSongProject] {
         var byId: [String: SyncTrashedSongProject] = [:]
         for trashed in local + remote {
-            if let existing = byId[trashed.id], !trashBeats(trashed, existing) { continue }
-            byId[trashed.id] = trashed
+            guard var merged = byId[trashed.id] else {
+                byId[trashed.id] = trashed
+                continue
+            }
+            // A38: the deletion time and the song's edit time are settled apart, each
+            // with its own flag; the text follows the edit time that stands.
+            if standingTime((trashed.deletedAt, trashed.trashedAtRepaired), over: (merged.deletedAt, merged.trashedAtRepaired)) == true {
+                merged.deletedAt = trashed.deletedAt
+                merged.trashedAtRepaired = trashed.trashedAtRepaired
+            }
+            let edit = standingTime((trashed.updatedAt, trashed.precedenceRepaired), over: (merged.updatedAt, merged.precedenceRepaired))
+            if edit == true || (edit == nil && (trashed.title, trashed.lyrics, trashed.theme) > (merged.title, merged.lyrics, merged.theme)) {
+                merged.updatedAt = trashed.updatedAt
+                merged.precedenceRepaired = trashed.precedenceRepaired
+                merged.title = trashed.title
+                merged.lyrics = trashed.lyrics
+                merged.theme = trashed.theme
+            }
+            merged.deleteAfter = merged.deletedAt.addingTimeInterval(trashRetentionInterval)
+            byId[trashed.id] = merged
         }
         return Array(byId.values)
     }
@@ -902,14 +927,6 @@ enum SyncMerger {
         if new.1 != old.1 { return !new.1 }
         if new.0 == old.0 { return nil }
         return new.1 ? new.0 < old.0 : new.0 > old.0
-    }
-
-    /// A38: each time is compared with its own flag: the deletion time first, then
-    /// the edit time, then the content.
-    private static func trashBeats(_ new: SyncTrashedSongProject, _ old: SyncTrashedSongProject) -> Bool {
-        if let decided = standingTime((new.deletedAt, new.trashedAtRepaired), over: (old.deletedAt, old.trashedAtRepaired)) { return decided }
-        if let decided = standingTime((new.updatedAt, new.precedenceRepaired), over: (old.updatedAt, old.precedenceRepaired)) { return decided }
-        return (new.title, new.lyrics, new.theme) > (old.title, old.lyrics, old.theme)
     }
 
     private static func resolveActiveTrashConflicts(projects: [SyncSongProject], trashed: [SyncTrashedSongProject]) -> (projects: [SyncSongProject], trashed: [SyncTrashedSongProject]) {
@@ -1002,23 +1019,32 @@ enum RecordingBackupManifest {
         name.precomposedStringWithCanonicalMapping.lowercased()
     }
 
-    /// A display name as an archive file name: path separators and leading dots
-    /// become "_", and the stem is cut (never inside a code point) so the whole name,
-    /// with ` <number>` when given, is at most 240 bytes of UTF-8.
+    /// A display name as an archive file name (A39): path separators and leading
+    /// dots become "_"; the extension is the text after the last dot only when it is
+    /// 1–16 bytes of UTF-8 and leaves a stem (otherwise the whole name is the stem);
+    /// the stem is cut, never inside a code point and never below one, so stem,
+    /// ` <number>` and extension fit in 240 bytes.
     static func archiveName(_ displayName: String, number: Int?) -> String {
         var clean = displayName.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
         let dots = clean.prefix { $0 == "." }.count
         clean = String(repeating: "_", count: dots) + clean.dropFirst(dots)
-        let pathExtension = (clean as NSString).pathExtension
-        let ext = pathExtension.isEmpty ? "" : "." + pathExtension
-        let stem = String(clean.dropLast(ext.count))
+        var stem = clean
+        var ext = ""
+        if let dot = clean.lastIndex(of: ".") {
+            let candidate = clean[clean.index(after: dot)...]
+            let base = clean[..<dot]
+            if !candidate.isEmpty, candidate.utf8.count <= 16, !base.isEmpty {
+                stem = String(base)
+                ext = "." + candidate
+            }
+        }
         let suffix = number.map { " \($0)" } ?? ""
         let budget = RecordingFiles.maxFileNameBytes - (suffix + ext).utf8.count
         var cut = String.UnicodeScalarView()
         var used = 0
         for scalar in stem.unicodeScalars {
             let size = String(scalar).utf8.count
-            guard used + size <= budget else { break }
+            guard used + size <= budget || cut.isEmpty else { break }
             cut.append(scalar)
             used += size
         }

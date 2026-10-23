@@ -583,7 +583,7 @@ final class RecordingLibrary: RecordingPublishing {
                     guard write.row.modelContext != nil, !write.row.isDeleted, write.row.sha256 == sha,
                           url(of: write.row).map(RecordingFiles.canonicalPath) == RecordingFiles.canonicalPath(write.to),
                           try RecordingFiles.readPendingMoves(for: memosRoot) == movesAfterCommit,
-                          try !DeletionStore.all(in: context).contains(where: { $0.covers(projectId: write.row.projectId, recordingId: write.row.id, sha256: sha, at: write.row.precedenceTime) }),
+                          try !DeletionStore.all(in: context).contains(where: { $0.covers(projectId: write.row.projectId, recordingId: write.row.id, sha256: sha, at: write.row.precedenceTime, repaired: write.row.precedenceRepaired) }),
                           try !RecordingFiles.exists(write.to) else {
                         // Its place holds other bytes: reported; the row's audio stays in its row.
                         if try RecordingFiles.exists(write.to) { plan.result.needsAttention.append(write.to) }
@@ -757,7 +757,7 @@ final class RecordingLibrary: RecordingPublishing {
             if file.trashed, let entry = detachedByDestination[file.path] {
                 guard let sha = file.sha256 else { continue }
                 if entry.sha256 == sha {
-                    if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: entry.recordingId, sha256: sha, at: Date(millisecondsSince1970: entry.at)) }) {
+                    if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: entry.recordingId, sha256: sha, at: Date(millisecondsSince1970: entry.at), repaired: entry.repaired ?? false) }) {
                         toQuarantine.append((file.url, sha, entry.recordingId))
                     }
                     continue
@@ -769,7 +769,8 @@ final class RecordingLibrary: RecordingPublishing {
                 candidates.append(Candidate(id: id, displayName: entry.displayName, trashedAt: file.modified, time: file.modified, file: file))
                 continue
             }
-            guard let sha = file.sha256 else { continue }
+            // An empty file is never a recording (as recording and import refuse it).
+            guard let sha = file.sha256, file.size > 0 else { continue }
             if let id = file.storedId {
                 // Copies written for a draft, taken in under the identity recorded for them.
                 if let entry = adoptByPath[file.path], entry.sha256 == sha, rowsById[entry.recordingId] == nil {
@@ -780,7 +781,7 @@ final class RecordingLibrary: RecordingPublishing {
                     if rowsById[id] != nil {
                         // A second copy of a recording held elsewhere.
                         toQuarantine.append((file.url, sha, id))
-                    } else if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: id, sha256: sha, at: Date(millisecondsSince1970: mirror.at)) }) {
+                    } else if deletions.contains(where: { $0.covers(projectId: file.projectId, recordingId: id, sha256: sha, at: Date(millisecondsSince1970: mirror.at), repaired: mirror.repaired) }) {
                         // Removed on another device, and a deletion of it wins here by time (A28).
                         toQuarantine.append((file.url, sha, id))
                     } else {
@@ -837,7 +838,7 @@ final class RecordingLibrary: RecordingPublishing {
             let precedence: Date = existing?.precedenceTime
                 ?? group.map { $0.time.epochMilliseconds > 0 ? $0.time : firstSeen(id) }.min()!
             let projectId = existing?.projectId ?? best.file.projectId
-            if let tombstone = deletions.first(where: { $0.covers(projectId: projectId, recordingId: id, sha256: best.file.sha256 ?? "", at: precedence) }) {
+            if let tombstone = deletions.first(where: { $0.covers(projectId: projectId, recordingId: id, sha256: best.file.sha256 ?? "", at: precedence, repaired: existing?.precedenceRepaired ?? repaired) }) {
                 if tombstone.isSongTombstone {
                     try DeletionStore.upsert(SyncDeletion(projectId: projectId, recordingId: id, fileName: existing?.displayName ?? best.displayName,
                                                           deletedAt: tombstone.deletedAt), in: context)
@@ -917,7 +918,7 @@ final class RecordingLibrary: RecordingPublishing {
         //    tombstone in this save); their audio goes to quarantine.
         var kept: [Recording] = []
         for row in rows where !row.isDeleted {
-            guard let tombstone = deletions.first(where: { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }) else {
+            guard let tombstone = deletions.first(where: { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime, repaired: row.precedenceRepaired) }) else {
                 kept.append(row)
                 continue
             }
@@ -1377,7 +1378,7 @@ final class RecordingLibrary: RecordingPublishing {
     /// within the cap.
     @discardableResult
     func commitRestored(_ audio: Data, entry: SyncRecording, origin: Recording.Origin, context: ModelContext) throws -> Bool {
-        guard Int64(audio.count) == entry.bytes, RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
+        guard !audio.isEmpty, Int64(audio.count) == entry.bytes, RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
             throw SyncValidationError.invalidRecording
         }
         try requireChecked(context)
@@ -1528,7 +1529,7 @@ final class RecordingLibrary: RecordingPublishing {
     /// tombstone by id, in the caller's transaction, and its row goes.
     static func tombstoneRecordings(ofProject projectId: String, deletedAt: Int64, in context: ModelContext) throws -> [Recording] {
         let rows = try context.fetch(FetchDescriptor<Recording>()).filter {
-            $0.projectId == projectId && $0.precedenceTime.epochMilliseconds < deletedAt
+            $0.projectId == projectId && ($0.precedenceRepaired || $0.precedenceTime.epochMilliseconds < deletedAt)
         }
         for row in rows {
             try DeletionStore.upsert(SyncDeletion(projectId: projectId, recordingId: row.id, fileName: row.displayName, deletedAt: deletedAt), in: context)

@@ -1155,7 +1155,7 @@ struct BackupCoreTests {
         harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
             projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 0))],
             recordings: [zero, older],
-            // An older positive tombstone does not beat a time that was missing.
+            // A38: a recorded tombstone beats a time that was missing, however late the repair.
             deletions: [SyncDeletion(projectId: "song", recordingId: "z", fileName: "take.m4a", deletedAt: 1_000)]
         ).encodedManifest())
         harness.drive.seedRecording(zero, content: audio)
@@ -1167,12 +1167,9 @@ struct BackupCoreTests {
             manifests.append(try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName))))
         }
         let first = try #require(manifests.first)
-        #expect(first.recordings.first { $0.id == "z" }.map { $0.uploadedAt.epochMilliseconds > 0 } == true)
-        #expect(first.projects.first.map { $0.updatedAt.epochMilliseconds > 0 } == true)
-        #expect(Set(first.recordings.map(\.id)) == ["z", "o"])
-        #expect(first.recordings.allSatisfy { $0.fileName == "take.m4a" })
-        // The time it got is marked as a repair (A37).
-        #expect(first.recordings.first { $0.id == "z" }?.precedenceRepaired == true && first.recordings.first { $0.id == "o" }?.precedenceRepaired == false)
+        #expect(first.projects.first.map { $0.updatedAt.epochMilliseconds > 0 && $0.precedenceRepaired } == true)
+        #expect(first.recordings.map(\.id) == ["o"] && first.recordings.first?.precedenceRepaired == false)
+        #expect(first.deletions.contains { $0.recordingId == "z" })
         for manifest in manifests.dropFirst() {
             #expect(manifest.recordings == first.recordings)
             #expect(manifest.projects == first.projects)
@@ -1361,6 +1358,30 @@ struct BackupCoreTests {
         try await harness.service.backupNow(modelContext: harness.context)
         _ = try harness.service.exportArchive(modelContext: harness.context, now: Date())
         #expect(try snapshot() == before)
+    }
+
+    @MainActor
+    @Test func aRecordingHeldHereWithOtherAudioThanTheBackupIsReportedAndBothAreKept() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        let mine = Data([1, 1]), theirs = Data([2, 2])
+        let id = UUID().uuidString.lowercased()
+        let local = SyncRecording(id: id, projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(mine), uploadedAt: Date(timeIntervalSince1970: 10))
+        try harness.service.library.commitRestored(mine, entry: local, origin: .restored, context: harness.context)
+        var remote = local
+        remote.sha256 = RecordingBackupManifest.sha256Hex(theirs)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))], recordings: [remote]
+        ).encodedManifest())
+        harness.drive.seedRecording(remote, content: theirs)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(harness.service.lastReport?.localDigestConflicts == ["take.m4a"])
+        try await harness.service.restoreNow(modelContext: harness.context)
+        #expect(harness.service.lastReport?.localDigestConflicts == ["take.m4a"])
+
+        #expect(try Data(contentsOf: harness.file(id, "song")) == mine)
+        #expect(harness.drive.contents(named: remote.driveName) == [theirs])
     }
 
     @MainActor

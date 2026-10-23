@@ -1630,8 +1630,18 @@ final class EditorViewModel: ObservableObject {
         )
         // Chosen on the normalized deadline: a row without a deletion time is never
         // expired, and a repaired row's deadline is its repaired time plus retention (A37).
-        let expiredProjects = ((try? context.fetch(descriptor)) ?? []).filter {
+        let dueProjects = ((try? context.fetch(descriptor)) ?? []).filter {
             $0.deletedAt.epochMilliseconds > 0 && (!$0.trashedAtRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
+        }
+        // A song whose folders hold a file the check has not verified (for example a
+        // recording waiting for its place) is kept for a later attempt; the others go.
+        let expiredProjects = dueProjects.filter { project in
+            guard let recordingLibrary else { return true }
+            return (try? recordingLibrary.checkSongDeletable(project.id, in: context)) != nil
+        }
+        if expiredProjects.count < dueProjects.count {
+            let kept = dueProjects.count - expiredProjects.count
+            errorMessage = "\(kept) expired \(kept == 1 ? "song was" : "songs were") kept in Trash because \(kept == 1 ? "its" : "their") recordings are not all checked yet."
         }
         guard !expiredProjects.isEmpty || !expiredMemos.isEmpty else {
             scheduleTrashPurge()
@@ -1639,8 +1649,6 @@ final class EditorViewModel: ObservableObject {
         }
         let projectIDs = expiredProjects.map(\.id)
         do {
-            // Every file of each song is one the check verified, before anything changes.
-            for projectId in projectIDs { try recordingLibrary?.checkSongDeletable(projectId, in: context) }
             for projectId in projectIDs {
                 try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
                 _ = try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context)
@@ -1711,11 +1719,12 @@ final class EditorViewModel: ObservableObject {
             if repaired { try saveModelContext(context) }
             let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: context))
             guard !deletions.isEmpty else { return }
-            // A tombstone removes a song only when it is newer than the song's last change.
+            // A tombstone removes a song only when it is newer than the song's last change,
+            // or that time is a repair (A38: a recorded time beats a repaired one).
             let tombstones = Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
             var deletedProjects = Set(tombstones.keys)
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
-                if tombstones[project.id]! > project.updatedAt.epochMilliseconds {
+                if project.precedenceRepaired || tombstones[project.id]! > project.updatedAt.epochMilliseconds {
                     context.delete(project)
                 } else {
                     deletedProjects.remove(project.id)
@@ -1723,7 +1732,7 @@ final class EditorViewModel: ObservableObject {
             }
             for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) where tombstones[project.id] != nil {
                 // A38: a tombstone against the Trash entry's deletion time only.
-                if tombstones[project.id]! > project.deletedAt.epochMilliseconds {
+                if project.trashedAtRepaired || tombstones[project.id]! > project.deletedAt.epochMilliseconds {
                     context.delete(project)
                 } else {
                     deletedProjects.remove(project.id)
@@ -2330,7 +2339,7 @@ final class EditorViewModel: ObservableObject {
         guard let rows = try? modelContext.fetch(FetchDescriptor<Recording>()),
               let deletions = try? DeletionStore.all(in: modelContext) else { return false }
         guard let row = rows.first(where: { $0.fileURL(memosRoot: recordingLibrary.memosRoot, trashRoot: recordingLibrary.trashRoot).map(RecordingFiles.canonicalPath) == path }) else { return true }
-        return !deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
+        return !deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime, repaired: row.precedenceRepaired) }
     }
 
     /// Brings `Recording` rows (iCloud) and memo files in step. Runs at launch, when
@@ -2625,6 +2634,10 @@ final class EditorViewModel: ObservableObject {
         if report.unmovedLegacyRecordings > 0 {
             let count = report.unmovedLegacyRecordings
             notes.append("\(count) older \(count == 1 ? "recording" : "recordings") could not be moved; the older backup is kept.")
+        }
+        if !report.localDigestConflicts.isEmpty {
+            let count = report.localDigestConflicts.count
+            notes.append("\(count) \(count == 1 ? "recording here holds" : "recordings here hold") different audio than the backup lists for \(count == 1 ? "it" : "them"); both are kept: \(report.localDigestConflicts.joined(separator: ", ")).")
         }
         if !report.notUploadedConflicts.isEmpty {
             let count = report.notUploadedConflicts.count

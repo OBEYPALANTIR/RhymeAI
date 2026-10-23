@@ -450,7 +450,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func launchTimeDeletionsKeepSongsForIdTombstonesAndTimelessSongs() async throws {
+    @Test func launchTimeDeletionsKeepSongsForIdTombstonesButNotTimelessSongs() async throws {
         let (viewModel, _, context, container) = try await Self.libraryViewModel("LaunchDeletions")
         _ = container
         context.insert(SongProject(id: "kept", title: "Kept", updatedAt: Date(timeIntervalSince1970: 50)))
@@ -461,8 +461,9 @@ struct TrashLifecycleTests {
         viewModel.modelContext = context
         await viewModel.recordingsLaunchTask?.value
 
-        #expect(Set(try context.fetch(FetchDescriptor<SongProject>()).map(\.id)) == ["kept", "timeless"])
-        #expect(try context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "timeless" }.map { $0.updatedAt.epochMilliseconds > 1_000 } == true)
+        // A recording's tombstone never removes its song; a song tombstone beats a repaired time (A38).
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["kept"])
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.projectId) == ["timeless"])
     }
 
     @MainActor
@@ -561,6 +562,30 @@ struct TrashLifecycleTests {
         await viewModel.keepRecordingSeparately(place)
         #expect(try Data(contentsOf: place).first == 1 && !FileManager.default.fileExists(atPath: live.path))
         #expect(try OversizedRecordings.read(for: library.memosRoot).values.filter { $0.completed != false }.count == 2)
+    }
+
+    @MainActor
+    @Test func expiryKeepsOnlyTheSongWhoseRecordingsAreNotAllChecked() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("PerSongExpiry")
+        _ = container
+        let long = Date(timeIntervalSince1970: 1_000)
+        for id in ["clear", "blocked"] {
+            context.insert(TrashedSongProject(id: id, title: id, lyrics: "", theme: "", updatedAt: long, deletedAt: long))
+        }
+        try context.save()
+        // A file in the blocked song's folder that waits for its place (both files reported).
+        let derived = RecordingBackupManifest.legacyRecordingId(projectId: "blocked", fileName: "a.m4a", sha256: RecordingBackupManifest.sha256Hex(Data([1])))
+        for (name, bytes) in [("a.m4a", Data([1])), ("\(derived).m4a", Data([9]))] {
+            let url = library.memosRoot.appendingPathComponent("blocked/\(name)")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: url)
+        }
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id) == ["blocked"])
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.projectId) == ["clear"])
+        #expect(FileManager.default.fileExists(atPath: library.memosRoot.appendingPathComponent("blocked/a.m4a").path))
     }
 
     @MainActor
