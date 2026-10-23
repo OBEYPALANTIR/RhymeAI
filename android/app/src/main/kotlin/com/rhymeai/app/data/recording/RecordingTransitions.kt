@@ -312,9 +312,6 @@ internal object RecordingTransitions {
         val sha = RecordingFileStore.sha256Hex(source)
         val length = source.length()
         if (length <= 0L) throw IOException("An empty recording is never saved")
-        // Playback stops before the intent is written: a cancellation here leaves no record
-        // behind, while one left after its caller deletes staging would match neither end.
-        beforeBytesMove?.invoke(setOf(id))
         val claim = newToken()
         val record = RecordingRecord(
             id, projectId, displayName, uploadedAt, sha, length, origin,
@@ -325,6 +322,7 @@ internal object RecordingTransitions {
             pendingClaim = claim
         )
         catalog.putRecord(record)
+        beforeBytesMove?.invoke(setOf(id))
         try {
             moveNoReplace(source, target, claim, sha, length)
         } catch (e: Exception) {
