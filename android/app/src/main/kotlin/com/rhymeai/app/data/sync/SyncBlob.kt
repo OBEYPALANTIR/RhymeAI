@@ -219,7 +219,8 @@ data class RecordingManifestEntry(
         SyncIdentity.validateDisplayName(fileName)
         SyncIdentity.validateRecordingId(id)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
-        require(sizeBytes >= 0L) { "Invalid recording size" }
+        // An empty recording is never valid, on any path (recording, import, archive, restore).
+        require(sizeBytes > 0L) { "Invalid recording size" }
         require(uploadedAt >= 0L) { "Invalid recording time" }
     }
 
@@ -388,18 +389,18 @@ object SyncMerger {
     ): Resolved {
         val tombstones = Tombstones(deletions)
         val keptProjects = projects.filterNot { project ->
-            tombstones.songs[project.id]?.let { it.deletedAt > project.updatedAt } == true
+            tombstones.songs[project.id]?.let { deletes(it, project.updatedAt, project.precedenceRepaired) } == true
         }
         val keptTrash = trashed.filterNot { entry ->
             // A38: a Trash entry against a tombstone is its trash time only; its song's own time never overrides one.
-            tombstones.songs[entry.project.id]?.let { it.deletedAt > entry.deletedAt } == true
+            tombstones.songs[entry.project.id]?.let { deletes(it, entry.deletedAt, entry.deletedAtRepaired) } == true
         }
         val keptRecordings = recordings.filterNot(tombstones::removes)
         // Each recording a song tombstone removes gets its own tombstone, so reviving
         // the song later (which drops the song tombstone) cannot bring the audio back.
         val covered = recordings.mapNotNull { entry ->
             val songTombstone = tombstones.songs[entry.projectId] ?: return@mapNotNull null
-            if (songTombstone.deletedAt <= entry.precedenceTime) return@mapNotNull null
+            if (!deletes(songTombstone, entry.precedenceTime, entry.precedenceRepaired)) return@mapNotNull null
             SyncDeletion(entry.projectId, entry.fileName, songTombstone.deletedAt, recordingId = entry.id)
         }
         val allDeletions = if (covered.isEmpty()) deletions else mergeDeletions(deletions + covered)
@@ -435,9 +436,10 @@ object SyncMerger {
 
         fun removes(entry: RecordingManifestEntry): Boolean {
             val time = entry.precedenceTime
-            return songs[entry.projectId]?.let { it.deletedAt > time } == true ||
-                byId[entry.id]?.let { it.deletedAt > time } == true ||
-                byProjectNames[entry.projectId].orEmpty().any { it.deletedAt > time && namesLegacy(it, entry) }
+            val repaired = entry.precedenceRepaired
+            return songs[entry.projectId]?.let { deletes(it, time, repaired) } == true ||
+                byId[entry.id]?.let { deletes(it, time, repaired) } == true ||
+                byProjectNames[entry.projectId].orEmpty().any { deletes(it, time, repaired) && namesLegacy(it, entry) }
         }
 
         companion object {
@@ -464,6 +466,13 @@ object SyncMerger {
         return byId.values.toList()
     }
 
+    /**
+     * A38: whether [tombstone] (always a real time) wins over a held time: a real time beats
+     * a repair, so a tombstone removes anything whose time is a repair; otherwise it must be newer.
+     */
+    internal fun deletes(tombstone: SyncDeletion, time: Long, repaired: Boolean): Boolean =
+        supersedes(tombstone.deletedAt, false, time, repaired)
+
     private fun mergeTrash(
         local: List<TrashedSongProject>,
         remote: List<TrashedSongProject>
@@ -474,9 +483,14 @@ object SyncMerger {
         }
         for (entry in remote) {
             val existing = byId[entry.project.id]
-            if (existing == null || supersedes(entry.deletedAt, entry.deletedAtRepaired, existing.deletedAt, existing.deletedAtRepaired)) {
+            if (existing == null) {
                 byId[entry.project.id] = entry
+                continue
             }
+            // A38: the Trash time and the song inside are settled independently, each by its own flag.
+            val trash = if (supersedes(entry.deletedAt, entry.deletedAtRepaired, existing.deletedAt, existing.deletedAtRepaired)) entry else existing
+            val song = if (supersedes(entry.project.updatedAt, entry.project.precedenceRepaired, existing.project.updatedAt, existing.project.precedenceRepaired)) entry.project else existing.project
+            byId[entry.project.id] = trash.copy(project = song)
         }
         return byId.values.toList()
     }

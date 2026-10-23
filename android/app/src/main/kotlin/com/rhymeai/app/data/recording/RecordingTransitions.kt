@@ -262,9 +262,25 @@ internal object RecordingTransitions {
      * Gives every live and Trash file of [projectIds] a record (and its id name) before a
      * song deletion or expiry builds its recording tombstones from the records. All or
      * nothing: an unreadable file or folder throws, and the caller must not delete anything.
+     * A file left under its old name (its id name holds other bytes) must have a record, so
+     * its identity is tombstoned with the song; one without a record stops the deletion.
      */
     suspend fun adopt(catalog: RecordingCatalog, filesDir: File, projectIds: Set<String>) {
-        if (projectIds.isNotEmpty()) snapshot(catalog, filesDir, emptySet(), projectIds)
+        if (projectIds.isEmpty()) return
+        val left = mutableListOf<File>()
+        snapshot(catalog, filesDir, emptySet(), projectIds, notListed = left)
+        if (left.isEmpty()) return
+        val records = catalog.recordingRecords()
+        // Identified: a record of these very bytes, at this path or (a row awaiting migration) by its derived id.
+        val unidentified = left.filterNot { file ->
+            val projectId = file.parentFile?.name ?: return@filterNot false
+            val name = VoiceMemoService.parseTrashedName(file.name)?.second ?: file.name
+            val sha = RecordingFileStore.sha256Hex(file)
+            val path = relativePath(filesDir, file)
+            val legacyId = RecordingManifestEntry.legacyRecordingId(projectId, name, sha)
+            records.any { it.sha256 == sha && (it.path == path || it.id == legacyId) }
+        }
+        if (unidentified.isNotEmpty()) throw IOException("${unidentified.size} recording file(s) could not be identified yet")
     }
 
     /**

@@ -1080,7 +1080,12 @@ class DriveSyncService(
             val uploaded = HashMap<String, String>()
             // A40: one id, one digest forever. A raw object under this id with another digest
             // (or none) is never written over; the recording is reported instead.
-            var conflicting = 0
+            // A recording held here (live or in Trash) whose bytes differ from the merged entry for
+            // its id: Drive's copy is kept and listed, this device's audio stays here, and neither
+            // is uploaded over or downloaded over the other. Reported, before the upload plan
+            // leaves it out.
+            val mergedById = merged.recordings.associateBy { it.id }
+            var conflicting = localFiles.count { held -> mergedById[held.entry.id]?.let { it.sha256 != held.entry.sha256 } == true }
             val presentNames = merged.recordings.filter(::onDrive).mapTo(HashSet()) { BackupManifest.recordingDriveName(it.id) }
             val uploadable = liveFiles.map { it.entry }.filter { it.isTransferable }
             for (entry in RecordingSyncPlanner.planUploads(uploadable, merged.recordings, presentNames)) {
@@ -1259,7 +1264,7 @@ class DriveSyncService(
         val tombstones = SyncMerger.mergeDeletions(written.deletions + legacy.deletions)
             .filter { it.isSongTombstone }.associateBy { it.projectId }
         return (legacy.projects + legacy.trashed.map { it.project }).count { old ->
-            if (tombstones[old.id]?.let { it.deletedAt > old.updatedAt } == true) return@count false
+            if (tombstones[old.id]?.let { SyncMerger.deletes(it, old.updatedAt, old.precedenceRepaired) } == true) return@count false
             val kept = writtenById[old.id] ?: return@count true
             !(kept.updatedAt > old.updatedAt ||
                 (kept.updatedAt == old.updatedAt && kept.title == old.title && kept.lyrics == old.lyrics && kept.theme == old.theme))

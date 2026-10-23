@@ -361,7 +361,8 @@ class ProjectRepository internal constructor(
         val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
         return ids.flatMap { id ->
             listOf(SyncDeletion(projectId = id, deletedAt = deletedAt)) +
-                records.filter { it.projectId == id && it.path != null }
+                // Every record of the song, a row whose file awaits migration (no path) included.
+                records.filter { it.projectId == id }
                     .map { SyncDeletion(id, it.displayName, deletedAt, recordingId = it.id) }
         }
     }

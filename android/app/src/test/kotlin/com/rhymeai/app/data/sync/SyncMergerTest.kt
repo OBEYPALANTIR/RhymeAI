@@ -235,4 +235,37 @@ class SyncMergerTest {
         val later = SyncMerger.merge(SyncBlob(trashed = listOf(trashed.copy(deletedAt = 250L))), SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))))
         assertEquals(listOf("s"), later.trashed.map { it.project.id })
     }
+
+    @Test
+    fun aRealTombstoneBeatsARepairedTimeWhateverTheNumbers() {
+        // A38: Trash time 300 is a repair, the tombstone at 200 is real: the tombstone wins.
+        val trashed = TrashedSongProject(SongProject(id = "s", updatedAt = 100L), deletedAt = 300L, deletedAtRepaired = true)
+        val merged = SyncMerger.merge(SyncBlob(trashed = listOf(trashed)), SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))))
+        assertTrue(merged.trashed.isEmpty())
+        assertEquals(listOf("s"), merged.deletions.map { it.projectId })
+        // The same for an active song and a recording whose times are repairs.
+        val active = SongProject(id = "a", updatedAt = 900L, precedenceRepaired = true)
+        val take = RecordingManifestEntry("a", "take.m4a", sizeBytes = 1L, modifiedAt = 0L, sha256 = "a".repeat(64), uploadedAt = 900L, precedenceRepaired = true)
+        val both = SyncMerger.merge(SyncBlob(projects = listOf(active), recordings = listOf(take)),
+            SyncBlob(deletions = listOf(SyncDeletion("a", deletedAt = 200L))))
+        assertTrue(both.projects.isEmpty() && both.recordings.isEmpty())
+        // A real time newer than the tombstone still survives it.
+        val real = SyncMerger.merge(SyncBlob(projects = listOf(active.copy(precedenceRepaired = false))), SyncBlob(deletions = listOf(SyncDeletion("a", deletedAt = 200L))))
+        assertEquals(listOf("a"), real.projects.map { it.id })
+    }
+
+    @Test
+    fun twoTrashCopiesSettleTheirTrashTimeAndTheirSongIndependently() {
+        // One copy was trashed later; the other holds the newer edit of the song.
+        val laterTrash = TrashedSongProject(SongProject(id = "s", lyrics = "old", updatedAt = 100L), deletedAt = 500L)
+        val newerSong = TrashedSongProject(SongProject(id = "s", lyrics = "new", updatedAt = 400L), deletedAt = 300L)
+        for ((one, two) in listOf(laterTrash to newerSong, newerSong to laterTrash)) {
+            val merged = SyncMerger.merge(SyncBlob(trashed = listOf(one)), SyncBlob(trashed = listOf(two))).trashed.single()
+            assertEquals(500L to "new", merged.deletedAt to merged.project.lyrics)
+        }
+        // Repairs on each side follow their own flag: a real song time beats a repaired one.
+        val repairedSong = newerSong.copy(project = newerSong.project.copy(updatedAt = 900L, precedenceRepaired = true, lyrics = "repaired"))
+        val merged = SyncMerger.merge(SyncBlob(trashed = listOf(repairedSong)), SyncBlob(trashed = listOf(laterTrash))).trashed.single()
+        assertEquals(500L to "old", merged.deletedAt to merged.project.lyrics)
+    }
 }

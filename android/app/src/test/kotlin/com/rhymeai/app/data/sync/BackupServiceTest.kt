@@ -1044,7 +1044,7 @@ class BackupServiceTest {
     }
 
     @Test
-    fun aRecordingOrSongWithoutATimeIsNotDeletedByAnOlderTombstone() = runBlocking<Unit> {
+    fun aRecordingOrSongWithoutATimeLosesToARealTombstone() = runBlocking<Unit> {
         val bytes = "timeless take".toByteArray()
         val timeless = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 0L)
         putRemote(SyncBlob(
@@ -1059,10 +1059,12 @@ class BackupServiceTest {
 
         assertIs<SyncResult.Success>(service.restore(repository))
 
-        // First seen now, both outlive tombstones written before that.
-        assertEquals(clock, remote().projects.single { it.id == "p" }.updatedAt)
-        assertEquals(clock, remote().recordings.single { it.id == timeless.id }.uploadedAt)
-        assertContentEquals(bytes, liveFile("p", "take.m4a").readBytes())
+        // A38: an unknown time is repaired (first seen now), and a real tombstone beats a repair,
+        // even one written before that: neither comes back.
+        assertTrue(remote().projects.none { it.id == "p" })
+        assertTrue(remote().recordings.none { it.id == timeless.id })
+        assertFalse(liveFile("p", "take.m4a").exists())
+        assertTrue(remote().deletions.any { it.isSongTombstone && it.projectId == "p" })
     }
 
     @Test
@@ -1185,11 +1187,12 @@ class BackupServiceTest {
         val entry = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytes.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(bytes), uploadedAt = 0L)
         BackupArchive.import(BackupArchive.Contents(SyncBlob(projects = listOf(song("p")), recordings = listOf(entry)), mapOf(entry.id to bytes)), repository, filesDir)
 
-        // The imported record has its first-seen time, so an older tombstone does not hide it.
+        // The imported record has its first-seen time, marked as a repair (A37), which any real
+        // tombstone beats (A38).
         val record = repository.recordingRecords().single()
         val firstSeen = record.uploadedAt
-        assertTrue(firstSeen > 0L)
-        assertFalse(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", firstSeen - 1, recordingId = entry.id))).removes(record.toEntry()))
+        assertTrue(firstSeen > 0L && record.precedenceRepaired)
+        assertTrue(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", firstSeen - 1, recordingId = entry.id))).removes(record.toEntry()))
 
         // Exported and imported into a fresh device: the same time.
         val archive = File(root, "export.zip")
@@ -1219,8 +1222,8 @@ class BackupServiceTest {
         // The transactional apply does the same for a song stored here without a time.
         repository.saveProjects(listOf(song("q", updatedAt = 0L)))
         repository.applySyncResult(SyncBlob(deletions = listOf(SyncDeletion("q", deletedAt = 750L))), repository.snapshotLocalSyncBase())
-        // Kept, with a first-seen time newer than the tombstone.
-        assertTrue(repository.projectsFlow.first().single { it.id == "q" }.updatedAt > 750L)
+        // A38: its repaired time loses to the real tombstone, whatever the numbers.
+        assertTrue(repository.projectsFlow.first().none { it.id == "q" })
     }
 
     @Test
@@ -1628,15 +1631,18 @@ class BackupServiceTest {
         repository.updateRecordingRecords { records -> records.map { it.copy(uploadedAt = 0L) } }
         repository.recordRecordingDeletion("p", "take.m4a", take.id, 500L)
 
-        // Launch upkeep without Drive: repair first, then the deletion check.
+        // Lists compare the repaired record: A38, a real tombstone beats a repaired time.
+        repository.establishPrecedence(emptyList(), clock)
+        val repaired = repository.recordingRecords().single()
+        assertTrue(repaired.uploadedAt > 500L && repaired.precedenceRepaired)
+        assertEquals(setOf(repaired.path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
+
+        // Launch upkeep without Drive: repair first, then the deletion check moves it aside.
         quarantineDeletedRecordings(repository, filesDir)
 
-        val record = repository.recordingRecords().single()
-        assertTrue(record.uploadedAt > 500L && record.precedenceRepaired)
-        assertTrue(RecordingFileStore.targetFile(filesDir, "p", take.id, "take.m4a").exists())
-        assertFalse(RecordingFiles.quarantineRoot(filesDir).exists())
-        // Lists compare the repaired record too: nothing is hidden.
-        assertEquals(emptySet(), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
+        assertTrue(repository.recordingRecords().isEmpty())
+        assertFalse(RecordingFileStore.targetFile(filesDir, "p", take.id, "take.m4a").exists())
+        assertEquals(listOf("${take.id}.m4a"), RecordingFiles.quarantineDirectory(filesDir, "p").walk().filter { it.isFile }.map { it.name }.toList())
         // The trashed song's own time and its Trash time are repaired as well.
         val trashed = repository.trashedProjectsFlow.first().single()
         assertTrue(trashed.project.updatedAt > 0L && trashed.project.precedenceRepaired)
@@ -1850,5 +1856,84 @@ class BackupServiceTest {
 
         assertEquals(before, state())
         assertEquals(RecordingRecord.OP_PUBLISH, repository.recordingRecords().single { it.id == id }.pendingOp)
+    }
+
+    @Test
+    fun aRecordingWhoseMigrationIsBlockedIsStillTombstonedWithItsDeletedSong() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        repository.moveProjectToTrash("p", 10L)
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        val audio = "old take".toByteArray()
+        val take = File(dir, "take.m4a").apply { writeBytes(audio) }
+        val sha = BackupManifest.sha256Hex(audio)
+        val r = RecordingManifestEntry.legacyRecordingId("p", "take.m4a", sha)
+        // A row from the first record store, and other bytes already at its id name.
+        dataStore.edit {
+            it[androidx.datastore.preferences.core.stringPreferencesKey("recording_records_json")] =
+                """[{"projectId":"p","fileName":"take.m4a","uploadedAt":1000,"sha256":"$sha","bytes":${audio.size},"origin":"recorded"}]"""
+        }
+        File(dir, "$r.m4a").writeBytes("squatter".toByteArray())
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+
+        repository.permanentlyDeleteTrashedProject("p", now = 5_000L, adopt = adopt)
+
+        assertTrue(take.exists())
+        assertTrue(repository.syncDeletions().any { it.recordingId == r && it.deletedAt == 5_000L })
+        // The song comes back newer from another device, beside an older backup still listing the take.
+        val old = RecordingManifestEntry("p", "take.m4a", sizeBytes = audio.size.toLong(), modifiedAt = 0L, sha256 = sha, uploadedAt = 1_000L)
+        putRemote(SyncBlob(projects = listOf(song("p", updatedAt = 9_000L)), recordings = listOf(old)))
+        putRaw(old, audio)
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+        assertTrue(remote().recordings.none { it.id == r })
+        assertTrue(repository.recordingRecords().none { it.id == r })
+    }
+
+    @Test
+    fun aSongDeletionStopsWhileAFileOfItCannotBeIdentified() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        repository.moveProjectToTrash("p", 10L)
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        val take = File(dir, "take.m4a").apply { writeBytes("old take".toByteArray()) }
+        // No record, and its derived id name already holds other bytes: it cannot be tombstoned.
+        val r = RecordingManifestEntry.legacyRecordingId("p", "take.m4a", BackupManifest.sha256Hex(take.readBytes()))
+        File(dir, "$r.m4a").writeBytes("squatter".toByteArray())
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+
+        assertFails { repository.permanentlyDeleteTrashedProject("p", now = 5_000L, adopt = adopt) }
+
+        assertEquals(listOf("p"), repository.trashedProjectsFlow.first().map { it.project.id })
+        assertTrue(take.exists())
+    }
+
+    @Test
+    fun aRecordingWhoseBytesDifferFromDrivesEntryForItsIdIsReportedAndBothAreKept() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val mine = "my take".toByteArray()
+        val theirs = "their take".toByteArray()
+        val held = holdRecording(repository, filesDir, id, "take.m4a", mine, 10L)
+        val listed = RecordingManifestEntry("p", "take.m4a", sizeBytes = theirs.size.toLong(), modifiedAt = 0L,
+            sha256 = BackupManifest.sha256Hex(theirs), uploadedAt = 10L, id = id)
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(listed)))
+        putRaw(listed, theirs)
+        val name = BackupManifest.recordingDriveName(id)
+
+        assertEquals(1, assertIs<SyncResult.Success>(service.backUp(repository)).conflictingRecordings)
+        assertEquals(1, assertIs<SyncResult.Success>(service.restore(repository)).conflictingRecordings)
+
+        // Nothing is written over on either side.
+        assertContentEquals(theirs, drive.bytes(name))
+        assertEquals(listed.sha256, remote().recordings.single().sha256)
+        assertContentEquals(mine, File(filesDir, held.path!!).readBytes())
+    }
+
+    @Test
+    fun anEmptyRecordingIsRefusedEverywhere() {
+        val empty = RecordingManifestEntry("p", "take.m4a", sizeBytes = 0L, modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(ByteArray(0)), uploadedAt = 1L)
+        assertFails { empty.validate() }
+        assertFails { BackupManifest.encode(SyncBlob(recordings = listOf(empty)), 1L, "x") }
     }
 }
