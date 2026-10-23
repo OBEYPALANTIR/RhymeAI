@@ -12,6 +12,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.ZoneOffset
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -259,5 +262,35 @@ class BackupArchiveTest {
         // corrupt + missing, each once; the oversized one only as a size skip.
         assertEquals(2, summary.damagedRecordings)
         assertEquals(1, summary.skippedLargeRecordings)
+    }
+
+    private fun repoFileOrNull(path: String): File? =
+        sequenceOf("../../$path", "../$path", path).map(::File).firstOrNull(File::isFile)
+
+    @Test
+    fun archiveNamesMatchTheSharedFixture() {
+        val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
+            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+        ).jsonObject
+        val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
+        fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
+        val entries = cases.map { case ->
+            RecordingManifestEntry(field(case, "projectId"), field(case, "displayName"), driveName = "unused", sizeBytes = 1L,
+                modifiedAt = 0L, sha256 = "a".repeat(64), uploadedAt = field(case, "precedenceTime").toLong(), id = field(case, "id"))
+        }
+        val names = BackupArchive.exportNames(entries)
+        assertEquals(
+            cases.associate { field(it, "id") to field(it, "archivePath") },
+            entries.associate { it.id to "recordings/${it.projectId}/${names.getValue(it.id)}" }
+        )
+        // Any order of arrival gives the same names.
+        assertEquals(names, BackupArchive.exportNames(entries.reversed()))
+    }
+
+    @Test
+    fun theIosCopyOfTheArchiveNamesFixtureMatches() {
+        val iosCopy = repoFileOrNull("Writers Block/Writers BlockTests/archive-names-v1.json")
+        org.junit.Assume.assumeTrue("iOS copy of archive-names-v1.json is not in this checkout yet; drift check skipped.", iosCopy != null)
+        assertContentEquals(requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readBytes(), iosCopy!!.readBytes())
     }
 }
