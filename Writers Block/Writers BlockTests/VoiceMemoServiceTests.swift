@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 import SwiftData
 import Testing
 @testable import Writers_Block
@@ -218,29 +219,20 @@ struct VoiceMemoServiceTests {
 
     // MARK: - Purge
 
-    @Test func deleteMemosFolderRemovesDirectory() async throws {
-        // Use a temp dir as a stand-in for the real Application Support path
-        // so the test is hermetic and doesn't pollute the simulator sandbox.
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("purge-test-\(UUID().uuidString)", isDirectory: true)
-        let projectFolder = tmp.appendingPathComponent("project-1", isDirectory: true)
-        try FileManager.default.createDirectory(at: projectFolder, withIntermediateDirectories: true)
-        let file = projectFolder.appendingPathComponent("1000.m4a")
-        FileManager.default.createFile(atPath: file.path, contents: Data())
+    /// T1.4: a song's recording folder is removed only once empty; nothing in it is
+    /// removed by folder.
+    @Test func aTrashFolderIsRemovedOnlyWhenEmpty() async throws {
+        let folder = RecordingFiles.trashFolder(for: "purge-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("\(UUID().uuidString.lowercased()).m4a")
+        try Data([1]).write(to: file)
 
-        #expect(FileManager.default.fileExists(atPath: projectFolder.path))
+        RecordingFiles.removeEmptyFolder(folder, within: RecordingFiles.memosTrashRoot())
+        #expect(try Data(contentsOf: file) == Data([1]))
 
-        // We can't call deleteMemosFolder(for:) here because it hardcodes
-        // Application Support. Instead test the underlying FileManager.removeItem
-        // call that the static method delegates to — same one-liner path.
-        try FileManager.default.removeItem(at: projectFolder)
-
-        #expect(!FileManager.default.fileExists(atPath: projectFolder.path))
-    }
-
-    @Test func deleteMemosFolderIsSilentWhenFolderAbsent() async {
-        // Must not throw/crash when the folder never existed.
-        RecordingFiles.deleteMemosFolder(for: "ghost-project-\(UUID().uuidString)")
+        try FileManager.default.removeItem(at: file)
+        RecordingFiles.cleanUpEmptyTrashFolder(folder)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 
     // MARK: - sanitizeName
@@ -682,5 +674,165 @@ enum AudioFixtures {
             truncatedAfterIndex: indexFirst.prefix(dataStart + 16),
             truncatedBeforeIndex: complete.prefix(complete.count * 3 / 5)
         )
+    }
+}
+
+/// Round 14: takes and imports interrupted or challenged by the production code.
+extension PendingTakeTests {
+    /// T1.16: a take whose id already has a row is settled only by a recoverable
+    /// published copy; a row whose audio is not its recorded bytes and has no file
+    /// keeps the staged take waiting.
+    @Test func aTakeWhoseRowHoldsNoRecoverableCopyKeepsItsStagedAudio() async throws {
+        let store = try await makeStore()
+        let staged = try take(Data([4, 4]), in: store, finishedAt: Date(timeIntervalSince1970: 50))
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        // A row from an earlier attempt, whose audio is damaged and whose file is gone.
+        store.context.insert(Recording(id: id, projectId: "song", displayName: "take.m4a", audio: Data([0]), recordedAt: Date(timeIntervalSince1970: 50),
+                                       sha256: RecordingBackupManifest.sha256Hex(Data([4, 4]))))
+        try store.context.save()
+        try await store.library.reconcile(context: store.context)
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+
+        await service.retryPendingTakes()
+
+        #expect(try Data(contentsOf: staged) == Data([4, 4]))
+        #expect(service.pendingTakes.map(\.id) == [id])
+    }
+
+    /// T6.50: an oversized take killed after its move and before its record was
+    /// completed is finished from the record after a relaunch.
+    @Test func anOversizedTakeKilledAfterItsMoveIsCompletedAfterARelaunch() async throws {
+        let store = try await makeStore()
+        let staged = try take(Data(repeating: 2, count: Int(SyncRecording.maxBytes) + 1), in: store, finishedAt: Date(timeIntervalSince1970: 66))
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        try await withBoundaryHook(scope: store.scratch, { point, source, _ in
+            // After the rename, before the record is marked done: the process stops.
+            if point == .afterPrimitive, source.lastPathComponent == staged.lastPathComponent { throw SimulatedCrash() }
+        }) {
+            await service.retryPendingTakes()
+        }
+        let place = store.library.memosRoot.appendingPathComponent("song/\(id).m4a")
+        #expect(FileManager.default.fileExists(atPath: place.path) && !FileManager.default.fileExists(atPath: staged.path))
+        #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.completed == false)
+
+        let reopened = try reopen(store)
+        try await reopened.library.reconcile(context: reopened.context)
+        let relaunched = VoiceMemoService(stagingRoot: store.stagingRoot)
+        relaunched.publisher = reopened.library
+        await relaunched.retryPendingTakes()
+
+        let entry = try #require(OversizedRecordings.read(for: store.library.memosRoot)[id])
+        #expect(entry.completed == true && entry.finishedAt == 66_000)
+        #expect(relaunched.pendingTakes.isEmpty && relaunched.failedTakes.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: place.path))
+    }
+
+    /// T5.11: an unreadable marker is set aside and the take's own audio decides:
+    /// complete audio is published, a malformed container is kept as failed.
+    @Test func anUnreadableMarkerIsSetAsideAndTheAudioDecides() async throws {
+        let store = try await makeStore()
+        let fixtures = try await AudioFixtures.make(in: store.scratch)
+        let good = try take(fixtures.complete, in: store)
+        let bad = try take(fixtures.truncatedMidData, in: store)
+        for staged in [good, bad] {
+            try Data("not a time".utf8).write(to: staged.deletingLastPathComponent().appendingPathComponent(RecordingFiles.finishedTakeMarker))
+        }
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+
+        await service.retryPendingTakes()
+
+        let goodId = good.deletingLastPathComponent().lastPathComponent
+        #expect(try store.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [goodId])
+        #expect(service.failedTakes.map(\.id) == [bad.deletingLastPathComponent().lastPathComponent])
+        #expect(try Data(contentsOf: bad) == fixtures.truncatedMidData)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: bad.deletingLastPathComponent().path)
+        #expect(aside.contains { $0.hasPrefix("finished.unreadable-") })
+    }
+
+    /// T5.12: only a take that could not be saved can be deleted, and only when asked.
+    @Test func onlyAFailedTakeIsDeletedOnRequest() async throws {
+        let store = try await makeStore()
+        let fixtures = try await AudioFixtures.make(in: store.scratch)
+        let bad = try take(fixtures.truncatedMidData, in: store)
+        let waiting = try take(Data([1, 2, 3]), in: store, finishedAt: Date(timeIntervalSince1970: 9))
+        store.library.save = { _ in throw CocoaError(.fileWriteUnknown) }
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        await service.retryPendingTakes()
+        let failed = try #require(service.failedTakes.first)
+        let pending = try #require(service.pendingTakes.first { $0.id == waiting.deletingLastPathComponent().lastPathComponent })
+
+        service.deleteFailedTake(pending)
+        #expect(FileManager.default.fileExists(atPath: waiting.path), "a take waiting to be saved is never deleted")
+        service.deleteFailedTake(failed)
+        #expect(!FileManager.default.fileExists(atPath: bad.deletingLastPathComponent().path))
+        #expect(service.failedTakes.isEmpty)
+    }
+
+    /// T1.21, T1.22: an import is staged as `<id>/<id>.<ext>` beside its record; one
+    /// killed just before publication is published under that id at the next launch.
+    @Test func anImportKilledBeforePublicationIsPublishedUnderItsIdAtLaunch() async throws {
+        let store = try await makeStore()
+        let fixtures = try await AudioFixtures.make(in: store.scratch)
+        let source = store.scratch.appendingPathComponent("Voice Note.m4a")
+        try fixtures.complete.write(to: source)
+        let importRoot = store.scratch.appendingPathComponent("recording-import", isDirectory: true)
+        let crashImage = store.scratch.appendingPathComponent("import-at-crash", isDirectory: true)
+        let staged = HookBox<(id: String, record: VoiceMemoService.ImportRecord?)?>(nil)
+        try await withBoundaryHook(scope: importRoot, { point, source, _ in
+            guard point == .beforeCheck, staged.value == nil else { return }
+            let folder = source.deletingLastPathComponent()
+            let record = try? JSONDecoder().decode(VoiceMemoService.ImportRecord.self, from: Data(contentsOf: folder.appendingPathComponent("import.json")))
+            staged.value = (folder.lastPathComponent, record)
+            // What the disk holds at this instant is what a killed app leaves.
+            try FileManager.default.copyItem(at: importRoot, to: crashImage)
+            throw SimulatedCrash()
+        }) {
+            _ = try? await VoiceMemoService.importMemo(from: source, projectId: "song", publisher: store.library, importRoot: importRoot)
+        }
+        let id = try #require(staged.value?.id)
+        #expect(staged.value?.record?.id == id && staged.value?.record?.verified == true && staged.value?.record?.displayName == "Voice Note.m4a")
+        #expect(FileManager.default.fileExists(atPath: crashImage.appendingPathComponent("\(id)/\(id).m4a").path))
+        // The relaunch finds the crash image.
+        try? FileManager.default.removeItem(at: importRoot)
+        try FileManager.default.moveItem(at: crashImage, to: importRoot)
+        let reopened = try reopen(store)
+        try await reopened.library.reconcile(context: reopened.context)
+
+        let kept = await VoiceMemoService.recoverImports(publisher: reopened.library, importRoot: importRoot)
+
+        #expect(kept.isEmpty)
+        let row = try #require(try reopened.context.fetch(FetchDescriptor<Recording>()).first { $0.id == id })
+        #expect(row.displayName == "Voice Note.m4a")
+        try await reopened.library.reconcile(context: reopened.context)
+        #expect(try Data(contentsOf: reopened.library.memosRoot.appendingPathComponent("song/\(id).m4a")) == fixtures.complete)
+        #expect(!FileManager.default.fileExists(atPath: importRoot.appendingPathComponent(id).path))
+    }
+
+    /// T4.6: recovery never touches the folder of an import still running here; a
+    /// folder no running import owns and whose copy never decoded is disposed of.
+    @Test func importRecoveryLeavesARunningImportAlone() async throws {
+        let store = try await makeStore()
+        let importRoot = store.scratch.appendingPathComponent("recording-import", isDirectory: true)
+        func folder(_ id: String) throws -> URL {
+            let folder = importRoot.appendingPathComponent(id, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try VoiceMemoService.ImportRecord(id: id, projectId: "song", displayName: "a.m4a", verified: false).write(in: folder)
+            try Data([1]).write(to: folder.appendingPathComponent("\(id).m4a"))
+            return folder
+        }
+        let running = UUID().uuidString.lowercased(), abandoned = UUID().uuidString.lowercased()
+        let runningFolder = try folder(running), abandonedFolder = try folder(abandoned)
+        VoiceMemoService.activeImports.withLock { _ = $0.insert(running) }
+        defer { VoiceMemoService.activeImports.withLock { _ = $0.remove(running) } }
+
+        await VoiceMemoService.recoverImports(publisher: store.library, importRoot: importRoot)
+
+        #expect(FileManager.default.fileExists(atPath: runningFolder.appendingPathComponent("\(running).m4a").path))
+        #expect(!FileManager.default.fileExists(atPath: abandonedFolder.path))
     }
 }

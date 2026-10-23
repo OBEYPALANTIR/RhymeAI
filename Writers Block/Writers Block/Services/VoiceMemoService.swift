@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import os
 
 // All memo audio-session mutations share one serial queue. A stop enqueues its
 // deactivation before the next activation, even when that stop does not wait.
@@ -248,6 +249,9 @@ final class VoiceMemoService {
         RecordingFiles.memosRoot().deletingLastPathComponent().appendingPathComponent("recording-import", isDirectory: true)
     }
 
+    /// Imports running in this process, by id: recovery never touches their folders (T4.6).
+    nonisolated static let activeImports = OSAllocatedUnfairLock(initialState: Set<String>())
+
     /// What an import's private copy is for, written before it is copied.
     nonisolated struct ImportRecord: Codable {
         var id: String
@@ -277,7 +281,7 @@ final class VoiceMemoService {
     static func recoverImports(publisher: any RecordingPublishing, importRoot: URL = defaultImportRoot) async -> [String] {
         var kept: [String] = []
         let folders = (try? FileManager.default.contentsOfDirectory(at: importRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-        for folder in folders {
+        for folder in folders where !activeImports.withLock({ $0.contains(folder.lastPathComponent) }) {
             guard let data = try? Data(contentsOf: folder.appendingPathComponent("import.json")),
                   let record = try? JSONDecoder().decode(ImportRecord.self, from: data), record.id == folder.lastPathComponent else {
                 kept.append(folder.lastPathComponent)
@@ -314,6 +318,8 @@ final class VoiceMemoService {
             // `<id>.<ext>` beside a record of what it is for, so a killed import is
             // recovered or disposed of at the next launch (T1.21, T1.22).
             let id = UUID().uuidString.lowercased()
+            activeImports.withLock { _ = $0.insert(id) }
+            defer { activeImports.withLock { _ = $0.remove(id) } }
             let stem = RecordingFiles.sanitizeName(source.deletingPathExtension().lastPathComponent)
             let displayName = "\(stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem).\(ext)"
             let staging = importRoot.appendingPathComponent(id, isDirectory: true)
@@ -860,9 +866,7 @@ final class VoiceMemoService {
     /// The take is saved: its marker goes, and its folder once empty.
     private func forget(_ take: PendingTake) {
         try? FileManager.default.removeItem(at: take.folder.appendingPathComponent(RecordingFiles.finishedTakeMarker))
-        if (try? FileManager.default.contentsOfDirectory(atPath: take.folder.path))?.isEmpty == true {
-            try? FileManager.default.removeItem(at: take.folder)
-        }
+        rmdir(take.folder.path) // only when empty
     }
 
     /// The recordings changed (a deletion applied, a restore): lists reload, and a
