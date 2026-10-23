@@ -1342,11 +1342,11 @@ final class BackupService {
         }
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
-        var removedFiles: [(file: URL, projectId: String)] = []
+        var removedFiles: [URL] = []
         for projectId in deletedProjectIds {
             let deletedAt = blob.deletions.filter { $0.isSongTombstone && $0.projectId == projectId }.map(\.deletedAt).max() ?? 0
             for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
-                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, projectId)) }
+                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
             }
         }
         // A live recording the resolution removed (it is gone from the result and a
@@ -1357,7 +1357,7 @@ final class BackupService {
                 ? !resolvedIds.contains(row.id) && blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: .distantPast) }
                 : blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
             guard removed else { continue }
-            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.projectId)) }
+            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
             modelContext.delete(row)
         }
 
@@ -1403,11 +1403,9 @@ final class BackupService {
         for (id, trash) in trashById where deletedProjectIds.contains(id) {
             modelContext.delete(trash)
         }
-        try modelContext.save()
-        // Deleted recordings leave the memo folders and the Trash for quarantine (A28).
-        for removed in removedFiles where FileManager.default.fileExists(atPath: removed.file.path) {
-            try? RecordingFiles.quarantine(removed.file, projectId: removed.projectId, memosRoot: memosRoot)
-        }
+        // Deleted recordings leave the memo folders and the Trash for quarantine,
+        // recorded before this save and finished after it (A28).
+        try library.saveQuarantining(removedFiles, in: modelContext) { try modelContext.save() }
         return blob
     }
 

@@ -193,11 +193,18 @@ final class RecordingLibrary: RecordingPublishing {
         // Finish moves a row recorded but did not see through, before looking at files.
         for row in rows where row.pendingFrom != nil { try recoverPendingMove(row, in: context) }
 
-        let files = try scan(abortingIfMissing: !known.isEmpty)
-        let trashEntries = firstImport ? try RecordingFiles.readableTrashedMemos(in: trashRoot) : []
+        // Quarantine moves an earlier run recorded but did not finish come first;
+        // files still waiting for one are neither adopted nor listed.
+        finishPendingQuarantine(in: context)
+        let hidden = RecordingFiles.pendingQuarantine(for: memosRoot)
+        let files = try scan(abortingIfMissing: !known.isEmpty).filter { !hidden.contains(RecordingFiles.canonicalPath($0.value.url)) }
+        let trashEntries = firstImport
+            ? try RecordingFiles.readableTrashedMemos(in: trashRoot).filter { !hidden.contains(RecordingFiles.canonicalPath($0.url)) }
+                .sorted { $0.url.path < $1.url.path }
+            : []
         var result = Result()
         // Audio a known deletion covers, and extra copies of one recording, go to quarantine.
-        var toQuarantine: [(file: URL, projectId: String)] = []
+        var toQuarantine: [URL] = []
 
         // Local application of tombstones. A song tombstone that removes a recording
         // leaves that recording its own tombstone, in this save.
@@ -210,7 +217,7 @@ final class RecordingLibrary: RecordingPublishing {
             if tombstone.isSongTombstone {
                 try Self.upsertTombstone(SyncDeletion(projectId: row.projectId, recordingId: row.id, fileName: row.fileName, deletedAt: tombstone.deletedAt), in: context)
             }
-            if let file = url(of: row), FileManager.default.fileExists(atPath: file.path) { toQuarantine.append((file, row.projectId)) }
+            if let file = url(of: row), FileManager.default.fileExists(atPath: file.path) { toQuarantine.append(file) }
             context.delete(row)
         }
 
@@ -224,8 +231,11 @@ final class RecordingLibrary: RecordingPublishing {
                     owner = only
                 } else {
                     let digest = Self.hash(file.url)
-                    owner = claimants.first { $0.sha256 == digest }
-                        ?? claimants.first { known[path] == $0.id }   // changed on disk since: refreshed below
+                    // The id this device had at that path first, then the audio, then that id
+                    // again when the file changed on disk since (refreshed below).
+                    owner = claimants.first { known[path] == $0.id && $0.sha256 == digest }
+                        ?? claimants.first { $0.sha256 == digest }
+                        ?? claimants.first { known[path] == $0.id }
                 }
             } else {
                 owner = claimants.first
@@ -249,14 +259,14 @@ final class RecordingLibrary: RecordingPublishing {
         for row in kept where row.trashedAt != nil { try materialize(row) }
 
         var trashMoves: [(from: URL, projectId: String, fileName: String)] = []
-        // Ids adopted in this run: a second file with one legacy identity is a copy.
-        var adoptedIds = Set<String>()
+        // Files no row owns, each with the id every device derives for it.
+        var candidates: [(row: Recording, file: URL)] = []
         for (path, file) in files.sorted(by: { $0.key < $1.key }) where live[path] == nil {
             if let knownId = known[path], allowRemovals {
                 // Removed on another device: to the recordings Trash, or to
                 // quarantine when a deletion of it is known here (A28).
                 if deletions.contains(where: { $0.recordingId == knownId }) {
-                    toQuarantine.append((file.url, file.projectId))
+                    toQuarantine.append(file.url)
                 } else {
                     trashMoves.append((file.url, file.projectId, file.fileName))
                 }
@@ -270,38 +280,54 @@ final class RecordingLibrary: RecordingPublishing {
             }
             let row = try adopt(file.url, projectId: file.projectId, fileName: file.fileName, trashedAt: nil)
             if try applyCovering(deletions, to: row, file: file.url, in: context, quarantining: &toQuarantine) { continue }
-            if byId[row.id] != nil || adoptedIds.contains(row.id) {
-                toQuarantine.append((file.url, file.projectId))
-                continue
-            }
-            adoptedIds.insert(row.id)
-            context.insert(row)
-            live[path] = row
+            candidates.append((row, file.url))
         }
-
-        // Trash entries from before v4 get their rows the first time (A20/A21).
+        // Trash entries from before v4 are candidates the first time (A20/A21).
         if firstImport {
             let trashedRows = kept.filter { $0.trashedAt != nil }
-            for memo in trashEntries.sorted(by: { $0.url.path < $1.url.path }) where !trashedRows.contains(where: { Self.isRow($0, of: memo) }) {
+            for memo in trashEntries where !trashedRows.contains(where: { Self.isRow($0, of: memo) }) {
                 let size = (try? memo.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 guard Int64(size) <= SyncRecording.maxBytes,
                       (try? SyncIdentity.validateFileName(memo.originalName)) != nil else { continue }
                 let row = try adopt(memo.url, projectId: memo.projectId, fileName: memo.originalName, trashedAt: memo.deletedAt)
                 if try applyCovering(deletions, to: row, file: memo.url, in: context, quarantining: &toQuarantine) { continue }
-                // The live copy (adopted above) is canonical; another copy is quarantined (A26).
-                if byId[row.id] != nil || adoptedIds.contains(row.id) {
-                    toQuarantine.append((memo.url, memo.projectId))
-                    continue
-                }
-                adoptedIds.insert(row.id)
-                context.insert(row)
+                candidates.append((row, memo.url))
             }
         }
 
-        try save(context)
-        for item in toQuarantine where FileManager.default.fileExists(atPath: item.file.path) {
-            try RecordingFiles.quarantine(item.file, projectId: item.projectId, memosRoot: memosRoot)
+        // One legacy identity is one recording (A26). Its canonical copy is chosen
+        // over every candidate, the existing row's file included, whatever order
+        // they arrived in: a live copy first, else the newest Trash time, ties by
+        // file name. The row takes the canonical copy's place, time and expiry;
+        // every other copy goes to quarantine.
+        func rank(_ trashedAt: Date?, _ name: String) -> (Int, Int64, String) {
+            (trashedAt == nil ? 0 : 1, -(trashedAt?.epochMilliseconds ?? 0), name)
         }
+        let keptById = Dictionary(kept.map { ($0.id, $0) }) { first, _ in first }
+        for (id, group) in Dictionary(grouping: candidates, by: { $0.row.id }).sorted(by: { $0.key < $1.key }) {
+            let ordered = group.sorted { rank($0.row.trashedAt, $0.file.lastPathComponent) < rank($1.row.trashedAt, $1.file.lastPathComponent) }
+            let best = ordered[0]
+            if let existing = keptById[id] {
+                let current = url(of: existing)
+                if rank(existing.trashedAt, current?.lastPathComponent ?? existing.fileName) <= rank(best.row.trashedAt, best.file.lastPathComponent) {
+                    toQuarantine += group.map(\.file)
+                    continue
+                }
+                if existing.trashedAt == nil { live["\(existing.projectId)/\(existing.fileName)"] = nil }
+                if let current, FileManager.default.fileExists(atPath: current.path) { toQuarantine.append(current) }
+                existing.fileName = best.row.fileName
+                existing.trashedAt = best.row.trashedAt
+                existing.recordedAt = best.row.recordedAt
+                existing.uploadedAt = best.row.uploadedAt
+                if existing.trashedAt == nil { live["\(existing.projectId)/\(existing.fileName)"] = existing }
+            } else {
+                context.insert(best.row)
+                if best.row.trashedAt == nil { live["\(best.row.projectId)/\(best.row.fileName)"] = best.row }
+            }
+            toQuarantine += ordered.dropFirst().map(\.file)
+        }
+
+        try saveQuarantining(toQuarantine, in: context) { try save(context) }
         // Removed on another device: recoverable from the recordings Trash for 30 days.
         for move in trashMoves {
             let folder = trashRoot.appendingPathComponent(move.projectId, isDirectory: true)
@@ -330,15 +356,47 @@ final class RecordingLibrary: RecordingPublishing {
     /// quarantine after the save, and a song deletion leaves it a tombstone by its
     /// id in that save.
     private func applyCovering(_ deletions: [SyncDeletion], to row: Recording, file: URL, in context: ModelContext,
-                               quarantining toQuarantine: inout [(file: URL, projectId: String)]) throws -> Bool {
+                               quarantining toQuarantine: inout [URL]) throws -> Bool {
         guard let tombstone = deletions.first(where: { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }) else {
             return false
         }
         if tombstone.isSongTombstone {
             try Self.upsertTombstone(SyncDeletion(projectId: row.projectId, recordingId: row.id, fileName: row.fileName, deletedAt: tombstone.deletedAt), in: context)
         }
-        toQuarantine.append((file, row.projectId))
+        toQuarantine.append(file)
         return true
+    }
+
+    /// Quarantine moves are recorded before the save that removes their rows,
+    /// made after it, and finished at the next start if interrupted (A28).
+    func saveQuarantining(_ files: [URL], in context: ModelContext, save: () throws -> Void) throws {
+        let paths = Set(files.map(RecordingFiles.canonicalPath))
+        let before = RecordingFiles.pendingQuarantine(for: memosRoot)
+        if !paths.isEmpty { try RecordingFiles.setPendingQuarantine(before.union(paths), for: memosRoot) }
+        do {
+            try save()
+        } catch {
+            if !paths.isEmpty { try? RecordingFiles.setPendingQuarantine(before, for: memosRoot) }
+            throw error
+        }
+        finishPendingQuarantine(in: context)
+    }
+
+    /// Moves each recorded file to quarantine unless a row still names it (its
+    /// save never landed). A move that fails stays recorded for the next start.
+    func finishPendingQuarantine(in context: ModelContext) {
+        let pending = RecordingFiles.pendingQuarantine(for: memosRoot)
+        guard !pending.isEmpty, let rows = try? context.fetch(FetchDescriptor<Recording>()) else { return }
+        let referenced = Set(rows.compactMap { url(of: $0).map(RecordingFiles.canonicalPath) })
+        var remaining = Set<String>()
+        for path in pending where !referenced.contains(path) && FileManager.default.fileExists(atPath: path) {
+            do {
+                try RecordingFiles.quarantine(URL(fileURLWithPath: path), memosRoot: memosRoot)
+            } catch {
+                remaining.insert(path)
+            }
+        }
+        try? RecordingFiles.setPendingQuarantine(remaining, for: memosRoot)
     }
 
     private static func isRow(_ row: Recording, of memo: TrashedVoiceMemo) -> Bool {

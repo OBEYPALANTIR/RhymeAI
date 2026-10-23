@@ -35,12 +35,22 @@ enum RecordingFiles {
 
     /// Where the recorder writes; a recording is published into the memo folder
     /// only when it finishes, so nothing reads it while it is being written.
-    nonisolated static func recorderStagingURL(for projectId: String) -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("recording-in-progress", isDirectory: true)
-            .appendingPathComponent(projectId, isDirectory: true)
+    /// Each take records into its own folder named by the take's id, which is
+    /// its recording id from the start (A27).
+    nonisolated static func recorderStagingURL(for projectId: String, takeId: String, root: URL = recorderStagingRoot()) -> URL {
+        root.appendingPathComponent(projectId, isDirectory: true)
+            .appendingPathComponent(takeId, isDirectory: true)
             .appendingPathComponent(newMemoURL(for: projectId).lastPathComponent)
     }
+
+    nonisolated static func recorderStagingRoot() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("recording-in-progress", isDirectory: true)
+    }
+
+    /// Written beside a take's audio when the recorder reports it finished; a take
+    /// folder without it is unfinished and is never published.
+    nonisolated static let finishedTakeMarker = "finished"
 
     nonisolated static func newMemoURL(for projectId: String) -> URL {
         let folder = memoFolder(for: projectId)
@@ -56,7 +66,9 @@ enum RecordingFiles {
             includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
             options: .skipsHiddenFiles
         ) else { return [] }
-        let memoURLs = items.filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+        // A recording waiting to move to quarantine is not listed (A28).
+        let hidden = pendingQuarantine(for: memosRoot())
+        let memoURLs = items.filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) && !hidden.contains(canonicalPath($0)) }
         let datedMemos = memoURLs.map { url -> (url: URL, date: Date) in
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
             return (url: url, date: values?.contentModificationDate ?? values?.creationDate ?? .distantPast)
@@ -102,6 +114,7 @@ enum RecordingFiles {
 
     /// All trashed recordings across every project, newest deletion first.
     nonisolated static func trashedMemos(in trashRoot: URL = memosTrashRoot()) -> [TrashedVoiceMemo] {
+        let hidden = pendingQuarantine(for: trashRoot)
         guard let folders = try? FileManager.default.contentsOfDirectory(
             at: trashRoot,
             includingPropertiesForKeys: nil,
@@ -117,7 +130,7 @@ enum RecordingFiles {
                     options: .skipsHiddenFiles
                 ) else { return [] }
                 return files
-                    .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+                    .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) && !hidden.contains(canonicalPath($0)) }
                     .compactMap { trashedMemo(at: $0, projectId: projectId) }
             }
             .sorted { $0.deletedAt > $1.deletedAt }
@@ -267,11 +280,39 @@ enum RecordingFiles {
         memosRoot.deletingLastPathComponent().appendingPathComponent("recording-quarantine", isDirectory: true)
     }
 
-    /// Moves `file` into quarantine under a unique name; never replaces anything.
-    nonisolated static func quarantine(_ file: URL, projectId: String, memosRoot: URL) throws {
+    /// Moves `file` (in a memo or Trash project folder) into quarantine under a
+    /// unique name; never replaces anything.
+    nonisolated static func quarantine(_ file: URL, memosRoot: URL) throws {
+        let projectId = file.deletingLastPathComponent().lastPathComponent
         let folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent("\(UUID().uuidString.lowercased())\(trashNameSeparator)\(file.lastPathComponent)"))
+    }
+
+    nonisolated static func canonicalPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Files recorded for quarantine whose move has not finished yet (A28). `root`
+    /// is the memo or the Trash root; both sit in the same folder.
+    nonisolated static func pendingQuarantine(for root: URL) -> Set<String> {
+        guard let data = try? Data(contentsOf: pendingQuarantineURL(for: root)),
+              let paths = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(paths)
+    }
+
+    nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
+        let url = pendingQuarantineURL(for: root)
+        if paths.isEmpty {
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(paths.sorted()).write(to: url, options: .atomic)
+    }
+
+    private nonisolated static func pendingQuarantineURL(for root: URL) -> URL {
+        quarantineRoot(for: root).appendingPathComponent("pending-moves.json")
     }
 
     /// Trash entries for adoption: an unreadable Trash fails rather than looking empty.
