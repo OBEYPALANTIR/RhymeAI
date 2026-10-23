@@ -29,9 +29,10 @@ enum SyncIdentity {
 
     /// A recording's display name (A36/A39): metadata, not a path. It may hold
     /// separators, have no extension or exceed 240 bytes (export makes a file name
-    /// of it); it must not be empty or hold control characters.
+    /// of it); as on Android it is non-empty, holds no NUL and is at most 1024 bytes
+    /// of UTF-8, so a manifest one platform writes validates on the other.
     nonisolated static func validateDisplayName(_ value: String) throws {
-        guard !value.isEmpty, !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+        guard !value.isEmpty, !value.unicodeScalars.contains("\u{0}"), value.utf8.count <= 1024 else {
             throw SyncValidationError.invalidFileName
         }
     }

@@ -217,6 +217,17 @@ struct SyncManifestV4Tests {
         #expect(try Data(contentsOf: copy) == Data(contentsOf: Self.sharedArchiveNames))
     }
 
+    @Test func aDisplayNameIsMetadataNotAPath() async throws {
+        for name in ["../verse/idea.m4a", "no extension", "line\nbreak", String(repeating: "\u{E9}", count: 512)] {
+            #expect(throws: Never.self) { try SyncIdentity.validateDisplayName(name) }
+        }
+        for name in ["", "nul\u{0}.m4a", String(repeating: "a", count: 1025)] {
+            #expect(throws: (any Error).self) { try SyncIdentity.validateDisplayName(name) }
+        }
+        // File names from before A36 keep the strict rule.
+        #expect(throws: (any Error).self) { try SyncIdentity.validateFileName("../verse/idea.m4a") }
+    }
+
     @Test func archiveNamesFollowTheSharedRule() async throws {
         func names(_ entries: [(String, TimeInterval, String)]) -> [String] {
             let recordings = entries.map { SyncRecording(id: $0.0, projectId: "p", fileName: $0.2, bytes: 1, sha256: String(repeating: "a", count: 64),
