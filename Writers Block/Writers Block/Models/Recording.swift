@@ -1224,7 +1224,16 @@ final class RecordingLibrary: RecordingPublishing {
                         for copy in ordered.dropFirst() { toQuarantine.append((copy.file.url, copy.file.sha256 ?? "", id)) }
                         continue
                     }
-                    // Its own file is in place: these are copies.
+                    // Its own file is in place: these are copies. A Trash time among them is
+                    // ranked against the row's by the same rule (A38: recorded before
+                    // repaired, the latest recorded, the smallest repair), each copy's time
+                    // normalized first (T2.26); the row takes the one that stands.
+                    if existing.trashedAt != nil,
+                       let standing = group.filter({ $0.trashedAt != nil }).min(by: { Self.rank($0.trashedAt, repaired: $0.trashedAtRepaired, "") < Self.rank($1.trashedAt, repaired: $1.trashedAtRepaired, "") }),
+                       Self.rank(standing.trashedAt, repaired: standing.trashedAtRepaired, "") < Self.rank(existing.trashedAt, repaired: existing.trashedAtRepaired, "") {
+                        existing.trashedAt = standing.trashedAt
+                        existing.trashedAtRepaired = standing.trashedAtRepaired
+                    }
                     for copy in group { toQuarantine.append((copy.file.url, copy.file.sha256 ?? "", id)) }
                     continue
                 }
@@ -1853,6 +1862,9 @@ final class RecordingLibrary: RecordingPublishing {
             throw SyncValidationError.invalidRecording
         }
         try requireChecked(context)
+        // What a tombstone without a time names is never brought back, read again
+        // now, after any wait for the download (T5.24).
+        guard try !held(in: context).contains(projectId: entry.projectId, recordingId: entry.id, displayName: entry.fileName) else { return false }
         guard Int64(audio.count) <= SyncRecording.maxBytes,
               try context.fetch(FetchDescriptor<Recording>()).first(where: { $0.id == entry.id }) == nil,
               // A deletion made here while the restore ran wins if it is newer.

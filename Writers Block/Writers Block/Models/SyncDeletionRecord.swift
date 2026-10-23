@@ -71,8 +71,9 @@ enum DeletionStore {
             + context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletion)
     }
 
+    /// Only a missing (zero) time is undated; a negative one is invalid (A33).
     private static func isUndated(_ deletion: SyncDeletion) -> Bool {
-        guard deletion.deletedAt <= 0 else { return false }
+        guard deletion.deletedAt == 0 else { return false }
         var probe = deletion
         probe.deletedAt = 1
         return (try? probe.validate()) != nil

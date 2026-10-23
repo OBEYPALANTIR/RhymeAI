@@ -645,6 +645,18 @@ enum AudioFixtures {
         for _ in 0..<seconds { try file.write(from: buffer) }
     }
 
+    /// Real audio over the 16 MiB cap: stereo AAC at 320 kbit/s for `seconds`.
+    static func large(seconds: Int = 600, at url: URL) throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
+                                                               AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 320_000])
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        // Noise, so the encoder cannot spend fewer bits than asked.
+        for channel in 0..<2 { for frame in 0..<48_000 { buffer.floatChannelData![channel][frame] = Float.random(in: -0.3...0.3) } }
+        for _ in 0..<seconds { try file.write(from: buffer) }
+    }
+
     static func make(in folder: URL) async throws -> Set {
         let recorded = folder.appendingPathComponent("recorded.m4a")
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))

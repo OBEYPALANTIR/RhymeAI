@@ -2275,24 +2275,37 @@ extension RecordingLibraryTests {
     /// T2.26: a Trash row with a repaired time and a copy of the same recording in a
     /// Trash file with no time: the file's time is normalized (to a later repair)
     /// before ranking, so the smaller repair stands.
-    @Test func aTimelessTrashFileIsNormalizedBeforeItIsRankedAgainstARepairedRow() async throws {
+    @Test(arguments: [false, true])
+    func aTimelessTrashFileIsNormalizedBeforeItIsRankedAgainstARepairedRow(rowLater: Bool) async throws {
         let store = try await makeStore()
         let context = store.container.mainContext
         let audio = Data([5, 1])
         let id = derivedId("song", "take.m4a", audio)
         let row = Recording(id: id, projectId: "song", displayName: "take.m4a", audio: audio, recordedAt: Date(timeIntervalSince1970: 10))
-        row.trashedAt = Date(timeIntervalSince1970: 3_000)
+        // A repaired Trash time before the copy is first seen, or after it.
+        let rowTime = rowLater ? Date().addingTimeInterval(86_400) : Date(timeIntervalSince1970: 3_000)
+        row.trashedAt = Date(millisecondsSince1970: rowTime.epochMilliseconds)
         row.trashedAtRepaired = true
         context.insert(row)
         try context.save()
         try await store.library.reconcile(context: context)
         try write(audio, "song", "0__take.m4a", root: store.trash, modified: 0)
+        let before = Date().addingTimeInterval(-1)
 
         try await store.library.reconcile(context: context)
 
         let rows = try context.fetch(FetchDescriptor<Recording>())
         #expect(rows.count == 1)
-        #expect(rows.first?.trashedAt == Date(timeIntervalSince1970: 3_000) && rows.first?.trashedAtRepaired == true)
+        let kept = try #require(rows.first)
+        #expect(kept.trashedAtRepaired)
+        if rowLater {
+            // The copy's missing time becomes its first-seen time (now), the smaller repair.
+            let trashedAt = try #require(kept.trashedAt)
+            #expect(trashedAt >= before && trashedAt <= Date())
+        } else {
+            // Ranked raw, the copy's 0 would stand; normalized first, the row's 3 000 s does.
+            #expect(kept.trashedAt == Date(timeIntervalSince1970: 3_000))
+        }
     }
 
     /// SHOULD 4, T3.2: a row an earlier build synced arrives with its name only in the
@@ -2330,5 +2343,26 @@ extension RecordingLibraryTests {
 
         #expect(store.library.unmaterialized == ["waiting.m4a"])
         #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([4, 4])])
+    }
+}
+
+
+extension RecordingLibraryTests {
+    /// SHOULD 2: only a missing (zero) tombstone time is undated; a negative one is
+    /// invalid, for both kinds of tombstone.
+    @Test(arguments: [false, true])
+    func aNegativeTombstoneTimeIsInvalidNotUndated(recording: Bool) async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        if recording {
+            context.insert(SyncRecordingDeletion(projectId: "song", recordingId: uuid(), fileName: "a.m4a", deletedAt: -5))
+        } else {
+            context.insert(SyncDeletionRecord(projectId: "song", deletedAt: -5))
+        }
+        try context.save()
+
+        #expect(throws: (any Error).self) { _ = try DeletionStore.all(in: context) }
+        #expect(try DeletionStore.undated(in: context).isEmpty)
+        await #expect(throws: (any Error).self) { try await store.library.reconcile(context: context) }
     }
 }
