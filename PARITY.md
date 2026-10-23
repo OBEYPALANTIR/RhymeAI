@@ -353,11 +353,12 @@ below is the contract it must meet, not verified behaviour.
   malformed value is refused.
 - Tombstone values (A33): a device always writes a positive deletion time. A
   tombstone read without one (absent, or 0) has an unknown time: it is never
-  given the current time; it suspends only its own identity: it removes nothing
-  (not even a repaired time), the recording it names is hidden and refused for
-  playback with its bytes kept, the tombstone is kept and carried forward (Drive
-  writes it without `deletedAt`), and a later tombstone of the same identity with
-  a valid time replaces it. Every other tombstone still applies. A negative time
+  given the current time; it suspends only its own identity, on this device only
+  (erratum to A33): it removes nothing (not even a repaired time), the recording
+  it names is hidden and refused for playback with its bytes kept, the tombstone
+  stays in this device's deletion state, and a later tombstone of the same
+  identity with a valid time replaces it. It is never written anywhere shared:
+  the Drive manifest and an export carry only tombstones with a valid time. Every other tombstone still applies. A negative time
   or a wrong type is malformed and makes the whole input unreadable. Duplicates of
   one identity count their newest deletion everywhere (Android collapses them at
   the store and in `SyncMerger.Tombstones`). A song tombstone has neither a
