@@ -129,6 +129,7 @@ struct SongRecordingsView: View {
                         Button("Cancel") { importTask?.cancel() }
                     }
                 }
+                pendingTakesRow
                 recordingsTabContent
             }
             .padding(RhymeAITokens.Spacing.lg)
@@ -167,6 +168,7 @@ struct SongRecordingsView: View {
         }
         .onAppear { reloadRecordings() }
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, _ in reloadRecordings() }
+        .onChange(of: viewModel.voiceMemoService.publishedRevision) { _, _ in reloadRecordings() }
         .onDisappear {
             importTask?.cancel()
             viewModel.voiceMemoService.stopPlayback()
@@ -427,6 +429,24 @@ struct SongRecordingsView: View {
             return Self.recordingDateFormatter.string(from: date)
         }
         return stem
+    }
+
+    /// Takes that finished but are not saved yet (A27), with Retry.
+    @ViewBuilder
+    private var pendingTakesRow: some View {
+        let waiting = viewModel.voiceMemoService.pendingTakes.filter { $0.projectId == projectId }.count
+        if waiting > 0 {
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                Text("\(waiting) \(waiting == 1 ? "recording" : "recordings") waiting to be saved")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Retry") { viewModel.retryPendingRecordings() }
+                    .buttonStyle(.rhymePress)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .accessibilityIdentifier("retryPendingRecordings")
+            }
+            .accessibilityIdentifier("pendingRecordings")
+        }
     }
 
     private func reloadRecordings() {
