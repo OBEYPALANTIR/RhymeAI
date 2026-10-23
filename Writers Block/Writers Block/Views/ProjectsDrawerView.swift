@@ -353,6 +353,8 @@ struct ProjectsDrawerView: View {
                 reloadRecordings()
             }
         }
+        // Deletions applied, takes published or a failed check: the list follows (A28/A33).
+        .onChange(of: viewModel.voiceMemoService.publishedRevision) { _, _ in reloadRecordings() }
     }
 
     // MARK: - Songs Tab
@@ -723,6 +725,10 @@ struct ProjectsDrawerView: View {
         // doing file-system work in a detached task.
         let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
         let root = RecordingFiles.memosRoot()
+        guard !viewModel.recordingListsSuspended else {
+            recordingFolders = []
+            return
+        }
 
         Task {
             let folders = await Task.detached(priority: .userInitiated) { () -> [RecordingFolder] in

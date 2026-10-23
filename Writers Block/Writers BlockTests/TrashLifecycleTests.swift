@@ -6,7 +6,7 @@ import Testing
 struct TrashLifecycleTests {
 
     @MainActor
-    @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() throws {
+    @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let context = harness.context
@@ -49,7 +49,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func moveProjectToTrashReplacesDuplicateTrashEntries() throws {
+    @Test func moveProjectToTrashReplacesDuplicateTrashEntries() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let context = harness.context
@@ -98,7 +98,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func restoreTrashedProjectReplacesExistingActiveProject() throws {
+    @Test func restoreTrashedProjectReplacesExistingActiveProject() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let context = harness.context
@@ -136,7 +136,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func restoreTrashedProjectCollapsesDuplicateActiveAndTrashRows() throws {
+    @Test func restoreTrashedProjectCollapsesDuplicateActiveAndTrashRows() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let context = harness.context
@@ -190,7 +190,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func purgeExpiredTrashedProjectsKeepsUnexpiredTrash() throws {
+    @Test func purgeExpiredTrashedProjectsKeepsUnexpiredTrash() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
         let context = harness.context
@@ -226,7 +226,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func permanentProjectDeletePersistsTombstoneBeforeRemovingTrash() throws {
+    @Test func permanentProjectDeletePersistsTombstoneBeforeRemovingTrash() async throws {
         let harness = try Self.makeHarness()
         let trashed = TrashedSongProject(
             id: "gone",
@@ -247,7 +247,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func persistedTombstoneSuppressesStaleProjectOnRelaunch() throws {
+    @Test func persistedTombstoneSuppressesStaleProjectOnRelaunch() async throws {
         let harness = try Self.makeHarness()
         harness.context.insert(SongProject(id: "gone", title: "Stale", lyrics: "stale lyric", updatedAt: Date(timeIntervalSince1970: 100)))
         harness.context.insert(SyncDeletionRecord(projectId: "gone", deletedAt: 200_000))
@@ -261,7 +261,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func songEditedAfterItsTombstoneSurvivesRelaunch() throws {
+    @Test func songEditedAfterItsTombstoneSurvivesRelaunch() async throws {
         let harness = try Self.makeHarness()
         harness.context.insert(SongProject(id: "back", title: "Edited later", lyrics: "kept", updatedAt: Date(timeIntervalSince1970: 300)))
         harness.context.insert(SyncDeletionRecord(projectId: "back", deletedAt: 200_000))
@@ -274,7 +274,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func permanentRecordingDeleteRejectsSymlinkedTrashParent() throws {
+    @Test func permanentRecordingDeleteRejectsSymlinkedTrashParent() async throws {
         let fixture = try RecordingTrashFixture(symlinkedParent: true)
         defer { fixture.cleanUp() }
         let service = VoiceMemoService()
@@ -285,7 +285,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func permanentRecordingDeleteRemovesInRootMemo() throws {
+    @Test func permanentRecordingDeleteRemovesInRootMemo() async throws {
         let fixture = try RecordingTrashFixture(symlinkedParent: false)
         defer { fixture.cleanUp() }
         let service = VoiceMemoService()
@@ -296,7 +296,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func expiredRecordingPurgeRejectsSymlinkedTrashParent() throws {
+    @Test func expiredRecordingPurgeRejectsSymlinkedTrashParent() async throws {
         let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
         let fixture = try RecordingTrashFixture(symlinkedParent: true, deletedAt: deletedAt)
         defer { fixture.cleanUp() }
@@ -308,7 +308,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func expiredRecordingPurgeRejectsEnumeratedSymlinkedFile() throws {
+    @Test func expiredRecordingPurgeRejectsEnumeratedSymlinkedFile() async throws {
         let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
         let fixture = try RecordingTrashFixture(symlinkedParent: false, deletedAt: deletedAt)
         defer { fixture.cleanUp() }
@@ -327,7 +327,7 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func tombstoneRecordingCleanupRejectsSymlinkedTrashParent() throws {
+    @Test func tombstoneRecordingCleanupRejectsSymlinkedTrashParent() async throws {
         let fixture = try RecordingTrashFixture(symlinkedParent: true)
         defer { fixture.cleanUp() }
         let service = VoiceMemoService()
@@ -342,8 +342,8 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func aRecordingsFailureIsShownAndExpiryWaitsForIt() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+    @Test func aRecordingsFailureIsShownAndExpiryWaitsForIt() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("TrashLifecycle-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -358,15 +358,24 @@ struct TrashLifecycleTests {
 
         let viewModel = EditorViewModel(recordingLibrary: library)
         viewModel.modelContext = container.mainContext
+        await viewModel.recordingsLaunchTask?.value
 
+        #expect(viewModel.recordingListsSuspended)
+        // Nothing plays while the recordings cannot be checked.
+        #expect(!viewModel.isPlayableRecording(memosRoot.appendingPathComponent("song/take.m4a")))
         #expect(viewModel.errorMessage?.hasPrefix("Couldn't bring your recordings up to date") == true)
+        #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
+        #expect(try Self.fetchDeletions(container.mainContext).isEmpty)
+        // The permanent-delete path waits too (A33).
+        let trashed = try #require(Self.fetchTrash(container.mainContext).first)
+        #expect(!viewModel.permanentlyDeleteTrashedProject(trashed))
         #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
         #expect(try Self.fetchDeletions(container.mainContext).isEmpty)
     }
 
     @MainActor
-    @Test func aRecordingAWinningDeletionCoversIsNotPlayable() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+    @Test func aRecordingAWinningDeletionCoversIsNotPlayable() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Playable-\(UUID().uuidString)", isDirectory: true)
         let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
@@ -378,6 +387,7 @@ struct TrashLifecycleTests {
         try context.save()
         let viewModel = EditorViewModel(recordingLibrary: library)
         viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
         let old = library.memosRoot.appendingPathComponent("song/old.m4a")
         let new = library.memosRoot.appendingPathComponent("song/new.m4a")
         #expect(viewModel.isPlayableRecording(old) && viewModel.isPlayableRecording(new))
@@ -394,7 +404,7 @@ struct TrashLifecycleTests {
 
     @MainActor
     private static func makeHarness() throws -> Harness {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let viewModel = EditorViewModel()

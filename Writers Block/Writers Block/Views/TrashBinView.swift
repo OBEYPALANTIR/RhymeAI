@@ -110,6 +110,8 @@ struct TrashBinView: View {
         .onChange(of: trashIds) { _, _ in
             pruneSelection()
         }
+        // Deletions applied, takes published or a failed check: the list follows (A28/A33).
+        .onChange(of: viewModel.voiceMemoService.publishedRevision) { _, _ in reloadTrashedMemos() }
         .alert("Delete forever?", isPresented: $confirmPermanentDelete) {
             Button("Cancel", role: .cancel) { }
             Button("Delete Forever", role: .destructive) {
@@ -341,7 +343,7 @@ struct TrashBinView: View {
     }
 
     private func reloadTrashedMemos() {
-        trashedMemos = RecordingFiles.trashedMemos()
+        trashedMemos = viewModel.recordingListsSuspended ? [] : RecordingFiles.trashedMemos()
         selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
     }
 

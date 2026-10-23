@@ -458,7 +458,7 @@ struct SongRecordingsView: View {
     }
 
     private func reloadRecordings() {
-        let items = RecordingFiles.memos(for: projectId).map {
+        let items = (viewModel.recordingListsSuspended ? [] : RecordingFiles.memos(for: projectId)).map {
             RecordingItem(id: $0.absoluteString, url: $0, projectId: projectId, projectTitle: projectTitle)
         }
         recordingFolders = items.isEmpty ? [] : [RecordingFolder(id: projectId, title: projectTitle, items: items)]
