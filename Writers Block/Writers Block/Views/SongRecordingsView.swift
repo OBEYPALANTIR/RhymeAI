@@ -10,6 +10,7 @@ struct SongRecordingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     @State private var searchText = ""
+    @State private var failedTakeToDelete: VoiceMemoService.PendingTake?
     @State private var undoToast: UndoToast?
     @State private var fileImporterPresented = false
     @State private var importTask: Task<Void, Never>?
@@ -437,13 +438,31 @@ struct SongRecordingsView: View {
     @ViewBuilder
     private var pendingTakesRow: some View {
         let waiting = viewModel.voiceMemoService.pendingTakes.filter { $0.projectId == projectId }.count
-        let failed = viewModel.voiceMemoService.failedTakes.filter { $0.projectId == projectId }.count
+        let failedTakes = viewModel.voiceMemoService.failedTakes.filter { $0.projectId == projectId }
+        let failed = failedTakes.count
         if failed > 0 {
-            Text("\(failed) \(failed == 1 ? "recording" : "recordings") could not be saved; the audio is kept on this device.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("failedRecordings")
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                Text("\(failed) \(failed == 1 ? "recording" : "recordings") could not be saved; the audio is kept on this device.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Deleting is the user's explicit choice, confirmed first (T5.12).
+                Button("Delete", role: .destructive) { failedTakeToDelete = failedTakes.first }
+                    .font(.footnote.weight(.semibold))
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .accessibilityIdentifier("deleteFailedRecording")
+            }
+            .accessibilityIdentifier("failedRecordings")
+            .confirmationDialog("Delete this recording that could not be saved?", isPresented: Binding(
+                get: { failedTakeToDelete != nil }, set: { if !$0 { failedTakeToDelete = nil } }
+            ), titleVisibility: .visible) {
+                Button("Delete Recording", role: .destructive) {
+                    if let take = failedTakeToDelete { viewModel.voiceMemoService.deleteFailedTake(take) }
+                    failedTakeToDelete = nil
+                }
+            } message: {
+                Text("Its audio is removed from this device and cannot be recovered.")
+            }
         }
         if waiting > 0 {
             HStack(spacing: RhymeAITokens.Spacing.sm) {

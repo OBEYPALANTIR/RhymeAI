@@ -55,6 +55,49 @@ enum DeletionStore {
         return deletions
     }
 
+    /// The recovery for tombstones that do not validate (T5.24): one naming a valid
+    /// song or recording but with no usable time takes the time of this repair, so it
+    /// still suppresses every existing copy of what it names; one whose identity is
+    /// not valid names nothing that can be found, and is set aside in `setAside`
+    /// (kept for diagnosis) and removed from the store. No recording file is touched.
+    @discardableResult
+    static func repairInvalid(in context: ModelContext, setAside: URL, now: Date = Date()) throws -> (repaired: Int, setAside: Int) {
+        var repaired = 0
+        var removed: [[String: String]] = []
+        func identityValid(projectId: String, recordingId: String?, fileName: String?) -> Bool {
+            var probe = SyncDeletion(projectId: projectId, recordingId: recordingId, fileName: fileName, deletedAt: 1)
+            if recordingId == nil, fileName?.isEmpty == true { probe.fileName = nil }
+            return (try? probe.validate()) != nil
+        }
+        for record in try context.fetch(FetchDescriptor<SyncDeletionRecord>()) where (try? record.deletion.validate()) == nil {
+            if identityValid(projectId: record.projectId, recordingId: nil, fileName: record.deletion.fileName) {
+                record.deletedAt = now.epochMilliseconds
+                repaired += 1
+            } else {
+                removed.append(["type": "song", "projectId": record.projectId, "fileName": record.fileName ?? "", "deletedAt": String(record.deletedAt)])
+                context.delete(record)
+            }
+        }
+        for record in try context.fetch(FetchDescriptor<SyncRecordingDeletion>()) where (try? record.deletion.validate()) == nil {
+            if identityValid(projectId: record.projectId, recordingId: record.recordingId, fileName: record.deletion.fileName) {
+                record.deletedAt = now.epochMilliseconds
+                repaired += 1
+            } else {
+                removed.append(["type": "recording", "projectId": record.projectId, "recordingId": record.recordingId,
+                                "fileName": record.fileName, "deletedAt": String(record.deletedAt)])
+                context.delete(record)
+            }
+        }
+        if !removed.isEmpty {
+            var kept = (try? JSONDecoder().decode([[String: String]].self, from: Data(contentsOf: setAside))) ?? []
+            kept += removed
+            try FileManager.default.createDirectory(at: setAside.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(kept).write(to: setAside, options: .atomic)
+        }
+        if context.hasChanges { try context.save() }
+        return (repaired, removed.count)
+    }
+
     /// Stores a tombstone, keeping the newest time per identity.
     static func upsert(_ deletion: SyncDeletion, in context: ModelContext) throws {
         try deletion.validate()

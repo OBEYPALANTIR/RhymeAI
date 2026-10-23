@@ -361,6 +361,16 @@ struct PendingTakeTests {
                      stagingRoot: scratch.appendingPathComponent("recording-in-progress", isDirectory: true))
     }
 
+    /// The same on-disk store, files and settings opened afresh, as after the app was killed.
+    private func reopen(_ store: Store) throws -> Store {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: store.scratch.appendingPathComponent("library.store"), cloudKitDatabase: .none)])
+        let library = RecordingLibrary(memosRoot: store.library.memosRoot, trashRoot: store.library.trashRoot,
+                                       defaults: UserDefaults(suiteName: "PendingTakes-\(store.scratch.lastPathComponent)")!)
+        library.context = container.mainContext
+        return Store(scratch: store.scratch, context: container.mainContext, container: container, library: library, stagingRoot: store.stagingRoot)
+    }
+
     /// A take's audio in its own folder, as the recorder leaves it.
     private func take(_ audio: Data, in store: Store, finishedAt: Date? = nil) throws -> URL {
         let url = RecordingFiles.recorderStagingURL(for: "song", takeId: UUID().uuidString.lowercased(), root: store.stagingRoot)
@@ -380,14 +390,18 @@ struct PendingTakeTests {
         // The app stopped right after another take finished at a known time.
         let orphan = try take(Data([2, 2]), in: store, finishedAt: Date(timeIntervalSince1970: 1_234))
 
-        store.library.save = { try $0.save() }
+        // A real relaunch: store, settings and library opened afresh (T6.46).
+        let reopened = try reopen(store)
+        try await reopened.library.reconcile(context: reopened.context)
         let relaunched = VoiceMemoService(stagingRoot: store.stagingRoot)
-        relaunched.publisher = store.library
+        relaunched.publisher = reopened.library
         let ids = Set(relaunched.pendingTakes.map(\.id))
         #expect(ids.count == 2 && ids.contains(orphan.deletingLastPathComponent().lastPathComponent))
         await relaunched.retryPendingTakes()
         #expect(relaunched.pendingTakes.isEmpty && relaunched.failedTakes.isEmpty)
-        let rows = try store.context.fetch(FetchDescriptor<Recording>())
+        let afterRetry = try reopen(store)
+        let rows = try afterRetry.context.fetch(FetchDescriptor<Recording>())
+        for row in rows { #expect(try Data(contentsOf: store.library.memosRoot.appendingPathComponent("song/\(row.id).m4a")) == row.audio) }
         #expect(Set(rows.map(\.id)) == ids)
         // The retry reuses the recorded finish time, never the retry time.
         #expect(rows.first { $0.id == orphan.deletingLastPathComponent().lastPathComponent }?.uploadedAt == Date(timeIntervalSince1970: 1_234))
@@ -398,11 +412,45 @@ struct PendingTakeTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try RecordingFiles.writeFinishedMarker(Date(), in: folder)
         let again = VoiceMemoService(stagingRoot: store.stagingRoot)
-        again.publisher = store.library
+        again.publisher = reopened.library
         #expect(again.pendingTakes.map(\.id) == [published])
         await again.retryPendingTakes()
         #expect(again.pendingTakes.isEmpty && again.lastError == nil)
-        #expect(try store.context.fetch(FetchDescriptor<Recording>()).count == 2)
+        let final = try reopen(store)
+        #expect(try final.context.fetch(FetchDescriptor<Recording>()).count == 2)
+    }
+
+    /// T3.10: a take an earlier build left flat in its song's staging folder moves
+    /// into its own folder, named by its new id, with its bytes, and waits there.
+    @Test func aFlatTakeFromAnEarlierBuildMovesIntoItsOwnFolder() async throws {
+        let store = try await makeStore()
+        let flat = store.stagingRoot.appendingPathComponent("song/take.m4a")
+        try FileManager.default.createDirectory(at: flat.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([3, 1, 4]).write(to: flat)
+
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+
+        let pending = try #require(service.pendingTakes.first)
+        #expect(service.pendingTakes.count == 1 && !FileManager.default.fileExists(atPath: flat.path))
+        let moved = store.stagingRoot.appendingPathComponent("song/\(pending.id)/\(pending.id).m4a")
+        #expect(try Data(contentsOf: moved) == Data([3, 1, 4]))
+    }
+
+    /// T3.11: an empty finished marker (as earlier builds wrote it) means its own
+    /// write time, which is then written into it.
+    @Test func anEmptyFinishedMarkerIsReadAsItsWriteTime() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Marker-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let marker = folder.appendingPathComponent(RecordingFiles.finishedTakeMarker)
+        try Data().write(to: marker)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_234)], ofItemAtPath: marker.path)
+
+        #expect(RecordingFiles.readFinishedMarker(in: folder) == Date(timeIntervalSince1970: 1_234))
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "1234000")
+        // A value that is not a plausible time is not a time.
+        try Data("99999999999999999".utf8).write(to: marker)
+        #expect(RecordingFiles.readFinishedMarker(in: folder) == nil)
     }
 
     @Test func aFailureAfterTheMoveKeepsTheRowAndTheMarker() async throws {
@@ -421,8 +469,17 @@ struct PendingTakeTests {
 
         let id = staged.deletingLastPathComponent().lastPathComponent
         #expect(service.pendingTakes.map(\.id) == [id] && service.lastError != nil)
-        #expect(try store.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [id])
-        #expect(FileManager.default.fileExists(atPath: store.library.memosRoot.appendingPathComponent("song/\(id).m4a").path))
+        // What was saved survives a relaunch: the row with its audio, and the file (T6.47).
+        let reopened = try reopen(store)
+        let row = try #require(try reopened.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.id == id && row.audio == Data([5, 5]))
+        #expect(try Data(contentsOf: store.library.memosRoot.appendingPathComponent("song/\(id).m4a")) == Data([5, 5]))
+        try await reopened.library.reconcile(context: reopened.context)
+        let relaunched = VoiceMemoService(stagingRoot: store.stagingRoot)
+        relaunched.publisher = reopened.library
+        await relaunched.retryPendingTakes()
+        #expect(relaunched.pendingTakes.isEmpty && relaunched.failedTakes.isEmpty)
+        #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [id])
     }
 
     @Test func renamingChangesTheDisplayNameAndLeavesTheFile() async throws {
@@ -481,23 +538,35 @@ struct PendingTakeTests {
         let staged = try take(Data(count: Int(SyncRecording.maxBytes) + 1), in: store, finishedAt: Date(timeIntervalSince1970: 77))
         let id = staged.deletingLastPathComponent().lastPathComponent
         let published = try store.library.publishFinished(staged, projectId: "song", preferredName: staged.lastPathComponent, origin: .recorded, id: id, finishedAt: Date(timeIntervalSince1970: 77))
-        // The app stopped before the take's marker was cleared: a retry finds it saved.
+        // The app stopped after the move and before the record was completed (T6.50):
+        // the record still names its source, and the take's marker is still there.
+        var entry = try #require(OversizedRecordings.read(for: store.library.memosRoot)[id])
+        entry.source = staged.path
+        entry.completed = false
+        try OversizedRecordings.record(id: id, entry: entry, for: store.library.memosRoot)
+        try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try RecordingFiles.writeFinishedMarker(Date(timeIntervalSince1970: 77), in: staged.deletingLastPathComponent())
+        let reopened = try reopen(store)
+        try await reopened.library.reconcile(context: reopened.context)
         let service = VoiceMemoService(stagingRoot: store.stagingRoot)
-        service.publisher = store.library
+        service.publisher = reopened.library
         #expect(service.pendingTakes.map(\.id) == [id])
         await service.retryPendingTakes()
         #expect(service.pendingTakes.isEmpty && service.failedTakes.isEmpty && service.lastError == nil)
         #expect(FileManager.default.fileExists(atPath: published.path))
-        #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.finishedAt == 77_000)
+        let finished = try #require(OversizedRecordings.read(for: store.library.memosRoot)[id])
+        #expect(finished.finishedAt == 77_000 && finished.completed == true)
     }
 
     @Test func anOversizedTakeInterruptedBetweenItsJournalAndItsMoveIsFinished() async throws {
         let store = try await makeStore()
         let staged = try take(Data(count: Int(SyncRecording.maxBytes) + 1), in: store, finishedAt: Date(timeIntervalSince1970: 88))
         let id = staged.deletingLastPathComponent().lastPathComponent
-        // The app stopped right after journalling the publication, before the move.
+        // The app stopped right after journalling the publication (with the take's
+        // digest and length, T1.16), before the move.
         try OversizedRecordings.record(id: id, entry: .init(projectId: "song", fileName: staged.lastPathComponent, finishedAt: 88_000,
-                                                             source: staged.path, completed: false), for: store.library.memosRoot)
+                                                             source: staged.path, completed: false, sha256: RecordingFiles.sha256(of: staged),
+                                                             bytes: RecordingFiles.facts(staged).size), for: store.library.memosRoot)
         let service = VoiceMemoService(stagingRoot: store.stagingRoot)
         service.publisher = store.library
         await service.retryPendingTakes()
