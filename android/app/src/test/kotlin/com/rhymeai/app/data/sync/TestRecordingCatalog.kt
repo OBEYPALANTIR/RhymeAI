@@ -6,7 +6,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 
-/** In-memory recording records; [failWrites] or [failOnWrite] (1-based) inject a metadata write failure. */
+/** In-memory recording records; [failWrites] or [failOnWrite] (1-based, counting changing writes) inject a write failure. */
 class MemoryCatalog : RecordingCatalog {
     var records: List<RecordingRecord> = emptyList()
     var failWrites = false
@@ -16,8 +16,11 @@ class MemoryCatalog : RecordingCatalog {
     override suspend fun recordingRecords(): List<RecordingRecord> = records
 
     override suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>) {
+        // Like the DataStore-backed catalog, an unchanged list writes nothing.
+        val next = transform(records)
+        if (next == records) return
         if (failWrites || ++writes == failOnWrite) throw IOException("injected metadata write failure")
-        records = transform(records)
+        records = next
     }
 }
 

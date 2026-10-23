@@ -75,6 +75,10 @@ fun SongRecordingsDialog(
     val memos by produceState<List<VoiceMemo>?>(null, projectId, revision, service.isRecording) {
         value = service.memosForProject(projectId)
     }
+    // A27: finished takes whose save failed stay listed here until Retry saves them.
+    val waiting by produceState(0, projectId, revision, service.isRecording) {
+        value = service.waitingTakes(projectId).size
+    }
     DisposableEffect(service) { onDispose { service.stopPlayback() } }
     val picker = rememberLauncherForActivityResult(OpenAudioDocument) { uri ->
         if (uri != null) {
@@ -132,6 +136,29 @@ fun SongRecordingsDialog(
                 label = { Text("Search recordings") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
+            if (waiting > 0) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (waiting == 1) "1 recording waiting to be saved" else "$waiting recordings waiting to be saved",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                service.retryWaitingTakes(projectId)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                snackbar.showSnackbar("Couldn't save the recording. Free up storage, then tap Retry.")
+                            } finally {
+                                revision++
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("retryWaitingTakes")
+                ) { Text("Retry") }
+            }
             TextButton(
                 onClick = { picker.launch(arrayOf("audio/*")) },
                 enabled = !importing && !isClosing,
@@ -166,7 +193,7 @@ fun SongRecordingsDialog(
                 items(visible, key = { it.file.absolutePath }) { memo ->
                     RecordingMemoRow(
                         memo = memo, service = service, isSelecting = selecting,
-                        isSelected = memo.file.absolutePath in selected, snackbarHostState = snackbar,
+                        isSelected = memo.file.absolutePath in selected, snackbarHostState = snackbar, actionScope = scope,
                         onSelectionChanged = { checked ->
                             selected = if (checked) selected + memo.file.absolutePath else selected - memo.file.absolutePath
                         },

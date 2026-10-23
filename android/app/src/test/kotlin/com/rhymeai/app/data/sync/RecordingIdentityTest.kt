@@ -232,7 +232,7 @@ class RecordingIdentityTest {
         assertTrue(moved.exists())
 
         // The next consumer reconciles first and finds the same recording.
-        val record = RecordingTransitions.recordFor(catalog, filesDir, moved, "song", moved.name)
+        val record = RecordingTransitions.recordFor(catalog, filesDir, moved, "song")!!
         assertEquals(stamped.id, record.id)
         assertEquals(1_000L, record.uploadedAt)
         assertEquals(stamped.id, snapshot().single().entry.id)
@@ -268,5 +268,64 @@ class RecordingIdentityTest {
         val after = snapshot()
         assertEquals(2, after.size)
         assertEquals(renamed.name, after.single { it.entry.id == secondId }.entry.fileName)
+    }
+
+    @Test
+    fun identicalLiveAndTrashCopiesAreOneRecordingWhicheverIsSeenFirst() = runBlocking<Unit> {
+        val bytes = "old take".toByteArray()
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex(bytes))
+        fun device(dir: File): Pair<File, File> {
+            val live = File(RecordingFiles.memoDirectory(dir, "song").apply { mkdirs() }, "take.m4a").apply { writeBytes(bytes); setLastModified(1_000L) }
+            val trashed = File(RecordingFiles.trashDirectory(dir, "song").apply { mkdirs() }, "1500__take.m4a").apply { writeBytes(bytes); setLastModified(1_000L) }
+            return live to trashed
+        }
+        val other = kotlin.io.path.createTempDirectory("rhymeai-identity-other").toFile()
+        try {
+            // Here a snapshot sees both copies first; there the Trash copy is consumed first.
+            device(filesDir)
+            val (_, otherTrash) = device(other)
+            val otherCatalog = MemoryCatalog()
+            assertNull(RecordingTransitions.recordFor(otherCatalog, other, otherTrash, "song"))
+
+            val here = snapshot()
+            val there = RecordingTransitions.snapshot(otherCatalog, other, emptySet())
+            for ((dir, listed) in listOf(filesDir to here, other to there)) {
+                assertEquals(listOf(id), listed.map { it.entry.id })
+                assertFalse(listed.single().inTrash)
+                // The Trash copy is kept, never deleted, in quarantine.
+                assertContentEquals(bytes, RecordingFiles.quarantineDirectory(dir, "song").listFiles().orEmpty().single().readBytes())
+                assertTrue(RecordingFiles.trashDirectory(dir, "song").list().orEmpty().isEmpty())
+            }
+        } finally {
+            other.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aLiveCopyAppearingAfterItsTrashCopyWasStampedTakesOverTheSameIdAndTime() = runBlocking<Unit> {
+        val bytes = "old take".toByteArray()
+        File(RecordingFiles.trashDirectory(filesDir, "song").apply { mkdirs() }, "1500__take.m4a").apply { writeBytes(bytes); setLastModified(1_000L) }
+        val stamped = snapshot().single()
+        assertTrue(stamped.inTrash)
+
+        File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a").apply { writeBytes(bytes); setLastModified(9_000L) }
+        val after = snapshot().single()
+
+        assertEquals(stamped.entry.id, after.entry.id)
+        assertEquals(1_000L, after.entry.uploadedAt)
+        assertFalse(after.inTrash)
+        assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "song").list().orEmpty().size)
+    }
+
+    @Test
+    fun anEmptyStemNameGetsANamedVariantOnCollision() = runBlocking<Unit> {
+        val first = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "first".toByteArray()), "song", ".m4a",
+            RecordingManifestEntry.newRecordingId(), 1_000L, RecordingRecord.RESTORED)!!
+        val second = RecordingTransitions.publish(catalog, filesDir, staged("song", "b.m4a", "second".toByteArray()), "song", ".m4a",
+            RecordingManifestEntry.newRecordingId(), 2_000L, RecordingRecord.RESTORED)!!
+
+        assertEquals(".m4a", first.name)
+        assertEquals("Recording 2.m4a", second.name)
+        assertEquals(2, snapshot().size)
     }
 }

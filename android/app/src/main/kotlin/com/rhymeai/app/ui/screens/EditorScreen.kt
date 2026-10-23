@@ -458,9 +458,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             withDismissAction = true,
             duration = SnackbarDuration.Long
         ) == SnackbarResult.ActionPerformed
-        if (!retry) return
+        val projectId = (error as? com.rhymeai.app.service.VoiceMemoService.RecordingNotSavedException)?.projectId
+        if (!retry || projectId == null) return
         try {
-            viewModel.voiceMemoService.retryPendingTake()
+            viewModel.voiceMemoService.retryWaitingTakes(projectId)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (again: Exception) {
