@@ -189,7 +189,9 @@ class RecordingDeletionUiTest {
             val quarantined = boundary.single { xId in it.ids }
             assertTrue(boundary.toString(), quarantined.xInPlace && quarantined.after == null)
             assertTrue("the Restore took too long to rule out the take ending: $quarantined", quarantined.at - playStart < 11_000L)
-            assertTrue(boundary.toString(), boundary.none { it.before != null && it.after != null })
+            // In the deleting Restore, no move left a take playing (Y's publish in the first Restore
+            // correctly left X playing).
+            assertTrue(boundary.toString(), boundary.filter { it.at >= playStart }.none { it.before != null && it.after != null })
             assertNull(service.playingFile)
             assertEquals(listOf("$xId.m4a"), RecordingFiles.quarantineDirectory(filesDir, projectId).walk().filter { it.isFile }.map { it.name }.toList())
             assertTrue(yFile.exists())
