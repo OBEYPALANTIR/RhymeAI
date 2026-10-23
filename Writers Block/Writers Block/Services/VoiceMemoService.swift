@@ -88,6 +88,18 @@ final class VoiceMemoService {
     // Set when a recording or file operation fails so the UI can surface it
     // instead of swallowing the error. Writable so the alert binding can clear it.
     var lastError: String?
+    /// Finished takes not yet published into the library (A27): persisted, shown
+    /// as "waiting to be saved" with Retry, until each one is published.
+    private(set) var pendingTakes: [PendingTake] = []
+    /// Bumped whenever a take is published, so open lists reload.
+    private(set) var publishedRevision = 0
+
+    struct PendingTake: Codable, Equatable {
+        let id: String
+        let projectId: String
+        let path: String
+        let finishedAt: Date
+    }
 
     // MARK: - Private (not tracked by @Observable)
 
@@ -110,9 +122,22 @@ final class VoiceMemoService {
     /// one (tests of the service alone) changes are file moves only.
     @ObservationIgnored weak var publisher: (any RecordingPublishing)?
     @ObservationIgnored private var recordingProjectId: String?
+    /// A stopped recorder whose completion has not arrived yet; it keeps its
+    /// delegate alive so the outcome is not lost.
+    @ObservationIgnored private var finishing: (recorder: AVAudioRecorder, projectId: String, delegate: VoiceMemoDelegate?)?
 
-    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
+    @ObservationIgnored private let defaults: UserDefaults
+    private static let pendingTakesKey = "voice-memo-pending-takes"
+
+    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared, defaults: UserDefaults = .standard) {
         self.sessionTransitions = sessionTransitions
+        self.defaults = defaults
+        pendingTakes = defaults.data(forKey: Self.pendingTakesKey)
+            .flatMap { try? JSONDecoder().decode([PendingTake].self, from: $0) } ?? []
+    }
+
+    private func storePendingTakes() {
+        if let data = try? JSONEncoder().encode(pendingTakes) { defaults.set(data, forKey: Self.pendingTakesKey) }
     }
 
     nonisolated static let maximumImportBytes = 100 * 1024 * 1024
@@ -404,16 +429,18 @@ final class VoiceMemoService {
 
     /// Stops the recorder; a recording that finished is published into the memo
     /// folder (with its library row first). One that failed stays in staging.
-    func stopRecording(publish: Bool = true) {
+    /// Stops the recorder. The recording is published (row first, then file) only
+    /// from the recorder's completion callback, and only when it finished
+    /// successfully; a failed one stays in staging and the failure is shown.
+    func stopRecording() {
         audioIntentRevision &+= 1
         let shouldDeactivateSession = audioRecorder != nil || recordingActivationRevision != nil
-        let finished = audioRecorder.map { ($0.url, recordingProjectId) }
-        audioRecorder?.stop()
+        if let recorder = audioRecorder, let projectId = recordingProjectId {
+            finishing = (recorder, projectId, delegateForwarder)
+        }
         audioRecorder = nil
         recordingProjectId = nil
-        if publish, let (staged, projectId) = finished, let projectId {
-            publishRecording(staged, projectId: projectId)
-        }
+        finishing?.recorder.stop()
         elapsedTimer?.invalidate()
         elapsedTimer = nil
         meteringTimer?.invalidate()
@@ -548,27 +575,64 @@ final class VoiceMemoService {
         return targetURL
     }
 
-    private func publishRecording(_ staged: URL, projectId: String) {
+    /// A finished take is recorded as pending (persisted) before it is published,
+    /// so a failure or a crash leaves it recoverable rather than lost (A27).
+    func publishRecording(_ staged: URL, projectId: String) {
         guard let size = (try? staged.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 else { return }
+        let take = PendingTake(id: UUID().uuidString.lowercased(), projectId: projectId, path: staged.path, finishedAt: Date())
+        pendingTakes.append(take)
+        storePendingTakes()
+        publish(take)
+    }
+
+    /// Publishes every waiting take; the caller brings the library up to date
+    /// first, so a take already published (by id) simply counts as saved.
+    func retryPendingTakes() {
+        for take in pendingTakes { publish(take) }
+    }
+
+    private func publish(_ take: PendingTake) {
+        let staged = URL(fileURLWithPath: take.path)
         do {
             if let publisher {
-                _ = try publisher.publishFinished(staged, projectId: projectId, preferredName: staged.lastPathComponent, origin: .recorded)
+                _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded, id: take.id)
             } else {
-                let folder = RecordingFiles.memoFolder(for: projectId)
+                let folder = RecordingFiles.memoFolder(for: take.projectId)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: staged, to: RecordingFiles.restoredURL(originalName: staged.lastPathComponent, folder: folder))
             }
         } catch {
-            // The audio stays in staging rather than being lost.
-            lastError = "Couldn't save the recording: \(error.localizedDescription)"
+            // Without its audio there is nothing left to save.
+            guard FileManager.default.fileExists(atPath: take.path) else {
+                forgetPendingTake(take)
+                return
+            }
+            // The audio stays in staging, listed as waiting to be saved.
+            lastError = "Couldn't save the recording: \(error.localizedDescription) It is kept on this device; tap Retry to save it."
+            return
         }
+        forgetPendingTake(take)
+        publishedRevision &+= 1
+        onFilesChanged?()
+    }
+
+    private func forgetPendingTake(_ take: PendingTake) {
+        pendingTakes.removeAll { $0.id == take.id }
+        storePendingTakes()
     }
 
     // MARK: - Callbacks from delegate forwarder
 
     fileprivate func recordingDidFinish(_ recorder: AVAudioRecorder, successfully: Bool) {
-        guard audioRecorder === recorder else { return }
-        stopRecording(publish: successfully)
+        // The recorder ended on its own (an interruption or a limit): tidy up first.
+        if audioRecorder === recorder { stopRecording() }
+        guard let finished = finishing, finished.recorder === recorder else { return }
+        finishing = nil
+        if successfully {
+            publishRecording(recorder.url, projectId: finished.projectId)
+        } else {
+            lastError = "The recording could not be finished. Its audio was kept on this device and was not added to the song."
+        }
     }
 
     fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {

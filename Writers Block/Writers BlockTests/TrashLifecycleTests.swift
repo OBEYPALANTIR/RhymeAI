@@ -342,6 +342,29 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func aRecordingsFailureIsShownAndExpiryWaitsForIt() throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("TrashLifecycle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        // A memo root that is not a folder cannot be scanned.
+        let memosRoot = scratch.appendingPathComponent("voice-memos")
+        try Data([0]).write(to: memosRoot)
+        let library = RecordingLibrary(memosRoot: memosRoot, trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "TrashLifecycle-\(scratch.lastPathComponent)")!)
+        container.mainContext.insert(TrashedSongProject(id: "expired", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                                        deletedAt: Date(timeIntervalSince1970: 2), deleteAfter: Date(timeIntervalSince1970: 3)))
+        try container.mainContext.save()
+
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = container.mainContext
+
+        #expect(viewModel.errorMessage?.hasPrefix("Couldn't bring your recordings up to date") == true)
+        #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
+        #expect(try Self.fetchDeletions(container.mainContext).isEmpty)
+    }
+
+    @MainActor
     private static func makeHarness() throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)

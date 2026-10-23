@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Writers_Block
 
@@ -405,5 +406,56 @@ struct VoiceMemoServiceTests {
         #expect(history[19] == 0.1)
         #expect(history[20] == 0.4)
         #expect(history[21] == 0.9)
+    }
+}
+
+/// Finished takes whose publication failed stay recoverable (A27).
+@MainActor
+struct PendingTakeTests {
+    @Test func unsavedTakesWaitAcrossRelaunchAndRetrySavesEachOnceById() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("PendingTakes-\(UUID().uuidString)", isDirectory: true)
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: scratch.appendingPathComponent("library.store"), cloudKitDatabase: .none)])
+        let context = container.mainContext
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "PendingTakes-lib-\(scratch.lastPathComponent)")!)
+        library.context = context
+        let defaults = UserDefaults(suiteName: "PendingTakes-\(scratch.lastPathComponent)")!
+        func take(_ byte: UInt8) throws -> URL {
+            let url = scratch.appendingPathComponent("recording-in-progress/song/\(byte).m4a")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([byte, byte]).write(to: url)
+            return url
+        }
+
+        library.save = { _ in throw CocoaError(.fileWriteUnknown) }
+        let service = VoiceMemoService(defaults: defaults)
+        service.publisher = library
+        service.publishRecording(try take(1), projectId: "song")
+        service.publishRecording(try take(2), projectId: "song")   // a later recording keeps the first waiting
+        #expect(service.pendingTakes.count == 2 && service.lastError != nil)
+        #expect(service.pendingTakes.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+
+        // Relaunch: the list is still there, and Retry saves each take under its id.
+        library.save = { try $0.save() }
+        let relaunched = VoiceMemoService(defaults: defaults)
+        relaunched.publisher = library
+        let ids = Set(relaunched.pendingTakes.map(\.id))
+        #expect(ids == Set(service.pendingTakes.map(\.id)))
+        relaunched.retryPendingTakes()
+        #expect(relaunched.pendingTakes.isEmpty)
+        #expect(Set(try context.fetch(FetchDescriptor<Recording>()).map(\.id)) == ids)
+
+        // A take published before the app stopped (its entry still listed) counts as saved.
+        let published = try #require(ids.first)
+        let stale = VoiceMemoService.PendingTake(id: published, projectId: "song", path: scratch.appendingPathComponent("gone.m4a").path, finishedAt: Date())
+        defaults.set(try JSONEncoder().encode([stale]), forKey: "voice-memo-pending-takes")
+        let again = VoiceMemoService(defaults: defaults)
+        again.publisher = library
+        again.retryPendingTakes()
+        #expect(again.pendingTakes.isEmpty && again.lastError == nil)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 2)
     }
 }
