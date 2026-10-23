@@ -434,6 +434,112 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    private static func libraryViewModel(_ name: String) async throws -> (viewModel: EditorViewModel, library: RecordingLibrary, context: ModelContext, container: ModelContainer) {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "\(name)-\(scratch.lastPathComponent)")!)
+        return (EditorViewModel(recordingLibrary: library), library, container.mainContext, container)
+    }
+
+    @MainActor
+    @Test func permanentDeletionNeedsTheCompleteCheckAndTheBytesThereNow() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("DeleteGate")
+        _ = container
+        let trashFile = library.trashRoot.appendingPathComponent("song/1000__take.m4a")
+        try FileManager.default.createDirectory(at: trashFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1]).write(to: trashFile)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let trashed = try #require(RecordingFiles.trashedMemos(in: library.trashRoot).first)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
+
+        // An unreadable move record: nothing is deleted.
+        let record = RecordingFiles.quarantineRoot(for: library.memosRoot).appendingPathComponent("pending-moves.json")
+        try FileManager.default.createDirectory(at: record.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{".utf8).write(to: record)
+        #expect(!viewModel.permanentlyDeleteTrashedMemo(trashed))
+        try FileManager.default.removeItem(at: record)
+
+        // Other bytes in the row's Trash file: nothing is deleted either.
+        try Data([9]).write(to: trashFile)
+        #expect(!viewModel.permanentlyDeleteTrashedMemo(trashed))
+        #expect(FileManager.default.fileExists(atPath: trashFile.path))
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func aSongIsNotDeletedWhileItsFolderHoldsUncheckedBytes() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("SongGate")
+        _ = container
+        context.insert(TrashedSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1), deletedAt: Date()))
+        try context.save()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        // A file that appeared after the last check.
+        let stray = library.memosRoot.appendingPathComponent("song/new.m4a")
+        try FileManager.default.createDirectory(at: stray.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([3]).write(to: stray)
+        let trashed = try #require(context.fetch(FetchDescriptor<TrashedSongProject>()).first)
+
+        #expect(!viewModel.permanentlyDeleteTrashedProject(trashed))
+        #expect(FileManager.default.fileExists(atPath: stray.path))
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func launchTimeDeletionsKeepSongsForIdTombstonesAndTimelessSongs() async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("LaunchDeletions")
+        _ = container
+        context.insert(SongProject(id: "kept", title: "Kept", updatedAt: Date(timeIntervalSince1970: 50)))
+        context.insert(SongProject(id: "timeless", title: "Timeless", updatedAt: Date(timeIntervalSince1970: 0)))
+        context.insert(SyncRecordingDeletion(projectId: "kept", recordingId: "a-take", fileName: "", deletedAt: 4_000_000_000_000))
+        context.insert(SyncDeletionRecord(projectId: "timeless", deletedAt: 1_000))
+        try context.save()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        #expect(Set(try context.fetch(FetchDescriptor<SongProject>()).map(\.id)) == ["kept", "timeless"])
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "timeless" }.map { $0.updatedAt.epochMilliseconds > 1_000 } == true)
+    }
+
+    @MainActor
+    @Test func aReconcileMoveStopsPlaybackThroughTheHook() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("HookStop")
+        _ = container
+        let url = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Far longer than the test: it cannot finish on its own.
+        try AudioFixtures.long(seconds: 120, at: url)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+
+        viewModel.voiceMemoService.togglePlayback(url: url)
+        for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(viewModel.voiceMemoService.isPlaying)
+
+        var atBoundary: [(playing: Bool, fileStillThere: Bool)] = []
+        library.atMoveBoundary = { file in
+            atBoundary.append((viewModel.voiceMemoService.isPlaying, FileManager.default.fileExists(atPath: file.path)))
+        }
+        // Renamed on another device: the reconcile parks and moves the file itself,
+        // with no VoiceMemoService call in between.
+        row.fileName = "renamed.m4a"
+        row.claimedName = "renamed.m4a"
+        try context.save()
+        #expect(await viewModel.reconcileRecordings())
+
+        #expect(atBoundary.count == 1 && atBoundary.first?.playing == false && atBoundary.first?.fileStillThere == true)
+        #expect(!viewModel.voiceMemoService.isPlaying)
+        #expect(FileManager.default.fileExists(atPath: library.memosRoot.appendingPathComponent("song/renamed.m4a").path))
+    }
+
+    @MainActor
     private static func makeHarness() throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)

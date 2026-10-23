@@ -1573,6 +1573,8 @@ final class EditorViewModel: ObservableObject {
         guard recordingsChecked() else { return false }
         let projectId = trashedProject.id
         do {
+            // Every file of the song is one the check verified, before anything changes.
+            try recordingLibrary?.checkSongDeletable(projectId, in: context)
             let deletedAt = Date()
             try upsertPermanentDeletion(projectId: projectId, deletedAt: deletedAt, in: context)
             // Each recording gets its own tombstone in the same save (A21).
@@ -1585,6 +1587,7 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         // Remove the memo folder so orphaned audio doesn't accumulate on disk.
+        stopPlaybackOfSong(projectId)
         if !RecordingFiles.deleteMemosFolder(for: projectId) {
             errorMessage = "This song was permanently deleted, but its local recordings could not be removed. Writers Block will retry cleanup."
         }
@@ -1608,6 +1611,8 @@ final class EditorViewModel: ObservableObject {
         }
         let projectIDs = expiredProjects.map(\.id)
         do {
+            // Every file of each song is one the check verified, before anything changes.
+            for projectId in projectIDs { try recordingLibrary?.checkSongDeletable(projectId, in: context) }
             for projectId in projectIDs {
                 try upsertPermanentDeletion(projectId: projectId, deletedAt: now, in: context)
                 _ = try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: now.epochMilliseconds, in: context)
@@ -1617,6 +1622,7 @@ final class EditorViewModel: ObservableObject {
             }
             expiredProjects.forEach(context.delete)
             try saveModelContext(context)
+            projectIDs.forEach(stopPlaybackOfSong)
             for projectId in projectIDs where !RecordingFiles.deleteMemosFolder(for: projectId) {
                 errorMessage = "Expired writing was removed, but some local recordings could not be cleaned up. Writers Block will retry."
             }
@@ -1650,8 +1656,17 @@ final class EditorViewModel: ObservableObject {
             let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: context))
             guard !deletions.isEmpty else { return }
             // A tombstone removes a song only when it is newer than the song's last change.
-            let tombstones = Dictionary(deletions.filter { $0.fileName == nil }.map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+            let tombstones = Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
             var deletedProjects = Set(tombstones.keys)
+            // A32: a song without a time gets the time it was first seen here, before
+            // any comparison, kept and written back.
+            for project in try context.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
+                project.updatedAt = firstSeenTime("project:\(project.id)")
+            }
+            for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) {
+                if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = firstSeenTime("project:\(project.id)") }
+                if project.deletedAt.epochMilliseconds <= 0 { project.deletedAt = firstSeenTime("trashed:\(project.id)") }
+            }
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
                 if tombstones[project.id]! > project.updatedAt.epochMilliseconds {
                     context.delete(project)
@@ -1668,11 +1683,11 @@ final class EditorViewModel: ObservableObject {
             }
             // The deleted songs' recordings (adopted by the library just before) get
             // their own tombstones in the same save; only their files go.
-            var removedFiles: [URL] = []
+            var removedFiles: [(url: URL, sha256: String)] = []
             for projectId in deletedProjects {
                 for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: tombstones[projectId] ?? 0, in: context) {
                     if let library = recordingLibrary, let file = row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot) {
-                        removedFiles.append(file)
+                        removedFiles.append((file, row.sha256))
                     }
                 }
             }
@@ -1709,6 +1724,13 @@ final class EditorViewModel: ObservableObject {
     /// A trashed recording deleted for good: tombstoned by its id (by name if it
     /// never had a row) and its row removed, in the caller's save.
     private func tombstoneTrashedMemo(_ trashed: TrashedVoiceMemo, deletedAt: Date, in context: ModelContext) throws {
+        if let recordingLibrary {
+            // The complete check, and the id of the bytes there now (finding 1).
+            let identity = try recordingLibrary.identityForDeletion(of: trashed, in: context)
+            try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: identity.id, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
+            if let row = identity.row { context.delete(row) }
+            return
+        }
         let row = try context.fetch(FetchDescriptor<Recording>()).first {
             $0.projectId == trashed.projectId && $0.fileName == trashed.originalName
                 && $0.trashedAt?.epochMilliseconds == trashed.deletedAt.epochMilliseconds
@@ -2182,11 +2204,31 @@ final class EditorViewModel: ObservableObject {
     /// required before a deletion or expiry changes recordings (A33).
     func recordingsChecked() -> Bool {
         guard let recordingLibrary, let modelContext else { return true }
-        guard recordingLibrary.lastRunSucceeded, (try? DeletionStore.all(in: modelContext)) != nil else {
+        // The complete check: last run, tombstones and move record (A33).
+        guard (try? recordingLibrary.requireChecked(modelContext)) != nil else {
             errorMessage = "Your recordings are being checked, so nothing was deleted. Try again in a moment."
             return false
         }
         return true
+    }
+
+    private static let firstSeenKey = "editor-first-seen-times"
+
+    /// A32: the time something without a time was first seen here, kept and never changed.
+    private func firstSeenTime(_ key: String) -> Date {
+        var seen = (defaults.dictionary(forKey: Self.firstSeenKey) as? [String: NSNumber])?.mapValues(\.int64Value) ?? [:]
+        if let known = seen[key] { return Date(millisecondsSince1970: known) }
+        let now = Date().epochMilliseconds
+        seen[key] = now
+        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        return Date(millisecondsSince1970: now)
+    }
+
+    /// Stops playback of anything in a song's memo or Trash folder before they go.
+    private func stopPlaybackOfSong(_ projectId: String) {
+        let roots = recordingLibrary.map { [$0.memosRoot, $0.trashRoot] } ?? [RecordingFiles.memosRoot(), RecordingFiles.memosTrashRoot()]
+        let folders = roots.map { RecordingFiles.canonicalPath($0.appendingPathComponent(projectId, isDirectory: true)) + "/" }
+        voiceMemoService.stopPlayback(ifPlayingWithin: folders)
     }
 
     /// A verified identity for what plays: the id of the row whose bytes the file
