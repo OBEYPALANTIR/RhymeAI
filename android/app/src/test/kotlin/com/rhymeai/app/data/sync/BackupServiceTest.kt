@@ -878,6 +878,110 @@ class BackupServiceTest {
 
         assertEquals(2, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
         assertEquals(2, assertIs<SyncResult.Success>(service.restore(repository)).skippedLargeRecordings)
+
+        // The Trash-held recording's raw object goes missing, then comes back with another size:
+        // it is unpreserved, counted once, and not as a remote recording this device lacks.
+        drive.remove(BackupManifest.recordingDriveName(trashed.id))
+        assertEquals(3, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+        drive.put(BackupManifest.recordingDriveName(trashed.id), byteArrayOf(1), recordingAppProperties(trashed.copy(sizeBytes = 1L)))
+        assertEquals(3, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+    }
+
+    @Test
+    fun aStampedTimeHoldsWhenTheFileTimeLaterDropsBelowATombstone() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val file = File(RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }, "take.m4a")
+            .apply { writeBytes("take".toByteArray()); setLastModified(5_000L) }
+        val stamped = snapshotLocalRecordingFiles(filesDir, emptySet(), repository).single().entry
+        assertEquals(5_000L, stamped.uploadedAt)
+
+        file.setLastModified(1_000L)
+        val again = snapshotLocalRecordingFiles(filesDir, emptySet(), repository).single().entry
+
+        assertEquals(5_000L, again.uploadedAt)
+        assertFalse(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", 3_000L, recordingId = stamped.id))).removes(again))
+    }
+
+    @Test
+    fun anInterruptedPublishWhoseDestinationCannotBeExaminedKeepsItsIdentityUntilAccessReturns() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        val bytes = "restored take".toByteArray()
+        val placed = File(dir, "take.m4a").apply { writeBytes(bytes); setLastModified(9_000L) }
+        val id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, placed)
+        // The file reached its place; the process died before the record was finished.
+        val intent = RecordingRecord(id, "p", "take.m4a", 1_000L, BackupManifest.sha256Hex(bytes), bytes.size.toLong(),
+            RecordingRecord.RESTORED, path = path, pendingFrom = ".recording-restore-x/take.m4a", pendingOp = RecordingRecord.OP_PUBLISH)
+        repository.updateRecordingRecords { listOf(intent) }
+
+        dir.setExecutable(false)
+        val blocked = runCatching { java.nio.file.Files.readAttributes(placed.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java) }.isFailure
+        org.junit.Assume.assumeTrue("permissions are not enforced for this user", blocked)
+        try {
+            assertFailsWith<java.io.IOException> { snapshotLocalRecordingFiles(filesDir, emptySet(), repository) }
+            assertEquals(listOf(intent), repository.recordingRecords())
+        } finally {
+            dir.setExecutable(true)
+        }
+
+        val listed = snapshotLocalRecordingFiles(filesDir, emptySet(), repository).single().entry
+        assertEquals(id, listed.id)
+        assertEquals(1_000L, listed.uploadedAt)
+        assertEquals(RecordingRecord.RESTORED, repository.recordingRecords().single().origin)
+        assertTrue(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", 5_000L, recordingId = id))).removes(listed))
+    }
+
+    @Test
+    fun twoDevicesWithDifferentRecordingsUnderOneNameConvergeWithoutRenamingLoops() = runBlocking<Unit> {
+        val otherFiles = File(root, "other-files").also { it.mkdirs() }
+        val otherRepository = ProjectRepository(
+            PreferenceDataStoreFactory.create(scope = scope) { File(root, "other.preferences_pb") }, MemoryKeyStore()
+        )
+        val other = DriveSyncService(otherFiles, MemoryKeyStore(), drive, auth, clientId = { "other-device" }, now = { clock })
+        repository.saveProjects(listOf(song("p")))
+        otherRepository.saveProjects(listOf(song("p")))
+        // Here, X under take.m4a at 2000; on the other device, Y under take.m4a at 1000.
+        val x = writeMemo("p", "take.m4a", "x take".toByteArray(), modifiedAt = 2_000L)
+        val y = writeMemo("p", "take.m4a", "y take".toByteArray(), modifiedAt = 1_000L, repo = otherRepository, dir = otherFiles)
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertIs<SyncResult.Success>(other.restore(otherRepository))
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        // The earlier recording keeps the name on both devices; the later one is "take 2".
+        for (dir in listOf(filesDir, otherFiles)) {
+            assertContentEquals("y take".toByteArray(), RecordingFileStore.targetFile(dir, "p", "take.m4a").readBytes())
+            assertContentEquals("x take".toByteArray(), RecordingFileStore.targetFile(dir, "p", "take 2.m4a").readBytes())
+        }
+        val names = remote().recordings.associate { it.id to it.fileName }
+        assertEquals(mapOf(y.id to "take.m4a", x.id to "take 2.m4a"), names)
+
+        // Further rounds from either device change nothing: no renaming loop.
+        repeat(2) {
+            assertIs<SyncResult.Success>(service.backUp(repository))
+            assertIs<SyncResult.Success>(other.backUp(otherRepository))
+            assertIs<SyncResult.Success>(other.restore(otherRepository))
+            assertIs<SyncResult.Success>(service.restore(repository))
+            assertEquals(names, remote().recordings.associate { it.id to it.fileName })
+        }
+        assertEquals(setOf("take.m4a", "take 2.m4a"), RecordingFiles.memoDirectory(otherFiles, "p").list()!!.toSet())
+    }
+
+    @Test
+    fun theEarlierRecordingOrTheSmallerIdKeepsAContestedName() {
+        val a = RecordingManifestEntry("p", "take.m4a", sizeBytes = 1L, modifiedAt = 0L, sha256 = "a".repeat(64), uploadedAt = 5_000L, id = "b2a1c3d4-e5f6-4789-8abc-def012345678")
+        val b = a.copy(uploadedAt = 5_000L, id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
+        val c = a.copy(uploadedAt = 1_000L, id = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2")
+        val existingVariant = a.copy(fileName = "take 2.m4a", driveName = RecordingManifestEntry.driveNameFor("p", "take 2.m4a"), id = "11111111-2222-4333-8444-555555555555")
+
+        val named = SyncMerger.assignNames(listOf(a, b, c, existingVariant)).associate { it.id to it.fileName }
+        // Same answer whatever order the entries arrive in.
+        assertEquals(named, SyncMerger.assignNames(listOf(existingVariant, c, b, a)).associate { it.id to it.fileName })
+        assertEquals("take.m4a", named[c.id])
+        assertEquals("take 2.m4a", named[existingVariant.id])
+        assertEquals("take 3.m4a", named[b.id])
+        assertEquals("take 4.m4a", named[a.id])
     }
 
     @Test
@@ -1003,6 +1107,10 @@ class BackupServiceTest {
                 add(name, bytes, appProperties)
             }
         }
+        fun remove(name: String) {
+            files.values.removeIf { it.name == name }
+        }
+
         fun add(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()): String {
             val id = "id-${nextId++}"
             files[id] = StoredFile(name, bytes, appProperties, 1, nextId)

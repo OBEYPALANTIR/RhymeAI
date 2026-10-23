@@ -1024,6 +1024,8 @@ class DriveSyncService(
                         val name = liveById[entry.id]?.entry?.fileName ?: return@map entry
                         entry.copy(fileName = name, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name))
                     }
+                    // A30: a name two recordings claim goes to the earlier one on every device.
+                    .let(SyncMerger::assignNames)
             )
             val driveFiles = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX)
                 .associateBy { it.name }
@@ -1079,6 +1081,8 @@ class DriveSyncService(
             var damaged = 0
             var committed = merged
             if (applyLocally) {
+                // A30: local recordings take their converged names before downloads are placed.
+                RecordingTransitions.applyNames(repository, filesDir, merged.recordings.associate { it.id to it.fileName })
                 damaged = restoreRemoteRecordings(
                     token, repository, merged.recordings, driveFiles.mapValues { it.value.id } + uploaded, localFiles
                 )
@@ -1092,7 +1096,10 @@ class DriveSyncService(
             val allowed = recordingsAllowedForUpload(liveFiles.map { it.entry }, emptyList(), merged.deletions)
             // Held here, live or in Trash: not a remote recording this device lacks.
             val heldIds = localFiles.mapTo(HashSet()) { it.entry.id }
+            val listedIds = merged.recordings.mapTo(HashSet()) { it.id }
             val skipped = allowed.count { !it.isTransferable && !onDrive(it) } +
+                // A Trash-held recording Drive lists but does not hold intact is unpreserved too.
+                localFiles.count { it.inTrash && !it.entry.isTransferable && it.entry.id in listedIds && !onDrive(it.entry) } +
                 merged.recordings.count { !it.isTransferable && it.id !in heldIds }
             return PushOutcome(merged, committed, skipped, damaged)
         }

@@ -103,6 +103,8 @@ internal object RecordingTransitions {
         val record = catalog?.let { recordForLocked(it, filesDir, from, projectId) ?: return@withLock null }
         val target = pick()
         renamesTo(target)?.let { SyncIdentity.validateFileName(it) }
+        // Never replace a file: a taken target fails the move.
+        if (target.exists() || isRegularFileStrictly(target)) return@withLock null
         val intent = record?.copy(
             fileName = renamesTo(target) ?: record.fileName,
             path = relativePath(filesDir, target),
@@ -117,6 +119,32 @@ internal object RecordingTransitions {
         }
         if (intent != null) catalog.putRecord(intent.copy(pendingFrom = null, pendingFromName = null, pendingOp = null))
         target
+    }
+
+    /**
+     * A30: renames live recordings to their converged [names] (id to file name) where the
+     * name is free. A name held by another recording that is itself being renamed frees
+     * up on a later pass; a name held by anything else is left alone, never replaced.
+     */
+    suspend fun applyNames(catalog: RecordingCatalog, filesDir: File, names: Map<String, String>) {
+        val trashPrefix = relativePath(filesDir, RecordingFiles.trashRoot(filesDir)) + File.separator
+        do {
+            val pending = namespace.withLock {
+                reconcileLocked(catalog, filesDir)
+                catalog.recordingRecords().filter { record ->
+                    val path = record.path ?: return@filter false
+                    !path.startsWith(trashPrefix) && names[record.id]?.let { it != record.fileName } == true
+                }
+            }
+            var progress = false
+            for (record in pending) {
+                val from = File(filesDir, record.path!!)
+                val target = File(from.parentFile, names.getValue(record.id))
+                if (move(catalog, filesDir, from, record.projectId, record.fileName, pick = { target }, renamesTo = { it.name }) != null) {
+                    progress = true
+                }
+            }
+        } while (progress)
     }
 
     /**
@@ -194,6 +222,13 @@ internal object RecordingTransitions {
         return target
     }
 
+    /** Whether [file] is a regular file; only confirmed absence is false, and a file that cannot be examined throws. */
+    internal fun isRegularFileStrictly(file: File): Boolean = try {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java).isRegularFile
+    } catch (_: java.nio.file.NoSuchFileException) {
+        false
+    }
+
     /** A24: finishes a move whose file reached its target, undoes one that did not. */
     suspend fun reconcile(catalog: RecordingCatalog, filesDir: File) = namespace.withLock { reconcileLocked(catalog, filesDir) }
 
@@ -205,9 +240,10 @@ internal object RecordingTransitions {
                 val target = record.path?.let { File(filesDir, it) }
                 val source = record.pendingFrom?.let { File(filesDir, it) }
                 when {
-                    target != null && target.isFile && RecordingFileStore.sha256Hex(target) == record.sha256 ->
+                    // Strict checks: a file that cannot be examined throws here and nothing is committed.
+                    target != null && isRegularFileStrictly(target) && RecordingFileStore.sha256Hex(target) == record.sha256 ->
                         record.copy(pendingFrom = null, pendingFromName = null, pendingOp = null)
-                    record.pendingOp == RecordingRecord.OP_MOVE && source != null && source.isFile -> record.copy(
+                    record.pendingOp == RecordingRecord.OP_MOVE && source != null && isRegularFileStrictly(source) -> record.copy(
                         path = record.pendingFrom,
                         fileName = record.pendingFromName ?: record.fileName,
                         pendingFrom = null, pendingFromName = null, pendingOp = null
@@ -275,9 +311,16 @@ internal object RecordingTransitions {
             val byPath = records.filter { it.path != null }.associateBy { it.path }
             val hashedPaths = hashed.mapTo(HashSet()) { it.path }
             fun matches(item: Hashed) = byPath[item.path]?.takeIf { it.sha256 == item.sha && it.bytes == item.size }
-            // Records of files on disk but not listed here (songs pending deletion) keep their bytes.
-            val kept = records.filter { it.path != null && it.path !in hashedPaths && File(filesDir, it.path).isFile }
-                .associateByTo(LinkedHashMap()) { it.id }
+            // A record not matched by this scan goes only when its file is confirmed absent; a song
+            // outside this scan (or pending deletion) keeps its records unexamined.
+            val kept = records.filter { record ->
+                val path = record.path ?: return@filter false
+                when {
+                    path in hashedPaths -> false
+                    record.projectId in pendingDeletionIds || (onlyProjects != null && record.projectId !in onlyProjects) -> true
+                    else -> isRegularFileStrictly(File(filesDir, path))
+                }
+            }.associateByTo(LinkedHashMap()) { it.id }
             // A26: every copy of one recording, matched or seen for the first time, is a candidate.
             val groups = hashed.groupBy { item ->
                 matches(item)?.id ?: RecordingManifestEntry.legacyRecordingId(item.projectId, item.displayName, item.sha)
@@ -289,12 +332,15 @@ internal object RecordingTransitions {
                 ).first()
                 quarantined += candidates.filter { it !== canonical }
                 val existing = kept[id] ?: candidates.firstNotNullOfOrNull { matches(it) }
-                val earliest = candidates.minOf { it.modifiedAt }
+                // A20: a stamped time never moves with a file time; only copies seen for the first time count.
+                val earliest = candidates.filter { matches(it) == null }.minOfOrNull { it.modifiedAt }
                 val record = when {
-                    existing == null -> stamp(canonical, id, earliest)
+                    existing == null -> stamp(canonical, id, earliest!!)
                     // An adopted file's time is the earliest of its copies; other times are kept as stored.
-                    existing.origin == RecordingRecord.ADOPTED ->
-                        existing.copy(path = canonical.path, fileName = canonical.displayName, uploadedAt = minOf(existing.uploadedAt, earliest))
+                    existing.origin == RecordingRecord.ADOPTED -> existing.copy(
+                        path = canonical.path, fileName = canonical.displayName,
+                        uploadedAt = earliest?.let { minOf(existing.uploadedAt, it) } ?: existing.uploadedAt
+                    )
                     existing.path == canonical.path -> existing
                     else -> existing.copy(path = canonical.path, fileName = canonical.displayName)
                 }

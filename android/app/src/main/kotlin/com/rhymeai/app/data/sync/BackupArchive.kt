@@ -1,5 +1,7 @@
 package com.rhymeai.app.data.sync
 
+import com.rhymeai.app.data.recording.RecordingTransitions
+
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.util.LyricsExporter
 import java.io.File
@@ -139,9 +141,13 @@ object BackupArchive {
         // A recording held here, live or in Trash, is never imported again.
         val local = localFiles.mapTo(HashSet()) { it.entry.id }
         val imported = contents.manifest.recordings.associateBy { it.id }
+        // A30: names two recordings claim converge; local recordings take theirs first.
+        val names = SyncMerger.assignNames(merged.recordings).associate { it.id to it.fileName }
+        RecordingTransitions.applyNames(repository, filesDir, names)
         val wanted = merged.recordings
             .filter { it.id in imported && it.id !in local }
             .map { imported.getValue(it.id) }
+            .map { entry -> names[entry.id]?.let { entry.copy(fileName = it, driveName = RecordingManifestEntry.driveNameFor(entry.projectId, it)) } ?: entry }
         var added = 0
         for (entry in wanted) {
             val bytes = contents.recordings[entry.id] ?: continue

@@ -103,15 +103,19 @@ internal object RecordingFiles {
      */
     fun resolveCollision(dir: File, base: String, extension: String = "m4a"): File {
         var candidate = File(dir, "$base.$extension")
-        // A name like ".m4a" is valid but has no stem to number.
-        val stem = base.trim().ifEmpty { "Recording" }
         var suffix = 2
-        while (candidate.exists()) {
-            val tail = " $suffix.$extension"
-            val room = SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - tail.toByteArray(Charsets.UTF_8).size
-            candidate = File(dir, truncateUtf8(stem, room).trimEnd() + tail)
-            suffix++
-        }
+        while (candidate.exists()) candidate = File(dir, variantName(base, extension, suffix++))
         return candidate
+    }
+
+    /**
+     * "<stem> <n>.<extension>", the stem shortened to keep the name within the recording
+     * filename limit; a name like ".m4a" has no stem to number and uses "Recording".
+     */
+    fun variantName(base: String, extension: String, n: Int): String {
+        val stem = base.trim().ifEmpty { "Recording" }
+        val tail = " $n.$extension"
+        val room = SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - tail.toByteArray(Charsets.UTF_8).size
+        return truncateUtf8(stem, room).trimEnd() + tail
     }
 }

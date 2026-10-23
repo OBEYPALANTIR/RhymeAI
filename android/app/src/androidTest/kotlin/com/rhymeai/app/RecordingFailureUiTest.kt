@@ -96,6 +96,7 @@ class RecordingFailureUiTest {
         val service = viewModel.voiceMemoService
         val take = File(RecordingFiles.stagingDirectory(filesDir, projectId).apply { mkdirs() }, "1700000000000.m4a")
             .apply { writeBytes(ByteArray(64) { it.toByte() }) }
+        TestRecordings.startMarker(take, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
         compose.runOnIdle { service.seedRecordingForTesting(take) }
 
         compose.mainClock.autoAdvance = false
