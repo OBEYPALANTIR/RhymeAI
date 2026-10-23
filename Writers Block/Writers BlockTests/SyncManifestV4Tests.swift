@@ -988,6 +988,70 @@ struct RecordingLibraryTests {
         #expect(row.fileName == "take 2.m4a")
     }
 
+    /// A recording removed on another device and detached here to the Trash.
+    private func detachedEntry() async throws -> (store: (container: ModelContainer, root: URL, trash: URL, library: RecordingLibrary), destination: URL) {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        context.insert(Recording(id: "gone", projectId: "song", fileName: "take.m4a", audio: Data([5]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        for row in try context.fetch(FetchDescriptor<Recording>()) { context.delete(row) }
+        try context.save()
+        try await store.library.reconcile(context: context)
+        let destination = try #require(RecordingFiles.trashedMemos(in: store.trash).first).url
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).detach.map(\.recordingId) == ["gone"])
+        return (store, destination)
+    }
+
+    @Test func aDetachedTrashEntryIsDeletedUnderItsOwnIdAndOnlyWithItsOwnBytes() async throws {
+        let (store, destination) = try await detachedEntry()
+        let context = store.container.mainContext
+        let trashed = try #require(RecordingFiles.trashedMemos(in: store.trash).first)
+        #expect(try store.library.identityForDeletion(of: trashed, in: context).id == "gone")
+        // Other bytes in its place: neither the entry nor its song is deleted.
+        try Data([6]).write(to: destination)
+        #expect(throws: RecordingLibraryError.notVerified) { _ = try store.library.identityForDeletion(of: trashed, in: context) }
+        #expect(throws: RecordingLibraryError.notVerified) { try store.library.checkSongDeletable("song", in: context) }
+    }
+
+    @Test func aMoveNeverReliesOnACachedDigestWhileItsRowRemains() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        context.insert(Recording(id: "r", projectId: "song", fileName: "take.m4a", audio: Data([1, 1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        try await store.library.reconcile(context: context)
+        // Rewritten in place with other bytes of the same length, its date put back,
+        // then the row renamed on another device.
+        let path = store.root.appendingPathComponent("song/take.m4a")
+        let before = try RecordingFiles.facts(path)
+        let handle = try FileHandle(forWritingTo: path)
+        try handle.write(contentsOf: Data([2, 2]))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: before.modified], ofItemAtPath: path.path)
+        let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        row.fileName = "moved.m4a"
+        row.claimedName = "moved.m4a"
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        // The row's audio goes to its new name from the row; the other bytes stay theirs.
+        #expect(try Data(contentsOf: store.root.appendingPathComponent("song/moved.m4a")) == Data([1, 1]))
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        #expect(rows.count == 2 && rows.first { $0.id != "r" }?.audio == Data([2, 2]))
+        #expect(try Data(contentsOf: path) == Data([2, 2]))
+    }
+
+    @Test func adoptionWorksThroughABoundedBudgetInOneRun() async throws {
+        let store = try await makeStore(onDisk: true)
+        let context = store.container.mainContext
+        store.library.adoptionBudget = 2
+        for index in 0..<4 { try write(Data([UInt8(index), UInt8(index)]), "song", "take \(index).m4a", root: store.root) }
+        try await store.library.reconcile(context: context)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 4)
+    }
+
     @Test func restoredAudioMustMatchItsDeclaredLength() async throws {
         let store = try await makeStore(onDisk: true)
         let context = store.container.mainContext
