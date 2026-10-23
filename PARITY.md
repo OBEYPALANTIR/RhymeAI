@@ -118,18 +118,33 @@ below is the contract it must meet, not verified behaviour.
   (that moment), restored or imported from an archive (the entry's own
   `uploadedAt`), and kept through renames, Trash and restore from Trash. A file
   with no record at its path, or whose bytes no longer match the record there,
-  is a recording seen for the first time: it gets a new id and is stamped once
-  with its file time. That first-seen stamping is the only local write a backup
-  makes. File times are otherwise never used as precedence.
+  is a recording seen for the first time: it gets the derived pre-v4 id (a random
+  id only if another file already holds that id) and is stamped once with its
+  file time. Random ids are given only to new recordings and audio imports. A
+  backup's only local writes are that stamping and finishing or undoing an
+  interrupted move (reconciliation); it never touches restore staging. File
+  times are otherwise never used as precedence.
+- Name-only tombstones (pre-v4): migration turns each into an id tombstone for
+  the older recording it names and drops it. One that names no older entry
+  removes only a recording whose id is the pre-v4 id of that name and the
+  recording's own bytes, never a v4 recording that reuses the name.
+- Song deletion and expiry first give every live and Trash file of the song a
+  record (first-seen stamping), then commit the song's and each recording's
+  tombstones in one write. Startup reconciles and adopts before its purge.
 - Unfinished recordings (A22): the recorder writes into a staging folder; the
-  take is moved into the song's folder, with its record, only when recording
-  finishes. Snapshots never read staging, so a backup during recording never
-  sees the take.
+  take is moved into the song's folder, with its record, only when the recorder
+  finishes it (`MediaRecorder.stop()` succeeds). A take whose stop fails is left
+  unpublished and the user is told it was not saved. Snapshots never read
+  staging, so a backup during recording never sees the take.
 - Metadata before publication (A24): restore, import, rename, move to Trash and
   restore from Trash write the record's intent (id, name, time, hash, size, new
   and old location) before the file moves, under one lock that snapshots also
-  take. If the record cannot be written the operation fails and nothing moves.
-  An interrupted move is finished or undone at the next launch from that intent.
+  take. If the record cannot be written the operation fails and nothing moves;
+  the UI says so (a finished take stays in staging and the snackbar's Retry
+  saves it). Every transition, deletion and snapshot first finishes or undoes an
+  interrupted move from its intent, so an interrupted move never yields a new id.
+  Collision variants (`take 2.m4a`) are shortened to stay within the 240-byte
+  name limit, and the final name is validated before the intent is written.
 - Merge rules: per project id the newest `updatedAt` wins; per recording id
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins.
   Tombstones apply by timestamp: a song tombstone removes the song only when
@@ -154,8 +169,8 @@ below is the contract it must meet, not verified behaviour.
   both match; otherwise this device's own bytes for that id are uploaded again,
   and never another recording's.
 - Back up versus restore: Back up now and the automatic backup merge this device
-  into Drive and change no songs or recordings here (the first-seen stamping
-  above is their only local write). Restore merges both ways, uploads local-only
+  into Drive and change no songs or recordings here (reconciliation and the
+  first-seen stamping above are their only local writes). Restore merges both ways, uploads local-only
   items, then downloads recordings this device does not hold (live or in Trash).
   Restore and import apply in one repository transaction that resolves the
   incoming inputs with the current songs, Trash, tombstones and recording records,

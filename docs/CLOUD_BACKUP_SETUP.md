@@ -57,8 +57,9 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   appears at launch when Drive is connected and the library is empty.
 - **Back up now** and the automatic backup (30 seconds after the last change to
   songs, trash, tombstones or recordings, and when leaving the app) merge this
-  device into Drive and change no songs or recordings here (stamping a recording
-  seen for the first time with its file time is their only local write). The manifest is re-checked
+  device into Drive and change no songs or recordings here (their only local writes
+  are finishing or undoing an interrupted recording move and stamping a recording
+  seen for the first time with its file time). The manifest is re-checked
   just before each write and read back after it; if another device wrote in
   between, the backup merges again, keeping what earlier attempts saw (up to
   three times, then "Backup conflict, will retry").
@@ -123,6 +124,6 @@ After both OAuth clients exist:
 2. Android restore: clear app data or install on a second device, connect the same Google account, accept "Restore your songs?", and confirm projects, trash, and voice recordings reappear.
 3. iOS: run the same connect, backup and restore flow from Settings.
 4. Cross-platform: back up on one platform and restore on the other. Confirm at least one project and one `.m4a` voice recording round-trip.
-5. Migration: on a device that still has an older encrypted backup, confirm the old `rhymeai-projects.json` disappears from `appDataFolder` only after `rhymeai-manifest.json` lists every old song and recording, and that the device's own library did not change.
+5. Migration: on a device that still has an older encrypted backup, confirm the old `rhymeai-projects.json` disappears from `appDataFolder` only after `rhymeai-manifest.json` holds every old song (same content or a newer edit), every old recording, deleted ones included, is a raw `rec_<recordingId>` file whose hash and size match, and every old recording that is not tombstoned is listed; deleted ones are preserved raw but stay unlisted. Confirm the device's own library did not change.
 
 If any OAuth client is missing, the code can still build and unit-test, but the live end-to-end backup gate is not complete.
