@@ -40,6 +40,18 @@ class BackupScheduleTest {
     }
 
     @Test
+    fun failedResultsKeepTheirSettingsWording() {
+        assertEquals("Google Drive is not available on this device.", backupFailureReason(SyncResult.NotConfigured))
+        assertEquals(DRIVE_SIGN_IN_CANCELLED, backupFailureReason(SyncResult.AuthorizationFailed(DRIVE_SIGN_IN_CANCELLED, retryable = false)))
+        assertEquals(
+            "Google rejected this build's signing certificate or OAuth setup. Check the Android OAuth client " +
+                "(package com.rhymeai.app and this build's SHA-1) and the consent screen's drive.appdata scope.",
+            backupFailureReason(SyncResult.AuthorizationFailed(driveAuthorizationFailure(10).reason, retryable = false))
+        )
+        assertEquals("Backup failed: offline", backupFailureReason(SyncResult.NetworkError("offline")))
+    }
+
+    @Test
     fun firstRunSheetAndResultNoticesUseTheSharedWording() {
         assertEquals(
             "We found 3 songs and 1 recording in your Google Drive backup.",

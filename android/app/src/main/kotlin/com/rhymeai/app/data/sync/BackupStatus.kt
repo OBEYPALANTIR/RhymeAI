@@ -26,6 +26,18 @@ object BackupSchedule {
         maxOf(DEBOUNCE_MILLIS, retryNotBeforeMillis - nowMillis)
 }
 
+/** The Settings status line for a result that stops a backup. */
+internal fun backupFailureReason(result: SyncResult): String = when (result) {
+    SyncResult.NotConfigured -> "Google Drive is not available on this device."
+    is SyncResult.AuthorizationFailed -> result.reason
+    SyncResult.CorruptRemote -> BackupManifest.DAMAGED_MESSAGE
+    SyncResult.UnsupportedVersion -> "This backup was made by a newer version of Writers Block. Update the app to use it."
+    is SyncResult.NetworkError -> "Backup failed: ${result.message}"
+    is SyncResult.UnknownError -> "Backup failed: ${result.cause.message ?: "unexpected error"}"
+    is SyncResult.Success, is SyncResult.AuthorizationRequired, SyncResult.NoBackup, SyncResult.WrongPassphrase ->
+        error("$result is not a failure")
+}
+
 /** "Last backed up 2 min ago · Google Drive" and the other status lines. */
 fun backupStatusLine(status: BackupStatus, nowMillis: Long): String = when (status) {
     BackupStatus.NotConnected -> "Not connected"

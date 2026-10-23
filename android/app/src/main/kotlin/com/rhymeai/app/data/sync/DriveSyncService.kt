@@ -6,6 +6,8 @@ import android.util.Log
 import com.google.android.gms.auth.GoogleAuthUtil
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
@@ -178,8 +180,13 @@ class PlayServicesDriveAuthorizer(
             .addOnFailureListener { error ->
                 val statusCode = (error as? ApiException)?.statusCode
                 Log.w(TAG, "Drive authorization failed: status=${statusCode ?: "none"} ${error.message}")
-                // Only a failure that is not a Play Services status means the service itself is missing.
-                cont.resume(if (statusCode == null) DriveAuthorization.Unavailable else driveAuthorizationFailure(statusCode))
+                cont.resume(
+                    when {
+                        statusCode != null -> driveAuthorizationFailure(statusCode)
+                        !playServicesInstalled() -> DriveAuthorization.Unavailable
+                        else -> DriveAuthorization.Failed("Google sign-in failed (${error.javaClass.simpleName}).", retryable = false)
+                    }
+                )
             }
     }
 
@@ -188,6 +195,9 @@ class PlayServicesDriveAuthorizer(
             runCatching { GoogleAuthUtil.clearToken(context, accessToken) }
         }
     }
+
+    private fun playServicesInstalled() =
+        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
 
     private companion object {
         const val TAG = "RhymeAI"
