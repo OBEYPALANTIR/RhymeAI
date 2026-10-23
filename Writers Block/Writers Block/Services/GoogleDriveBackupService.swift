@@ -932,6 +932,7 @@ final class BackupService {
             if seen.insert(readBack.manifestSha256).inserted { inputs.append(readBack) }
         }
         guard verified, let target else { throw BackupError.backupConflict }
+        recordSyncedClaims(merged.recordings)
         // Duplicates are folded into the verified manifest above; only now remove them.
         for duplicate in manifests where duplicate.id != target.id {
             try await driveClient.deleteFile(id: duplicate.id, accessToken: accessToken)
@@ -1056,7 +1057,7 @@ final class BackupService {
         for project in legacy.blob.projects + legacy.blob.trashed.map({ SyncSongProject(id: $0.id, title: $0.title, lyrics: $0.lyrics, theme: $0.theme, updatedAt: $0.updatedAt) }) {
             guard let version = kept[project.id] else {
                 // Gone from v4 only counts when a tombstone newer than this copy removed it.
-                guard merged.deletions.contains(where: { $0.fileName == nil && $0.projectId == project.id && $0.deletedAt > project.updatedAt.epochMilliseconds }) else { return false }
+                guard merged.deletions.contains(where: { $0.isSongTombstone && $0.projectId == project.id && $0.deletedAt > project.updatedAt.epochMilliseconds }) else { return false }
                 continue
             }
             // The same or a newer edit of the song is in v4.
@@ -1268,9 +1269,16 @@ final class BackupService {
         let merged = try apply(inputs: [imported], to: modelContext)
         // Decided by id: a recording this device lacks is added under a free name,
         // whatever file holds its name; its bytes must match hash and declared size.
+        // The archive holds each recording under its name in the imported manifest;
+        // the resolved entry (possibly with another allocated name) is found by id.
         let localIds = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
+        let importedById = Dictionary(imported.recordings.map { ($0.id, $0) }) { first, _ in first }
         for entry in merged.recordings where !localIds.contains(entry.id) {
-            guard let audio = files["recordings/\(entry.projectId)/\(entry.fileName)"] else { continue }
+            guard let original = importedById[entry.id] else { continue }
+            guard let audio = files["recordings/\(original.projectId)/\(original.fileName)"] else {
+                if BackupArchive.isZip(data) { report.damagedRecordings.append(original.fileName) }
+                continue
+            }
             guard Int64(audio.count) == entry.bytes, Int64(audio.count) <= SyncRecording.maxBytes,
                   RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
                 report.damagedRecordings.append(entry.fileName)
@@ -1350,8 +1358,31 @@ final class BackupService {
             if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = time("project:\(project.id)") }
             return project
         }
+        fixed.trashed = blob.trashed.map { trash in
+            var trash = trash
+            if trash.updatedAt.epochMilliseconds <= 0 { trash.updatedAt = time("project:\(trash.id)") }
+            if trash.deletedAt.epochMilliseconds <= 0 {
+                trash.deletedAt = time("trashed:\(trash.id)")
+                trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
+            }
+            return trash
+        }
         defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
         return fixed
+    }
+
+    private static let syncedClaimsKey = "backup-synced-claims"
+
+    /// A35: per recording id, the claim this device last wrote to or read from the manifest.
+    private var syncedClaims: [String: String] {
+        get { defaults.dictionary(forKey: Self.syncedClaimsKey) as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: Self.syncedClaimsKey) }
+    }
+
+    private func recordSyncedClaims(_ recordings: [SyncRecording]) {
+        var claims = syncedClaims
+        for entry in recordings { claims[entry.id] = entry.claim }
+        syncedClaims = claims
     }
 
     private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
@@ -1361,10 +1392,14 @@ final class BackupService {
         // The device holding the bytes says what name a recording claims; names are
         // then allocated over each whole collision group (A30), so every device writes
         // the same names whatever subset it holds.
+        // A35: a local claim replaces the gathered one only when it differs from the
+        // claim this device last synced for that id (renamed here since); otherwise
+        // the gathered claim stands, so two renames settle on the last one written.
         let claims = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.sha256, $0.claim)) }) { first, _ in first }
+        let synced = syncedClaims
         var resolved = try SyncMerger.resolve(gathered)
         resolved.recordings = SyncMerger.allocateNames(resolved.recordings) { entry in
-            guard let local = claims[entry.id], local.0 == entry.sha256 else { return entry.claim }
+            guard let local = claims[entry.id], local.0 == entry.sha256, synced[entry.id] != local.1 else { return entry.claim }
             return local.1
         }.sorted { ($0.projectId, $0.fileName, $0.id) < ($1.projectId, $1.fileName, $1.id) }
         return resolved
@@ -1379,17 +1414,17 @@ final class BackupService {
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
         // A kept tombstone of a song edited after it does not remove the song.
-        let deletedProjectIds = Set(blob.deletions.filter { $0.fileName == nil }.map(\.projectId))
+        let deletedProjectIds = Set(blob.deletions.filter(\.isSongTombstone).map(\.projectId))
             .subtracting(mergedActiveIds).subtracting(mergedTrashIds)
 
         for deletion in blob.deletions { try DeletionStore.upsert(deletion, in: modelContext) }
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
-        var removedFiles: [URL] = []
+        var removedFiles: [(url: URL, sha256: String)] = []
         for projectId in deletedProjectIds {
             let deletedAt = blob.deletions.filter { $0.isSongTombstone && $0.projectId == projectId }.map(\.deletedAt).max() ?? 0
             for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
-                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
+                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.sha256)) }
             }
         }
         // A live recording the resolution removed (it is gone from the result and a
@@ -1400,8 +1435,13 @@ final class BackupService {
                 ? !resolvedIds.contains(row.id) && blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: .distantPast) }
                 : blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
             guard removed else { continue }
-            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
+            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.sha256)) }
             modelContext.delete(row)
+        }
+        // A35: rows take the resolved claim; the next reconcile allocates their names.
+        let resolvedById = Dictionary(blob.recordings.map { ($0.id, $0) }) { first, _ in first }
+        for row in try modelContext.fetch(FetchDescriptor<Recording>()) where !row.isDeleted {
+            if let entry = resolvedById[row.id], entry.sha256 == row.sha256, row.claim != entry.claim { row.claimedName = entry.claim }
         }
 
         for project in blob.projects {

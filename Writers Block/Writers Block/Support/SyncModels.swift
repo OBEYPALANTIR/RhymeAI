@@ -60,10 +60,13 @@ struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
         "\(projectId)/" + (recordingId.map { "id:\($0)" } ?? fileName.map { "name:\($0)" } ?? "")
     }
 
+    /// Checked wherever a tombstone enters (manifest decode, store upsert, store
+    /// read): a valid identity and a positive time, before anything is saved.
     func validate() throws {
         try SyncIdentity.validateProjectId(projectId)
         if let recordingId { try SyncIdentity.validateRecordingId(recordingId) }
         if let fileName { try SyncIdentity.validateFileName(fileName) }
+        guard deletedAt > 0 else { throw SyncValidationError.invalidVersionShape }
     }
 
     /// True when this tombstone names the recording (or its whole song) and is

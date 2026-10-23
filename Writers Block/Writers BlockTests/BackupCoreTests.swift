@@ -915,6 +915,94 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func importFindsAnArchivedRecordingByIdWhenItsNameIsReallocated() async throws {
+        // The archived recording is the later one, so it is allocated "take 2" here
+        // although the archive holds it as "take.m4a".
+        let source = try await makeHarness()
+        source.context.insert(SongProject(id: "song", title: "Song"))
+        try source.context.save()
+        try source.writeFile(Data([0xA]), projectId: "song", fileName: "take.m4a")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(3_600)], ofItemAtPath: source.memosRoot.appendingPathComponent("song/take.m4a").path)
+        try await source.service.library.reconcile(context: source.context)
+        let archive = try source.service.exportArchive(modelContext: source.context, now: Date())
+        let archivedId = try source.rowId("take.m4a")
+
+        let target = try await makeHarness()
+        try target.writeFile(Data([0xB]), projectId: "song", fileName: "take.m4a")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: target.memosRoot.appendingPathComponent("song/take.m4a").path)
+        try await target.service.library.reconcile(context: target.context)
+        let localId = try target.rowId("take.m4a")
+        try await target.service.importArchive(archive.data, modelContext: target.context)
+
+        let rows = Dictionary(uniqueKeysWithValues: try target.context.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) })
+        #expect(rows[localId]?.fileName == "take.m4a" && rows[localId]?.audio == Data([0xB]))
+        #expect(rows[archivedId]?.fileName == "take 2.m4a" && rows[archivedId]?.audio == Data([0xA]))
+        #expect(try Data(contentsOf: target.memosRoot.appendingPathComponent("song/take 2.m4a")) == Data([0xA]))
+        #expect(target.service.lastReport?.damagedRecordings.isEmpty == true)
+    }
+
+    @MainActor
+    @Test func anIdTombstoneWithoutAFileNameNeverDeletesTheSong() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([1]), projectId: "song", fileName: "keep.m4a")
+        let blob = SyncBlob(projects: [SyncSongProject(id: "song", title: "Song", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+                            deletions: [SyncDeletion(projectId: "song", recordingId: "some-other-take", fileName: nil, deletedAt: 4_000_000_000_000)])
+        try await harness.service.importArchive(try blob.encodedManifest(), modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["song"])
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map(\.fileName) == ["keep.m4a"])
+        #expect(try harness.context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.recordingId) == ["some-other-take"])
+    }
+
+    @MainActor
+    @Test func aTombstoneWithoutATimeIsRefusedBeforeAnythingIsSaved() async throws {
+        let harness = try await makeHarness()
+        let manifest = try SyncBlob(deletions: [SyncDeletion(projectId: "song", deletedAt: 1)]).encodedManifest()
+        let zeroed = try #require(String(data: manifest, encoding: .utf8)).replacingOccurrences(of: "\"deletedAt\":1", with: "\"deletedAt\":0")
+        // The hash no longer matches either way; a bare manifest without one is checked too.
+        var fields = try #require(try JSONSerialization.jsonObject(with: Data(zeroed.utf8)) as? [String: Any])
+        fields.removeValue(forKey: "manifestSha256")
+        await #expect(throws: (any Error).self) {
+            try await harness.service.importArchive(try JSONSerialization.data(withJSONObject: fields), modelContext: harness.context)
+        }
+        #expect(throws: (any Error).self) { try DeletionStore.upsert(SyncDeletion(projectId: "song", deletedAt: 0), in: harness.context) }
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func twoOfflineRenamesSettleOnTheLastOneWritten() async throws {
+        let drive = FakeDriveClient()
+        let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let deviceB = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let audio = Data([5, 5])
+        let take = SyncRecording(id: "b", projectId: "song", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 20))
+        for harness in [deviceA, deviceB] {
+            harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+            try harness.context.save()
+            try harness.service.library.commitRestored(audio, entry: take, origin: .restored, context: harness.context)
+            try await harness.service.library.reconcile(context: harness.context)
+            try await harness.service.backupNow(modelContext: harness.context)
+        }
+        // A renames to foo, B (offline) to bar.
+        try deviceA.service.library.renameRecording(at: deviceA.memosRoot.appendingPathComponent("song/take.m4a"), to: deviceA.memosRoot.appendingPathComponent("song/foo.m4a"))
+        try deviceB.service.library.renameRecording(at: deviceB.memosRoot.appendingPathComponent("song/take.m4a"), to: deviceB.memosRoot.appendingPathComponent("song/bar.m4a"))
+
+        var names: [String] = []
+        for harness in [deviceA, deviceB, deviceA, deviceB] {
+            try await harness.service.backupNow(modelContext: harness.context)
+            let manifest = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+            names.append(try #require(manifest.recordings.first).claim)
+        }
+        #expect(names == ["foo.m4a", "bar.m4a", "bar.m4a", "bar.m4a"])
+        // A follows on its next restore.
+        try await deviceA.service.restoreNow(modelContext: deviceA.context)
+        let row = try #require(deviceA.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.claim == "bar.m4a" && row.fileName == "bar.m4a")
+    }
+
+    @MainActor
     @Test func aRecordingDeletedElsewhereLeavesTheListForQuarantine() async throws {
         let harness = try await makeHarness()
         harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 100)))
