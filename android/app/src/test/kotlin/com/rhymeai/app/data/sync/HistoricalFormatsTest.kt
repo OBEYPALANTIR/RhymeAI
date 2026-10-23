@@ -99,4 +99,14 @@ class HistoricalFormatsTest {
             File(file.path).delete()
         }
     }
+    @Test
+    fun aTombstoneWithoutAValidTimeIsRefusedNeverGivenOne() {
+        // A33/A41: no deletion time is ever invented; the whole backup is refused instead.
+        assertFailsWith<SerializationException> {
+            legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[{"id":"s1","updatedAt":10}],"deletions":[{"projectId":"s1"}]}""")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[],"deletions":[{"projectId":"s1","deletedAt":0}]}""")
+        }
+    }
 }

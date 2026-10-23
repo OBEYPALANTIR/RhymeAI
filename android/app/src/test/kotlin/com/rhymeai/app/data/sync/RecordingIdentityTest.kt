@@ -618,6 +618,10 @@ class RecordingIdentityTest {
         assertTrue(tombstones.isEmpty())
         assertEquals("take", restored.readText())
         assertNull(catalog.records.single().trashedAt)
+        // A deletion handed the live file itself is refused: only a recording in Trash is deleted.
+        assertFalse(RecordingTransitions.deleteFromTrash(catalog, filesDir, restored, "song", expiresBy = null) { r, _ -> tombstones += r.id })
+        assertTrue(tombstones.isEmpty())
+        assertEquals("take", restored.readText())
 
         // Trashed again just now: the stale selection's deadline no longer applies.
         val again = RecordingTransitions.moveToTrash(catalog, filesDir, restored, "song", now)!!
@@ -654,7 +658,14 @@ class RecordingIdentityTest {
     }
 
     @Test
-    fun anEstablishedRealTimeIsNeverLoweredByAnOlderCopysFileTime() = runBlocking<Unit> {
+    fun anEstablishedRealTimeIsNeverLoweredByAnOlderCopysFileTime() {
+        establishedRealTimeStays(RecordingRecord.RECORDED)
+        filesDir.listFiles()!!.forEach { it.deleteRecursively() }
+        // The audited case: a stamped ADOPTED row with a real time (written before repairs were flagged).
+        establishedRealTimeStays(RecordingRecord.ADOPTED)
+    }
+
+    private fun establishedRealTimeStays(origin: String) = runBlocking<Unit> {
         // T2.24: a copy of the same recording appears with an older file time.
         val bytes = "take".toByteArray()
         val sha = BackupManifest.sha256Hex(bytes)
@@ -662,7 +673,7 @@ class RecordingIdentityTest {
         val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
         val file = File(dir, RecordingFiles.idFileName(id, "take.m4a")).apply { writeBytes(bytes) }
         fun record(time: Long, repaired: Boolean) = RecordingRecord(id, "song", "take.m4a", time, sha, bytes.size.toLong(),
-            RecordingRecord.RECORDED, path = RecordingTransitions.relativePath(filesDir, file), precedenceRepaired = repaired)
+            origin, path = RecordingTransitions.relativePath(filesDir, file), precedenceRepaired = repaired)
         catalog.records = listOf(record(9_000L, repaired = false))
         File(RecordingFiles.trashDirectory(filesDir, "song").apply { mkdirs() }, "1500__take.m4a").apply { writeBytes(bytes); setLastModified(1_000L) }
 
@@ -779,5 +790,94 @@ class RecordingIdentityTest {
         val current = File(filesDir, ".recording-restore-9999").apply { mkdirs() }.also { File(it, "recording-0.tmp").writeText("download") }
         RecordingFileStore.recoverInterruptedRestores(filesDir, onlyHistorical = true)
         assertTrue(File(current, "recording-0.tmp").exists())
+    }
+    private fun tree(root: File) = root.walk().filter { it.isFile }.associate { it.relativeTo(filesDir).path to it.readBytes().toList() }
+
+    @Test
+    fun aHistoricalQuarantineJournalWhoseSavedIdDoesNotNameItsTargetHoldsItsFolder() = runBlocking<Unit> {
+        // T3.18: line 3 of the old quarantine journal is the id; here it names other bytes.
+        val q = RecordingFiles.quarantineDirectory(filesDir, "song").apply { mkdirs() }
+        val bytes = "kept copy".toByteArray()
+        val sha = BackupManifest.sha256Hex(bytes)
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", sha)
+        File(q, "1700__take.m4a").writeBytes(bytes)
+        File(q, "1800__other.m4a").writeText("another copy")
+        File(q, "1700__take.m4a.migrate").writeText("1700__take.m4a\n1700/$id.m4a\n0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\n$sha\n${bytes.size}\n")
+        val before = tree(filesDir)
+
+        val left = RecordingTransitions.migrate(catalog, filesDir)
+
+        // Nothing in the folder moved, the journal stays, and the files are reported.
+        assertEquals(before, tree(filesDir))
+        assertEquals(setOf("1700__take.m4a", "1800__other.m4a"), left.map { it.name }.toSet())
+        assertTrue(RecordingTransitions.unresolved.any { "1700__take.m4a.migrate" in it })
+        assertTrue(catalog.records.isEmpty())
+    }
+
+    @Test
+    fun aMalformedHistoricalStagingJournalSuspendsEveryMoveInItsFolder() = runBlocking<Unit> {
+        // T3.17: a staging journal without its length; the take and its marker must stay as they are.
+        val id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val take = staged("song", "1700000000000.m4a", "finished take".toByteArray())
+        File(take.parentFile, "1700000000000.m4a.take").writeText("$id\nfinished\n5000\n")
+        File(take.parentFile, "$id.m4a.migrate").writeText("1700000000000.m4a\n$id.m4a\n${BackupManifest.sha256Hex(take.readBytes())}\n")
+        val before = tree(filesDir)
+
+        val left = RecordingTransitions.migrateStaging(catalog, filesDir, emptySet())
+
+        assertEquals(before, tree(filesDir))
+        assertEquals(listOf(take.canonicalFile), left.map { it.canonicalFile })
+        assertTrue(catalog.records.isEmpty())
+    }
+    @Test
+    fun wholeSongCleanupDeletesNothingWhoseBytesChangedWhilePlaybackStopped() = runBlocking<Unit> {
+        // T1.5: the bytes are verified after the stop hook, immediately before the unlink.
+        val id = RecordingManifestEntry.newRecordingId()
+        val file = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "take".toByteArray()), "song", "take.m4a", id, 1_000L, RecordingRecord.RECORDED)!!
+        RecordingTransitions.beforeBytesMove = { file.writeText("rewritten while playback stopped") }
+        try {
+            assertFalse(RecordingTransitions.cleanUpDeletedSong(catalog, filesDir, "song", listOf(SyncDeletion("song", deletedAt = 5_000L))))
+        } finally {
+            RecordingTransitions.beforeBytesMove = null
+        }
+        assertEquals("rewritten while playback stopped", file.readText())
+        assertEquals(listOf(id), catalog.records.map { it.id })
+    }
+    @Test
+    fun anUnreadableJournalIsNeverTreatedAsEmptyAndNothingItNamesIsSwept() = runBlocking<Unit> {
+        // iOS final review item 5: a journal that cannot be read keeps its claim, source and itself.
+        val q = RecordingFiles.quarantineDirectory(filesDir, "song").apply { mkdirs() }
+        val bytes = "kept copy".toByteArray()
+        val source = File(q, "1700__take.m4a").apply { writeBytes(bytes) }
+        val sha = BackupManifest.sha256Hex(bytes)
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", sha)
+        val claim = java.util.UUID.randomUUID().toString()
+        val target = File(q, "1700/$id.m4a").apply { parentFile!!.mkdirs(); writeText("rhymeai-claim\n$claim\n") }
+        val journal = File(RecordingFiles.journalRoot(filesDir).apply { mkdirs() }, "$claim.move").apply {
+            writeText(listOf("rhymeai-move 1", "kind=quarantine", "id=$id",
+                "source=${RecordingTransitions.relativePath(filesDir, source)}", "target=${RecordingTransitions.relativePath(filesDir, target)}",
+                "sha256=$sha", "length=${bytes.size}", "claim=$claim").joinToString("\n", postfix = "\n"))
+        }
+        // An older build's staging journal beside a take, unreadable too.
+        val take = staged("song", "1700000000000.m4a", "finished take".toByteArray())
+        File(take.parentFile, "1700000000000.m4a.take").writeText("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b\nfinished\n5000\n")
+        val oldJournal = File(take.parentFile, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a.migrate").apply { writeText("x") }
+        journal.setReadable(false)
+        oldJournal.setReadable(false)
+        try {
+            org.junit.Assume.assumeFalse("permissions are not enforced here", journal.canRead() || oldJournal.canRead())
+            val before = filesDir.walk().filter { it.isFile }.map { it.relativeTo(filesDir).path to it.length() }.toSet()
+
+            RecordingTransitions.migrate(catalog, filesDir)
+            RecordingTransitions.migrateStaging(catalog, filesDir, emptySet())
+
+            assertEquals(before, filesDir.walk().filter { it.isFile }.map { it.relativeTo(filesDir).path to it.length() }.toSet())
+            assertEquals("rhymeai-claim\n$claim\n", target.readText())
+            assertContentEquals(bytes, source.readBytes())
+            assertEquals("finished take", take.readText())
+        } finally {
+            journal.setReadable(true)
+            oldJournal.setReadable(true)
+        }
     }
 }

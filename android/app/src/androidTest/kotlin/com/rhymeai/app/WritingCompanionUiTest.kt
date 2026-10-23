@@ -29,9 +29,7 @@ class WritingCompanionUiTest {
     @Before fun start() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario!!.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
-        // The launch finishes loading (and shows the start menu) before the test acts, so the
-        // start menu cannot reappear over the song the test opens.
-        waitUntil { vm.appearanceLoaded && vm.aiSettingsLoaded }
+        waitUntil { vm.appearanceLoaded }
         composeRule.onNodeWithText("New Song", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }

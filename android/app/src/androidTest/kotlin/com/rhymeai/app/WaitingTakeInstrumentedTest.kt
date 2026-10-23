@@ -264,21 +264,53 @@ class WaitingTakeInstrumentedTest {
         assertFalse(listed.finished)
         assertEquals("1700000000000.m4a", listed.file.name)
 
-        // Both wait on the recording lock: migration queued first moves the take, then the
-        // save (holding the listing's old path) inspects it where it is now.
-        RecordingTransitions.namespace.lock()
-        val migrating = async(Dispatchers.IO) { service.migrateStaging() }
-        kotlinx.coroutines.delay(300)
-        val saving = async(Dispatchers.IO) { service.saveListedTake(listed) }
-        kotlinx.coroutines.delay(300)
-        assertFalse(migrating.isCompleted || saving.isCompleted)
-        RecordingTransitions.namespace.unlock()
+        // Handshake: the save is requested from inside the migration's move (the recording lock
+        // is held there), after the listing captured the old path. It can only inspect the take
+        // once the migration has moved it, and must find and save it where it is now.
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var saving: kotlinx.coroutines.Deferred<Boolean>? = null
+        val scope = this
+        RecordingTransitions.beforeBytesMove = { ids ->
+            if (a in ids && saving == null) {
+                events += "migration moving; old path present=${listed.file.exists()}"
+                saving = scope.async(Dispatchers.IO) { service.saveListedTake(listed) }
+            }
+        }
+        val migrating = try {
+            service.migrateStaging()
+        } finally {
+            RecordingTransitions.beforeBytesMove = null
+        }
+        assertEquals(listOf("migration moving; old path present=true"), events)
+        assertTrue(migrating.isEmpty())
+        assertTrue(saving!!.await())
 
-        assertTrue(migrating.await().isEmpty())
-        assertTrue(saving.await())
         assertEquals(a, catalog.records.single().id)
         assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
         assertTrue(service.waitingTakes("song").isEmpty())
         assertTrue(staging.list().orEmpty().none { it.endsWith(".take") || it.endsWith(".migrate") })
+    }
+
+    @Test fun aCancelDuringAStartWaitsForItAndThenCancelsIt() = runBlocking<Unit> {
+        // T4.5: start, stop and cancel share the recorder lock. The cancel arrives while the start
+        // holds it (handshake); without the lock it would see nothing recording and the start would
+        // then leave a recorder running.
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        service.duringStartForTest = { entered.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        try {
+            val start = async(Dispatchers.IO) { service.startRecording("song") }
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val cancel = async(Dispatchers.IO) { service.cancelRecording() }
+            release.countDown()
+            val take = start.await()
+            cancel.await()
+            assertFalse(service.isRecording)
+            assertFalse(take.exists())
+            assertFalse(File(take.parentFile, take.name + ".take").exists())
+        } finally {
+            service.duringStartForTest = null
+            release.countDown()
+        }
     }
 }

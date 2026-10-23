@@ -1297,4 +1297,28 @@ class ProjectRepositoryTest {
 
         assertTrue(repository.syncDeletions().any { it.recordingId == recordingId && it.deletedAt == 500L })
     }
+    @Test
+    fun expiryResolvesEveryVersionOfASongBeforeItWritesATombstone() = withRepository { _, repository ->
+        // iOS final review item 1: a newer, unexpired Trash copy, or an active copy, of the same id
+        // must not lose to the tombstone an older expired copy would write.
+        val now = 100L * com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+        val expired = TrashedSongProject(SongProject(id = "s", title = "Old", updatedAt = 1L), deletedAt = 1L)
+        val newer = TrashedSongProject(SongProject(id = "s", title = "Newer", updatedAt = now - 5L), deletedAt = now - 5L)
+        repository.saveTrashedProjects(listOf(expired, newer))
+
+        assertTrue(repository.purgeExpiredTrashedProjects(now).purgedIds.isEmpty())
+        assertTrue(repository.syncDeletions().isEmpty())
+        assertEquals(2, repository.trashedProjectsFlow.first().size)
+
+        repository.saveTrashedProjects(listOf(expired))
+        repository.saveProjects(listOf(SongProject(id = "s", title = "Live", updatedAt = now - 5L)))
+        assertTrue(repository.purgeExpiredTrashedProjects(now).purgedIds.isEmpty())
+        assertTrue(repository.syncDeletions().isEmpty())
+        assertEquals("Live", repository.projectsFlow.first().single().title)
+
+        // With no other version, the expired copy does expire.
+        repository.saveProjects(emptyList())
+        assertEquals(listOf("s"), repository.purgeExpiredTrashedProjects(now).purgedIds)
+        assertTrue(repository.syncDeletions().any { it.projectId == "s" && it.isSongTombstone })
+    }
 }

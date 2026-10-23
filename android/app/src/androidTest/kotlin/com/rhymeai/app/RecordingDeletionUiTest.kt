@@ -91,9 +91,13 @@ class RecordingDeletionUiTest {
         compose.onNodeWithTag("songActionsMenuButton").performClick()
         compose.onNodeWithTag("songRecordings").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isNotEmpty() }
+        // Timed from the request: the take cannot start before it, so it cannot end on its own
+        // within 12 s of it (an upper bound on how long it has played).
+        val playRequested = android.os.SystemClock.elapsedRealtime()
+        val startedBefore = service.playersStarted
         compose.onAllNodesWithContentDescription("Play").onFirst().performClick()
         compose.waitUntil(10_000) { service.playingFile?.name == "${record.id}.m4a" }
-        val playStart = android.os.SystemClock.elapsedRealtime()
+        assertEquals(startedBefore + 1, service.playersStarted)
 
         // A Restore commits the winning tombstone; its quarantine move has not happened.
         runBlocking { requireNotNull(service.recordingDeletionRecorder)(projectId, record.displayName, record.id, System.currentTimeMillis() + 60_000L) }
@@ -102,16 +106,16 @@ class RecordingDeletionUiTest {
             service.playingFile == null &&
                 compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isEmpty()
         }
-        val stoppedAfter = android.os.SystemClock.elapsedRealtime() - playStart
-        assertTrue("stopped ${stoppedAfter}ms into a 12 s take; it may have ended on its own", stoppedAfter < 11_000L)
+        val stoppedWithin = android.os.SystemClock.elapsedRealtime() - playRequested
+        assertTrue("stopped within ${stoppedWithin}ms of the request for a 12 s take; it may have ended on its own", stoppedWithin < 11_000L)
         assertTrue(memo.exists())
 
-        // Playback refuses it even when asked directly, at no moment while the request is checked.
+        // Playback refuses it even when asked directly: once the request's check has finished,
+        // no player was started for it at any moment.
+        val startedBeforeRefusal = service.playersStarted
         compose.runOnIdle { service.play(VoiceMemo(memo, "Take", 12_000L)) }
-        repeat(30) {
-            assertNull("played at sample $it", service.playingFile)
-            Thread.sleep(50)
-        }
+        runBlocking { service.awaitPlayCheck() }
+        assertEquals(startedBeforeRefusal, service.playersStarted)
         compose.runOnIdle { assertNull(service.playingFile) }
     }
 
