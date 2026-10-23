@@ -95,7 +95,8 @@ tombstone removes an active song when it is newer than the song's `updatedAt`,
 a song in Trash when newer than its Trash time (a recording: newer than its
 `uploadedAt`). A tombstone always beats a time that was only repaired (first
 seen, because the data had none); a song lost that way is kept aside on the
-device, and such a recording is quarantined. A copy edited after the deletion
+device (whether it came from this device, Drive or an archive), such a recording
+is quarantined, and its raw copy in Drive is kept. A copy edited after the deletion
 survives and the tombstone is dropped, but the recordings that tombstone removed
 keep tombstones of their own; deleting a song also tombstones every recording
 this device knows for it in the same write. A recording never backed up and

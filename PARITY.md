@@ -289,13 +289,16 @@ below is the contract it must meet, not verified behaviour.
   display name; nothing collides, nothing is allocated and no suffix is
   generated. Export is the only place a display name becomes a file name. The
   only moves are staging to live, live to and from Trash, live or Trash to
-  quarantine, and the migration. Each journals its expected id and digest before
-  it moves (record intents for live and Trash; for staging and quarantine a
-  `.migrate` journal with source, target, SHA-256 and length, and for quarantine
-  the id), verifies against it, and moves with a no-replace move:
-  the target is claimed with an exclusive create first (a rename would replace
-  it, and hard links are refused in app storage), so a file that appears at the
-  target is never replaced; reconciliation removes a claim a crash left empty.
+  quarantine, and the migration. Each follows the verified-transition procedure
+  below (a journal or record intent with id, digest, length and claim token
+  first; the target claimed with an exclusive create, because a rename would
+  replace it and hard links are refused in app storage), so a file that appears
+  at the target is never replaced; recovery removes only a file holding exactly
+  its own claim. Journals of earlier builds (`<target>.migrate` beside a staging
+  take: source, target, SHA-256, length; beside a quarantine copy: source,
+  target, id, SHA-256, length) are read in full: the saved id must be the id the
+  target is named by, and a journal that cannot be read in full or settled keeps
+  every file in its folder where it is (reported) until it can.
   The name a backup writes for a recording it holds (live or in Trash) is its own
   when it was renamed here since its last write or Drive does not list it yet,
   otherwise the name in Drive's own entry (never one chosen by a precedence tie);
@@ -390,7 +393,9 @@ below is the contract it must meet, not verified behaviour.
   unlink happen under the same lock, so a restore cannot slip in between.
   Parked files from builds before A36 (`voice-memos-parking/<song>/<id>.<ext>`)
   return to their song at launch. Unreadable Trash file names, moves that
-  cannot be finished and files left in place are reported after launch.
+  cannot be finished and files left in place are reported after launch; the
+  Trash Bin lists each unreadable Trash file by name and size (kept, never
+  removed).
 - A manifest or archive listing one recording id twice is refused before anything
   is applied. Restore and Import reconcile again right before their transactional
   apply and stop if that fails.
@@ -426,12 +431,19 @@ below is the contract it must meet, not verified behaviour.
   (first-seen) time whatever the numbers (A41). A song or recording with a real
   time newer than its tombstone survives and the tombstone is dropped. A song
   (active or in Trash) on this device that loses only because its time was a
-  repair is not erased: Restore and Import keep its content and recording ids
-  in a local recovery store (`recovered_songs_json`) in the same transaction and
-  report "1 song with an unknown date was removed by a deletion from another
-  device; a copy is kept on this device." A song that loses with a real time is
-  a genuine deletion. Recordings follow the same split: one whose time was a
-  repair is quarantined, one with a real time is deleted. When a song tombstone removes a recording, that
+  repair is not erased, from whichever input it came (this device, Drive, an
+  archive): Back up, Restore and Import keep its content and recording ids in a
+  local recovery store (`recovered_songs_json`) before the manifest or the local
+  lists that held it are written, and report "1 song with an unknown date was
+  removed by a deletion; a copy is kept on this device." The store is readable
+  through `ProjectRepository.recoveredSongs`; it has no UI yet, is not bounded and
+  is not exported. A song that loses with a real time is a genuine deletion.
+  Recordings: on Restore and Import every recording a winning tombstone removes
+  is moved to quarantine (kept), whatever its time; a local song deletion
+  deletes a recording with a real time and quarantines one whose time was a
+  repair. In Drive, a raw object is removed only for a real-time loser; a
+  repaired loser's raw object stays (unlisted) and is reported ("1 deleted
+  recording with an unknown date was kept in your Google Drive."). When a song tombstone removes a recording, that
   recording gets its own tombstone at the same time, and deleting a song
   (Delete Forever or Trash expiry) writes tombstones for every recording this
   device holds for it in the same write, so reviving the song cannot bring the
