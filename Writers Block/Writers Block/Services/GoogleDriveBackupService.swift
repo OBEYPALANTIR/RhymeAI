@@ -852,7 +852,7 @@ final class BackupService {
         )
         // Backup reads the library as it is; restore first brings it up to date.
         if restore { try library.reconcile(context: modelContext) }
-        report.oversizedRecordings = library.oversizedCount
+        report.oversizedRecordings = unpreservedOversizedCount(remote: remoteRecordings)
 
         // Every remote-side input seen in this run, unresolved, in the order seen:
         // each candidate gathers them all with the current local snapshot and
@@ -865,19 +865,19 @@ final class BackupService {
             let blob = try await downloadManifest(file, accessToken: accessToken)
             if seen.insert(blob.manifestSha256).inserted { inputs.append(blob) }
         }
-        func candidate() throws -> SyncBlob {
-            let snapshot = try makeSnapshot(modelContext: modelContext)
-            var gathered = try SyncMerger.gather([snapshot] + inputs)
-            // A rename that conflicts across devices: the device holding the
-            // recording's bytes sets the name.
-            let held = Dictionary(snapshot.recordings.map { ($0.id, $0) }) { first, _ in first }
-            gathered.recordings = gathered.recordings.map { entry in
-                guard let local = held[entry.id], local.sha256 == entry.sha256 else { return entry }
-                var named = entry
-                named.fileName = local.fileName
-                return named
+        func candidate() throws -> SyncBlob { finalizedBlob(try resolve(inputs, with: modelContext)) }
+        /// Folds in any manifest written since the last look; true when something new arrived.
+        func absorbFreshManifests() async throws -> Bool {
+            var changed = false
+            for file in try await manifestFiles(accessToken: accessToken) {
+                if !manifests.contains(where: { $0.id == file.id }) { manifests.append(file) }
+                let blob = try await downloadManifest(file, accessToken: accessToken)
+                if seen.insert(blob.manifestSha256).inserted {
+                    inputs.append(blob)
+                    changed = true
+                }
             }
-            return finalizedBlob(try SyncMerger.resolve(gathered))
+            return changed
         }
         let legacyAudio = legacy?.audio ?? [:]
         let legacyIds = Set(legacy?.allRecordings.map(\.id) ?? [])
@@ -886,24 +886,19 @@ final class BackupService {
         var target = manifests.max { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }
         var verified = false
         for _ in 0..<Self.manifestWriteAttempts {
-            merged = try candidate()
-            var missing = try await uploadRecordings(merged, legacy: legacy, modelContext: modelContext, legacyAudio: legacyAudio, remote: &remoteRecordings, accessToken: accessToken)
-            // Anything another device wrote while the audio uploaded joins before the
-            // manifest is committed.
-            let fresh = try await manifestFiles(accessToken: accessToken)
-            var changed = false
-            for file in fresh {
-                if !manifests.contains(where: { $0.id == file.id }) { manifests.append(file) }
-                let blob = try await downloadManifest(file, accessToken: accessToken)
-                if seen.insert(blob.manifestSha256).inserted {
-                    inputs.append(blob)
-                    changed = true
-                }
-            }
-            if changed {
+            // Upload, then look again; only a look that finds nothing new, after the
+            // last upload, lets the manifest be written (A18).
+            var missing: [String] = []
+            var settled = false
+            for _ in 0..<Self.manifestWriteAttempts {
                 merged = try candidate()
                 missing = try await uploadRecordings(merged, legacy: legacy, modelContext: modelContext, legacyAudio: legacyAudio, remote: &remoteRecordings, accessToken: accessToken)
+                if try await !absorbFreshManifests() {
+                    settled = true
+                    break
+                }
             }
+            guard settled else { throw BackupError.backupConflict }
             // Every recording the manifest lists must be on Drive, verified or just uploaded.
             if !restore, !missing.isEmpty { throw BackupError.missingRemoteRecordings(missing) }
             let content = try merged.encodedManifest()
@@ -932,9 +927,9 @@ final class BackupService {
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
-            try apply(merged, to: modelContext)
-            try deleteLocalRecordingsCoveredByDeletions(merged.deletions, context: modelContext)
-            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(merged.recordings, remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
+            // The commit resolves the current local state with the original inputs, once.
+            let applied = try apply(inputs: inputs, to: modelContext)
+            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(applied.recordings, remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
             report.damagedRecordings = damagedOnDrive
             try library.reconcile(context: modelContext)
         }
@@ -1099,6 +1094,16 @@ final class BackupService {
         return try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, appProperties: appProperties, accessToken: accessToken)
     }
 
+    /// Recordings over the cap that Drive does not hold: an oversized file counts
+    /// as backed up only when a raw Drive object has its SHA-256 and size (A29).
+    private func unpreservedOversizedCount(remote: RemoteFiles) -> Int {
+        library.oversizedFiles.filter { file in
+            guard let audio = try? Data(contentsOf: file, options: .mappedIfSafe) else { return true }
+            let digest = RecordingBackupManifest.sha256Hex(audio)
+            return !remote.values.contains { $0.appProperties?["sha256"] == digest && $0.appProperties?["bytes"] == String(audio.count) }
+        }.count
+    }
+
     /// Every recording file in appDataFolder, v4 and legacy, by name.
     private func recordingFiles(accessToken: String) async throws -> RemoteFiles {
         Dictionary(try await driveClient.listFiles(prefix: "rec_", accessToken: accessToken).map { ($0.name, $0) }) { first, _ in first }
@@ -1172,8 +1177,7 @@ final class BackupService {
         for file in remote.values.sorted(by: { $0.name < $1.name }) where !live.contains(file.name) && !file.name.hasSuffix(".enc") {
             let covered: Bool
             if let id = file.appProperties?["id"], let projectId = file.appProperties?["projectId"] {
-                let fileName = file.appProperties?["fileName"] ?? ""
-                covered = deletions.contains { $0.covers(projectId: projectId, recordingId: id, fileName: fileName, at: .distantPast) }
+                covered = deletions.contains { $0.covers(projectId: projectId, recordingId: id, sha256: file.appProperties?["sha256"] ?? "", at: .distantPast) }
             } else {
                 // Files from before ids carry no properties: only a song tombstone can claim them.
                 covered = deletions.contains { $0.isSongTombstone && file.name.hasPrefix("rec_\($0.projectId)_") }
@@ -1239,14 +1243,14 @@ final class BackupService {
         }
         try library.reconcile(context: modelContext)
         report.oversizedRecordings = library.oversizedCount
-        let merged = try SyncMerger.merge(local: try makeSnapshot(modelContext: modelContext), remote: imported)
-        try apply(merged, to: modelContext)
-        try deleteLocalRecordingsCoveredByDeletions(merged.deletions, context: modelContext)
-        for entry in merged.recordings {
+        let merged = try apply(inputs: [imported], to: modelContext)
+        // Decided by id: a recording this device lacks is added under a free name,
+        // whatever file holds its name; its bytes must match hash and declared size.
+        let localIds = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
+        for entry in merged.recordings where !localIds.contains(entry.id) {
             guard let audio = files["recordings/\(entry.projectId)/\(entry.fileName)"] else { continue }
-            let target = try RecordingFiles.localURL(projectId: entry.projectId, fileName: entry.fileName, memosRoot: memosRoot)
-            guard !FileManager.default.fileExists(atPath: target.path) else { continue }
-            guard RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
+            guard Int64(audio.count) == entry.bytes, Int64(audio.count) <= SyncRecording.maxBytes,
+                  RecordingBackupManifest.sha256Hex(audio) == entry.sha256 else {
                 report.damagedRecordings.append(entry.fileName)
                 continue
             }
@@ -1300,9 +1304,25 @@ final class BackupService {
         )
     }
 
-    private func apply(_ blob: SyncBlob, to modelContext: ModelContext) throws {
-        let latestLocal = try makeSnapshot(modelContext: modelContext)
-        let blob = try SyncMerger.merge(local: latestLocal, remote: blob)
+    /// The current local state gathered with the run's unresolved inputs and resolved
+    /// once (A18): the same rule every candidate uses. A rename that conflicts
+    /// across devices takes the name from the device holding the bytes.
+    private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
+        let snapshot = try makeSnapshot(modelContext: modelContext)
+        var gathered = try SyncMerger.gather([snapshot] + inputs)
+        let held = Dictionary(snapshot.recordings.map { ($0.id, $0) }) { first, _ in first }
+        gathered.recordings = gathered.recordings.map { entry in
+            guard let local = held[entry.id], local.sha256 == entry.sha256 else { return entry }
+            var named = entry
+            named.fileName = local.fileName
+            return named
+        }
+        return try SyncMerger.resolve(gathered)
+    }
+
+    @discardableResult
+    private func apply(inputs: [SyncBlob], to modelContext: ModelContext) throws -> SyncBlob {
+        let blob = try resolve(inputs, with: modelContext)
         try blob.validate()
         let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
         let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
@@ -1322,16 +1342,22 @@ final class BackupService {
         }
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
-        var removedFiles: [URL] = []
+        var removedFiles: [(file: URL, projectId: String)] = []
         for projectId in deletedProjectIds {
             let deletedAt = blob.deletions.filter { $0.isSongTombstone && $0.projectId == projectId }.map(\.deletedAt).max() ?? 0
             for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
-                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
+                if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, projectId)) }
             }
         }
-        for row in try modelContext.fetch(FetchDescriptor<Recording>())
-        where blob.deletions.contains(where: { $0.covers(projectId: row.projectId, recordingId: row.id, fileName: row.fileName, at: row.precedenceTime) }) {
-            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append(file) }
+        // A live recording the resolution removed (it is gone from the result and a
+        // tombstone names it) goes; a trashed one is judged by its own time.
+        let resolvedIds = Set(blob.recordings.map(\.id))
+        for row in try modelContext.fetch(FetchDescriptor<Recording>()) {
+            let removed = row.trashedAt == nil
+                ? !resolvedIds.contains(row.id) && blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: .distantPast) }
+                : blob.deletions.contains { $0.covers(projectId: row.projectId, recordingId: row.id, sha256: row.sha256, at: row.precedenceTime) }
+            guard removed else { continue }
+            if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.projectId)) }
             modelContext.delete(row)
         }
 
@@ -1378,27 +1404,11 @@ final class BackupService {
             modelContext.delete(trash)
         }
         try modelContext.save()
-        for file in removedFiles {
-            try? RecordingFiles.removeItemIfPresent(at: file, within: file.path.hasPrefix(library.trashRoot.path) ? library.trashRoot : memosRoot)
+        // Deleted recordings leave the memo folders and the Trash for quarantine (A28).
+        for removed in removedFiles where FileManager.default.fileExists(atPath: removed.file.path) {
+            try? RecordingFiles.quarantine(removed.file, projectId: removed.projectId, memosRoot: memosRoot)
         }
-    }
-
-    /// Removes local memo files (live and trashed) that a tombstone newer than the file covers.
-    private func deleteLocalRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], context: ModelContext) throws {
-        // A file a live row owns is judged by the row, never by its file date.
-        let owned = Set(try context.fetch(FetchDescriptor<Recording>()).compactMap { $0.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot)?.path })
-        for projectId in Set(deletions.map(\.projectId)) {
-            let tombstones = deletions.filter { $0.projectId == projectId }
-            // Files with no row (rows were handled in `apply`): song or pre-id tombstones by file date.
-            for (fileName, url) in try RecordingBackupManifest.scanFiles(projectId: projectId, memosRoot: memosRoot)
-            where !owned.contains(url.path) && tombstones.contains(where: { $0.covers(projectId: projectId, recordingId: "", fileName: fileName, at: RecordingFiles.modificationDate(url)) }) {
-                try RecordingFiles.removeItemIfPresent(at: url, within: memosRoot)
-            }
-        }
-        for trashed in RecordingFiles.trashedMemos(in: library.trashRoot)
-        where !owned.contains(trashed.url.path) && deletions.contains(where: { $0.covers(projectId: trashed.projectId, recordingId: "", fileName: trashed.originalName, at: trashed.deletedAt) }) {
-            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: library.trashRoot)
-        }
+        return blob
     }
 
     private var clientId: String {
