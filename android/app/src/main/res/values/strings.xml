@@ -88,7 +88,10 @@
     <string name="voice_memo_permission_denied">Microphone permission is required to record voice memos.</string>
     <string name="voice_memo_record_failed">Couldn\'t start recording. Check the microphone and try again.</string>
     <string name="voice_memo_delete_failed">Couldn\'t delete recording. Try again.</string>
-    <string name="voice_memo_rename_failed">Couldn\'t rename recording. Try again.</string>
+    <string name="voice_memo_rename_failed">Couldn\'t rename recording. Check free storage, then try again.</string>
+    <string name="voice_memo_finish_failed">The recording didn\'t finish, so it wasn\'t saved. Try recording again.</string>
+    <string name="voice_memo_save_failed">Couldn\'t save the recording. Free up storage, then tap Retry.</string>
+    <string name="voice_memo_retry">Retry</string>
 
     <!-- Misc -->
     <string name="dialog_got_it">Got it</string>

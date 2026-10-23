@@ -909,6 +909,14 @@ private fun TrashBinPage(
     val trashIdSet = remember(trashIds) { trashIds.toSet() }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmPermanentDelete by remember { mutableStateOf(false) }
+    var trashActionError by remember { mutableStateOf<String?>(null) }
+    trashActionError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { trashActionError = null },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { trashActionError = null }) { Text("OK") } }
+        )
+    }
 
     // Trashed recordings are scanned from disk; bump the version to re-scan
     // after any restore/delete mutation.
@@ -979,9 +987,12 @@ private fun TrashBinPage(
         } else {
             val memosToRestore = trashedMemos.orEmpty().filter { it.file.absolutePath in selectedMemoPaths }
             scope.launch {
-                memosToRestore.forEach { service?.restoreTrashedMemo(it) }
+                val failed = memosToRestore.count { service?.restoreTrashedMemo(it) != true }
                 selectedMemoPaths = emptySet()
                 trashedMemoVersion++
+                if (failed > 0) trashActionError =
+                    "$failed recording(s) could not be restored and are still in Trash. Check free storage, then try again."
+
             }
         }
     }
@@ -994,9 +1005,12 @@ private fun TrashBinPage(
         } else {
             val memosToDelete = trashedMemos.orEmpty().filter { it.file.absolutePath in selectedMemoPaths }
             scope.launch {
-                memosToDelete.forEach { service?.permanentlyDeleteTrashedMemo(it) }
+                val failed = memosToDelete.count { service?.permanentlyDeleteTrashedMemo(it) != true }
                 selectedMemoPaths = emptySet()
                 trashedMemoVersion++
+                if (failed > 0) trashActionError =
+                    "$failed recording(s) could not be deleted and are still in Trash. Try again."
+
             }
         }
     }

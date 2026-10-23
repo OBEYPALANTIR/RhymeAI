@@ -177,4 +177,21 @@ class SyncMergerTest {
             assertEquals(merged.deletions, next.deletions)
         }
     }
+
+    @Test
+    fun aNameOnlyTombstoneNamesOnlyPreV4RecordingsOfThatName() {
+        val sha = BackupManifest.sha256Hex("a".toByteArray())
+        val olderA = RecordingManifestEntry("p", "take.m4a", sizeBytes = 1L, modifiedAt = 1_000L, sha256 = sha)
+        val renamedA = olderA.copy(fileName = "Verse.m4a", driveName = RecordingManifestEntry.driveNameFor("p", "Verse.m4a"))
+        val newB = olderA.copy(id = RecordingManifestEntry.newRecordingId(), uploadedAt = 1_000L)
+        val byName = SyncDeletion("p", "take.m4a", 5_000L)
+        val tombstones = SyncMerger.Tombstones(listOf(byName))
+
+        assertTrue(tombstones.removes(olderA))
+        assertTrue(tombstones.removes(renamedA))
+        assertFalse(tombstones.removes(newB))
+        val resolved = SyncMerger.merge(SyncBlob(recordings = listOf(newB)), SyncBlob(deletions = listOf(byName)))
+        assertEquals(listOf(newB), resolved.recordings)
+        assertTrue(byName in resolved.deletions)
+    }
 }

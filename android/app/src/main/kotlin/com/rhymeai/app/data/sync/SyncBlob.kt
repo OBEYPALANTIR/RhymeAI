@@ -143,7 +143,7 @@ internal object SyncIdentity {
     }
 
     private const val MAX_PROJECT_ID_BYTES = 128
-    private const val MAX_RECORDING_FILE_NAME_BYTES = 240
+    const val MAX_RECORDING_FILE_NAME_BYTES = 240
     private val illegalRecordingCharacters = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
 
     fun validateProjectId(value: String) {
@@ -382,29 +382,39 @@ object SyncMerger {
             keptTrash.forEach { add(it.project.id) }
         }
         val survivingIds = keptRecordings.mapTo(HashSet()) { it.id }
-        val survivingNames = keptRecordings.mapTo(HashSet()) { it.nameKey }
         val keptDeletions = allDeletions.filterNot { deletion ->
             when {
                 deletion.fileName == null -> deletion.projectId in survivingSongs
                 deletion.recordingId != null -> deletion.recordingId in survivingIds
-                else -> "${deletion.projectId}/${deletion.fileName}" in survivingNames
+                else -> keptRecordings.any { Tombstones.namesLegacy(deletion, it) }
             }
         }
         return Resolved(keptProjects, keptTrash, keptRecordings, keptDeletions)
     }
 
-    /** Song, recording-id and pre-v4 name-only tombstones, applied by timestamp. */
+    /**
+     * Song, recording-id and pre-v4 name-only tombstones, applied by timestamp. A
+     * name-only tombstone can only name a pre-v4 recording: it applies to a recording
+     * whose id is the legacy id of that name and the recording's own bytes, never to a
+     * v4 recording that reuses the name (A21).
+     */
     class Tombstones(deletions: List<SyncDeletion>) {
         val songs: Map<String, SyncDeletion> = deletions.filter { it.fileName == null }.associateBy { it.projectId }
         private val byId = deletions.filter { it.recordingId != null }.associateBy { it.recordingId!! }
-        private val byName = deletions.filter { it.fileName != null && it.recordingId == null }
-            .associateBy { "${it.projectId}/${it.fileName}" }
+        private val byProjectNames = deletions.filter { it.fileName != null && it.recordingId == null }
+            .groupBy { it.projectId }
 
         fun removes(entry: RecordingManifestEntry): Boolean {
             val time = entry.precedenceTime
             return songs[entry.projectId]?.let { it.deletedAt > time } == true ||
                 byId[entry.id]?.let { it.deletedAt > time } == true ||
-                byName[entry.nameKey]?.let { it.deletedAt > time } == true
+                byProjectNames[entry.projectId].orEmpty().any { it.deletedAt > time && namesLegacy(it, entry) }
+        }
+
+        companion object {
+            fun namesLegacy(deletion: SyncDeletion, entry: RecordingManifestEntry): Boolean =
+                deletion.recordingId == null && deletion.fileName != null && deletion.projectId == entry.projectId &&
+                    entry.id == RecordingManifestEntry.legacyRecordingId(entry.projectId, deletion.fileName, entry.sha256)
         }
     }
 

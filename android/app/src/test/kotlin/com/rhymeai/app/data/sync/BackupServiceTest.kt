@@ -1,5 +1,7 @@
 package com.rhymeai.app.data.sync
 
+import com.rhymeai.app.data.recording.RecordingFiles
+
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -639,6 +641,75 @@ class BackupServiceTest {
         assertNull(drive.file(BackupManifest.recordingDriveName(local.id)))
         assertTrue(SyncDeletion("p", "take.m4a", 5_000L, recordingId = local.id) in remote().deletions)
         assertNotNull(drive.bytes(SyncBlob.DRIVE_FILE_NAME))
+    }
+
+    @Test
+    fun anOlderNameTombstoneDeletesOnlyTheOlderRecordingItNamed() = runBlocking<Unit> {
+        keys.setKey(DriveSyncService.LEGACY_PASSPHRASE_KEY, passphrase)
+        repository.saveProjects(listOf(song("p")))
+        // Older backup: recording A under take.m4a at 1000, deleted by name at 5000.
+        val audioA = "older take".toByteArray()
+        val olderA = entry("p", "take.m4a", audioA, uploadedAt = 0L).copy(modifiedAt = 1_000L)
+        putLegacy(
+            SyncBlob(projects = listOf(song("p")), recordings = listOf(olderA), deletions = listOf(SyncDeletion("p", "take.m4a", 5_000L))),
+            mapOf(olderA to audioA)
+        )
+        // A different v4 recording B now has that name here, recorded at 1000.
+        val bytesB = "new take".toByteArray()
+        val fileB = RecordingFileStore.targetFile(filesDir, "p", "take.m4a").apply { parentFile!!.mkdirs(); writeBytes(bytesB) }
+        val b = RecordingManifestEntry("p", "take.m4a", sizeBytes = bytesB.size.toLong(), modifiedAt = 1_000L,
+            sha256 = BackupManifest.sha256Hex(bytesB), uploadedAt = 1_000L, id = RecordingManifestEntry.newRecordingId())
+        seedRecord(repository, filesDir, fileB, b)
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(listOf(b.id), remote().recordings.map { it.id })
+        assertContentEquals(bytesB, drive.bytes(BackupManifest.recordingDriveName(b.id)))
+        assertTrue(SyncDeletion("p", "take.m4a", 5_000L, recordingId = olderA.id) in remote().deletions)
+        assertTrue(remote().deletions.none { it.fileName != null && it.recordingId == null })
+    }
+
+    @Test
+    fun anOversizedLocalRecordingIsNeitherListedNorUploadedAndIsCountedAsSkipped() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val big = writeMemo("p", "big.m4a", ByteArray((RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1).toInt()))
+
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(1, result.skippedLargeRecordings)
+        assertTrue(remote().recordings.isEmpty())
+        assertNull(drive.file(BackupManifest.recordingDriveName(big.id)))
+    }
+
+    @Test
+    fun aSongDeletedBeforeItsRecordingsWereStampedStillTombstonesEachOfThem() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("gone")))
+        repository.moveProjectToTrash("gone", 10L)
+        val live = "live take".toByteArray()
+        val trashed = "trashed take".toByteArray()
+        File(RecordingFiles.memoDirectory(filesDir, "gone").apply { mkdirs() }, "take.m4a").apply { writeBytes(live); setLastModified(1_000L) }
+        File(RecordingFiles.trashDirectory(filesDir, "gone").apply { mkdirs() }, "1500__old.m4a").apply { writeBytes(trashed); setLastModified(1_000L) }
+        assertTrue(repository.recordingRecords().isEmpty())
+
+        // What the app does before Delete Forever or expiry.
+        com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, setOf("gone"))
+        repository.permanentlyDeleteTrashedProject("gone", now = 5_000L)
+
+        val expected = setOf(
+            RecordingManifestEntry.legacyRecordingId("gone", "take.m4a", BackupManifest.sha256Hex(live)),
+            RecordingManifestEntry.legacyRecordingId("gone", "old.m4a", BackupManifest.sha256Hex(trashed))
+        )
+        val deletions = repository.snapshotLocalSyncBase().blob.deletions
+        assertEquals(expected, deletions.mapNotNull { it.recordingId }.toSet())
+        // An offline device that never stamped its copy derives the same id, so the tombstone holds there too.
+        val offline = kotlin.io.path.createTempDirectory("rhymeai-offline").toFile()
+        try {
+            File(RecordingFiles.memoDirectory(offline, "gone").apply { mkdirs() }, "take.m4a").apply { writeBytes(live); setLastModified(1_000L) }
+            val copy = snapshotLocalRecordingFiles(offline, emptySet()).single().entry
+            assertTrue(SyncMerger.Tombstones(deletions.filter { it.fileName != null }).removes(copy))
+        } finally {
+            offline.deleteRecursively()
+        }
     }
 
     @Test

@@ -1187,10 +1187,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Reported by the collectors above; nothing to back up from unreadable data.
                 }
             }
-            // A24: finish or undo a recording move interrupted by the last run.
-            launch(Dispatchers.IO) {
-                runCatching { com.rhymeai.app.data.recording.RecordingTransitions.reconcile(repo, getApplication<Application>().filesDir) }
-            }
             if (isBackupConnected()) checkBackupAtLaunch()
         }
     }
@@ -1777,6 +1773,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (restoringDraft || savingBeforeNavigation) return
         viewModelScope.launch {
             try {
+                // Every recording of the song gets a record first, so the deletion tombstones all of them.
+                com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, setOf(id))
                 val committed = repo.permanentlyDeleteTrashedProject(id)
                     ?: return@launch reportMissingTrashProject()
                 trashedProjects = committed
@@ -1811,6 +1809,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var songPurgeError: Exception? = null
             var memoDirectoryFailure = false
             try {
+                // Finish interrupted moves and give every expiring song's recordings a record
+                // before the expiry builds their tombstones.
+                val expiring = repo.trashedProjectsFlow.first().filter { it.deleteAfter <= now }.mapTo(HashSet()) { it.project.id }
+                com.rhymeai.app.data.recording.RecordingTransitions.reconcile(repo, getApplication<Application>().filesDir)
+                com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, expiring)
                 val committed = repo.purgeExpiredTrashedProjects(now)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()

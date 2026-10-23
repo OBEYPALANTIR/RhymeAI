@@ -107,7 +107,7 @@ fun SongRecordingsDialog(
                         selected = emptySet()
                         selecting = false
                         revision++
-                        if (results.any { it == null }) snackbar.showSnackbar("Some recordings could not be moved to Trash.")
+                        if (results.any { it == null }) snackbar.showSnackbar("Some recordings could not be moved to Trash. Check free storage, then try again.")
                     }
                 }) { Text("Move to Trash") }
             },
@@ -175,11 +175,11 @@ fun SongRecordingsDialog(
                             scope.launch {
                                 val trashed = service.trashMemo(target)
                                 revision++
-                                if (trashed == null) snackbar.showSnackbar("Could not move recording to Trash.")
+                                if (trashed == null) snackbar.showSnackbar("Could not move recording to Trash. Check free storage, then try again.")
                                 else if (snackbar.showSnackbar("Recording moved to Trash", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
                                     val restored = service.restoreTrashedMemo(trashed)
                                     revision++
-                                    if (!restored) snackbar.showSnackbar("Could not restore recording.")
+                                    if (!restored) snackbar.showSnackbar("Could not restore recording; it is still in Trash. Check free storage, then try again.")
                                 }
                             }
                         }

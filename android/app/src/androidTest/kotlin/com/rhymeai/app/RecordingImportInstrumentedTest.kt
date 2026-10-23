@@ -112,13 +112,68 @@ class RecordingImportInstrumentedTest {
             catalog.failWrites = true
 
             assertTrue(runCatching { service.importRecording("song", uri) }.isFailure)
-            assertTrue(runCatching { service.renameMemo(memo, "Renamed") }.isFailure)
-            assertTrue(runCatching { service.restoreTrashedMemo(trashed) }.isFailure)
+            // Rename and restore from Trash report a failed move instead of throwing into the UI.
+            assertNull(service.renameMemo(memo, "Renamed"))
+            assertFalse(service.restoreTrashedMemo(trashed))
 
             assertEquals(listOf(memo.file.name), service.memosForProject("song").map { it.file.name })
             assertTrue(memo.file.exists())
             assertTrue(trashed.file.exists())
             assertTrue(RecordingFiles.stagingRoot(owned).walk().none { it.isFile })
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
+    @Test fun aRecorderThatFailsToStopLeavesItsNonEmptyTakeUnpublishedInStaging() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val catalog = Catalog()
+        service.catalog = catalog
+        try {
+            val take = File(RecordingFiles.stagingDirectory(owned, "song").apply { mkdirs() }, "1700000000000.m4a")
+                .apply { writeBytes(wav()) }
+
+            val failure = runCatching { service.finishTake(take, RuntimeException("stop failed")) }.exceptionOrNull()
+
+            assertTrue(failure is VoiceMemoService.RecordingNotFinishedException)
+            assertTrue(take.exists())
+            assertTrue(service.memosForProject("song").isEmpty())
+            assertTrue(catalog.records.isEmpty())
+            assertNull(service.pendingTake)
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
+    @Test fun aFinishedTakeWhoseRecordCannotBeWrittenStaysInStagingAndRetrySavesIt() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
+        val catalog = Catalog()
+        service.catalog = catalog
+        try {
+            val take = File(RecordingFiles.stagingDirectory(owned, "song").apply { mkdirs() }, "1700000000000.m4a")
+                .apply { writeBytes(wav()) }
+            catalog.failWrites = true
+
+            val failure = runCatching { service.finishTake(take, null) }.exceptionOrNull()
+
+            assertTrue(failure is VoiceMemoService.RecordingNotSavedException)
+            assertTrue(take.exists())
+            assertTrue(service.memosForProject("song").isEmpty())
+            val pending = requireNotNull(service.pendingTake)
+
+            catalog.failWrites = false
+            val saved = requireNotNull(service.retryPendingTake())
+            assertFalse(take.exists())
+            assertEquals(listOf(saved.file.name), service.memosForProject("song").map { it.file.name })
+            assertEquals(pending.id, catalog.records.single().id)
+            assertEquals(pending.recordedAt, catalog.records.single().uploadedAt)
+            assertNull(service.pendingTake)
         } finally {
             service.release()
             owned.deleteRecursively()
