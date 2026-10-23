@@ -343,7 +343,7 @@ struct TrashBinView: View {
     }
 
     private func reloadTrashedMemos() {
-        trashedMemos = viewModel.recordingListsSuspended ? [] : RecordingFiles.trashedMemos()
+        trashedMemos = viewModel.trashedRecordings()
         selectedMemoIds.formIntersection(Set(trashedMemos.map(\.id)))
     }
 

@@ -12,6 +12,9 @@ final class SongProject {
     var lyrics: String = ""
     var theme: String = ""
     var updatedAt: Date = Date()
+    /// A37: a time here was established for a missing one (A32), not by an edit.
+    /// Of two repairs the smaller time wins; an edit beats a repair and clears it.
+    var precedenceRepaired: Bool = false
 
     init(
         id: String = UUID().uuidString,
