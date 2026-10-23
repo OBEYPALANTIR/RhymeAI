@@ -86,8 +86,8 @@ The iOS side of v4 is pending its companion PR.
 
 Recordings are identified by a stable UUID, not by file name: a rename changes
 only the name, a live and a Trash recording with the same name are two
-recordings, a different recording arriving under a taken name gets a free
-variant, and identical audio imported again after a deletion is a new recording
+recordings, two recordings may share a name (files are named by id), and
+identical audio imported again after a deletion is a new recording
 whose old id stays deleted. Pre-v4 recordings get a name-based UUID derived from
 project, file name and hash, the same on every device. Each device stores every
 recording's id, precedence time, hash, size and location in DataStore beside the
@@ -130,10 +130,11 @@ song's recordings sheet offers Retry with the take's own id and finish time; a
 take whose finish could not be recorded shows as "could not be saved" and Retry
 saves it only if its MPEG-4 index and every listed sample are intact and readable
 to the end, while one that cannot be read right now stays waiting), and every later
-transition, deletion and snapshot first finishes or undoes an interrupted move.
+transition, deletion and moving snapshot (launch, Restore, Import) first finishes or
+undoes an interrupted move; Back up and export only read.
 Delete Forever and Trash expiry first give every recording of the song a record,
-so each one is tombstoned with the song. Variant names stay within the 240-byte
-name limit. A recording too large to upload is never added to the manifest; an
+so each one is tombstoned with the song. Display names are metadata (any text up
+to 1024 bytes); archive file names are allocated by A39 within 240 bytes. A recording too large to upload is never added to the manifest; an
 entry Drive already lists for it is kept, but it counts as backed up only when its
 raw Drive object has the same hash and size, and otherwise counts as skipped.
 
@@ -191,7 +192,7 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | --- | --- | --- |
 | V-1 | `BackupManifestTest.canonicalFormAndHashMatchTheSharedFixture`, `fixtureDecodesAndReEncodesByteForByte`, `canonicalEscapesOnlyTheContractCharactersAndSortsKeysByCodePoint` | Canonical JSON and `manifestSha256` match the shared fixture byte for byte. |
 | V-2 | `BackupManifestTest.hashMismatchIsRefused`, `newerVersionIsRefusedEvenWithAValidHash`; `BackupServiceTest.hashMismatchedManifestIsRefusedAndNeverOverwrittenOrMerged` | A damaged or newer manifest is neither merged nor overwritten. |
-| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawFileWithoutMatchingMetadataIsUploadedAgain`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
+| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawObjectWithTheSameDigestButWrongSizeIsReplacedWithTheVerifiedBytes`, `aRawObjectWithAnotherDigestOrNoneIsNeverOverwrittenAndIsReported`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
 | V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning`, `aFailedCommitKeepsEverythingAlreadyInPlace`, `recoveryRemovesOnlyTheStagingFolder`, `importPublishesWithItsRecordAndNeverReplacesAnotherRecording` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
 | V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `anUnavailableOlderRecordingNeverStandsInForADeletedLocalOne`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
