@@ -208,7 +208,12 @@ enum SyncRepairContractChecks {
         let opened = try SyncBlobCrypto.openManifest(rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"), passphrase: passphrase)
         try require(opened == legacy, "v3 import/deletion encrypted read failed")
         let upgraded = opened.upgraded(recordingId: { RecordingBackupManifest.legacyRecordingId(projectId: $0.projectId, fileName: $0.fileName, sha256: $0.sha256) })
-        try require(upgraded.recordings.map(\.driveName) == upgraded.recordings.map { "rec_\($0.id)" }, "v4 Drive names wrong")
+        // Expected values come from the four input formats, not from the upgrade's output.
+        let expectedIds = formats.map { RecordingBackupManifest.legacyRecordingId(projectId: "song", fileName: "take.\($0)", sha256: hash) }
+        try require(upgraded.recordings.count == formats.count, "v4 upgrade lost or added recordings")
+        try require(Set(upgraded.recordings.map(\.fileName)) == Set(formats.map { "take.\($0)" }), "v4 names wrong")
+        try require(Set(upgraded.recordings.map(\.id)) == Set(expectedIds), "v4 ids wrong")
+        try require(Set(upgraded.recordings.map(\.driveName)) == Set(expectedIds.map { "rec_\($0)" }), "v4 Drive names wrong")
         let reopened = try SyncBlob.decodeManifest(upgraded.encodedManifest())
         try require(reopened.recordings == upgraded.recordings && reopened.deletions == deleted, "v4 round trip lost imported audio or deletions")
         let tombstoned = SyncBlob(recordings: upgraded.recordings, deletions: [SyncDeletion(projectId: "song", fileName: "take.wav", deletedAt: Int64.max)])
