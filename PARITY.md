@@ -621,7 +621,8 @@ below is the contract it must meet, not verified behaviour.
   and generic fallback buckets are aligned; neither platform echoes raw
   response bodies into user-facing text.
 - Sign-in failures: Android surfaces the Play Services status (developer
-  error, cancelled, network, or "code N") in the Backup status; iOS shows
+  error, cancelled, closed without granting access, network, or "code N") in
+  the Backup status; iOS shows
   "Could not connect Google Drive: …" with the web sign-in error's description
   (known difference).
 - Trash retention: 30 days on both platforms

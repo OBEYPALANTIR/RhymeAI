@@ -44,11 +44,28 @@ class BackupScheduleTest {
         assertEquals("Google Drive is not available on this device.", backupFailureReason(SyncResult.NotConfigured))
         assertEquals(DRIVE_SIGN_IN_CANCELLED, backupFailureReason(SyncResult.AuthorizationFailed(DRIVE_SIGN_IN_CANCELLED, retryable = false)))
         assertEquals(
+            "Google closed sign-in without granting access. If you didn't cancel it, this build's signing certificate " +
+                "or OAuth client is not registered: check the Android OAuth client (package com.rhymeai.app and this " +
+                "build's SHA-1) in the Google Cloud console.",
+            backupFailureReason(SyncResult.AuthorizationFailed(DRIVE_SIGN_IN_NOT_GRANTED, retryable = false))
+        )
+        assertEquals(
             "Google rejected this build's signing certificate or OAuth setup. Check the Android OAuth client " +
                 "(package com.rhymeai.app and this build's SHA-1) and the consent screen's drive.appdata scope.",
             backupFailureReason(SyncResult.AuthorizationFailed(driveAuthorizationFailure(10).reason, retryable = false))
         )
         assertEquals("Backup failed: offline", backupFailureReason(SyncResult.NetworkError("offline")))
+    }
+
+    @Test
+    fun aDismissedConsentScreenSaysCancelledOnlyWhenPlayServicesDoes() {
+        assertEquals(driveAuthorizationFailure(16), consentDismissedFailure(driveAuthorizationFailure(16)))
+        assertEquals(DRIVE_SIGN_IN_CANCELLED, consentDismissedFailure(driveAuthorizationFailure(16)).reason)
+        assertEquals(driveAuthorizationFailure(10), consentDismissedFailure(driveAuthorizationFailure(10)))
+        assertEquals(
+            DriveAuthorization.Failed(DRIVE_SIGN_IN_NOT_GRANTED, retryable = false),
+            consentDismissedFailure(DriveAuthorization.Unavailable)
+        )
     }
 
     @Test

@@ -124,6 +124,21 @@ sealed class DriveAuthorization {
 
 const val DRIVE_SIGN_IN_CANCELLED = "Google sign-in was cancelled."
 
+const val DRIVE_SIGN_IN_NOT_GRANTED = "Google closed sign-in without granting access. If you didn't cancel it, " +
+    "this build's signing certificate or OAuth client is not registered: check the Android OAuth client " +
+    "(package com.rhymeai.app and this build's SHA-1) in the Google Cloud console."
+
+/**
+ * Why the consent screen finished with RESULT_CANCELED; [auth] is a fresh [DriveAuthorizer.authorize] taken
+ * right after it closed. Play Services also cancels when it refused the request (UNREGISTERED_ON_API_CONSOLE),
+ * so only its own status may say "cancelled"; [DriveAuthorization.Granted] is not a failure and never reaches here.
+ */
+fun consentDismissedFailure(auth: DriveAuthorization): DriveAuthorization.Failed = when (auth) {
+    is DriveAuthorization.Failed -> auth
+    is DriveAuthorization.Granted, is DriveAuthorization.NeedsConsent, DriveAuthorization.Unavailable ->
+        DriveAuthorization.Failed(DRIVE_SIGN_IN_NOT_GRANTED, retryable = false)
+}
+
 /** User-facing sentence for a Play Services status code; see docs/CLOUD_BACKUP_SETUP.md. */
 fun driveAuthorizationFailure(statusCode: Int): DriveAuthorization.Failed = when (statusCode) {
     CommonStatusCodes.DEVELOPER_ERROR -> DriveAuthorization.Failed(
