@@ -146,8 +146,15 @@ below is the contract it must meet, not verified behaviour.
   written (clearing a rename that was written). A duplicate copy stays where it
   is until launch, Restore or Import quarantines it, and a file still awaiting
   its A36 name is left out and counted ("N recordings still have their old file
-  names and were left out…"; Export: "N recordings with an old file name left
-  out"); it never touches restore staging.
+  names and were left out…"; Export counts those in songs and in the Trash Bin:
+  "N recordings with an old file name left out", and always adds that Trash Bin
+  recordings, takes waiting to be saved and recordings set aside are never
+  exported). It writes nothing to the file system: an empty claim left by an
+  interrupted move stays, with its intent pending, until launch, Restore or
+  Import reconciles it, and an empty file is never adopted as a recording. Rows
+  without a path (from the first record store) are kept by identity until the
+  scan that migrates their file, so a backup or export first loses nothing. It
+  never touches restore staging.
   File times are otherwise never used as precedence.
 - Local visibility (A28): after Restore or Import commits, a recording whose
   winning tombstone is now known here moves to quarantine and loses its record.
@@ -195,7 +202,10 @@ below is the contract it must meet, not verified behaviour.
   take. If the record cannot be written the operation fails and nothing moves;
   the UI says so (a finished take waits in staging, see A27). Every transition, deletion and snapshot first finishes or undoes an
   interrupted move from its intent, so an interrupted move never yields a new id.
-  A display name is validated (240-byte limit) before its record is written.
+  A display name is metadata, validated as any non-empty text without NUL of at
+  most 1024 UTF-8 bytes (separators, long names and names without an extension
+  are allowed, A39) before its record is written; only file names, which are
+  `<id>.<ext>`, are paths.
 - Oversized recordings (A29): this device never lists a recording too large for
   it to move unless Drive's manifest already lists it, and then it only keeps
   that existing entry. Keeping an entry is not verifying it: the recording counts
@@ -252,8 +262,9 @@ below is the contract it must meet, not verified behaviour.
   generated. Export is the only place a display name becomes a file name. The
   only moves are staging to live, live to and from Trash, live or Trash to
   quarantine, and the migration. Each journals its expected id and digest before
-  it moves (record intents for live and Trash, `<target>.migrate` with SHA-256 and
-  length for staging), verifies against it, and moves with a no-replace move:
+  it moves (record intents for live and Trash; for staging and quarantine a
+  `.migrate` journal with source, target, SHA-256 and length, and for quarantine
+  the id), verifies against it, and moves with a no-replace move:
   the target is claimed with an exclusive create first (a rename would replace
   it, and hard links are refused in app storage), so a file that appears at the
   target is never replaced; reconciliation removes a claim a crash left empty.
@@ -274,10 +285,15 @@ below is the contract it must meet, not verified behaviour.
   nothing. Rows written before A36 (`fileName`, claims, rename intents) are read
   as display names, and an old rename intent that never reached the file is
   undone to its old name. Waiting takes in staging move to `<id>.<ext>` with
-  their markers (new marker first, then the take, then the old marker, so a
-  crash leaves a marker naming the take's id), and pre-A36 quarantine copies
-  `<movedAt>__<name>` move to `<movedAt>/<id>.<ext>`. iOS performs the same
-  migration.
+  their markers in this order: journal, verify, move (no-replace), new marker,
+  old marker removed, journal removed; a later launch finishes a journaled move
+  whose target holds the journaled bytes (writing the marker from the old one)
+  or redoes one whose source still does. Retry finds, inspects and marks a
+  take under the recording lock, so migration cannot move it in between, and a
+  take moved before its save is saved where it is now. Pre-A36 quarantine
+  copies `<movedAt>__<name>` move to `<movedAt>/<id>.<ext>` through the same
+  kind of journal (a kill after the claim is finished at the next launch). iOS
+  performs the same migration.
 - Path form (Android): records store paths relative to the canonical files
   folder, and every recording `File` (listings, records, playback, staging) is
   built on the canonical files folder (`RecordingFiles.fileAt`), because Android
@@ -446,7 +462,8 @@ below is the contract it must meet, not verified behaviour.
   passphrase and the "Migrate older encrypted backup…" row, and is reported ("2
   older recordings could not be moved; the older backup was kept."). Without a
   passphrase the old files stay untouched and the row asks once, storing
-  nothing. No old file: forget any stored passphrase. The shared RAI vectors
+  nothing. If Drive needs consent first, the migration resumes after it with the
+  phrase kept in memory only (Android `BackupAction.Migrate`). No old file: forget any stored passphrase. The shared RAI vectors
   stay as decrypt tests (`SyncBlobCryptoTest`, `BackupServiceTest`).
   Passphrases are normalized as before (trim space/tab/CR/LF, at least 8
   printable ASCII characters).
@@ -456,7 +473,9 @@ below is the contract it must meet, not verified behaviour.
   recordings are visited by precedence time, then id (byte-wise); each takes its
   display name with "/", "\\" and leading dots turned into "_", or when that is
   taken "<stem> 2<ext>", "<stem> 3<ext>", … (first free counter); "taken"
-  compares NFC, case-folded names; nothing is reserved ahead of its turn; the
+  compares names NFC-normalized, then with Unicode default lowercasing (Kotlin
+  `lowercase(Locale.ROOT)`, Swift `lowercased()`, Python `str.lower()`; not full
+  case folding, so "İ", "ı" and "i" stay distinct); nothing is reserved ahead of its turn; the
   stem is cut so the whole name fits 240 UTF-8 bytes. Pinned by
   `shared/fixtures/archive-names-v1.json` (`scripts/generate-archive-names-fixture.py`,
   stdlib, `--check`); iOS keeps a byte-identical copy at
