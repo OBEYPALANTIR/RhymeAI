@@ -1239,7 +1239,7 @@ class DriveSyncService(
                     entry.id to driveFiles[BackupManifest.recordingDriveName(entry.id)].orEmpty()
                         .sortedBy { if (intact(it, entry)) 0 else 1 }.map { it.id }
                 }
-                damaged = restoreRemoteRecordings(token, repository, merged.recordings, filesById + uploaded, localFiles, candidates)
+                damaged = restoreRemoteRecordings(token, repository, merged.recordings, filesById + uploaded, localFiles, candidates, merged.deletions)
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
                 // The apply needs the last reconciliation to still hold (it throws otherwise).
@@ -1394,14 +1394,16 @@ class DriveSyncService(
         remoteManifest: List<RecordingManifestEntry>,
         remoteFilesByName: Map<String, String>,
         local: List<LocalRecordingFile>,
-        candidates: Map<String, List<String>> = emptyMap()
+        candidates: Map<String, List<String>> = emptyMap(),
+        runDeletions: List<SyncDeletion> = emptyList()
     ): Int {
-        // A recording held here, live or in Trash, is never downloaded again.
+        // A recording held here, live or in Trash, is never downloaded again; nor is one a known
+        // tombstone removes or an unknown-time one suspends.
         val plan = RecordingSyncPlanner.planRestores(
             local = local.map { it.entry },
             remoteManifest = remoteManifest,
             remoteFilesByName = remoteFilesByName
-        )
+        ).filterNot { withheld(repository, runDeletions, it.entry) }
         if (plan.isEmpty()) return 0
         val restoreBytes = requireTransferableRecordings(plan.map { it.entry })
         val requiredFreeBytes = try {
@@ -1417,16 +1419,22 @@ class DriveSyncService(
         // committed; the next restore plans only what is still missing.
         var damaged = 0
         for (chunk in RecordingSyncPlanner.chunkRestores(plan)) {
-            damaged += restoreRecordingChunk(token, repository, chunk, candidates)
+            damaged += restoreRecordingChunk(token, repository, chunk, candidates, runDeletions)
         }
         return damaged
     }
+
+    /** A recording this device's current tombstones, or this run's, remove or suspend. */
+    private suspend fun withheld(repository: ProjectRepository, runDeletions: List<SyncDeletion>, entry: RecordingManifestEntry): Boolean =
+        SyncMerger.Tombstones(SyncMerger.mergeDeletions(repository.syncDeletions() + runDeletions))
+            .let { it.removes(entry) || it.suspends(entry) }
 
     private suspend fun restoreRecordingChunk(
         token: String,
         repository: ProjectRepository,
         chunk: List<RecordingRestorePlan>,
-        candidates: Map<String, List<String>>
+        candidates: Map<String, List<String>>,
+        runDeletions: List<SyncDeletion>
     ): Int {
         val stageDirectory = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
         var damaged = 0
@@ -1447,6 +1455,9 @@ class DriveSyncService(
                     damaged++
                     return@mapNotNull null
                 }
+                // Re-read after the download wait, immediately before staging: a deletion or an
+                // unknown-time suspension stored meanwhile keeps this recording out.
+                if (withheld(repository, runDeletions, restore.entry)) return@mapNotNull null
                 RecordingFileStore.stageRestore(stageDirectory, restore.entry, bytes)
             }
             // Published as `<id>.<ext>` with the entry's display name and time.
