@@ -139,6 +139,13 @@ fun driveAuthorizationFailure(statusCode: Int): DriveAuthorization.Failed = when
     else -> DriveAuthorization.Failed("Google sign-in failed (code $statusCode).", retryable = false)
 }
 
+/** Classifies a failed authorization; [playServicesAvailability] is [GoogleApiAvailability]'s answer for this device. */
+fun driveAuthorizationFailure(error: Throwable, playServicesAvailability: Int): DriveAuthorization = when {
+    error is ApiException -> driveAuthorizationFailure(error.statusCode)
+    playServicesAvailability == ConnectionResult.SERVICE_MISSING -> DriveAuthorization.Unavailable
+    else -> DriveAuthorization.Failed("Google sign-in failed (${error.javaClass.simpleName}).", retryable = false)
+}
+
 /** Supplies a `drive.appdata` access token; the Play Services one is [PlayServicesDriveAuthorizer]. */
 interface DriveAuthorizer {
     suspend fun authorize(): DriveAuthorization
@@ -181,11 +188,7 @@ class PlayServicesDriveAuthorizer(
                 val statusCode = (error as? ApiException)?.statusCode
                 Log.w(TAG, "Drive authorization failed: status=${statusCode ?: "none"} ${error.message}")
                 cont.resume(
-                    when {
-                        statusCode != null -> driveAuthorizationFailure(statusCode)
-                        !playServicesInstalled() -> DriveAuthorization.Unavailable
-                        else -> DriveAuthorization.Failed("Google sign-in failed (${error.javaClass.simpleName}).", retryable = false)
-                    }
+                    driveAuthorizationFailure(error, GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context))
                 )
             }
     }
@@ -195,9 +198,6 @@ class PlayServicesDriveAuthorizer(
             runCatching { GoogleAuthUtil.clearToken(context, accessToken) }
         }
     }
-
-    private fun playServicesInstalled() =
-        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
 
     private companion object {
         const val TAG = "RhymeAI"
