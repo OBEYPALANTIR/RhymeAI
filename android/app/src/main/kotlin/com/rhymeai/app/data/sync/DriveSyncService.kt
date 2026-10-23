@@ -1031,11 +1031,13 @@ class DriveSyncService(
             // Evidence that is not uploadable here (Trash, too large, older recordings that
             // could not move) shapes tombstones but is listed only if Drive already lists it.
             val listedRemotely = remote.blob?.recordings.orEmpty().mapTo(HashSet()) { it.id }
-            val evidenceOnly = localFiles.filter { it.inTrash || !it.entry.isTransferable }.mapTo(HashSet()) { it.entry.id } + unlistable
             val liveById = liveFiles.associateBy { it.entry.id }
+            val uploadableIds = liveFiles.filter { it.entry.isTransferable }.mapTo(HashSet()) { it.entry.id }
+            val evidenceOnly = localFiles.filterNot { it.entry.id in uploadableIds }.mapTo(HashSet()) { it.entry.id } +
+                (unlistable - uploadableIds)
             merged = merged.copy(
                 recordings = merged.recordings
-                    .filterNot { (it.id in evidenceOnly && it.id !in liveById) && it.id !in listedRemotely }
+                    .filterNot { it.id in evidenceOnly && it.id !in listedRemotely }
                     // The device holding a recording names it: a rename here travels with the id.
                     .map { entry ->
                         val name = liveById[entry.id]?.entry?.fileName ?: return@map entry
@@ -1103,7 +1105,7 @@ class DriveSyncService(
                 // once more together with what this device holds at commit time.
                 committed = repository.applySyncResult(gathered, base)
             }
-            return PushOutcome(merged, committed, skippedLargeRecordingCount(localFiles.map { it.entry }, merged), damaged)
+            return PushOutcome(merged, committed, skippedLargeRecordingCount(liveFiles.map { it.entry }, merged), damaged)
         }
         throw DriveNetworkException(CONFLICT_MESSAGE)
     }
@@ -1113,14 +1115,20 @@ class DriveSyncService(
      * original time, and each pre-v4 name-only recording tombstone also becomes an id
      * tombstone for the older recordings it names.
      */
-    private fun legacyInputs(legacy: SyncBlob): SyncBlob = legacy.copy(
-        recordings = legacy.recordings.map { it.copy(uploadedAt = it.precedenceTime) },
-        deletions = legacy.deletions + legacy.recordings.flatMap { entry ->
+    private fun legacyInputs(legacy: SyncBlob): SyncBlob {
+        val converted = legacy.recordings.flatMap { entry ->
             legacy.deletions
                 .filter { it.recordingId == null && it.fileName == entry.fileName && it.projectId == entry.projectId }
-                .map { it.copy(recordingId = entry.id) }
+                .map { it to it.copy(recordingId = entry.id) }
         }
-    )
+        // A name tombstone that names an older recording becomes that recording's id
+        // tombstone only; one that names none stays and can match only pre-v4 ids.
+        val replaced = converted.mapTo(HashSet()) { it.first }
+        return legacy.copy(
+            recordings = legacy.recordings.map { it.copy(uploadedAt = it.precedenceTime) },
+            deletions = legacy.deletions.filterNot { it in replaced } + converted.map { it.second }
+        )
+    }
 
     /** Null when the passphrase does not open it; throws [DamagedBackupException] when it opens but cannot be read. */
     private suspend fun openLegacyManifest(token: String, file: DriveFileMetadata, passphrase: CharArray): SyncBlob? {

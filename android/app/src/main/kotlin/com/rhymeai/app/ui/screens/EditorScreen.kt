@@ -445,6 +445,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
     }
 
+    // A take the recorder did not finish is never saved; a finished take whose record
+    // could not be written stays in staging and Retry saves it (A22/A24).
+    suspend fun reportRecordingFailure(error: Exception) {
+        if (error is com.rhymeai.app.service.VoiceMemoService.RecordingNotFinishedException) {
+            snackbarHostState.showSnackbar(context.getString(R.string.voice_memo_finish_failed))
+            return
+        }
+        val retry = snackbarHostState.showSnackbar(
+            context.getString(R.string.voice_memo_save_failed),
+            actionLabel = context.getString(R.string.voice_memo_retry),
+            withDismissAction = true,
+            duration = SnackbarDuration.Long
+        ) == SnackbarResult.ActionPerformed
+        if (!retry) return
+        try {
+            viewModel.voiceMemoService.retryPendingTake()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (again: Exception) {
+            reportRecordingFailure(again)
+        }
+    }
+
     // Called when the mic FAB is tapped while not recording. Checks permission then
     // starts recording immediately — no sheet involved.
     fun onMicFabTap() {
@@ -1344,11 +1367,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 if (memoService.isRecording) {
                                     micBusy = true
                                     scope.launch {
-                                        try {
-                                            runCatching { memoService.stopRecording() }
+                                        val failure = try {
+                                            memoService.stopRecording()
+                                            null
+                                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
+                                            error
                                         } finally {
                                             micBusy = false
                                         }
+                                        if (failure != null) reportRecordingFailure(failure)
                                     }
                                 } else {
                                     onMicFabTap()

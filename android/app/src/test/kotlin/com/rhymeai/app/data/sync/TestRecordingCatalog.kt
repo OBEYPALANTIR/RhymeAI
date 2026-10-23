@@ -6,15 +6,17 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 
-/** In-memory recording records; [failWrites] injects a metadata write failure. */
+/** In-memory recording records; [failWrites] or [failOnWrite] (1-based) inject a metadata write failure. */
 class MemoryCatalog : RecordingCatalog {
     var records: List<RecordingRecord> = emptyList()
     var failWrites = false
+    var failOnWrite: Int? = null
+    private var writes = 0
 
     override suspend fun recordingRecords(): List<RecordingRecord> = records
 
     override suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>) {
-        if (failWrites) throw IOException("injected metadata write failure")
+        if (failWrites || ++writes == failOnWrite) throw IOException("injected metadata write failure")
         records = transform(records)
     }
 }

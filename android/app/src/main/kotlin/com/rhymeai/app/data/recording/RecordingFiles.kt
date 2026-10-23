@@ -65,31 +65,38 @@ internal object RecordingFiles {
             .replace(Regex("""[\p{Cc}\p{Cf}]"""), "")
             .trim()
         // Leave room for the audio extension, duplicate suffix and trash timestamp
-        // on both platforms. Count UTF-8 bytes without splitting a code point.
+        // on both platforms.
+        return truncateUtf8(cleaned, 200).trim()
+    }
+
+    /** The longest prefix of [value] within [maxBytes] UTF-8 bytes, never splitting a code point. */
+    private fun truncateUtf8(value: String, maxBytes: Int): String {
         val bounded = StringBuilder()
         var byteCount = 0
-        val points = cleaned.codePoints().iterator()
+        val points = value.codePoints().iterator()
         while (points.hasNext()) {
-            val point = points.nextInt()
-            val character = String(Character.toChars(point))
+            val character = String(Character.toChars(points.nextInt()))
             val bytes = character.toByteArray(Charsets.UTF_8).size
-            if (byteCount + bytes > 200) break
+            if (byteCount + bytes > maxBytes) break
             bounded.append(character)
             byteCount += bytes
         }
-        return bounded.toString().trim()
+        return bounded.toString()
     }
 
     /**
      * Find a free filename for [base] with [extension] inside [dir]. If that name already
      * exists (and is not the source file being renamed), append " 2", " 3", … until
-     * a free slot is found.
+     * a free slot is found. The base is shortened so a variant stays within the
+     * recording filename limit.
      */
     fun resolveCollision(dir: File, base: String, extension: String = "m4a"): File {
         var candidate = File(dir, "$base.$extension")
         var suffix = 2
         while (candidate.exists()) {
-            candidate = File(dir, "$base $suffix.$extension")
+            val tail = " $suffix.$extension"
+            val room = SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - tail.toByteArray(Charsets.UTF_8).size
+            candidate = File(dir, truncateUtf8(base, room).trimEnd() + tail)
             suffix++
         }
         return candidate
