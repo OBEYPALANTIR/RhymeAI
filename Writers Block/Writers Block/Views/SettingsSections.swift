@@ -584,6 +584,33 @@ struct SettingsCloudBackupSection: View {
                 }
                 .accessibilityIdentifier("recordingsNeedingAttention")
             }
+            if !viewModel.recordingNotes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(viewModel.recordingNotes, id: \.self) { note in
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button("Check recordings again") { Task { _ = await viewModel.reconcileRecordings() } }
+                        .font(.caption.weight(.semibold))
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .accessibilityIdentifier("checkRecordingsAgain")
+                }
+                .accessibilityIdentifier("recordingNotes")
+            }
+            if viewModel.recordingRecordsDamaged {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("A record of recordings changes is damaged, so recordings can't be changed. Every file is kept. Repairing sets the damaged record aside.")
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Repair recordings records") { Task { await viewModel.repairRecordingRecords() } }
+                        .font(.caption.weight(.semibold))
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .accessibilityIdentifier("repairRecordingRecords")
+                }
+            }
             if viewModel.recordingAdoptionStalled {
                 Text("Some recordings couldn't be read into the library yet. They stay on this device.")
                     .font(.caption)
