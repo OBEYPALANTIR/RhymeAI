@@ -558,18 +558,7 @@ class BackupServiceTest {
     @Test
     fun aBackupWhoseKeptSongsDoNotReadBackStopsBeforeDriveLosesThem() = runBlocking<Unit> {
         // A store that silently drops the recovery store's writes: the read-back must catch it.
-        val key = androidx.datastore.preferences.core.stringPreferencesKey("recovered_songs_json")
-        val lossy = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> by dataStore {
-            override suspend fun updateData(
-                transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences
-            ) = dataStore.updateData { current ->
-                transform(current).toMutablePreferences().apply {
-                    val before = current[key]
-                    if (before == null) remove(key) else this[key] = before
-                }.toPreferences()
-            }
-        }
-        val lossyRepository = ProjectRepository(lossy, keys)
+        val lossyRepository = ProjectRepository(storeRewritingRecovery { null }, keys)
         lossyRepository.saveTrashedProjects(listOf(TrashedSongProject(song("a"), deletedAt = 50L)))
         lossyRepository.permanentlyDeleteTrashedProject("a", now = 200L)
         val active = song("a", updatedAt = 300L, lyrics = "only copy of a").copy(precedenceRepaired = true)
@@ -582,31 +571,82 @@ class BackupServiceTest {
     }
 
     @Test
-    fun aTombstoneWithoutATimeIsRefusedAndNoLiveSongOrRecordingIsDeleted() = runBlocking<Unit> {
-        // A33/A41: an unknown deletion time is never stamped with the current time.
-        repository.saveProjects(listOf(song("p")))
+    fun aTombstoneWithoutATimeSuspendsOnlyItsIdentityAndALaterValidOneReplacesIt() = runBlocking<Unit> {
+        // A33/A41 (iOS second pass): an unknown deletion time is never stamped with now and never
+        // stops the other deletions. Its recording is hidden with its bytes kept; its song stays.
+        repository.saveProjects(listOf(song("p"), song("q")))
         val take = writeMemo("p", "take.m4a", "live take".toByteArray())
-        val text = String(BackupManifest.encode(SyncBlob(
-            projects = listOf(song("p")),
-            deletions = listOf(SyncDeletion("p", deletedAt = 9_000L), SyncDeletion("p", "take.m4a", 9_000L, recordingId = take.id))
-        ), 1_000L, "other-device"))
-        fun manifestWith(change: (JsonObject) -> JsonObject): ByteArray {
-            val root = Json.parseToJsonElement(text).jsonObject
-            val body = JsonObject(root - BackupManifest.HASH_KEY).let { body ->
-                JsonObject(body + ("deletions" to kotlinx.serialization.json.JsonArray(body.getValue("deletions").jsonArray.map { change(it.jsonObject) })))
+        // An unknown time is written without its `deletedAt` (as a writer that left it out).
+        fun manifestWith(deletions: List<SyncDeletion>) =
+            BackupManifest.encode(SyncBlob(projects = listOf(song("p")), deletions = deletions), 1_000L, "other-device")
+        drive.put(BackupManifest.FILE_NAME, manifestWith(listOf(
+            SyncDeletion("p", "take.m4a", 0L, recordingId = take.id),
+            SyncDeletion("q", deletedAt = 9_000L)
+        )))
+        assertFalse(BackupManifest.decode(drive.bytes(BackupManifest.FILE_NAME)!!).deletions.single { it.recordingId == take.id }.timeKnown)
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        // The valid tombstone applied; the unknown one deleted nothing, is kept, and hides its take.
+        assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+        assertContentEquals("live take".toByteArray(), liveFile("p", "take.m4a").readBytes())
+        assertTrue(repository.syncDeletions().any { it.recordingId == take.id && !it.timeKnown })
+        val path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, liveFile("p", "take.m4a"))
+        assertEquals(setOf(path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
+        assertTrue(remote().deletions.any { it.recordingId == take.id && !it.timeKnown })
+
+        // A later valid tombstone for the same recording replaces it and applies.
+        drive.put(BackupManifest.FILE_NAME, manifestWith(listOf(SyncDeletion("p", "take.m4a", 9_000L, recordingId = take.id))))
+        assertIs<SyncResult.Success>(service.restore(repository))
+        assertTrue(repository.syncDeletions().filter { it.recordingId == take.id }.all { it.timeKnown })
+        assertFalse(liveFile("p", "take.m4a").exists())
+        assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "p").walk().count { it.isFile })
+    }
+
+    /** A store whose writes of the recovery store pass through [rewrite] (a lost or corrupted write). */
+    private fun storeRewritingRecovery(rewrite: (String?) -> String?) =
+        object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> by dataStore {
+            val key = androidx.datastore.preferences.core.stringPreferencesKey("recovered_songs_json")
+            override suspend fun updateData(
+                transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences
+            ) = dataStore.updateData { current ->
+                val next = transform(current)
+                if (next[key] == current[key]) next
+                else next.toMutablePreferences().apply { val v = rewrite(next[key]); if (v == null) remove(key) else this[key] = v }.toPreferences()
             }
-            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
-            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray()
         }
-        for (bad in listOf(manifestWith { JsonObject(it - "deletedAt") }, manifestWith { JsonObject(it + ("deletedAt" to kotlinx.serialization.json.JsonPrimitive(0L))) })) {
-            drive.put(BackupManifest.FILE_NAME, bad)
 
-            assertFalse(service.restore(repository) is SyncResult.Success)
+    @Test
+    fun backUpKeepsADifferentRemoteVersionOfASongThisDeviceAlsoHolds() = runBlocking<Unit> {
+        // Final review 2, finding 1: this device holds "s" ("old", repaired 300); Drive holds a
+        // Trash version of "s" with other lyrics ("remote", repaired 200); a real tombstone at 100.
+        repository.saveProjects(listOf(song("s", updatedAt = 300L, lyrics = "old").copy(precedenceRepaired = true)))
+        putRemote(SyncBlob(
+            trashed = listOf(TrashedSongProject(song("s", updatedAt = 200L, lyrics = "remote").copy(precedenceRepaired = true), deletedAt = 200L, deletedAtRepaired = true)),
+            deletions = listOf(SyncDeletion("s", deletedAt = 100L))
+        ))
 
-            assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
-            assertTrue(repository.syncDeletions().isEmpty())
-            assertContentEquals("live take".toByteArray(), liveFile("p", "take.m4a").readBytes())
-        }
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertTrue(remote().projects.none { it.id == "s" } && remote().trashed.none { it.project.id == "s" })
+        // The version only Drive held is kept by content; the one this device still lists needs no copy.
+        assertEquals(1, result.songsSetAside)
+        assertEquals(listOf("remote" to true), repository.recoveredSongs().map { it.project.lyrics to it.wasInTrash })
+        assertEquals("old", repository.projectsFlow.first().single().lyrics)
+    }
+
+    @Test
+    fun aKeptSongWhoseFlagsReadBackDifferentlyStopsTheRun() = runBlocking<Unit> {
+        // The store keeps the song but loses its Trash time's repair flag: decoded values must match.
+        val flipping = ProjectRepository(storeRewritingRecovery { it?.replace("\"trashedAtRepaired\":true", "\"trashedAtRepaired\":false") }, keys)
+        flipping.saveTrashedProjects(listOf(TrashedSongProject(song("t"), deletedAt = 50L)))
+        flipping.permanentlyDeleteTrashedProject("t", now = 200L)
+        val trashed = TrashedSongProject(song("t", updatedAt = 40L, lyrics = "only copy of t"), deletedAt = 300L, deletedAtRepaired = true)
+        putRemote(SyncBlob(trashed = listOf(trashed)))
+
+        assertFalse(service.backUp(flipping) is SyncResult.Success)
+
+        assertEquals("only copy of t", remote().trashed.single { it.project.id == "t" }.project.lyrics)
     }
 
     @Test
@@ -1449,7 +1489,7 @@ class BackupServiceTest {
     }
 
     @Test
-    fun deletionTimesMustBePositiveAndDuplicatesCountTheNewest() = runBlocking<Unit> {
+    fun deletionTimesMustBeRealOrUnknownAndDuplicatesCountTheNewest() = runBlocking<Unit> {
         repository.saveProjects(listOf(song("p")))
         val take = writeMemo("p", "take.m4a", "take".toByteArray(), modifiedAt = 5_000L)
         val key = androidx.datastore.preferences.core.stringPreferencesKey("sync_deletions_json")
@@ -1464,10 +1504,13 @@ class BackupServiceTest {
         assertEquals(setOf(path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
         assertTrue(SyncMerger.Tombstones(listOf(SyncDeletion("p", "take.m4a", 9_000L, take.id), SyncDeletion("p", "take.m4a", 1_000L, take.id))).removes(take))
 
-        // A zero time is refused where it is written and where it is read.
+        // This device never writes an unknown time; a stored negative one is malformed; a stored
+        // one without a time is read as unknown (suspended), never as now.
         assertFails { repository.recordRecordingDeletion("p", "take.m4a", take.id, 0L) }
-        dataStore.edit { it[key] = """[{"projectId":"p","fileName":null,"deletedAt":0}]""" }
+        dataStore.edit { it[key] = """[{"projectId":"p","fileName":null,"deletedAt":-5}]""" }
         assertFails { repository.syncDeletions() }
+        dataStore.edit { it[key] = """[{"projectId":"p","fileName":null}]""" }
+        assertEquals(listOf(false), repository.syncDeletions().map { it.timeKnown })
     }
 
     @Test

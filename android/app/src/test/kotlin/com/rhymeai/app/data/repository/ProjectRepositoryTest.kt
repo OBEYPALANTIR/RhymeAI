@@ -1321,4 +1321,17 @@ class ProjectRepositoryTest {
         assertEquals(listOf("s"), repository.purgeExpiredTrashedProjects(now).purgedIds)
         assertTrue(repository.syncDeletions().any { it.projectId == "s" && it.isSongTombstone })
     }
+    @Test
+    fun expiryWeighsEveryActiveCopyOfAnIdNotTheFirstRow() = withRepository { _, repository ->
+        // iOS second pass item 1: two active rows of one id (a merge or import gone wrong); the first
+        // is older than the expired Trash copy, the second newer. Neither may be purged by it.
+        val now = 100L * com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+        repository.saveProjects(listOf(SongProject(id = "s", title = "Older", updatedAt = 1L), SongProject(id = "s", title = "Newer", updatedAt = now - 5L)))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "s", title = "Bin", updatedAt = 2L), deletedAt = 3L)))
+
+        assertTrue(repository.purgeExpiredTrashedProjects(now).purgedIds.isEmpty())
+
+        assertTrue(repository.syncDeletions().isEmpty())
+        assertEquals(listOf("Older", "Newer"), repository.projectsFlow.first().map { it.title })
+    }
 }

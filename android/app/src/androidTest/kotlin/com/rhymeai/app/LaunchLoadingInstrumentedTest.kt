@@ -11,6 +11,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.TrashedSongProject
+import com.rhymeai.app.data.sync.RecordingRecord
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.dataStore
 import kotlinx.coroutines.CompletableDeferred
@@ -39,11 +41,19 @@ class LaunchLoadingInstrumentedTest {
 
     private var heldStore: androidx.lifecycle.ViewModelStore? = null
 
+    // The library as the class found it: every test puts it back, so later classes see no songs of ours.
+    private val projectsBefore = runBlocking { repo.projectsFlow.first() }
+    private val trashBefore = runBlocking { repo.trashedProjectsFlow.first() }
+
     @After fun stop() {
         LaunchTestHooks.beforeLoading?.complete(Unit)
         LaunchTestHooks.beforeLoading = null
         heldStore?.let { store -> instrumentation.runOnMainSync { store.clear() } }
         scenario?.close()
+        runBlocking {
+            repo.saveProjects(projectsBefore)
+            repo.saveTrashedProjects(trashBefore)
+        }
     }
 
     private fun launch() {
@@ -102,9 +112,22 @@ class LaunchLoadingInstrumentedTest {
     }
 
     @Test fun aLaunchWhoseTimesCannotBeEstablishedPublishesNothingAndSaysSo() {
+        // T2.37/T2.38/T2.40: a song, a Trash entry with a future deadline and a trashed recording
+        // with its own deadline are stored; none may be published, selected or scheduled.
         val persistedId = "launch-${UUID.randomUUID()}"
+        val binnedId = "launch-bin-${UUID.randomUUID()}"
+        val recordingId = UUID.randomUUID().toString()
+        val trashFile = java.io.File(com.rhymeai.app.data.recording.RecordingFiles.trashDirectory(app.filesDir, binnedId).apply { mkdirs() }, "$recordingId.m4a")
+            .apply { writeText("trashed take") }
+        val now = System.currentTimeMillis()
         runBlocking {
             repo.saveProjects(repo.projectsFlow.first() + SongProject(id = persistedId, title = "Kept", lyrics = "kept words"))
+            repo.saveTrashedProjects(repo.trashedProjectsFlow.first() + TrashedSongProject(SongProject(id = binnedId, title = "Binned", updatedAt = now), deletedAt = now))
+            repo.updateRecordingRecords { records ->
+                records + RecordingRecord(recordingId, binnedId, "take.m4a", now, com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(trashFile),
+                    trashFile.length(), RecordingRecord.RECORDED, path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(app.filesDir, trashFile),
+                    trashedAt = now)
+            }
             repo.setCurrentProjectId(persistedId)
             // A malformed first-seen ledger makes precedence impossible to establish.
             app.dataStore.edit { it[ledgerKey] = """{"song:$persistedId":0}""" }
@@ -112,21 +135,30 @@ class LaunchLoadingInstrumentedTest {
         try {
             launch()
             waitUntil { vm.initialized }
+            SystemClock.sleep(1_000)
             onMain {
                 assertTrue(vm.projects.isEmpty())
                 assertTrue(vm.trashedProjects.isEmpty())
                 assertNull(vm.currentProjectId)
                 assertNotNull(vm.persistenceError)
+                assertNull(vm.scheduledTrashPurgeAt)
             }
             // Nothing stored was changed.
             assertEquals("kept words", runBlocking { repo.projectsFlow.first() }.single { it.id == persistedId }.lyrics)
+            assertTrue(runBlocking { repo.trashedProjectsFlow.first() }.any { it.project.id == binnedId })
+            assertEquals("trashed take", trashFile.readText())
         } finally {
-            runBlocking { app.dataStore.edit { it.remove(ledgerKey) } }
+            runBlocking {
+                app.dataStore.edit { it.remove(ledgerKey) }
+                repo.updateRecordingRecords { records -> records.filterNot { it.id == recordingId } }
+                repo.saveTrashedProjects(repo.trashedProjectsFlow.first().filterNot { it.project.id == binnedId })
+            }
+            trashFile.parentFile?.deleteRecursively()
         }
     }
 
     @Test fun aDeletionWhoseDraftCannotBeSavedFirstIsAbortedAndTheEditorKept() {
-        // iOS final review item 3: the draft is saved before the song leaves; if that fails, nothing is deleted.
+        // iOS final review item 3: only the draft save fails; the song itself stays deletable.
         launch()
         waitUntil { vm.initialized }
         val draft = "unsaved words ${UUID.randomUUID()}"
@@ -134,22 +166,54 @@ class LaunchLoadingInstrumentedTest {
         onMain { vm.onLyricsChanged(TextFieldValue("first words")) }
         waitUntil { vm.currentProjectId != null && runBlocking { repo.projectsFlow.first().any { it.id == vm.currentProjectId } } }
         val id = vm.currentProjectId!!
-        val projectsKey = stringPreferencesKey("projects_json")
-        val stored = runBlocking { app.dataStore.data.first()[projectsKey] }
         try {
-            // The song library becomes unreadable, so the draft cannot be saved before the move.
-            runBlocking { app.dataStore.edit { it[projectsKey] = "{not valid json" } }
             onMain { vm.onLyricsChanged(TextFieldValue(draft)) }
-            onMain { vm.moveProjectToTrash(id) }
-            SystemClock.sleep(1_000)
+            onMain {
+                DraftSaveTestHooks.failNext.set(true)
+                vm.moveProjectToTrash(id)
+            }
+            waitUntil { !DraftSaveTestHooks.failNext.get() && !vm.savingBeforeNavigation }
+            SystemClock.sleep(500)
             onMain {
                 assertEquals(draft, vm.lyrics)
                 assertEquals(id, vm.currentProjectId)
                 assertTrue(vm.trashedProjects.none { it.project.id == id })
             }
             assertTrue(runBlocking { repo.trashedProjectsFlow.first() }.none { it.project.id == id })
+
+            // The same deletion succeeds once the draft can be saved: only the save had failed.
+            onMain { vm.moveProjectToTrash(id) }
+            waitUntil { runBlocking { repo.trashedProjectsFlow.first() }.any { it.project.id == id && it.project.lyrics == draft } }
         } finally {
-            runBlocking { app.dataStore.edit { prefs -> if (stored == null) prefs.remove(projectsKey) else prefs[projectsKey] = stored } }
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test fun typingWhileNewSongStoresItsSelectionIsKept() {
+        // Final review 2, finding 2: after the flush, the selection save is held; text typed then must survive.
+        launch()
+        waitUntil { vm.initialized }
+        onMain { vm.applyTemplate("Verse", "", "template line") }
+        onMain { vm.onLyricsChanged(TextFieldValue("the earlier song ${UUID.randomUUID()}")) }
+        waitUntil { vm.currentProjectId != null && runBlocking { repo.projectsFlow.first().any { it.id == vm.currentProjectId } } }
+        val earlier = vm.currentProjectId
+        val gate = CompletableDeferred<Unit>()
+        NewSongTestHooks.beforeSelectionSave = gate
+        try {
+            onMain { vm.newProject() }
+            // The flush has finished; the selection save is still held.
+            waitUntil { !vm.savingBeforeNavigation }
+            val typed = "typed while New Song was saving ${UUID.randomUUID()}"
+            onMain { vm.onLyricsChanged(TextFieldValue(typed)) }
+            gate.complete(Unit)
+            waitUntil { runBlocking { repo.projectsFlow.first().any { it.lyrics == typed } } }
+            onMain {
+                assertEquals(typed, vm.lyrics)
+                assertTrue(vm.currentProjectId != earlier)
+            }
+        } finally {
+            NewSongTestHooks.beforeSelectionSave = null
+            gate.complete(Unit)
         }
     }
 }
