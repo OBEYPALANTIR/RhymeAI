@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                     if (result.resultCode == Activity.RESULT_OK) {
                         viewModel.retryAfterDriveAuthorization()
                     } else {
-                        viewModel.syncPendingIntent = null
+                        viewModel.cancelDriveAuthorization()
                     }
                 }
 

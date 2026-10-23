@@ -31,6 +31,7 @@ import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
+import com.rhymeai.app.data.sync.DRIVE_SIGN_IN_CANCELLED
 import com.rhymeai.app.data.sync.actionAfterAuthorization
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DamagedBackupException
@@ -876,6 +877,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** The consent screen came back without approval (dismissed, or Google refused the request). */
+    fun cancelDriveAuthorization() {
+        val action = actionAfterAuthorization(pendingAuthAction, BackupAction.BackUp)
+        pendingAuthAction = null
+        pendingMigrationPassphrase = null
+        syncPendingIntent = null
+        handleBackupResult(SyncResult.AuthorizationFailed(DRIVE_SIGN_IN_CANCELLED, retryable = false), action, interactive = true)
+    }
+
     /** Debounced automatic backup after a change; waits out any backoff. */
     fun scheduleAutoBackup() = backupScheduler.schedule()
 
@@ -934,6 +944,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             SyncResult.NotConfigured -> {
                 backupStatus = BackupStatus.Failed("Google Drive is not available on this device.", lastBackupAt)
                 false
+            }
+            is SyncResult.AuthorizationFailed -> {
+                backupStatus = BackupStatus.Failed(result.reason, lastBackupAt)
+                result.retryable
             }
             SyncResult.CorruptRemote -> {
                 backupStatus = BackupStatus.Failed(BackupManifest.DAMAGED_MESSAGE, lastBackupAt)
