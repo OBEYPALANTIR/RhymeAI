@@ -83,12 +83,14 @@ object BackupManifest {
                 }
             }
             putJsonArray("deletions") {
-                blob.deletions.forEach { deletion ->
+                // A33 erratum: a tombstone whose time is unknown is this device's suspension state
+                // only; nothing shared (Drive, an export) ever carries one.
+                blob.deletions.filter { it.timeKnown }.forEach { deletion ->
                     addJsonObject {
                         put("projectId", deletion.projectId)
                         put("fileName", deletion.fileName?.let(::JsonPrimitive) ?: JsonNull)
                         deletion.recordingId?.let { put("recordingId", it) }
-                        if (deletion.timeKnown) put("deletedAt", deletion.deletedAt)
+                        put("deletedAt", deletion.deletedAt)
                     }
                 }
             }

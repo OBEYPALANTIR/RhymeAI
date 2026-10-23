@@ -576,13 +576,23 @@ class BackupServiceTest {
         // stops the other deletions. Its recording is hidden with its bytes kept; its song stays.
         repository.saveProjects(listOf(song("p"), song("q")))
         val take = writeMemo("p", "take.m4a", "live take".toByteArray())
-        // An unknown time is written without its `deletedAt` (as a writer that left it out).
-        fun manifestWith(deletions: List<SyncDeletion>) =
-            BackupManifest.encode(SyncBlob(projects = listOf(song("p")), deletions = deletions), 1_000L, "other-device")
+        // Another writer's manifest whose recording tombstone has no `deletedAt` (this app never writes one).
+        fun manifestWith(deletions: List<SyncDeletion>, dropTimeOf: String? = null): ByteArray {
+            val text = String(BackupManifest.encode(SyncBlob(projects = listOf(song("p")), deletions = deletions), 1_000L, "other-device"))
+            val root = Json.parseToJsonElement(text).jsonObject
+            val body = JsonObject(root - BackupManifest.HASH_KEY).let { body ->
+                JsonObject(body + ("deletions" to kotlinx.serialization.json.JsonArray(body.getValue("deletions").jsonArray.map {
+                    val d = it.jsonObject
+                    if (dropTimeOf != null && d["recordingId"]?.jsonPrimitive?.content == dropTimeOf) JsonObject(d - "deletedAt") else d
+                })))
+            }
+            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray()
+        }
         drive.put(BackupManifest.FILE_NAME, manifestWith(listOf(
-            SyncDeletion("p", "take.m4a", 0L, recordingId = take.id),
+            SyncDeletion("p", "take.m4a", 1L, recordingId = take.id),
             SyncDeletion("q", deletedAt = 9_000L)
-        )))
+        ), dropTimeOf = take.id))
         assertFalse(BackupManifest.decode(drive.bytes(BackupManifest.FILE_NAME)!!).deletions.single { it.recordingId == take.id }.timeKnown)
 
         assertIs<SyncResult.Success>(service.restore(repository))
@@ -593,7 +603,10 @@ class BackupServiceTest {
         assertTrue(repository.syncDeletions().any { it.recordingId == take.id && !it.timeKnown })
         val path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, liveFile("p", "take.m4a"))
         assertEquals(setOf(path), com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()))
-        assertTrue(remote().deletions.any { it.recordingId == take.id && !it.timeKnown })
+        // A33 erratum: the unknown tombstone is local suspension state only: never written to Drive or an export.
+        assertTrue(remote().deletions.none { it.recordingId == take.id })
+        val exported = BackupManifest.decode(BackupManifest.encode(SyncBlob(deletions = repository.syncDeletions()), 1_000L, "device"))
+        assertTrue(exported.deletions.none { it.recordingId == take.id })
 
         // A later valid tombstone for the same recording replaces it and applies.
         drive.put(BackupManifest.FILE_NAME, manifestWith(listOf(SyncDeletion("p", "take.m4a", 9_000L, recordingId = take.id))))
