@@ -105,10 +105,12 @@ implementer, same worktree) and Phase 3 (the verifier re-runs every check the fi
 iOS stage and UI checks included); then the PR gets a follow-up comment with the re-run counts and
 Codex is re-requested. Rebase-merge, pinned to the head commit (`--match-head-commit`), only once
 the verifier's latest round ran on that commit, CI is green on it and an independent verdict covers
-it. When Phase 0 selected or created an issue, record the merge on it (`gh issue comment <n>
---body "Merged in <merge sha>"`) and run `gh issue close <n>` if it is still open (the PR's
-`Fixes #<n>` closes it only when the PR merges into the default branch); skip this step when there
-is no issue. Finish with the worktree and branch cleanup in `rhymeai-pr-evidence`.
+it; when GitHub can't rebase the branch (usually because a merge from `main` resolved a conflict),
+squash-merge with the same pin, as `rhymeai-pr-evidence` shows. When Phase 0 selected or created an
+issue, record the merge on it (`gh issue comment <n> --body "Merged in <merge sha>"`) and run
+`gh issue close <n>` if it is still open (the PR's `Fixes #<n>` closes it only when the PR merges
+into the default branch); skip this step when there is no issue. Finish with the worktree and
+branch cleanup in `rhymeai-pr-evidence`.
 
 ### Phase 5: models  → `rhymeai-model-trainer`  (entered from Phase 1 for model work)
 Teacher-data runs follow `rhymeai-teacher-data`; student runs follow `rhymeai-colab-student`.
@@ -136,6 +138,7 @@ issue (`Fixes #<n>` in the PR body).
 
 ## Test scenarios
 - **Normal:** request → scope → implementer pushes branch → verifier NON-BLOCKING → PR opened
-  with evidence → CI + Codex green → rebase-merge → issue closed → worktree removed.
+  with evidence → CI + Codex green → rebase-merge (squash if it can't rebase) → issue closed →
+  worktree removed.
 - **Error:** verifier BLOCKING → implementer fixes → verifier clears → continue; a second
   BLOCKING round stops and reports to the owner with both findings.
