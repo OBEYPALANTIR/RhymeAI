@@ -35,6 +35,7 @@ struct ProjectsDrawerView: View {
     @State private var activeTab: DrawerTab = .songs
     // Recordings folders refresh when the Recordings tab is shown and after delete/rename.
     @State private var recordingFolders: [RecordingFolder] = []
+    @State private var reloadGeneration = 0
     @State private var expandedFolders: Set<String> = []
     @State private var isSelectingRecordings = false
     @State private var selectedRecordingIDs: Set<String> = []
@@ -725,6 +726,8 @@ struct ProjectsDrawerView: View {
         // doing file-system work in a detached task.
         let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
         let root = RecordingFiles.memosRoot()
+        reloadGeneration += 1
+        let generation = reloadGeneration
         guard !viewModel.recordingListsSuspended else {
             recordingFolders = []
             return
@@ -765,6 +768,8 @@ struct ProjectsDrawerView: View {
             }.value
 
             await MainActor.run {
+                // A newer reload, or a failed check meanwhile, wins over this result.
+                guard generation == reloadGeneration, !viewModel.recordingListsSuspended else { return }
                 recordingFolders = folders
             }
         }

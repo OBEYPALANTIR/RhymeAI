@@ -314,6 +314,7 @@ final class VoiceMemoService {
     /// Move a trashed recording back into its project's live memo folder under
     /// its original name (suffixed if that name is now taken).
     func restoreTrashedMemo(_ trashed: TrashedVoiceMemo) {
+        stopPlayback(ifPlayingAnyOf: [trashed.url])
         let folder = RecordingFiles.memoFolder(for: trashed.projectId)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -609,6 +610,12 @@ final class VoiceMemoService {
         if let playing = activePlayURL ?? pendingPlayURL, paths.contains(RecordingFiles.canonicalPath(playing)) { stopPlayback() }
     }
 
+    /// Stops playback (or a pending start) of anything under these folder paths.
+    func stopPlayback(ifPlayingWithin folders: [String]) {
+        if let playing = activePlayURL ?? pendingPlayURL,
+           folders.contains(where: { RecordingFiles.canonicalPath(playing).hasPrefix($0) }) { stopPlayback() }
+    }
+
     func stopPlayback() {
         audioIntentRevision &+= 1
         playingIdentity = nil
@@ -647,8 +654,14 @@ final class VoiceMemoService {
 
         let targetURL = RecordingFiles.renamedURL(for: url, sanitizedName: sanitized)
 
-        // No-op if names are identical.
-        guard targetURL != url else { return url }
+        // The same name: no move, but choosing it makes it the recording's claim (A35).
+        guard targetURL != url else {
+            if let publisher {
+                try publisher.renameRecording(at: url, to: targetURL)
+                onFilesChanged?()
+            }
+            return url
+        }
 
         // If active playback is on this file, stop it before rename.
         stopPlayback(ifPlayingAnyOf: [url])
