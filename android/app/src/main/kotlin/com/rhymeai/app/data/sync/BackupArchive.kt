@@ -45,8 +45,15 @@ object BackupArchive {
             val taken = HashSet<String>()
             for (entry in song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })) {
                 val name = sanitizeArchiveName(entry.fileName)
+                // The extension is the text after the last dot only when it is 1-16 UTF-8 bytes and
+                // leaves a stem; otherwise the whole name is the stem.
                 val dot = name.lastIndexOf('.')
-                val (stem, extension) = if (dot > 0) name.substring(0, dot) to name.substring(dot) else name to ""
+                val after = if (dot > 0) name.substring(dot + 1) else ""
+                val (stem, extension) = if (after.isNotEmpty() && after.toByteArray().size <= MAX_EXTENSION_BYTES) {
+                    name.substring(0, dot) to name.substring(dot)
+                } else {
+                    name to ""
+                }
                 var n = 1
                 var candidate: String
                 while (true) {
@@ -74,9 +81,13 @@ object BackupArchive {
     /** [text] cut to at most [maxBytes] UTF-8 bytes at a whole code point. */
     private fun fitBytes(text: String, maxBytes: Int): String {
         var end = text.length
-        while (text.substring(0, end).toByteArray().size > maxBytes) end = text.offsetByCodePoints(end, -1)
+        // Never below one code point.
+        val first = if (text.isEmpty()) 0 else text.offsetByCodePoints(0, 1)
+        while (end > first && text.substring(0, end).toByteArray().size > maxBytes) end = text.offsetByCodePoints(end, -1)
         return text.substring(0, end)
     }
+
+    private const val MAX_EXTENSION_BYTES = 16
 
     data class ExportSummary(val songs: Int, val recordings: Int, val skippedLargeRecordings: Int)
 

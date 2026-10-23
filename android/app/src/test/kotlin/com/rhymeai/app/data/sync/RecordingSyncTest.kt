@@ -33,16 +33,18 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun recordingManifestAcceptsAnyNonNegativeSizeAndFlagsWhatThisDeviceCanTransfer() {
+    fun recordingManifestAcceptsAnyPositiveSizeAndFlagsWhatThisDeviceCanTransfer() {
         fun sized(sizeBytes: Long) =
             recording("p1", "clip.m4a", modifiedAt = 1L, sha256 = "digest", sizeBytes = sizeBytes)
         val limit = RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES
 
-        sized(0L).validate()
+        sized(1L).validate()
         sized(limit).validate()
         sized(limit + 1L).validate()
         sized(100L * 1024L * 1024L).validate()
         assertFailsWith<IllegalArgumentException> { sized(-1L).validate() }
+        // An empty recording is refused everywhere.
+        assertFailsWith<IllegalArgumentException> { sized(0L).validate() }
 
         assertTrue(sized(limit).isTransferable)
         assertFalse(sized(limit + 1L).isTransferable)

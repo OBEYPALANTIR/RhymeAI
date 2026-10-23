@@ -7,14 +7,15 @@ same archive path for every recording:
 - Within one song, recordings are visited by precedence time ascending, ties by id
   ascending (byte-wise UTF-8).
 - The display name is sanitized: "/" and "\\" become "_", and each leading "." becomes "_".
-- It splits into stem and extension at its last "." (none when there is no dot).
+- The extension is the text after the last "." only when it is 1-16 UTF-8 bytes and
+  leaves a non-empty stem; otherwise the whole name is the stem and there is none.
 - Each recording takes "<stem><ext>"; when that is taken, "<stem> 2<ext>", "<stem> 3<ext>",
   ... (the first free counter from 2). Nothing is reserved ahead of its turn.
 - "Taken" compares names NFC-normalized, then lowercased with Unicode default
   lowercasing (Python str.lower(), Kotlin lowercase(Locale.ROOT), Swift lowercased()),
   not full case folding: "İ", "ı" and "i" stay three different names.
-- Before suffixing, the stem is cut so the whole UTF-8 name is at most 240 bytes,
-  never splitting a code point.
+- Before suffixing, the stem is cut so stem + suffix + extension is at most 240
+  UTF-8 bytes, never splitting a code point and never below one code point.
 - The archive path is "recordings/<projectId>/<name>". Import finds each file by
   recording id through the manifest and this same allocation, never by name alone.
 
@@ -30,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "shared" / "fixtures" / "archive-names-v1.json"
 MAX_NAME_BYTES = 240
+MAX_EXTENSION_BYTES = 16
 
 
 def sanitize(name: str) -> str:
@@ -40,9 +42,17 @@ def sanitize(name: str) -> str:
 
 def fit(text: str, max_bytes: int) -> str:
     out = text
-    while len(out.encode("utf-8")) > max_bytes:
+    while len(out) > 1 and len(out.encode("utf-8")) > max_bytes:
         out = out[:-1]
     return out
+
+
+def split(name: str):
+    dot = name.rfind(".")
+    after = name[dot + 1:] if dot > 0 else ""
+    if after and len(after.encode("utf-8")) <= MAX_EXTENSION_BYTES:
+        return name[:dot], name[dot:]
+    return name, ""
 
 
 def key(name: str) -> str:
@@ -58,8 +68,7 @@ def allocate(entries):
         taken = set()
         for entry in sorted(song, key=lambda e: (e["precedenceTime"], e["id"].encode("utf-8"))):
             name = sanitize(entry["displayName"])
-            dot = name.rfind(".")
-            stem, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
+            stem, ext = split(name)
             n = 1
             while True:
                 suffix = "" if n == 1 else f" {n}"
@@ -100,6 +109,14 @@ def build() -> dict:
         entry(13, "song-e", 5000, "hook.m4a"),
         # The same name in another song is free there.
         entry(15, "song-f", 1000, "take.m4a"),
+        # Not an extension: 241 bytes after the last dot, so the whole name is cut to fit.
+        entry(19, "song-h", 1000, "take." + "a" * 241),
+        entry(20, "song-h", 2000, "take." + "a" * 241),
+        # A name ending in a dot has no extension.
+        entry(21, "song-h", 3000, "ends with a dot."),
+        # A 240-byte stem with ".m4a": cut to fit, and again when the suffix must fit too.
+        entry(22, "song-i", 1000, "x" * 240 + ".m4a"),
+        entry(23, "song-i", 2000, "x" * 240 + ".m4a"),
         # Dotted capital I, dotless i and i are three different names.
         entry(16, "song-g", 1000, "\u0130.m4a"),
         entry(17, "song-g", 2000, "\u0131.m4a"),
