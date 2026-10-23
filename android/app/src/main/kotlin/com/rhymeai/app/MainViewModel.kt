@@ -31,11 +31,12 @@ import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
-import com.rhymeai.app.data.sync.DRIVE_SIGN_IN_CANCELLED
 import com.rhymeai.app.data.sync.actionAfterAuthorization
 import com.rhymeai.app.data.sync.backupFailureReason
+import com.rhymeai.app.data.sync.consentDismissedFailure
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DamagedBackupException
+import com.rhymeai.app.data.sync.DriveAuthorization
 import com.rhymeai.app.data.sync.DriveAuthorizer
 import com.rhymeai.app.data.sync.DriveClient
 import com.rhymeai.app.data.sync.DriveSyncService
@@ -227,12 +228,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupPrefs.getString(KEY_CLIENT_ID, null)
             ?: java.util.UUID.randomUUID().toString().also { backupPrefs.edit { putString(KEY_CLIENT_ID, it) } }
     }
+    private val driveAuthorizer: DriveAuthorizer = BackupTestHooks.authorizer
+        ?: PlayServicesDriveAuthorizer(application, BuildConfig.DRIVE_OAUTH_CLIENT_ID)
     private val driveSyncService = DriveSyncService(
         filesDir = application.filesDir,
         secureKeyStore = EncryptedPrefsKeyStore(application),
         driveClient = BackupTestHooks.driveClient ?: RealDriveClient(),
-        authorizer = BackupTestHooks.authorizer
-            ?: PlayServicesDriveAuthorizer(application, BuildConfig.DRIVE_OAUTH_CLIENT_ID),
+        authorizer = driveAuthorizer,
         clientId = { backupClientId }
     )
     private val localModelService = LocalModelService().also {
@@ -880,13 +882,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The consent screen came back without approval (dismissed, or Google refused the request). */
     fun cancelDriveAuthorization() {
-        // After process death there is no pending action; while disconnected only Connect shows the notice.
-        val fallback = if (isBackupConnected()) BackupAction.BackUp else BackupAction.Connect
-        val action = actionAfterAuthorization(pendingAuthAction, fallback)
-        pendingAuthAction = null
-        pendingMigrationPassphrase = null
         syncPendingIntent = null
-        handleBackupResult(SyncResult.AuthorizationFailed(DRIVE_SIGN_IN_CANCELLED, retryable = false), action, interactive = true)
+        viewModelScope.launch {
+            // Play Services also returns RESULT_CANCELED when it refused the request (unregistered OAuth
+            // client), so ask it once more: its own status says "cancelled", anything else does not.
+            val auth = backupMutex.withLock { driveAuthorizer.authorize() }
+            if (auth is DriveAuthorization.Granted) return@launch retryAfterDriveAuthorization()
+            // After process death there is no pending action; while disconnected only Connect shows the notice.
+            val fallback = if (isBackupConnected()) BackupAction.BackUp else BackupAction.Connect
+            val action = actionAfterAuthorization(pendingAuthAction, fallback)
+            pendingAuthAction = null
+            pendingMigrationPassphrase = null
+            val failure = consentDismissedFailure(auth)
+            handleBackupResult(SyncResult.AuthorizationFailed(failure.reason, failure.retryable), action, interactive = true)
+        }
     }
 
     /** Debounced automatic backup after a change; waits out any backoff. */
