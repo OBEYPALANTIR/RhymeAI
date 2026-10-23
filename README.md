@@ -101,14 +101,14 @@ are one recording with that id; whichever order they appear in, the live copy
 (else the most recently trashed) keeps it, and the others move to a quarantine
 folder that is never listed, backed up or deleted. That adoption is all or nothing: a file, folder or
 folder entry that cannot be read stops Delete Forever, Trash expiry, Restore and
-Import with nothing changed. A backup's only
-local writes are that first-seen stamping (with its quarantine moves) and
-finishing or undoing an interrupted recording move (metadata reconciliation); it
-never touches restore staging. After Restore or Import, a recording whose
+Import with nothing changed. A backup moves no file: its only local writes are
+that first-seen stamping and finishing or undoing an interrupted recording move
+(metadata reconciliation), a file still awaiting its new name is left out and
+counted, and it never touches restore staging. After Restore or Import, a recording whose
 deletion won moves to quarantine; if that move fails it is retried at the next
 launch, and meanwhile the recordings and Trash lists hide it (refreshing when the
 tombstones change) and playback refuses it. Recording files are named by their
-id (`<id>.m4a`) everywhere on disk and the name the user sees is metadata (the
+id (`<id>.<ext>`: `m4a` for takes, the audio's own extension for imports) everywhere on disk and the name the user sees is metadata (the
 record's display name, the manifest's `fileName`), so a rename moves nothing and
 two recordings may share a name; only an export turns names into file names
 (" 2", " 3" for repeats). Older files are renamed to their ids once, journaled,

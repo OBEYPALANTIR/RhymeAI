@@ -139,9 +139,12 @@ below is the contract it must meet, not verified behaviour.
   Import that depend on it fail with nothing changed. Only confirmed absence counts
   as absence: reconciling an interrupted move, or dropping a record whose file is
   gone, throws on a file that cannot be examined and commits nothing, and records
-  of songs outside a scan are kept unexamined. A backup's only
-  local writes are that stamping (with its quarantine moves) and finishing or
-  undoing an interrupted move (reconciliation); it never touches restore staging.
+  of songs outside a scan are kept unexamined. A backup (and an export) moves no
+  file (A17): its only local writes are record stamping and finishing or undoing
+  an interrupted move (reconciliation). A duplicate copy stays where it is until
+  launch, Restore or Import quarantines it, and a file still awaiting its A36 name
+  is left out of the backup and counted ("N recordings still have their old file
+  names and were left out…"); it never touches restore staging.
   File times are otherwise never used as precedence.
 - Local visibility (A28): after Restore or Import commits, a recording whose
   winning tombstone is now known here moves to quarantine and loses its record.
@@ -211,9 +214,15 @@ below is the contract it must meet, not verified behaviour.
   the flag; of two repairs the smaller wins everywhere (manifest, local state and
   the first-seen map), so two replicas that repaired one time-less song at tA <
   tB both settle on tA and a tombstone between them wins. A Trash deadline is
-  always recomputed from the repaired `trashedAt`. Android applies this in
-  `SyncMerger.supersedes` (songs, Trash, recordings and the active/Trash choice)
-  and in `ProjectRepository.normalizePrecedence`.
+  always recomputed from the repaired `trashedAt`, and Trash expiry repairs
+  before it chooses anything (and again inside its deciding write), so a
+  time-less Trash entry gets 30 days from first sight instead of expiring at once.
+  A repair stays a repair through Restore, Import and export (the flag is
+  published with the record). A real time from any input replaces a recording's
+  local repair before anything is compared, so lists, playback and quarantine
+  compare what the merge compares. Android applies this in
+  `SyncMerger.supersedes` (songs, Trash, recordings and the active/Trash choice,
+  where a tie keeps the Trash entry) and in `ProjectRepository.normalizePrecedence`.
 - Valid tombstones first (A33): tombstones are validated where they are read
   (Android `ProjectRepository`'s deletion store runs `SyncDeletion.validate` on
   every entry; iOS validates at its store too), so a malformed one makes the
@@ -230,6 +239,11 @@ below is the contract it must meet, not verified behaviour.
   generated. Export is the only place a display name becomes a file name. The
   only moves are staging to live, live to and from Trash, live or Trash to
   quarantine, and the migration; each keeps its journaled intent and digest check.
+  The name a backup writes for a recording it holds (live or in Trash) is its own
+  when it was renamed here since its last write or Drive does not list it yet,
+  otherwise the name in Drive's own entry (never one chosen by a precedence tie);
+  a rename stays pending until its own name is the one written. Restore payloads
+  are staged as `<id>.<ext>` too.
 - Migration (A36), at every launch until done (idempotent): a file in the live
   or Trash folder not named by an id gets one, from its record at that path when
   the bytes match, else the A21 derived id, and is moved to `<id>.<ext>` in the
@@ -237,7 +251,19 @@ below is the contract it must meet, not verified behaviour.
   gives the name and the Trash time) as its display name. Each move is journaled
   as a move intent, so a crash resumes from it. A file whose id name is taken by
   other bytes is left where it is and reported ("N older recording file(s) could
-  not be renamed…"); migration deletes nothing. iOS performs the same migration.
+  not be renamed…"), and its record is kept unchanged so its identity, time and
+  tombstone protection survive until the move can happen; migration deletes
+  nothing. Rows written before A36 (`fileName`, claims, rename intents) are read
+  as display names, and an old rename intent that never reached the file is
+  undone to its old name. Waiting takes in staging move to `<id>.<ext>` with
+  their markers (new marker first, then the take, then the old marker, so a
+  crash leaves a marker naming the take's id), and pre-A36 quarantine copies
+  `<movedAt>__<name>` move to `<movedAt>/<id>.<ext>`. iOS performs the same
+  migration.
+- Path form (Android): records store paths relative to the canonical files
+  folder, and every recording `File` (listings, records, playback, staging) is
+  built on the canonical files folder (`RecordingFiles.fileAt`), because Android
+  hands the app `/data/user/0/<package>`, a symlink to `/data/data/<package>`.
 - Local folders (Android, under the app's files directory): `voice-memos/`
   (live), `voice-memos-trash/` (Trash time in the record), `voice-memos-staging/`
   (takes being recorded or waiting), `voice-memos-quarantine/<projectId>/<movedAt>/<id>.<ext>`
