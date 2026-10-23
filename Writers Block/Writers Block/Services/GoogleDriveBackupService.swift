@@ -672,6 +672,11 @@ struct BackupReport: Equatable, Sendable {
     /// Export: recordings it could not include (no verified bytes here, or files the
     /// library has not taken in), by name; never left out silently.
     var leftOutRecordings: [String] = []
+    /// Drive objects of a known recording id holding other bytes (A40): kept, reported.
+    var conflictingDriveObjects: [String] = []
+    /// Export: quarantined files and takes waiting to be saved are never exported.
+    var quarantinedNotExported = 0
+    var takesWaitingNotExported = 0
 }
 
 struct RemoteBackupSummary: Equatable, Sendable {
@@ -955,9 +960,9 @@ final class BackupService {
 
         // Precedence times of every recording this run gathered, before resolution.
         let gatheredRecordings = try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs.map(fixingPrecedence)).recordings
-        let precedence = Dictionary(gatheredRecordings.map { ($0.id, ($0.projectId, $0.uploadedAt)) }) { first, _ in first }
-        try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds, precedence: precedence,
-                                                           remote: remoteRecordings, accessToken: accessToken)
+        let gatheredById = Dictionary(gatheredRecordings.map { ($0.id, $0) }) { first, _ in first }
+        report.conflictingDriveObjects = try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
+                                                                                            gathered: gatheredById, remote: remoteRecordings, accessToken: accessToken)
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
@@ -1120,13 +1125,6 @@ final class BackupService {
         }
     }
 
-    private func upsertDriveFile(name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
-        if let existing = try await driveClient.findFile(named: name, accessToken: accessToken) {
-            return try await driveClient.updateFile(id: existing.id, mimeType: mimeType, content: content, appProperties: appProperties, accessToken: accessToken)
-        }
-        return try await driveClient.uploadNewFile(named: name, mimeType: mimeType, content: content, appProperties: appProperties, accessToken: accessToken)
-    }
-
     /// Recordings over the cap that Drive does not hold: an oversized file counts
     /// as backed up only when a raw Drive object has its SHA-256 and size (A29).
     /// Live and Trash files are inventoried now, on every run.
@@ -1175,7 +1173,9 @@ final class BackupService {
                 continue
             }
             let properties = ["id": entry.id, "projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes)]
-            let uploaded = try await upsertDriveFile(name: entry.driveName, mimeType: "application/octet-stream", content: audio, appProperties: properties, accessToken: accessToken)
+            // A40: an existing object's content is never changed; the recording goes up
+            // as a new object beside any other one under its name.
+            let uploaded = try await driveClient.uploadNewFile(named: entry.driveName, mimeType: "application/octet-stream", content: audio, appProperties: properties, accessToken: accessToken)
             if let checksum = uploaded.sha256Checksum, checksum.lowercased() != entry.sha256 {
                 throw BackupError.recordingIntegrityMismatch(entry.fileName)
             }
@@ -1225,32 +1225,45 @@ final class BackupService {
     }
 
     /// Removes Drive audio for recordings the merge dropped by tombstone.
+    /// A40: one id, one digest. An object is removed only when its own properties
+    /// (id, sha256, bytes) are those of a recording gathered in a run that a winning
+    /// tombstone covers, and only by its Drive file id. Anything else is kept: another
+    /// device's upload not yet in a manifest, a file from before ids, and an object of
+    /// a known id with other bytes or length (returned, to be reported). A covered
+    /// entry is kept here until its objects are gone, so a retry after a failed
+    /// removal still has its proof.
     private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], keeping kept: Set<String>,
-                                                          precedence: [String: (projectId: String, at: Date)], remote: RemoteFiles,
-                                                          accessToken: String) async throws {
+                                                          gathered: [String: SyncRecording], remote: RemoteFiles,
+                                                          accessToken: String) async throws -> [String] {
         let live = Set(recordings.map(\.driveName) + kept.map(RecordingBackupManifest.driveName(recordingId:)))
-        // An object is removed only when shown covered by its recording's own time
-        // gathered in a run. Anything else (another device's upload not yet listed in a
-        // manifest, of a new id or of this very id, or a file from before ids) is kept
-        // (finding 1). An object shown covered is recorded by Drive id and version
-        // before its removal, so a retry after a failed removal deletes that same
-        // object, and never one uploaded under its name since.
-        var proven = (defaults.dictionary(forKey: Self.provenCoveredKey) as? [String: String]) ?? [:]
-        for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) where !live.contains(file.name) {
-            guard let id = file.appProperties?["id"] else { continue }
-            let covered: Bool
-            if let gathered = precedence[id] {
-                covered = deletions.contains { $0.covers(projectId: gathered.projectId, recordingId: id, sha256: file.appProperties?["sha256"] ?? "", at: gathered.at) }
-            } else {
-                covered = proven[file.id] != nil && proven[file.id] == (file.version ?? "")
+        var proven = provenCovered
+        var conflicting: [String] = []
+        for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) {
+            guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"],
+                  let known = gathered[id] ?? proven[id] else { continue }
+            guard known.sha256 == sha, String(known.bytes) == bytes else {
+                conflicting.append(file.name)
+                continue
             }
-            guard covered else { continue }
-            proven[file.id] = file.version ?? ""
-            defaults.set(proven, forKey: Self.provenCoveredKey)
+            guard !live.contains(file.name),
+                  deletions.contains(where: { $0.covers(projectId: known.projectId, recordingId: id, sha256: sha, at: known.uploadedAt) }) else { continue }
+            proven[id] = known
+            provenCovered = proven
             try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
-            proven.removeValue(forKey: file.id)
-            defaults.set(proven, forKey: Self.provenCoveredKey)
         }
+        // Proof is dropped once no object of that id is left.
+        let remaining = Set(remote.values.joined().compactMap { $0.appProperties?["id"] })
+        provenCovered = proven.filter { remaining.contains($0.key) && !live.contains(RecordingBackupManifest.driveName(recordingId: $0.key)) }
+        return conflicting.sorted()
+    }
+
+    /// Covered recordings whose Drive objects a run started removing (A40).
+    private var provenCovered: [String: SyncRecording] {
+        get {
+            guard let data = defaults.data(forKey: Self.provenCoveredKey) else { return [:] }
+            return (try? JSONDecoder().decode([String: SyncRecording].self, from: data)) ?? [:]
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.provenCoveredKey) }
     }
 
     // MARK: Export and import
@@ -1278,8 +1291,13 @@ final class BackupService {
             }
             entries.append(("recordings/\(entry.projectId)/\(name)", row.audio))
         }
-        // Files on this device the library has not taken in are not in the archive.
-        report.leftOutRecordings += library.needsAttention.map(\.lastPathComponent)
+        // Everything else on this device that the archive does not hold is named.
+        let omitted = try library.exportOmissions(in: modelContext)
+        report.leftOutRecordings += omitted.trashed.map { "\($0) (recordings Trash)" }
+        report.leftOutRecordings += omitted.notTakenIn.map { "\($0) (not in the library yet)" }
+        report.leftOutRecordings += omitted.oversized.map { "\($0) (over 16 MB)" }
+        report.quarantinedNotExported = omitted.quarantined
+        report.takesWaitingNotExported = RecordingFiles.waitingTakeCount()
         report.oversizedRecordings = library.oversizedCount
         lastReport = report
         let formatter = DateFormatter()
@@ -1394,8 +1412,8 @@ final class BackupService {
     /// once (A18): the same rule every candidate uses. A rename that conflicts
     /// across devices takes the name from the device holding the bytes.
     private static let firstSeenKey = "backup-first-seen-times"
-    /// Drive objects shown covered by a deletion, by Drive id, with the version seen.
-    private static let provenCoveredKey = "backup-proven-covered-objects"
+    /// Covered recordings (id, digest, length, time) whose Drive objects are being removed.
+    private static let provenCoveredKey = "backup-proven-covered-recordings"
 
     /// A32: an entry without a precedence time (zero or missing) gets the time this
     /// device first saw it, kept here and written to the manifest, never changed.

@@ -584,11 +584,15 @@ final class RecordingLibrary: RecordingPublishing {
                           url(of: write.row).map(RecordingFiles.canonicalPath) == RecordingFiles.canonicalPath(write.to),
                           try RecordingFiles.readPendingMoves(for: memosRoot) == movesAfterCommit,
                           try !DeletionStore.all(in: context).contains(where: { $0.covers(projectId: write.row.projectId, recordingId: write.row.id, sha256: sha, at: write.row.precedenceTime) }),
-                          try !RecordingFiles.exists(write.to) else { continue }
-                    try FileManager.default.createDirectory(at: write.to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                          try !RecordingFiles.exists(write.to) else {
+                        // Its place holds other bytes: reported; the row's audio stays in its row.
+                        if try RecordingFiles.exists(write.to) { plan.result.needsAttention.append(write.to) }
+                        continue
+                    }
                     do {
-                        try FileManager.default.moveItem(at: staged, to: write.to)
+                        try RecordingFiles.safeMove(staged, to: write.to, within: [memosRoot, trashRoot])
                     } catch CocoaError.fileWriteFileExists {
+                        plan.result.needsAttention.append(write.to)
                         continue
                     }
                     plan.verified.append((write.row, try RecordingFiles.facts(write.to)))
@@ -700,6 +704,11 @@ final class RecordingLibrary: RecordingPublishing {
             let survivor = ordered[0]
             if survivor.precedenceTime != winner.precedenceTime { survivor.uploadedAt = winner.precedenceTime }
             if survivor.precedenceRepaired != winner.precedenceRepaired { survivor.precedenceRepaired = winner.precedenceRepaired }
+            // A rename made here and not yet written survives on whichever copy kept it.
+            if let renamed = ordered.first(where: \.displayNameChanged) {
+                if survivor.displayName != renamed.displayName { survivor.displayName = renamed.displayName }
+                if !survivor.displayNameChanged { survivor.displayNameChanged = true }
+            }
             rows.append(survivor)
             extras += ordered.dropFirst()
         }
@@ -953,10 +962,12 @@ final class RecordingLibrary: RecordingPublishing {
         for move in rowMoves {
             guard let target = url(of: move.row) else { continue }
             // Something took its place meanwhile: the row keeps its pending source for the next run.
-            guard try !RecordingFiles.exists(target) else { continue }
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard try !RecordingFiles.exists(target) else {
+                result.needsAttention.append(move.from.url)
+                continue
+            }
             do {
-                try FileManager.default.moveItem(at: move.from.url, to: target)
+                try RecordingFiles.safeMove(move.from.url, to: target, within: [memosRoot, trashRoot])
             } catch CocoaError.fileWriteFileExists {
                 // It appeared after the check: nothing is replaced; the move stays pending.
                 result.needsAttention.append(move.from.url)
@@ -969,13 +980,19 @@ final class RecordingLibrary: RecordingPublishing {
         // Files over the cap from before A36: journalled, then moved to their ids.
         for migration in oversizedMigrations {
             try OversizedRecordings.record(id: migration.id, entry: migration.entry, for: memosRoot)
-            _ = try? finishOversized(id: migration.id, entry: migration.entry)
+            if (try? finishOversized(id: migration.id, entry: migration.entry)) == nil { result.needsAttention.append(migration.file.url) }
         }
         // Interrupted oversized moves (publication, migration, Trash, restore) are
         // finished from their journal before anything is pruned; one that cannot be
         // finished yet stays recorded.
         for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.completed == false {
-            _ = try? finishOversized(id: id, entry: entry)
+            guard (try? finishOversized(id: id, entry: entry)) == nil else { continue }
+            // Blocked (other bytes at its place, or its source changed): both files are
+            // kept and reported; neither is listed or expired as this recording.
+            let place = oversizedURL(id: id, entry: entry)
+            for file in [place] + (entry.source.map { [URL(fileURLWithPath: $0)] } ?? []) where (try? RecordingFiles.exists(file)) == true {
+                if !result.needsAttention.contains(file) { result.needsAttention.append(file) }
+            }
         }
         try OversizedRecordings.prune(for: memosRoot) { id, entry in
             // Entries whose file is confirmed gone (deleted, or restored elsewhere) end.
@@ -1055,11 +1072,9 @@ final class RecordingLibrary: RecordingPublishing {
                         // Other bytes at the source: not the removed recording's.
                         guard digest == entry.sha256 else { return nil }
                         let destination = URL(fileURLWithPath: entry.destination)
-                        guard RecordingFiles.isRecordingFile(source, in: [memosRoot]),
-                              RecordingFiles.canonicalPath(destination.deletingLastPathComponent().deletingLastPathComponent()) == RecordingFiles.canonicalPath(trashRoot) else { return nil }
+                        guard RecordingFiles.isRecordingFile(source, in: [memosRoot]) else { return nil }
                         guard try !RecordingFiles.exists(destination) else { return entry }
-                        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                        try FileManager.default.moveItem(at: source, to: destination)
+                        try RecordingFiles.safeMove(source, to: destination, within: [trashRoot])
                     }
                     entry.source = ""
                 }
@@ -1121,12 +1136,13 @@ final class RecordingLibrary: RecordingPublishing {
         }
         for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.trashedAt == nil && (projectId == nil || entry.projectId == projectId) {
             let file = oversizedURL(id: id, entry: entry)
-            guard try RecordingFiles.exists(file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
+            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
             items.append(.init(url: file, projectId: entry.projectId, displayName: entry.fileName, date: Date(millisecondsSince1970: entry.finishedAt)))
         }
+        let blocked = try blockedPaths()
         for (folderProject, file) in try Self.listing(memosRoot) where projectId == nil || folderProject == projectId {
             let path = RecordingFiles.canonicalPath(file)
-            guard !listed.contains(path), !hidden.contains(path) else { continue }
+            guard !listed.contains(path), !hidden.contains(path), !blocked.contains(path) else { continue }
             items.append(.init(url: file, projectId: folderProject, displayName: file.lastPathComponent, date: try RecordingFiles.facts(file).modified))
         }
         return items.sorted { $0.date == $1.date ? $0.url.path < $1.url.path : $0.date > $1.date }
@@ -1152,13 +1168,14 @@ final class RecordingLibrary: RecordingPublishing {
         }
         for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.trashedAt != nil {
             let file = oversizedURL(id: id, entry: entry)
-            guard try RecordingFiles.exists(file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
+            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
             items.append(TrashedVoiceMemo(url: file, projectId: entry.projectId, originalName: entry.fileName,
                                           deletedAt: Date(millisecondsSince1970: entry.trashedAt!), recordingId: id))
         }
+        let blocked = try blockedPaths()
         for (projectId, file) in try Self.listing(trashRoot) {
             let path = RecordingFiles.canonicalPath(file)
-            guard !listed.contains(path), !hidden.contains(path) else { continue }
+            guard !listed.contains(path), !hidden.contains(path), !blocked.contains(path) else { continue }
             let legacy = RecordingFiles.legacyTrashName(file.lastPathComponent)
             let modified = try RecordingFiles.facts(file).modified
             // A file not taken in yet never counts as expired by a missing time.
@@ -1180,6 +1197,8 @@ final class RecordingLibrary: RecordingPublishing {
         try requireChecked(context)
         if let id = trashed.recordingId, let entry = try OversizedRecordings.read(for: memosRoot)[id],
            RecordingFiles.canonicalPath(oversizedURL(id: id, entry: entry)) == RecordingFiles.canonicalPath(trashed.url) {
+            // Only the recording's own bytes, by digest and length (finding 2).
+            guard try oversizedHolds(entry, at: trashed.url, digest: true) else { throw RecordingLibraryError.notVerified }
             return (id, nil)
         }
         let digest = try RecordingFiles.sha256(of: trashed.url)
@@ -1199,14 +1218,59 @@ final class RecordingLibrary: RecordingPublishing {
     /// its memo and Trash folders must be a row's verified bytes, a file over the
     /// cap, or a recording removed elsewhere still holding its recorded bytes;
     /// anything else fails before anything changes (finding 1).
+    /// What an export leaves out, by kind (finding 7): recordings in the recordings
+    /// Trash, files the library has not taken in (or reported), recordings over the
+    /// cap, and how many quarantined files there are.
+    func exportOmissions(in context: ModelContext) throws -> (trashed: [String], notTakenIn: [String], oversized: [String], quarantined: Int) {
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        var held = Set(rows.compactMap { url(of: $0).map(RecordingFiles.canonicalPath) })
+        let registry = try OversizedRecordings.read(for: memosRoot)
+        for (id, entry) in registry { held.insert(RecordingFiles.canonicalPath(oversizedURL(id: id, entry: entry))) }
+        for entry in try RecordingFiles.readPendingMoves(for: memosRoot).detach { held.insert(entry.destination) }
+        var notTakenIn = needsAttention.map(\.lastPathComponent)
+        for (_, file) in try Self.listing(memosRoot) + Self.listing(trashRoot) where !held.contains(RecordingFiles.canonicalPath(file)) {
+            if !notTakenIn.contains(file.lastPathComponent) { notTakenIn.append(file.lastPathComponent) }
+        }
+        let quarantineRoot = RecordingFiles.quarantineRoot(for: memosRoot)
+        let quarantined = (FileManager.default.enumerator(at: quarantineRoot, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }.count
+        return (try trashedRecordings(in: context).map(\.originalName), notTakenIn, registry.values.map(\.fileName).sorted(), quarantined)
+    }
+
+    /// Files a blocked move left (reported, and the places and sources of unfinished
+    /// oversized moves): never listed, played or expired until resolved.
+    private func blockedPaths() throws -> Set<String> {
+        var paths = Set(needsAttention.map(RecordingFiles.canonicalPath))
+        for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.completed == false {
+            paths.insert(RecordingFiles.canonicalPath(oversizedURL(id: id, entry: entry)))
+            if let source = entry.source { paths.insert(RecordingFiles.canonicalPath(URL(fileURLWithPath: source))) }
+        }
+        return paths
+    }
+
+    /// An oversized entry's file is listed, deleted or expired only when its move is
+    /// complete and the file has the recorded length (and, for deletion, digest).
+    private func oversizedHolds(_ entry: OversizedRecordings.Entry, at file: URL, digest: Bool = false) throws -> Bool {
+        guard entry.completed != false, try RecordingFiles.exists(file) else { return false }
+        if let bytes = entry.bytes, try RecordingFiles.facts(file).size != bytes { return false }
+        if digest { return try entry.sha256.map { try RecordingFiles.sha256(of: file) == $0 } ?? false }
+        return true
+    }
+
     func checkSongDeletable(_ projectId: String, in context: ModelContext) throws {
         try requireChecked(context)
+        let oversized = Dictionary(try OversizedRecordings.read(for: memosRoot).filter { $0.value.projectId == projectId }
+            .map { (RecordingFiles.canonicalPath(oversizedURL(id: $0.key, entry: $0.value)), $0.value) }) { first, _ in first }
         let rows = try context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == projectId }
         let held = Dictionary(rows.compactMap { row in url(of: row).map { (RecordingFiles.canonicalPath($0), row.sha256) } }) { first, _ in first }
         let detached = Dictionary(try RecordingFiles.readPendingMoves(for: memosRoot).detach.map { ($0.destination, $0.sha256) }) { first, _ in first }
         for (folderProject, file) in try Self.listing(memosRoot) + Self.listing(trashRoot) where folderProject == projectId {
             let path = RecordingFiles.canonicalPath(file)
-            if try RecordingFiles.facts(file).size > SyncRecording.maxBytes { continue }
+            if try RecordingFiles.facts(file).size > SyncRecording.maxBytes {
+                // Only a registered recording's own bytes go with the song.
+                guard let entry = oversized[path], try oversizedHolds(entry, at: file, digest: true) else { throw RecordingLibraryError.notVerified }
+                continue
+            }
             guard let sha = held[path] ?? detached[path], try RecordingFiles.sha256(of: file) == sha else { throw RecordingLibraryError.notVerified }
         }
     }
@@ -1228,7 +1292,7 @@ final class RecordingLibrary: RecordingPublishing {
         }
         if id != nil, try !RecordingFiles.exists(staged) { throw RecordingLibraryError.takeMissing }
         try SyncIdentity.validateProjectId(projectId)
-        try SyncIdentity.validateFileName(preferredName)
+        try SyncIdentity.validateDisplayName(preferredName)
         let finished = finishedAt.map { Date(millisecondsSince1970: $0.epochMilliseconds) } ?? Date(millisecondsSince1970: Date().epochMilliseconds)
         let recordingId = id ?? UUID().uuidString.lowercased()
         guard try RecordingFiles.facts(staged).size <= SyncRecording.maxBytes else {
@@ -1296,9 +1360,8 @@ final class RecordingLibrary: RecordingPublishing {
                 // Only the journalled bytes move: digest and length are checked first.
                 if let sha = entry.sha256, try RecordingFiles.sha256(of: source) != sha { throw RecordingLibraryError.notVerified }
                 if let bytes = entry.bytes, try RecordingFiles.facts(source).size != bytes { throw RecordingLibraryError.notVerified }
-                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                 aboutToMove([source])
-                try FileManager.default.moveItem(at: source, to: target)
+                try RecordingFiles.safeMove(source, to: target, within: [memosRoot, trashRoot])
             }
             entry.completed = true
             entry.source = nil
@@ -1334,7 +1397,7 @@ final class RecordingLibrary: RecordingPublishing {
     }
 
     func renameRecording(at url: URL, to displayName: String) throws {
-        try SyncIdentity.validateFileName(displayName)
+        try SyncIdentity.validateDisplayName(displayName)
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
         if let row = try verifiedRow(at: url, trashed: false, in: context) {
@@ -1418,19 +1481,25 @@ final class RecordingLibrary: RecordingPublishing {
         let trashed = RecordingFiles.isRecordingFile(url, in: [trashRoot])
         guard trashed || RecordingFiles.isRecordingFile(url, in: [memosRoot]) else { throw RecordingLibraryError.notVerified }
         let facts = try RecordingFiles.facts(url)
-        guard facts.size <= SyncRecording.maxBytes else { throw RecordingLibraryError.notVerified }
-        let audio = try Data(contentsOf: url)
         let id = UUID().uuidString.lowercased()
         let legacy = trashed ? RecordingFiles.legacyTrashName(url.lastPathComponent) : nil
         let name = RecordingFiles.storedId(of: url) == nil ? (legacy?.originalName ?? url.lastPathComponent)
             : "Recording.\(RecordingFiles.storedExtension(of: url.lastPathComponent))"
         let time = facts.modified.epochMilliseconds > 0 ? Date(millisecondsSince1970: facts.modified.epochMilliseconds) : firstSeen(id)
+        let trashTime = trashed ? ((legacy?.deletedAt).flatMap { $0.epochMilliseconds > 0 ? $0 : nil } ?? Date(millisecondsSince1970: Date().epochMilliseconds)) : nil
+        if facts.size > SyncRecording.maxBytes {
+            // Over the cap: a local record of its own, its move journalled (finding 9).
+            let entry = OversizedRecordings.Entry(projectId: url.deletingLastPathComponent().lastPathComponent, fileName: name, finishedAt: time.epochMilliseconds,
+                                                  trashedAt: trashTime?.epochMilliseconds)
+            let target = try moveOversized(id: id, entry: entry, from: url)
+            needsAttention.removeAll { RecordingFiles.canonicalPath($0) == RecordingFiles.canonicalPath(url) }
+            return target
+        }
+        let audio = try Data(contentsOf: url)
         let row = Recording(id: id, projectId: url.deletingLastPathComponent().lastPathComponent, displayName: name, audio: audio,
                             recordedAt: time, uploadedAt: time, origin: .migrated, sha256: RecordingBackupManifest.sha256Hex(audio))
         row.precedenceRepaired = facts.modified.epochMilliseconds <= 0
-        if trashed {
-            row.trashedAt = (legacy?.deletedAt).flatMap { $0.epochMilliseconds > 0 ? $0 : nil } ?? Date(millisecondsSince1970: Date().epochMilliseconds)
-        }
+        row.trashedAt = trashTime
         let target = try commit(row, movingFrom: url, in: context)
         needsAttention.removeAll { RecordingFiles.canonicalPath($0) == RecordingFiles.canonicalPath(url) }
         return target
@@ -1492,9 +1561,8 @@ final class RecordingLibrary: RecordingPublishing {
             throw error
         }
         do {
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             aboutToMove([source])
-            try FileManager.default.moveItem(at: source, to: target)
+            try RecordingFiles.safeMove(source, to: target, within: [memosRoot, trashRoot])
         } catch {
             revert()
             row.pendingFrom = nil
@@ -1520,8 +1588,7 @@ final class RecordingLibrary: RecordingPublishing {
             throw error
         }
         do {
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.moveItem(at: staged, to: target)
+            try RecordingFiles.safeMove(staged, to: target, within: [memosRoot, trashRoot])
         } catch {
             context.delete(row)
             try? save(context)
