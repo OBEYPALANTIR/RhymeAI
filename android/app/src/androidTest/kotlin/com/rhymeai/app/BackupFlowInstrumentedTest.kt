@@ -196,8 +196,8 @@ class BackupFlowInstrumentedTest {
         val memoDir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "drive-a").also { it.mkdirs() }
         java.io.File(memoDir, "trigger.m4a").writeBytes(byteArrayOf(1, 2, 3))
         runBlocking {
-            val memo = vm.voiceMemoService.memosForProject("drive-a").single { it.file.name == "trigger.m4a" }
-            vm.voiceMemoService.deleteMemo(memo)
+            val memo = vm.voiceMemoService.memosForProject("drive-a").single()
+            checkNotNull(vm.voiceMemoService.trashMemo(memo))
         }
         waitUntil { vm.backupStatus == BackupStatus.Pending }
     }

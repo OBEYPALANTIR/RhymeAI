@@ -10,7 +10,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNames
 import kotlinx.serialization.json.JsonNull
@@ -98,6 +102,31 @@ private data class SyncBlobWire(
     val savedByClientId: String = ""
 )
 
+/**
+ * The v1–v3 encrypted backup as its writers stored it: a collection left out was empty
+ * (its default), but a song or Trash entry without its time has an unknown time (0,
+ * repaired before any comparison, A32) rather than the moment it is read, and a song
+ * without an id is refused (an identity is never invented).
+ */
+private fun historicalTimes(fields: JsonObject): Map<String, JsonElement> {
+    fun song(element: JsonElement): JsonObject {
+        val song = element.jsonObject
+        if ("id" !in song) throw SerializationException("A song in the backup has no id")
+        return if ("updatedAt" in song) song else JsonObject(song + ("updatedAt" to JsonPrimitive(0L)))
+    }
+    val out = HashMap<String, JsonElement>()
+    fields["projects"]?.let { projects -> out["projects"] = JsonArray(projects.jsonArray.map(::song)) }
+    fields["trashed"]?.let { trashed ->
+        out["trashed"] = JsonArray(trashed.jsonArray.map { element ->
+            val entry = element.jsonObject
+            val project = entry["project"] ?: throw SerializationException("A Trash entry in the backup has no song")
+            val timed = if ("deletedAt" in entry) entry else JsonObject(entry + ("deletedAt" to JsonPrimitive(0L)))
+            JsonObject(timed + ("project" to song(project)))
+        })
+    }
+    return out
+}
+
 object SyncBlobSerializer : KSerializer<SyncBlob> {
     override val descriptor: SerialDescriptor = SyncBlobWire.serializer().descriptor
 
@@ -112,7 +141,7 @@ object SyncBlobSerializer : KSerializer<SyncBlob> {
         ) {
             throw SerializationException("Invalid sync version shape")
         }
-        val wire = input.json.decodeFromJsonElement(SyncBlobWire.serializer(), fields)
+        val wire = input.json.decodeFromJsonElement(SyncBlobWire.serializer(), JsonObject(fields + historicalTimes(fields)))
         return SyncBlob(
             version = wire.version,
             projects = wire.projects,
@@ -278,7 +307,12 @@ data class RecordingRecord(
     /** A37: [uploadedAt] is a first-seen repair of a missing time (A32). */
     val precedenceRepaired: Boolean = false,
     /** Pre-A36 rename intents only: the name to return to if that rename is undone. */
-    val pendingFromName: String? = null
+    val pendingFromName: String? = null,
+    /**
+     * The token of the exclusive claim a pending move creates at [path]: only a target
+     * holding exactly this claim is this move's, and only it is ever removed on recovery.
+     */
+    val pendingClaim: String? = null
 ) {
     fun toEntry() = RecordingManifestEntry(
         projectId = projectId, fileName = displayName, sizeBytes = bytes, modifiedAt = 0L,

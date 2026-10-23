@@ -165,7 +165,9 @@ class VoiceMemoService(private val context: Context) {
         /** Null while the take's marker cannot be read; it is never replaced by a new id. */
         val id: String?,
         val recordedAt: Long,
-        val finished: Boolean
+        val finished: Boolean,
+        /** The recorder did not finish it (or its bytes proved invalid): kept, never offered for saving. */
+        val failed: Boolean = false
     )
 
     /** What a take's marker says; a marker that cannot be read is never treated as missing. */
@@ -198,7 +200,7 @@ class VoiceMemoService(private val context: Context) {
      * Returns the File being recorded to, so the caller can display a progress
      * indicator before stopRecording() is called. Throws if already recording.
      */
-    suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) {
+    suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) { synchronized(recorderLock) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
 
         // Ensure the directory exists; surface storage failures to the caller.
@@ -262,7 +264,10 @@ class VoiceMemoService(private val context: Context) {
         }
 
         file
-    }
+    } }
+
+    /** Start, stop and cancel change the recorder and its take one at a time (T4.5). */
+    private val recorderLock = Any()
 
     /**
      * Stop an in-progress recording and return the saved [VoiceMemo], or null if
@@ -272,28 +277,31 @@ class VoiceMemoService(private val context: Context) {
      * written (the take waits in staging for [retryWaitingTakes]).
      */
     suspend fun stopRecording(): VoiceMemo? = withContext(Dispatchers.IO) {
-        if (!isRecording) return@withContext null
-
-        tickJob?.cancel()
-        tickJob = null
-
-        val rec = recorder
-        val file = recordingFile
-        recorder = null
-        recordingFile = null
-        isRecording = false
-        recordingElapsedMs = 0L
-
         var stopError: Exception? = null
-        if (rec != null) {
-            try {
-                rec.stop()
-            } catch (e: Exception) {
-                // stop() can throw if recording was too short; still must release.
-                stopError = e
-            } finally {
-                rec.release()
+        val file = synchronized(recorderLock) {
+            if (!isRecording) return@withContext null
+
+            tickJob?.cancel()
+            tickJob = null
+
+            val rec = recorder
+            val file = recordingFile
+            recorder = null
+            recordingFile = null
+            isRecording = false
+            recordingElapsedMs = 0L
+
+            if (rec != null) {
+                try {
+                    rec.stop()
+                } catch (e: Exception) {
+                    // stop() can throw if recording was too short; still must release.
+                    stopError = e
+                } finally {
+                    rec.release()
+                }
             }
+            file
         }
         finishTake(file, stopError)
     }
@@ -347,6 +355,9 @@ class VoiceMemoService(private val context: Context) {
                                 WaitingTake(take, dir.name, marker.id, sessionFinish, finished = true)
                             marker.state == STATE_RECORDING && take.exists() ->
                                 WaitingTake(take, dir.name, marker.id, take.lastModified(), finished = false)
+                            // Kept on disk and listed, so it never disappears unannounced.
+                            marker.state == STATE_FAILED && take.exists() ->
+                                WaitingTake(take, dir.name, marker.id, take.lastModified(), finished = false, failed = true)
                             else -> null
                         }
                     }
@@ -367,7 +378,7 @@ class VoiceMemoService(private val context: Context) {
     suspend fun retryWaitingTakes(projectId: String? = null): Int = withContext(Dispatchers.IO) {
         var saved = 0
         var failure: RecordingNotSavedException? = null
-        for (listed in waitingTakes(projectId)) {
+        for (listed in waitingTakes(projectId).filterNot { it.failed }) {
             try {
                 if (saveListedTake(listed)) saved++
             } catch (e: RecordingNotSavedException) {
@@ -512,80 +523,28 @@ class VoiceMemoService(private val context: Context) {
     private fun markerFor(take: File) = File(take.parentFile, take.name + MARKER_SUFFIX)
 
     /**
-     * A36 for staging: a waiting take still under a pre-A36 name moves to `<id>.<ext>`, the
-     * id from its marker. Each move is journaled first in `<target>.migrate` (source and
-     * target names, expected SHA-256 and length); the source is verified against it right
-     * before a move that never replaces a file, then the marker follows and the journal goes.
-     * A run after a crash finishes a move whose target holds the journaled bytes, or undoes
-     * one whose source still does. A take whose marker cannot be read, whose id name is
-     * taken, or whose journal matches neither file stays as it is and is returned. Run at
-     * launch, under the recording lock, only when the deletion state is readable (A33).
+     * A36 for staging (RecordingTransitions.migrateStaging): pre-A36 takes and markers move
+     * to their id names through the journaled no-replace move, interrupted imports are set
+     * aside, and unknown remnants are reported. The take being recorded and imports in
+     * progress are never touched. Run at launch.
      */
     suspend fun migrateStaging(): List<File> = withContext(Dispatchers.IO) {
-        RecordingTransitions.namespace.withLock {
-            catalog?.requireDeletionsReadable()
-            val left = mutableListOf<File>()
-            for (dir in RecordingTransitions.listStrictly(RecordingFiles.stagingRoot(context.filesDir))) {
-                if (!RecordingTransitions.isDirectoryStrictly(dir)) continue
-                // Finish or undo journaled moves first.
-                for (journal in RecordingTransitions.listStrictly(dir).filter { it.name.endsWith(MIGRATION_SUFFIX) }) {
-                    val lines = journal.readLines()
-                    val source = File(dir, lines.getOrNull(0) ?: continue)
-                    val target = File(dir, lines.getOrNull(1) ?: continue)
-                    val sha = lines.getOrNull(2) ?: continue
-                    val length = lines.getOrNull(3)?.toLongOrNull() ?: continue
-                    fun holds(file: File) = RecordingTransitions.isRegularFileStrictly(file) && file.length() == length &&
-                        com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) == sha
-                    // An empty target is the exclusive claim of an interrupted move.
-                    if (length > 0L && RecordingTransitions.isRegularFileStrictly(target) && target.length() == 0L) target.delete()
-                    when {
-                        holds(target) -> {
-                            val marker = readMarker(source)
-                            if (marker is Marker.Read && !markerFor(target).exists()) writeMarker(target, marker.id, marker.state, marker.recordedAt)
-                            if (markerFor(target).exists()) markerFor(source).delete()
-                            journal.delete()
-                        }
-                        holds(source) -> journal.delete()
-                        else -> left += source
-                    }
-                }
-                for (file in RecordingTransitions.listStrictly(dir)) {
-                    if (file == recordingFile || RecordingFiles.idOf(file) != null) continue
-                    if (!RecordingTransitions.isRegularFileStrictly(file) ||
-                        file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
-                    val marker = when (val read = readMarker(file)) {
-                        is Marker.Read -> read
-                        Marker.Absent -> continue
-                        Marker.Unreadable -> { left += file; continue }
-                    }
-                    val target = File(dir, RecordingFiles.idFileName(marker.id, file.name))
-                    val journal = File(dir, target.name + MIGRATION_SUFFIX)
-                    if (target.exists() || journal.exists()) { left += file; continue }
-                    val sha = com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file)
-                    val length = file.length()
-                    val temp = File(dir, journal.name + ".tmp")
-                    temp.writeText("${file.name}\n${target.name}\n$sha\n$length\n")
-                    java.nio.file.Files.move(temp.toPath(), journal.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
-                    // Verified right before the move: the journal names exactly these bytes.
-                    if (file.length() != length || com.rhymeai.app.data.sync.RecordingFileStore.sha256Hex(file) != sha) {
-                        journal.delete()
-                        left += file
-                        continue
-                    }
-                    try {
-                        RecordingTransitions.moveNoReplace(file, target)
-                    } catch (_: java.nio.file.FileAlreadyExistsException) {
-                        journal.delete()
-                        left += file
-                        continue
-                    }
-                    writeMarker(target, marker.id, marker.state, marker.recordedAt)
-                    markerFor(file).delete()
-                    journal.delete()
-                }
-            }
-            left
+        RecordingTransitions.migrateStaging(catalog, context.filesDir, setOfNotNull(recordingFile) + importsInProgress)
+    }
+
+    /** Staged imports of this process still being copied or saved: staging migration leaves them alone. */
+    private val importsInProgress: MutableSet<File> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Takes the recorder did not finish stay listed until set aside: their bytes move to
+     * quarantine (kept, never deleted) through the journaled move. Returns how many moved.
+     */
+    suspend fun setAsideFailedTakes(projectId: String): Int = withContext(Dispatchers.IO) {
+        var moved = 0
+        for (take in waitingTakes(projectId).filter { it.failed && it.id != null }) {
+            if (RecordingTransitions.setAsideStaged(catalog, context.filesDir, take.file, take.projectId, take.id!!)) moved++
         }
+        moved
     }
 
     private fun writeMarker(take: File, id: String, state: String, recordedAt: Long) {
@@ -647,7 +606,7 @@ class VoiceMemoService(private val context: Context) {
     /**
      * Cancel a recording in progress. The partially written file is deleted.
      */
-    fun cancelRecording() {
+    fun cancelRecording(): Unit = synchronized(recorderLock) {
         if (!isRecording) return
 
         tickJob?.cancel()
@@ -826,6 +785,9 @@ class VoiceMemoService(private val context: Context) {
                 val source = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("Cannot open audio")
                 val id = RecordingManifestEntry.newRecordingId()
+                val stagingDir = RecordingFiles.stagingDirectory(context.filesDir, projectId)
+                // Registered before the first byte is staged, so a concurrent launch check leaves it alone.
+                staged = File(stagingDir, RecordingFiles.idFileName(id, name)).also { importsInProgress += it }
                 val pending = RecordingImportStore.stage(
                         input = source,
                         directory = RecordingFiles.stagingDirectory(context.filesDir, projectId),
@@ -843,18 +805,13 @@ class VoiceMemoService(private val context: Context) {
                 memoFromFile(file, pending.desiredName)
             }.also { memoChangeEvents.tryEmit(Unit) }
         } finally {
-            staged?.takeIf { it.exists() }?.delete()
-        }
-    }
-
-    /** Delete a single memo. Stops playback of that file if it is currently playing. */
-    suspend fun deleteMemo(memo: VoiceMemo): Boolean {
-        if (playingFile == memo.file) stopPlayback()
-        return withContext(Dispatchers.IO) {
-            deleteMemoFile(memo.file).also { deleted ->
-                if (deleted) forgetRecord(memo.file)
+            staged?.let {
+                // A copy of the user's own file that was never saved: removed with its ownership marker.
+                if (it.exists()) it.delete()
+                RecordingImportStore.markerFor(it).delete()
+                importsInProgress -= it
             }
-        }.also { if (it) memoChangeEvents.tryEmit(Unit) }
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -976,52 +933,37 @@ class VoiceMemoService(private val context: Context) {
         return RecordingTransitions.deletedPaths(catalog.recordingRecords(), deletions)
     }
 
-    /** Drops the record of a file that is gone; a failed write is cleaned up by the next snapshot. */
-    private suspend fun forgetRecord(file: File) {
-        val path = RecordingTransitions.relativePath(context.filesDir, file)
-        runCatching { catalog?.updateRecordingRecords { records -> records.filterNot { it.path == path } } }
-    }
+    /**
+     * Permanently delete a trashed recording: one operation under the recording lock that
+     * checks it is still in Trash, writes its tombstone, stops its playback, verifies its
+     * bytes and unlinks them (RecordingTransitions.deleteFromTrash). A recording restored
+     * or changed meanwhile is left alone.
+     */
+    suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean = deleteFromTrash(trashed, expiresBy = null)
 
-    /** Permanently delete a trashed recording. */
-    suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
-        if (playingFile == trashed.file) stopPlayback()
-        var recordId: String? = null
-        try {
-            val catalog = catalog
-            if (catalog != null) {
-                // Null: the file was a duplicate copy of a pre-v4 recording and now sits in
-                // quarantine (A26); it has left the Trash and its deletion must not tombstone the live copy.
-                // Adoption hashes the song's recordings: off the main thread.
-                val record = withContext(Dispatchers.IO) {
-                    RecordingTransitions.recordFor(catalog, context.filesDir, trashed.file, trashed.projectId)
-                } ?: return true.also { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
-                recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, record.id, System.currentTimeMillis())
-                recordId = record.id
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return false
-        }
-        return withContext(Dispatchers.IO) {
-            val catalog = catalog
-            val id = recordId
-            // The bytes go only if, under the recording lock, they are still that recording.
-            val deleted = if (catalog != null && id != null) {
-                runCatching { RecordingTransitions.deleteVerified(catalog, context.filesDir, id) }.getOrDefault(false)
-            } else {
-                deleteMemoFile(trashed.file).also { if (it) forgetRecord(trashed.file) }
-            }
+    private suspend fun deleteFromTrash(trashed: TrashedVoiceMemo, expiresBy: Long?): Boolean {
+        val catalog = catalog ?: return false
+        val deleted = withContext(Dispatchers.IO) {
+            val done = guarded {
+                RecordingTransitions.deleteFromTrash(catalog, context.filesDir, trashed.file, trashed.projectId, expiresBy) { record, at ->
+                    recordingDeletionRecorder?.invoke(record.projectId, record.displayName, record.id, at)
+                }
+            } ?: false
             cleanUpEmptyTrashDir(trashed.file.parentFile)
-            deleted
-        }.also { if (it) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) } }
+            done
+        }
+        if (deleted) run { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
+        return deleted
     }
 
-    /** Delete expired trashed recordings on their own clock, reporting partial failures. */
+    /**
+     * Delete expired trashed recordings on their own clock, reporting partial failures. Each
+     * deletion re-checks, under the lock, that the recording is still in Trash and expired.
+     */
     suspend fun purgeExpiredTrashedMemos(now: Long = System.currentTimeMillis()): Boolean {
         var complete = true
         for (memo in trashedMemos().filter { it.deleteAfter <= now }) {
-            if (!permanentlyDeleteTrashedMemo(memo)) complete = false
+            if (!deleteFromTrash(memo, expiresBy = now) && memo.file.exists()) complete = false
         }
         return complete
     }
@@ -1167,7 +1109,6 @@ class VoiceMemoService(private val context: Context) {
 
         /** Beside each staged take: its id, state and finish time (A27). */
         private const val MARKER_SUFFIX = ".take"
-        private const val MIGRATION_SUFFIX = ".migrate"
         private const val STATE_RECORDING = "recording"
         private const val STATE_FINISHED = "finished"
         private const val STATE_FAILED = "failed"
@@ -1201,13 +1142,6 @@ class VoiceMemoService(private val context: Context) {
             return base.toLongOrNull()?.let(::formatMemoLabel) ?: base
         }
 
-        /**
-         * Delete [file], reporting success for UI surfacing. An already-absent file
-         * counts as success — there is nothing left to fail to remove, so callers
-         * should not show a delete-failed error for it.
-         */
-        internal fun deleteMemoFile(file: File): Boolean =
-            !file.exists() || file.delete()
 
     }
 }

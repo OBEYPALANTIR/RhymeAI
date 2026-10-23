@@ -131,7 +131,12 @@ internal object BackupTestHooks {
 internal enum class BackupAction { Connect, BackUp, Restore, Migrate }
 
 internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
-    "Your older encrypted backup was moved to the new format.".takeIf { result.migratedLegacyBackup },
+    "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive.".takeIf { result.migratedLegacyBackup },
+    when (result.songsSetAside) {
+        0 -> null
+        1 -> "1 song with an unknown date was removed by a deletion from another device; a copy is kept on this device."
+        else -> "${result.songsSetAside} songs with unknown dates were removed by a deletion from another device; copies are kept on this device."
+    },
     when (result.unmovedLegacyRecordings) {
         0 -> null
         1 -> "1 older recording could not be moved; the older backup was kept."
@@ -1122,6 +1127,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .getOrDefault(AppAppearance.INK)
             appearanceLoaded = true
 
+            // A32: every stored time is established before anything is loaded, sorted, selected or scheduled.
+            runCatching { repo.establishPrecedence(emptyList(), System.currentTimeMillis()) }
             // Load projects
             projects = try {
                 repo.projectsFlow.first()
@@ -1248,17 +1255,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 voiceMemoService.maintenance = {
                     // A32: this device's own missing times are fixed before anything compares them.
                     repo.establishPrecedence(emptyList(), System.currentTimeMillis())
+                    // An interrupted restore of the older encrypted-sync version first: its originals are
+                    // preserved in their songs, where the migration below adopts them.
+                    val heldRestores = com.rhymeai.app.data.sync.RecordingFileStore.recoverInterruptedRestores(filesDir, onlyHistorical = true)
                     val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir) +
                         voiceMemoService.migrateStaging()
-                    if (left.isNotEmpty() && !leftReported) {
+                    val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
+                    val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
+                    val unreadableTrash = com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles
+                    val notes = listOfNotNull(
+                        left.size.takeIf { it > 0 }?.let { "$it older recording file(s) could not be renamed because a file with their new name already exists. They were left in place." },
+                        unresolved.size.takeIf { it > 0 }?.let { "$it recording move(s) could not be finished. The recordings were kept." },
+                        unreadableTrash.size.takeIf { it > 0 }?.let { "$it file(s) in the recordings Trash have names this version cannot read. They were kept." },
+                        heldRestores.size.takeIf { it > 0 }?.let { "An interrupted restore from an older version could not be finished. Its files were kept." },
+                        setAside.takeIf { it > 0 }?.let { "$it deleted recording(s) were set aside on this device." }
+                    )
+                    if (notes.isNotEmpty() && !leftReported) {
                         leftReported = true
-                        withContext(Dispatchers.Main) {
-                            reportRecordingMaintenance(
-                                "${left.size} older recording file(s) could not be renamed because a file with their new name already exists. They were left in place."
-                            )
-                        }
+                        withContext(Dispatchers.Main) { reportRecordingMaintenance(notes.joinToString(" ")) }
                     }
-                    com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                 }
                 try {
                     voiceMemoService.runMaintenance()

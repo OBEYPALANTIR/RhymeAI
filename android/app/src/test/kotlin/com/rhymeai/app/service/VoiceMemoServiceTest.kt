@@ -54,33 +54,6 @@ class VoiceMemoServiceTest {
         assertEquals(null, VoiceMemoService.parseTrashedName("1700__"))
     }
 
-    @Test
-    fun deleteMemoFileReturnsFalseWhenFileDeleteFails() {
-        val dir = File(tempFolder.root, "voice-memos/proj-delete-failure")
-        dir.mkdirs()
-        File(dir, "child.m4a").createNewFile()
-
-        assertFalse(VoiceMemoService.deleteMemoFile(dir))
-        assertTrue(dir.exists())
-    }
-
-    @Test
-    fun deleteMemoFileReturnsTrueWhenFileDeleteSucceeds() {
-        val file = File(tempFolder.root, "delete-me.m4a").also { it.createNewFile() }
-
-        assertTrue(VoiceMemoService.deleteMemoFile(file))
-        assertFalse(file.exists())
-    }
-
-    @Test
-    fun deleteMemoFileReturnsTrueWhenFileAlreadyGone() {
-        // An already-absent file is not a delete failure — nothing to remove.
-        val file = File(tempFolder.root, "never-existed.m4a")
-        assertFalse(file.exists())
-
-        assertTrue(VoiceMemoService.deleteMemoFile(file))
-    }
-
     // ---------------------------------------------------------------------------
     // Task 3 — rename: displayName
     // ---------------------------------------------------------------------------

@@ -13,6 +13,13 @@ internal object RecordingImportStore {
     class Staged(val file: File, val desiredName: String)
 
     /**
+     * The ownership marker of a staged import (`<file>.import`, holding its id), written before
+     * the first byte is copied and removed with the staged file. A launch check that finds a
+     * staged file with this marker and no import in progress sets it aside, kept.
+     */
+    fun markerFor(staged: File) = File(staged.parentFile, staged.name + ".import")
+
+    /**
      * Copies and validates the audio into `<id>.<ext>` in [directory] (staging, outside the
      * published list). The caller publishes it with its record, or deletes it.
      */
@@ -36,6 +43,7 @@ internal object RecordingImportStore {
                 val temporary = File(directory, RecordingFiles.idFileName(id, "x.$extension"))
                 if (!temporary.createNewFile()) throw IOException("Cannot stage the recording")
                 staged = temporary
+                markerFor(temporary).writeText("$id\n")
                 temporary.outputStream().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var bytesCopied = 0L
@@ -57,7 +65,7 @@ internal object RecordingImportStore {
             staged = null
             return Staged(candidate, "$basename.$extension")
         } finally {
-            staged?.delete()
+            staged?.let { it.delete(); markerFor(it).delete() }
         }
     }
 }

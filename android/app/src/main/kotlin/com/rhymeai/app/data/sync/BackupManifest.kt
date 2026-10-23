@@ -136,7 +136,9 @@ object BackupManifest {
                         sha256 = sha,
                         // A32: an absent time is unknown (0) and gets its first-seen time before any merge.
                         uploadedAt = fields.timeOrUnknown("uploadedAt"),
-                        id = fields.string("id"),
+                        // An early v4 manifest has no recording id: the A21 derived id of its song, name and bytes.
+                        id = if (fields.containsKey("id")) fields.string("id")
+                        else RecordingManifestEntry.legacyRecordingId(fields.string("projectId"), fields.string("fileName"), sha),
                         precedenceRepaired = fields.flag(PRECEDENCE_REPAIRED)
                     )
                 },

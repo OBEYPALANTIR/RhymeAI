@@ -65,12 +65,17 @@ class PlaybackGuardInstrumentedTest {
     private class GatedCatalog : RecordingCatalog {
         @Volatile var records = listOf<RecordingRecord>()
         @Volatile var gateReads = false
+        /** Completed when a gated read is waiting: the play's check has begun. */
+        val readEntered = CompletableDeferred<Unit>()
         val readGate = CompletableDeferred<Unit>()
         @Volatile var gateWrites = false
         val writeEntered = CompletableDeferred<Unit>()
         val writeGate = CompletableDeferred<Unit>()
         override suspend fun recordingRecords(): List<RecordingRecord> {
-            if (gateReads) readGate.await()
+            if (gateReads) {
+                readEntered.complete(Unit)
+                readGate.await()
+            }
             return records
         }
         override suspend fun updateRecordingRecords(transform: (List<RecordingRecord>) -> List<RecordingRecord>) {
@@ -109,6 +114,13 @@ class PlaybackGuardInstrumentedTest {
 
     private fun play(target: VoiceMemo = memo) = instrumentation.runOnMainSync { service.play(target) }
 
+    /** Plays and returns once the play's authorization is inside its gated read. */
+    private fun playUntilChecking() {
+        catalog.gateReads = true
+        play()
+        runBlocking { withTimeout(10_000) { catalog.readEntered.await() } }
+    }
+
     @Test fun aPlayStartsWithTheRecordingsVerifiedId() {
         play()
         settle()
@@ -127,8 +139,7 @@ class PlaybackGuardInstrumentedTest {
     }
 
     @Test fun stopWhileThePlaybackIsStillBeingCheckedWins() {
-        catalog.gateReads = true
-        play()
+        playUntilChecking()
         instrumentation.runOnMainSync { service.stopPlayback() }
         catalog.readGate.complete(Unit)
         settle()
@@ -136,8 +147,7 @@ class PlaybackGuardInstrumentedTest {
     }
 
     @Test fun releaseWhileThePlaybackIsStillBeingCheckedWins() {
-        catalog.gateReads = true
-        play()
+        playUntilChecking()
         instrumentation.runOnMainSync { service.release() }
         catalog.readGate.complete(Unit)
         settle()
@@ -145,8 +155,7 @@ class PlaybackGuardInstrumentedTest {
     }
 
     @Test fun aDeletionWhileThePlaybackIsStillBeingCheckedWins() {
-        catalog.gateReads = true
-        play()
+        playUntilChecking()
         // The tombstone commits after the play's check began.
         deletions = listOf(SyncDeletion("song", "take.m4a", 9_000L, recordingId = id))
         catalog.gateReads = false
@@ -173,9 +182,19 @@ class PlaybackGuardInstrumentedTest {
     }
 
     @Test fun aMoveToTrashStopsPlaybackBeforeTheMoveAndNoPlayStartsWhileItsIntentIsBeingWritten() = runBlocking<Unit> {
+        val started = System.nanoTime()
         play()
         settle()
         assertEquals(memo.file, service.playingFile)
+        // At the hook: what was playing, whether the source was still in place, and what played after.
+        var atHook: Triple<File?, Boolean, File?>? = null
+        var hookAtMillis = 0L
+        RecordingTransitions.beforeBytesMove = { ids ->
+            hookAtMillis = (System.nanoTime() - started) / 1_000_000
+            val before = service.playingFile
+            service.stopPlayingIds(ids)
+            atHook = Triple(before, memo.file.exists(), service.playingFile)
+        }
 
         catalog.gateWrites = true
         // The transition itself (not the service's own pre-trash stop) must stop playback.
@@ -196,6 +215,9 @@ class PlaybackGuardInstrumentedTest {
         assertEquals("$id.m4a", trashed?.name)
         assertEquals(RecordingFiles.trashDirectory(owned, "song").canonicalFile, trashed?.parentFile?.canonicalFile)
         assertNull(service.playingFile)
+        // The take was still playing when the transition stopped it: the stop was the hook's, not the take's end.
+        assertEquals(Triple(memo.file, true, null), atHook)
+        assertTrue("hook ran at ${hookAtMillis}ms, after the take could have ended", hookAtMillis in 1 until 10_000)
     }
 
     @Test fun aQuarantineStopsActivePlaybackBeforeItsBytesMove() = runBlocking<Unit> {

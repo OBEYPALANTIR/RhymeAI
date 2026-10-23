@@ -12,6 +12,9 @@ internal object RecordingFiles {
 
     private const val MEMOS_STAGING_ROOT_DIR = "voice-memos-staging"
     private const val MEMOS_QUARANTINE_ROOT_DIR = "voice-memos-quarantine"
+    private const val MEMOS_JOURNAL_ROOT_DIR = "voice-memos-journal"
+    private const val MEMOS_PARKING_ROOT_DIR = "voice-memos-parking"
+    private const val RESTORE_STAGE_PREFIX = ".recording-restore-"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -47,6 +50,27 @@ internal object RecordingFiles {
     fun quarantineDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(quarantineRoot(filesDir), projectId)
 
+    /** Journals of moves that have no recording record (quarantine, staging, historical recovery). */
+    fun journalRoot(filesDir: File): File =
+        File(filesDir.canonicalFile, MEMOS_JOURNAL_ROOT_DIR)
+
+    /** Where builds before A36 parked a recording while names swapped (`<projectId>/<id>.<ext>`); recovered at launch. */
+    fun parkingRoot(filesDir: File): File =
+        File(filesDir.canonicalFile, MEMOS_PARKING_ROOT_DIR)
+
+    /**
+     * [path], relative to the files folder, when it names a file inside one of the recording
+     * roots (live, Trash, staging, quarantine, parking) without leaving it; null otherwise.
+     */
+    fun containedRecordingFile(filesDir: File, path: String): File? {
+        if (path.isEmpty() || path.startsWith("/") || path.split('/').any { it == ".." || it.isEmpty() }) return null
+        val file = fileAt(filesDir, path)
+        val stageRoot = path.substringBefore('/').takeIf { it.startsWith(RESTORE_STAGE_PREFIX) }?.let { File(filesDir.canonicalFile, it) }
+        val roots = listOfNotNull(memosRoot(filesDir), trashRoot(filesDir), stagingRoot(filesDir), quarantineRoot(filesDir), parkingRoot(filesDir), stageRoot)
+        val canonical = runCatching { file.canonicalFile.toPath() }.getOrNull() ?: return null
+        return file.takeIf { roots.any { root -> canonical.startsWith(root.canonicalFile.toPath()) && canonical != root.canonicalFile.toPath() } }
+    }
+
 
     fun memoDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(memosRoot(filesDir), projectId)
@@ -69,6 +93,13 @@ internal object RecordingFiles {
     /** The recording id a file is named by, or null for any other name (a pre-A36 file). */
     fun idOf(file: File): String? =
         ID_FILE_NAME.matchEntire(file.name)?.takeIf { it.groupValues[2] in SUPPORTED_AUDIO_EXTENSIONS }?.groupValues?.get(1)
+
+    /** A pre-A36 file named [name] in [projectId]'s live folder (historical recovery), never outside it. */
+    fun legacyMemoFile(filesDir: File, projectId: String, name: String): File {
+        SyncIdentity.validateDisplayName(name)
+        require('/' !in name && '\\' !in name && name != "." && name != "..") { "Invalid recording file name" }
+        return requireDescendant(memosRoot(filesDir), File(memoDirectory(filesDir, projectId), name))
+    }
 
     /** The live file of recording [id] in [projectId]. */
     fun memoFile(filesDir: File, projectId: String, id: String, displayName: String): File =
