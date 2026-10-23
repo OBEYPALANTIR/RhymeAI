@@ -232,12 +232,55 @@ below is the contract it must meet, not verified behaviour.
   an allocated name (Android `SyncMerger.assignNames`, iOS
   `SyncMerger.allocateNames`). A device's claim for a recording it holds is its
   own when the user changed it since the device last wrote it (a new recording,
-  or a rename), else the manifest's claim. Back up writes the allocated names and
-  renames no local file; Restore and Import rename local recordings to their
+  or a rename), else the manifest's claim (A35: Android compares with the
+  record's `syncedName`, iOS with a per-recording last-synced claim kept in the
+  backup's UserDefaults, not in iCloud). After each manifest write a device takes
+  the written claim as both its claim and its synced name, so an accepted remote
+  rename is followed instead of flipping back. A device with no baseline for a
+  recording Drive lists (a reinstall or cleared store) follows Drive's claim
+  rather than reading its own name as a rename; an automatic rename (Restore,
+  Import, parking) keeps the recording's claim and changes only its file name.
+  Back up writes the allocated names and renames no local file; Restore and Import rename local recordings to their
   allocated names (a move with its record, never replacing a file, through
   parking when names swap) before placing downloads. A restored or imported
   recording claims its `claimedName`, never its allocated name. A path belongs
   to the recording whose id and bytes the record verified.
+- Precedence on every path (A32): Android also fixes missing times for each
+  duplicate manifest before they are compared, for a conflicting read-back, for
+  the restore offer's probe, and for this device's own state inside the
+  transactional apply; an established time is stored in the local record, so an
+  imported recording, its listing, playback and an export all use it. A v4 entry
+  without `uploadedAt` reads as unknown (0) and gets its first-seen time; a
+  malformed value is refused.
+- Tombstone values (A33): a deletion time must be positive, checked where
+  tombstones are read and where they are written on both platforms; duplicates of
+  one identity count their newest deletion everywhere (Android collapses them at
+  the store and in `SyncMerger.Tombstones`). A song tombstone has neither a
+  recording id nor a file name; an id tombstone without a file name is a recording
+  tombstone and never deletes a song.
+- Intents and deletions (Android): undoing an interrupted move happens only when
+  the bytes at the source still have the record's hash; other bytes there are
+  adopted on their own and nothing is moved. Delete Forever of a recording writes
+  its tombstone after adoption and deletes the bytes only if, under the recording
+  lock, they are still that recording (`RecordingTransitions.deleteVerified`); a
+  song folder is deleted only with valid tombstones and no unreconciled move.
+  iOS stores digests in every move record (quarantine, Trash detach) and verifies
+  them at replay.
+- Takes of any size (Android) go through one journal: the `.take` marker (finish
+  and time) and the publish intent are written before the move, Retry finishes an
+  interrupted move, and a take counts as saved only when its file is in place with
+  the recorded bytes.
+- Ownership (Android): every move that relies on owning a file hashes it under the
+  lock; size, modification time and the record row are never proof, so a
+  same-length rewrite keeps its old time but not its old identity.
+- A manifest or archive listing one recording id twice is refused before anything
+  is applied. Restore and Import reconcile again right before their transactional
+  apply and stop if that fails.
+  iOS keeps an oversized journal (source and a completed flag) and finishes an
+  interrupted move at retry.
+- Import: both platforms find archive audio by recording id and verify it before
+  writing it under the allocated name; iOS reports missing audio instead of
+  skipping it.
 - Playback (A28): Android starts playback under the recording lock with a
   verified id (adopting a file seen for the first time), and every transition
   that moves bytes calls `RecordingTransitions.beforeBytesMove` under the same
