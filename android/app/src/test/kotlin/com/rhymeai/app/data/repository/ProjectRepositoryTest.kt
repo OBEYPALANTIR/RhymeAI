@@ -935,7 +935,7 @@ class ProjectRepositoryTest {
             )
             // Invalid names fail before anything is written, so the file stays in Trash.
             assertFailsWith<IllegalArgumentException> {
-                repository.recordRecordingDeletion("song-1", "../escape.m4a", recording.id, 50L)
+                repository.recordRecordingDeletion("song-1", "bad\u0000name.m4a", recording.id, 50L)
             }
             repository.recordRecordingDeletion("song-1", recording.fileName, recording.id, 5_000L)
 

@@ -77,7 +77,7 @@ data class SyncDeletion(
 
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
-        fileName?.let(SyncIdentity::validateFileName)
+        fileName?.let(SyncIdentity::validateDisplayName)
         recordingId?.let(SyncIdentity::validateRecordingId)
         // A33: a deletion time must be a real time; zero or negative never wins anything.
         require(deletedAt > 0L) { "Invalid deletion time" }
@@ -150,7 +150,7 @@ internal object SyncIdentity {
 
     private const val MAX_PROJECT_ID_BYTES = 128
     const val MAX_RECORDING_FILE_NAME_BYTES = 240
-    private val illegalRecordingCharacters = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
+    const val MAX_DISPLAY_NAME_BYTES = 1024
 
     fun validateProjectId(value: String) {
         require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= MAX_PROJECT_ID_BYTES) {
@@ -160,13 +160,14 @@ internal object SyncIdentity {
         require(value.none { it.isISOControl() || it == '/' || it == '\\' }) { "Invalid project identifier" }
     }
 
-    fun validateFileName(value: String) {
-        require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= MAX_RECORDING_FILE_NAME_BYTES) {
-            "Invalid recording filename"
-        }
-        require(value == value.trim() && value.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in com.rhymeai.app.data.recording.RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) { "Invalid recording filename" }
-        require(value.none { it.isISOControl() || it in illegalRecordingCharacters }) {
-            "Invalid recording filename"
+    /**
+     * A display name (A36/A39) is metadata, never a path: any non-empty text without NUL, at
+     * most [MAX_DISPLAY_NAME_BYTES] UTF-8 bytes. Separators, long names and names without an
+     * extension are allowed; files are named by id and archive names are allocated (A39).
+     */
+    fun validateDisplayName(value: String) {
+        require(value.isNotEmpty() && '\u0000' !in value && value.toByteArray(Charsets.UTF_8).size <= MAX_DISPLAY_NAME_BYTES) {
+            "Invalid recording name"
         }
     }
 }
@@ -215,7 +216,7 @@ data class RecordingManifestEntry(
 
     fun validate() {
         SyncIdentity.validateProjectId(projectId)
-        SyncIdentity.validateFileName(fileName)
+        SyncIdentity.validateDisplayName(fileName)
         SyncIdentity.validateRecordingId(id)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
         require(sizeBytes >= 0L) { "Invalid recording size" }

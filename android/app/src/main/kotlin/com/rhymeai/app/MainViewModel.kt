@@ -128,7 +128,7 @@ internal object BackupTestHooks {
     @Volatile var authorizer: DriveAuthorizer? = null
 }
 
-internal enum class BackupAction { Connect, BackUp, Restore }
+internal enum class BackupAction { Connect, BackUp, Restore, Migrate }
 
 internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
     "Your older encrypted backup was moved to the new format.".takeIf { result.migratedLegacyBackup },
@@ -709,6 +709,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val backupMutex = kotlinx.coroutines.sync.Mutex()
     private var pendingAuthAction: BackupAction? = null
+
+    /** The passphrase of a migration waiting for Drive consent: memory only, cleared when used or replaced. */
+    private var pendingMigrationPassphrase: String? = null
     private val backupScheduler = BackupScheduler(
         scope = viewModelScope,
         clock = System::currentTimeMillis,
@@ -797,6 +800,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (result) {
                 SyncResult.WrongPassphrase -> migrationError = "That passphrase did not open the older backup."
                 is SyncResult.Success -> handleBackupResult(result, BackupAction.BackUp, interactive = true)
+                // Consent first; the migration resumes with this passphrase once Drive access is granted.
+                is SyncResult.AuthorizationRequired -> {
+                    handleBackupResult(result, BackupAction.Migrate, interactive = true)
+                    pendingMigrationPassphrase = passphrase
+                }
                 else -> {
                     handleBackupResult(result, BackupAction.BackUp, interactive = true)
                     migrationError = (backupStatus as? BackupStatus.Failed)?.reason ?: "The older backup could not be moved. Try again."
@@ -807,12 +815,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun retryAfterDriveAuthorization() {
         val action = actionAfterAuthorization(pendingAuthAction, BackupAction.BackUp)
+        val passphrase = pendingMigrationPassphrase
         pendingAuthAction = null
+        pendingMigrationPassphrase = null
         syncPendingIntent = null
         when (action) {
             BackupAction.Connect -> connectDrive()
             BackupAction.BackUp -> startBackup(interactive = true)
             BackupAction.Restore -> restoreFromBackup()
+            BackupAction.Migrate -> if (passphrase != null) migrateLegacyBackup(passphrase) else startBackup(interactive = true)
         }
     }
 
@@ -842,6 +853,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val retry = when (result) {
             is SyncResult.Success -> {
                 pendingAuthAction = null
+                pendingMigrationPassphrase = null
                 val at = System.currentTimeMillis()
                 lastBackupAt = at
                 backupPrefs.edit { putLong(KEY_LAST_BACKUP, at) }
@@ -853,6 +865,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is SyncResult.AuthorizationRequired -> {
                 if (interactive) {
                     pendingAuthAction = action
+                    pendingMigrationPassphrase = null
                     syncPendingIntent = result.pendingIntent
                     backupStatus = if (isBackupConnected()) BackupStatus.Connected(lastBackupAt) else BackupStatus.NotConnected
                 } else {
@@ -914,7 +927,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupBusyLabel = "Exporting…"
         viewModelScope.launch {
             backupNotice = try {
-                // Live recordings still awaiting their A36 name: left out of the export and reported.
+                // Recordings (in songs or the Trash Bin) still awaiting their A36 name: left out and reported.
                 var notExported = 0
                 val summary = withContext(Dispatchers.IO) {
                     val base = repo.snapshotLocalSyncBase()
@@ -922,8 +935,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val notListed = mutableListOf<java.io.File>()
                     val snapshot = snapshotLocalRecordings(repo, app.filesDir, base.pendingIds, moveFiles = false, notListed = notListed)
                         .filterNot { it.inTrash }
-                    val liveRoot = com.rhymeai.app.data.recording.RecordingFiles.memosRoot(app.filesDir)
-                    notExported = notListed.count { it.parentFile?.parentFile == liveRoot }
+                    notExported = notListed.size
                     // A32: an export carries established precedence times, never an unknown one.
                     val established = repo.establishPrecedence(listOf(base.blob.copy(recordings = snapshot.map { it.entry })), System.currentTimeMillis()).single()
                     val byId = established.recordings.associateBy { it.id }
@@ -945,6 +957,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (notExported > 0) {
                         append(" ${plural(notExported, "recording")} with an old file name left out. Reopen the app to finish updating ${if (notExported == 1) "it" else "them"}.")
                     }
+                    append(" Recordings in the Trash Bin, takes waiting to be saved and recordings set aside are never exported.")
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

@@ -385,8 +385,15 @@ class VoiceMemoService(private val context: Context) {
      */
     internal suspend fun saveListedTake(listed: WaitingTake): Boolean {
         val id = listed.id ?: throw RecordingNotSavedException(listed.projectId, java.io.IOException("The take's marker could not be read"))
+        // Finding the take, inspecting it and updating its marker hold the recording lock, so
+        // staging migration cannot move it in between (it moves only under that lock).
+        val take = RecordingTransitions.namespace.withLock { prepareTake(listed, id) }
+        return publishTake(take, id) != null
+    }
+
+    private fun prepareTake(listed: WaitingTake, id: String): WaitingTake {
         val file = currentTakeFile(listed.file, id)
-        val take = if (listed.finished) WaitingTake(file, listed.projectId, id, listed.recordedAt, finished = true) else when (inspectFinalized(file)) {
+        return if (listed.finished) WaitingTake(file, listed.projectId, id, listed.recordedAt, finished = true) else when (inspectFinalized(file)) {
             Inspection.FINALIZED -> {
                 try {
                     writeMarker(file, id, STATE_FINISHED, listed.recordedAt)
@@ -402,7 +409,6 @@ class VoiceMemoService(private val context: Context) {
             Inspection.CANNOT_INSPECT ->
                 throw RecordingNotSavedException(listed.projectId, java.io.IOException("The recording could not be read"))
         }
-        return publishTake(take, id) != null
     }
 
     /** [file], or its id-named successor in the same staging folder once migration moved it. */
