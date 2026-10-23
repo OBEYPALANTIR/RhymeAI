@@ -1493,7 +1493,7 @@ extension RecordingLibraryTests {
         let store = try makeUncheckedStore(onDisk: true)
         let context = store.container.mainContext
         let row = Recording(projectId: "song", displayName: "take.m4a", audio: Data([7]), recordedAt: Date(timeIntervalSince1970: 1_000))
-        row.legacyClaimedName = "Chorus idea.m4a"
+        row.claimedName = "Chorus idea.m4a"
         context.insert(row)
         try context.save()
         let defaults = try #require(UserDefaults(suiteName: "RecordingLibraryTests-\(store.root.deletingLastPathComponent().lastPathComponent)"))
@@ -1503,7 +1503,7 @@ extension RecordingLibraryTests {
         try await store.library.reconcile(context: context)
 
         let kept = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
-        #expect(kept.displayName == "Chorus idea.m4a" && kept.legacyClaimedName.isEmpty && kept.displayNameChanged)
+        #expect(kept.displayName == "Chorus idea.m4a" && kept.claimedName.isEmpty && kept.displayNameChanged)
         #expect(defaults.object(forKey: "backup-synced-claims") == nil)
         #expect(defaults.object(forKey: "recording-library-mirrored-keys") == nil)
     }
@@ -1642,8 +1642,9 @@ extension RecordingLibraryTests {
     /// T1.15: a recording removed elsewhere is detached to the Trash under its id; a
     /// crash at the move leaves the record with its length, the replay stops the id
     /// and refuses a source whose length changed.
-    @Test(arguments: [false, true])
-    func aDetachKilledAtItsMoveIsReplayedOnlyForItsOwnBytes(lengthChanges: Bool) async throws {
+    @Test(arguments: ["none", "bytes", "recordedLength"])
+    func aDetachKilledAtItsMoveIsReplayedOnlyForItsOwnBytes(change: String) async throws {
+        let lengthChanges = change != "none"
         let store = try await makeStore()
         let context = store.container.mainContext
         let take = try published(Data([6, 6]), in: store)
@@ -1661,7 +1662,13 @@ extension RecordingLibraryTests {
         }
         let record = try #require(try RecordingFiles.readPendingMoves(for: store.root).detach.first)
         #expect(crashed.value && record.recordingId == take.id && record.bytes == 2)
-        if lengthChanges { try Data([6, 6, 6]).write(to: take.url) }
+        if change == "bytes" { try Data([6, 6, 6]).write(to: take.url) }
+        if change == "recordedLength" {
+            // The same bytes and digest, but the record says another length.
+            var moves = try RecordingFiles.readPendingMoves(for: store.root)
+            moves.detach[0].bytes = 3
+            try RecordingFiles.writePendingMoves(moves, for: store.root)
+        }
 
         let relaunched = try reopen(store)
         let stopped = HookBox<Set<String>>([])
@@ -1670,7 +1677,7 @@ extension RecordingLibraryTests {
 
         let destination = URL(fileURLWithPath: record.destination)
         if lengthChanges {
-            #expect(try Data(contentsOf: take.url) == Data([6, 6, 6]))
+            #expect(try Data(contentsOf: take.url) == (change == "bytes" ? Data([6, 6, 6]) : Data([6, 6])))
             #expect(!FileManager.default.fileExists(atPath: destination.path))
         } else {
             #expect(stopped.value.contains(take.id))
@@ -1692,8 +1699,9 @@ extension RecordingLibraryTests {
         let stopped = HookBox<Set<String>>([])
         store.library.willMove = { ids, _ in stopped.value.formUnion(ids) }
         let partialStep = HookBox<(name: String, folder: String, journalled: Bool)?>(nil)
-        let finalStep = HookBox<(stopped: Bool, source: String)?>(nil)
+        let finalStep = HookBox<(stopped: Bool, source: String, persisted: String?)?>(nil)
         let root = store.root
+        let storeURL = scratch(store).appendingPathComponent("library.store")
 
         try await withBoundaryHook(scope: scratch(store), { point, source, target in
             guard point == .beforeCheck, let target else { return }
@@ -1702,7 +1710,13 @@ extension RecordingLibraryTests {
                 partialStep.value = (source.lastPathComponent, source.deletingLastPathComponent().lastPathComponent,
                                      journal.moves.contains { $0.recordingId == id && $0.destination == RecordingFiles.canonicalPath(target) && $0.bytes == 2 })
             } else if target.lastPathComponent == "\(id).m4a" {
-                finalStep.value = (stopped.value.contains(id), source.path)
+                // What a relaunch would read now: a new container on the store file.
+                let persisted = MainActor.assumeIsolated { () -> String? in
+                    let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+                    guard let fresh = try? ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)]) else { return nil }
+                    return (try? fresh.mainContext.fetch(FetchDescriptor<Recording>()))?.first { $0.id == id }?.pendingFrom
+                }
+                finalStep.value = (stopped.value.contains(id), source.path, persisted)
             }
         }) {
             try await store.library.reconcile(context: context)
@@ -1713,6 +1727,7 @@ extension RecordingLibraryTests {
         // The run saved the staged source on the row before the move (read from disk).
         let source = try #require(finalStep.value?.source)
         #expect(URL(fileURLWithPath: source).lastPathComponent == "\(id).m4a")
+        #expect(finalStep.value?.persisted.map { RecordingFiles.canonicalPath(URL(fileURLWithPath: $0)) } == RecordingFiles.canonicalPath(URL(fileURLWithPath: source)))
         #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(id).m4a")) == Data([8, 8]))
         #expect(try RecordingFiles.readStagingJournal(for: store.root).moves.isEmpty)
     }
@@ -1825,7 +1840,8 @@ extension RecordingLibraryTests {
         let store = try await makeStore()
         let context = store.container.mainContext
         let id = uuid()
-        let times: [(String, TimeInterval, Bool)] = recordedFirst ? [("a.m4a", 5_000, false), ("b.m4a", 1_000, true)] : [("a.m4a", 1_000, true), ("b.m4a", 5_000, false)]
+        // The repaired time is the later one: only the repair rule, not "latest", picks the recorded one.
+        let times: [(String, TimeInterval, Bool)] = recordedFirst ? [("a.m4a", 1_000, false), ("b.m4a", 5_000, true)] : [("a.m4a", 5_000, true), ("b.m4a", 1_000, false)]
         for (name, seconds, repaired) in times {
             let row = Recording(id: id, projectId: "song", displayName: name, audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
             row.trashedAt = Date(timeIntervalSince1970: seconds)
@@ -1838,22 +1854,23 @@ extension RecordingLibraryTests {
 
         let kept = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
         #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
-        #expect(kept.trashedAt == Date(timeIntervalSince1970: 5_000) && !kept.trashedAtRepaired)
+        #expect(kept.trashedAt == Date(timeIntervalSince1970: 1_000) && !kept.trashedAtRepaired)
     }
 
     /// T2.27: two Trash files of one identity, one named with no time and one with a
     /// recorded time, are one recording with the recorded time.
     @Test func duplicateTrashFilesTakeTheRecordedTimeOverAMissingOne() async throws {
         let store = try await makeStore()
-        let zero = try write(Data([7]), "song", "0__take.m4a", root: store.trash, modified: 0)
-        let timed = try write(Data([7]), "song", "5000__take.m4a", root: store.trash, modified: 0)
-        _ = (zero, timed)
+        // One copy has no date either; the other is dated: its date is a recorded time.
+        try write(Data([7]), "song", "0__take.m4a", root: store.trash, modified: 0)
+        try write(Data([7]), "song", "5000__take.m4a", root: store.trash, modified: 4)
 
         try await store.library.reconcile(context: store.container.mainContext)
 
         let rows = try store.container.mainContext.fetch(FetchDescriptor<Recording>())
         #expect(rows.count == 1)
         #expect(rows.first?.trashedAt == Date(timeIntervalSince1970: 5) && rows.first?.trashedAtRepaired == false)
+        #expect(rows.first?.precedenceTime == Date(timeIntervalSince1970: 4) && rows.first?.precedenceRepaired == false)
     }
 
     /// T2.25: a recording removed elsewhere whose verified record has no time is
@@ -1926,7 +1943,7 @@ extension RecordingLibraryTests {
 
     /// T3.23: a move record that is valid JSON with an invalid field (a relative
     /// path, a bad digest, a negative length or a zero time) stops the run; nothing moves.
-    @Test(arguments: ["path", "digest", "bytes", "time"])
+    @Test(arguments: ["path", "digest", "bytes", "time", "id"])
     func aMoveRecordWithAnInvalidFieldStopsTheRun(field: String) async throws {
         let store = try await makeStore()
         let file = try write(Data([3]), "song", "\(uuid()).m4a", root: store.root)
@@ -1935,7 +1952,8 @@ extension RecordingLibraryTests {
         let digest = field == "digest" ? "XYZ" : sha
         let bytes = field == "bytes" ? -1 : 1
         let at = field == "time" ? 0 : 1_700_000_000_000
-        let record = #"{"quarantine":[],"detach":[{"recordingId":"\#(uuid())","source":"\#(path)","destination":"\#(store.trash.path)/song/a.m4a","sha256":"\#(digest)","displayName":"a.m4a","at":\#(at),"detachedAt":1700000000000,"bytes":\#(bytes)}],"adopt":[]}"#
+        let recordingId = field == "id" ? "../escape" : uuid()
+        let record = #"{"quarantine":[],"detach":[{"recordingId":"\#(recordingId)","source":"\#(path)","destination":"\#(store.trash.path)/song/a.m4a","sha256":"\#(digest)","displayName":"a.m4a","at":\#(at),"detachedAt":1700000000000,"bytes":\#(bytes)}],"adopt":[]}"#
         let url = RecordingFiles.quarantineRoot(for: store.root).appendingPathComponent("pending-moves.json")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(record.utf8).write(to: url)
@@ -1960,7 +1978,10 @@ extension RecordingLibraryTests {
         let store = try await makeStore()
         let context = store.container.mainContext
         let url = try store.library.publishFinished(try stage(Data([6, 1])), projectId: "song", preferredName: "take.m4a", origin: .recorded)
-        suite(store).set(["not": "entries"], forKey: "recording-library-verified-ids")
+        // The take's own entry is intact; another entry is damaged.
+        var registry = try #require(suite(store).dictionary(forKey: "recording-library-verified-ids") as? [String: [String: Any]])
+        registry[uuid()] = ["at": "not a time"]
+        suite(store).set(registry, forKey: "recording-library-verified-ids")
         context.delete(try #require(try context.fetch(FetchDescriptor<Recording>()).first))
         try context.save()
 
@@ -1970,6 +1991,17 @@ extension RecordingLibraryTests {
         #expect(try RecordingFiles.readPendingMoves(for: store.root).detach.isEmpty)
         #expect(suite(store).object(forKey: "recording-library-verified-ids.damaged") != nil)
         #expect(!store.library.stateIssues.isEmpty)
+
+        // The record is rebuilt from the rows, but this session does not trust it for
+        // removals: another recording removed elsewhere now stays where it is too.
+        let second = try store.library.publishFinished(try stage(Data([6, 2])), projectId: "song", preferredName: "other.m4a", origin: .recorded)
+        try await store.library.reconcile(context: context)
+        context.delete(try #require(try context.fetch(FetchDescriptor<Recording>()).first { $0.displayName == "other.m4a" }))
+        try context.save()
+        try await store.library.reconcile(context: context)
+        _ = second
+        #expect(try RecordingFiles.readPendingMoves(for: store.root).detach.isEmpty)
+        #expect(names(store.trash.appendingPathComponent("song")).isEmpty, "nothing was moved to the Trash as removed")
     }
 
     /// T3.33: a damaged first-seen record is set aside and reported, never read as empty silently.
@@ -2235,5 +2267,68 @@ extension RecordingLibraryTests {
 
         #expect(row.displayName == "Recording.m4a")
         #expect(try Data(contentsOf: store.root.appendingPathComponent("song/\(row.id).m4a")) == Data([3]))
+    }
+}
+
+/// Round 15.
+extension RecordingLibraryTests {
+    /// T2.26: a Trash row with a repaired time and a copy of the same recording in a
+    /// Trash file with no time: the file's time is normalized (to a later repair)
+    /// before ranking, so the smaller repair stands.
+    @Test func aTimelessTrashFileIsNormalizedBeforeItIsRankedAgainstARepairedRow() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let audio = Data([5, 1])
+        let id = derivedId("song", "take.m4a", audio)
+        let row = Recording(id: id, projectId: "song", displayName: "take.m4a", audio: audio, recordedAt: Date(timeIntervalSince1970: 10))
+        row.trashedAt = Date(timeIntervalSince1970: 3_000)
+        row.trashedAtRepaired = true
+        context.insert(row)
+        try context.save()
+        try await store.library.reconcile(context: context)
+        try write(audio, "song", "0__take.m4a", root: store.trash, modified: 0)
+
+        try await store.library.reconcile(context: context)
+
+        let rows = try context.fetch(FetchDescriptor<Recording>())
+        #expect(rows.count == 1)
+        #expect(rows.first?.trashedAt == Date(timeIntervalSince1970: 3_000) && rows.first?.trashedAtRepaired == true)
+    }
+
+    /// SHOULD 4, T3.2: a row an earlier build synced arrives with its name only in the
+    /// field it used (`fileName`); it keeps that name.
+    @Test func aRowSyncedByAnEarlierBuildKeepsItsName() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let row = Recording(projectId: "song", displayName: "", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 10))
+        row.fileName = "Old take.m4a"
+        let claimed = Recording(projectId: "song", displayName: "", audio: Data([3]), recordedAt: Date(timeIntervalSince1970: 10))
+        claimed.fileName = "1700000000000.m4a"
+        claimed.claimedName = "Chorus.m4a"
+        context.insert(row)
+        context.insert(claimed)
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(row.displayName == "Old take.m4a" && row.fileName == "Old take.m4a")
+        #expect(claimed.displayName == "Chorus.m4a" && claimed.claimedName.isEmpty)
+    }
+
+    /// T5.21: a row whose audio cannot be staged (the staging folder cannot be made)
+    /// is reported, and the row and its audio stay.
+    @Test func audioThatCannotBeStagedIsReportedAndKept() async throws {
+        let store = try await makeStore()
+        let context = store.container.mainContext
+        let staging = RecordingFiles.stagingRoot(for: store.root)
+        try? FileManager.default.removeItem(at: staging)
+        try Data([0]).write(to: staging)
+        context.insert(Recording(projectId: "song", displayName: "waiting.m4a", audio: Data([4, 4]), recordedAt: Date(timeIntervalSince1970: 10)))
+        try context.save()
+
+        try await store.library.reconcile(context: context)
+
+        #expect(store.library.unmaterialized == ["waiting.m4a"])
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.audio) == [Data([4, 4])])
     }
 }

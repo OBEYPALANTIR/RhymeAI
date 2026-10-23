@@ -446,13 +446,13 @@ struct SongRecordingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("failedRecordings")
                 // Deleting is the user's explicit choice, confirmed first (T5.12).
                 Button("Delete", role: .destructive) { failedTakeToDelete = failedTakes.first }
                     .font(.footnote.weight(.semibold))
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
                     .accessibilityIdentifier("deleteFailedRecording")
             }
-            .accessibilityIdentifier("failedRecordings")
             .confirmationDialog("Delete this recording that could not be saved?", isPresented: Binding(
                 get: { failedTakeToDelete != nil }, set: { if !$0 { failedTakeToDelete = nil } }
             ), titleVisibility: .visible) {

@@ -1003,7 +1003,11 @@ final class BackupService {
         if restore {
             // The commit resolves the current local state with the original inputs, once.
             let applied = try apply(inputs: inputs, to: modelContext, report: &report)
-            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(try applied.recordings.filter(listable), remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
+            // Nothing a tombstone without a time names is brought back (T5.24).
+            let held = try library.held(in: modelContext)
+            (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(
+                try applied.recordings.filter(listable).filter { !held.contains(projectId: $0.projectId, recordingId: $0.id, displayName: $0.fileName) },
+                remote: remoteRecordings, modelContext: modelContext, accessToken: accessToken)
             report.damagedRecordings = damagedOnDrive
             try await library.reconcile(context: modelContext)
         }
@@ -1491,7 +1495,8 @@ final class BackupService {
         let localIds = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
         let importedById = Dictionary(imported.recordings.map { ($0.id, $0) }) { first, _ in first }
         let exportNames = RecordingBackupManifest.exportNames(imported.recordings)
-        for entry in merged.recordings where !localIds.contains(entry.id) {
+        let held = try library.held(in: modelContext)
+        for entry in merged.recordings where !localIds.contains(entry.id) && !held.contains(projectId: entry.projectId, recordingId: entry.id, displayName: entry.fileName) {
             guard let original = importedById[entry.id], let name = exportNames[entry.id] else { continue }
             guard let audio = files["recordings/\(original.projectId)/\(name)"] else {
                 if BackupArchive.isZip(data) { report.damagedRecordings.append(original.fileName) }
@@ -1715,10 +1720,12 @@ final class BackupService {
     }
 
     @discardableResult
-    private func apply(inputs: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport) throws -> SyncBlob {
+    private func apply(inputs raw: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport) throws -> SyncBlob {
         // After the network waits: the recordings' last check must still hold, and the
         // tombstones and move record read now, before anything changes (finding 7).
         try library.requireChecked(modelContext)
+        // Times are fixed once (A32); resolution and preservation see the same values.
+        let inputs = raw.map(fixingPrecedence)
         let blob = try resolve(inputs, with: modelContext)
         try blob.validate()
         // A41: every repaired song this apply removes (held here or in an input) is
@@ -1733,6 +1740,9 @@ final class BackupService {
             .subtracting(mergedActiveIds).subtracting(mergedTrashIds)
 
         for deletion in blob.deletions { try DeletionStore.upsert(deletion, in: modelContext) }
+        // A song a tombstone without a time still names (none with a time superseded
+        // it above) is left exactly as it is here: not changed, removed or brought back (T5.24).
+        let held = try library.held(in: modelContext)
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
         var removedFiles: [(url: URL, sha256: String, recordingId: String)] = []
@@ -1766,7 +1776,7 @@ final class BackupService {
             if row.displayName != entry.fileName { row.displayName = entry.fileName }
         }
 
-        for project in blob.projects {
+        for project in blob.projects where !held.songs.contains(project.id) {
             if let existing = activeById[project.id] {
                 existing.title = project.title
                 existing.lyrics = project.lyrics
@@ -1781,7 +1791,7 @@ final class BackupService {
             }
         }
 
-        for trash in blob.trashed {
+        for trash in blob.trashed where !held.songs.contains(trash.id) {
             if let existing = trashById[trash.id] {
                 existing.title = trash.title
                 existing.lyrics = trash.lyrics
@@ -1799,10 +1809,10 @@ final class BackupService {
             }
         }
 
-        for (id, project) in activeById where mergedTrashIds.contains(id) && !mergedActiveIds.contains(id) {
+        for (id, project) in activeById where mergedTrashIds.contains(id) && !mergedActiveIds.contains(id) && !held.songs.contains(id) {
             modelContext.delete(project)
         }
-        for (id, trash) in trashById where mergedActiveIds.contains(id) && !mergedTrashIds.contains(id) {
+        for (id, trash) in trashById where mergedActiveIds.contains(id) && !mergedTrashIds.contains(id) && !held.songs.contains(id) {
             modelContext.delete(trash)
         }
         for (id, project) in activeById where deletedProjectIds.contains(id) {

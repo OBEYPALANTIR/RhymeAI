@@ -8,6 +8,9 @@ enum UITestFlags {
     static let seedRewriteSelection = "--ui-test-seed-rewrite-selection"
     static let seedRewriteLoading = "--ui-test-seed-rewrite-loading"
     static let seedTrashSong = "--ui-test-seed-trash-song"
+    /// Opens a song with one take that could not be saved (its audio kept), so the
+    /// confirmed Delete can be exercised.
+    static let seedFailedTake = "--ui-test-seed-failed-take"
     static let forceRewriteBar = "--ui-test-force-rewrite-bar"
     static let fakeVoiceRecording = "--ui-test-fake-voice-recording"
     static let seedSuggestions = "--ui-test-seed-suggestions"

@@ -14,11 +14,14 @@ final class Recording {
     var id: String = ""
     var projectId: String = ""
     /// The name the user sees, with its extension (A36). Two recordings may share it.
-    /// Stores from before A36 kept the file's name here as `fileName`; it carries over.
-    @Attribute(originalName: "fileName") var displayName: String = ""
-    /// The name an owner chose in builds from before A36 (`claimedName`), kept only so
-    /// an upgrade can carry it into `displayName`; empty once carried over.
-    @Attribute(originalName: "claimedName") var legacyClaimedName: String = ""
+    var displayName: String = ""
+    /// The field builds before A36 kept the name in. It keeps its own name (in the
+    /// store and in CloudKit), so a record those builds synced arrives with it, and
+    /// an empty `displayName` is filled from it; it is never cleared.
+    var fileName: String = ""
+    /// The name an owner chose in builds from before A36, under its own field name
+    /// for the same reason; carried into `displayName`, then emptied.
+    var claimedName: String = ""
     var sha256: String = ""
     var bytes: Int64 = 0
     var recordedAt: Date = Date()
@@ -630,13 +633,14 @@ final class RecordingLibrary: RecordingPublishing {
         for row in rows {
             // A row whose name arrived empty (an older record synced without the
             // renamed field) gets a name rather than being refused; its audio stays.
-            if row.displayName.isEmpty, row.legacyClaimedName.isEmpty {
-                row.displayName = "Recording.m4a"
+            if row.displayName.isEmpty, row.claimedName.isEmpty {
+                // The name an earlier build wrote, else a name of its own.
+                row.displayName = (try? SyncIdentity.validateDisplayName(row.fileName)) != nil ? row.fileName : "Recording.m4a"
                 changed = true
             }
-            if !row.legacyClaimedName.isEmpty {
-                if row.displayName != row.legacyClaimedName { row.displayName = row.legacyClaimedName }
-                row.legacyClaimedName = ""
+            if !row.claimedName.isEmpty {
+                if row.displayName != row.claimedName { row.displayName = row.claimedName }
+                row.claimedName = ""
                 changed = true
             }
             if let name = adoptions?[row.id], !row.displayNameChanged, (try? SyncIdentity.validateDisplayName(name)) != nil, row.displayName != name {
@@ -1549,20 +1553,42 @@ final class RecordingLibrary: RecordingPublishing {
 
     // MARK: What the lists show
 
+    /// What tombstones without a time name (T5.24): recording ids, song ids, and
+    /// pre-id names (`projectId/name`). Kept as they are, not listed or played.
+    struct Held {
+        var ids = Set<String>(), songs = Set<String>(), names = Set<String>()
+        func contains(projectId: String, recordingId: String?, displayName: String) -> Bool {
+            songs.contains(projectId) || recordingId.map(ids.contains) == true || names.contains("\(projectId)/\(displayName)")
+        }
+    }
+
+    func held(in context: ModelContext) throws -> Held {
+        var held = Held()
+        for deletion in try DeletionStore.undated(in: context) {
+            if let id = deletion.recordingId { held.ids.insert(id) }
+            else if let name = deletion.fileName { held.names.insert("\(deletion.projectId)/\(name)") }
+            else { held.songs.insert(deletion.projectId) }
+        }
+        return held
+    }
+
     /// Live recordings, newest first: rows, files over the cap, and files left
     /// for attention. Nothing hidden by a recorded move is listed (A28).
     func liveRecordings(projectId: String? = nil, in context: ModelContext) throws -> [RecordingListItem] {
         let hidden = try RecordingFiles.readPendingMoves(for: memosRoot).listingHidden
+        let held = try held(in: context)
         var items: [RecordingListItem] = []
         var listed = Set<String>()
         for row in try context.fetch(FetchDescriptor<Recording>()) where row.trashedAt == nil && (projectId == nil || row.projectId == projectId) {
             guard let file = url(of: row), try RecordingFiles.exists(file), !hidden.contains(RecordingFiles.canonicalPath(file)) else { continue }
-            listed.insert(RecordingFiles.canonicalPath(file))
+            guard listed.insert(RecordingFiles.canonicalPath(file)).inserted,
+                  !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { continue }
             items.append(.init(url: file, projectId: row.projectId, displayName: row.displayName, date: row.recordedAt))
         }
         for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.trashedAt == nil && (projectId == nil || entry.projectId == projectId) {
             let file = oversizedURL(id: id, entry: entry)
-            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
+            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted,
+                  !held.contains(projectId: entry.projectId, recordingId: id, displayName: entry.fileName) else { continue }
             items.append(.init(url: file, projectId: entry.projectId, displayName: entry.fileName, date: Date(millisecondsSince1970: entry.finishedAt)))
         }
         let blocked = try blockedPaths()
@@ -1579,6 +1605,7 @@ final class RecordingLibrary: RecordingPublishing {
     func trashedRecordings(in context: ModelContext) throws -> [TrashedVoiceMemo] {
         let moves = try RecordingFiles.readPendingMoves(for: memosRoot)
         let hidden = moves.listingHidden
+        let held = try held(in: context)
         var items: [TrashedVoiceMemo] = []
         var listed = Set<String>()
         // A time missing on a row or record that arrived since the last check is fixed
@@ -1586,12 +1613,14 @@ final class RecordingLibrary: RecordingPublishing {
         for row in try context.fetch(FetchDescriptor<Recording>()) where row.trashedAt != nil {
             if establishTimes(row) { try save(context) }
             guard let file = url(of: row), try RecordingFiles.exists(file), !hidden.contains(RecordingFiles.canonicalPath(file)) else { continue }
-            listed.insert(RecordingFiles.canonicalPath(file))
+            guard listed.insert(RecordingFiles.canonicalPath(file)).inserted,
+                  !held.contains(projectId: row.projectId, recordingId: row.id, displayName: row.displayName) else { continue }
             items.append(TrashedVoiceMemo(url: file, projectId: row.projectId, originalName: row.displayName, deletedAt: row.trashedAt!, recordingId: row.id))
         }
         for entry in moves.detach where entry.source.isEmpty {
             let file = URL(fileURLWithPath: entry.destination)
-            guard try RecordingFiles.exists(file), listed.insert(entry.destination).inserted else { continue }
+            guard try RecordingFiles.exists(file), listed.insert(entry.destination).inserted,
+                  !held.contains(projectId: file.deletingLastPathComponent().lastPathComponent, recordingId: entry.recordingId, displayName: entry.displayName) else { continue }
             items.append(TrashedVoiceMemo(url: file, projectId: file.deletingLastPathComponent().lastPathComponent, originalName: entry.displayName,
                                           deletedAt: Date(millisecondsSince1970: entry.detachedAt), recordingId: entry.recordingId))
         }
@@ -1602,7 +1631,8 @@ final class RecordingLibrary: RecordingPublishing {
                 try OversizedRecordings.record(id: id, entry: entry, for: memosRoot)
             }
             let file = oversizedURL(id: id, entry: entry)
-            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted else { continue }
+            guard try oversizedHolds(entry, at: file), listed.insert(RecordingFiles.canonicalPath(file)).inserted,
+                  !held.contains(projectId: entry.projectId, recordingId: id, displayName: entry.fileName) else { continue }
             items.append(TrashedVoiceMemo(url: file, projectId: entry.projectId, originalName: entry.fileName,
                                           deletedAt: Date(millisecondsSince1970: entry.trashedAt!), recordingId: id))
         }
