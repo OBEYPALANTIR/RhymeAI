@@ -1334,4 +1334,24 @@ class ProjectRepositoryTest {
         assertTrue(repository.syncDeletions().isEmpty())
         assertEquals(listOf("Older", "Newer"), repository.projectsFlow.first().map { it.title })
     }
+    @Test
+    fun anExpiredDatedTrashCopyNeverDeletesRepairedActiveCopiesOfItsId() = withRepository { _, repository ->
+        // iOS third pass item 1: a dated (real-time) Trash copy would win over repaired active
+        // copies by precedence. Android never expires an id that has any active row, so no
+        // tombstone is written, nothing is set aside and nothing of those copies is deleted.
+        val now = 100L * com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+        repository.saveProjects(listOf(
+            SongProject(id = "s", title = "First", lyrics = "repaired lyrics one", updatedAt = 2L, precedenceRepaired = true),
+            SongProject(id = "s", title = "Second", lyrics = "repaired lyrics two", updatedAt = 3L, precedenceRepaired = true)
+        ))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "s", title = "Bin", lyrics = "dated", updatedAt = 4L), deletedAt = 5L)))
+
+        val purge = repository.purgeExpiredTrashedProjects(now)
+
+        assertTrue(purge.purgedIds.isEmpty())
+        assertTrue(repository.syncDeletions().isEmpty())
+        assertTrue(repository.recoveredSongs().isEmpty())
+        assertEquals(listOf("repaired lyrics one", "repaired lyrics two"), repository.projectsFlow.first().map { it.lyrics })
+        assertTrue(repository.pendingRecordingDeletionIds().isEmpty())
+    }
 }

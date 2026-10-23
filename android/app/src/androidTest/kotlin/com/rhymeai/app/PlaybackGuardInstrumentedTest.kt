@@ -168,6 +168,26 @@ class PlaybackGuardInstrumentedTest {
         assertNull(service.playingFile)
     }
 
+    @Test fun anUnknownTimeSuspensionStopsActivePlaybackAndRefusesAnother() {
+        // iOS third pass item 3: a tombstone whose time is unknown suspends its recording: it
+        // stops a play in progress and no later play starts (its bytes stay).
+        play()
+        settle()
+        assertEquals(memo.file, service.playingFile)
+
+        deletions = listOf(SyncDeletion("song", "take.m4a", 0L, recordingId = id))
+        runBlocking { service.onDeletionsChanged() }
+        settle()
+        assertNull(service.playingFile)
+
+        val started = service.playersStarted
+        play()
+        runBlocking { service.awaitPlayCheck() }
+        assertEquals(started, service.playersStarted)
+        assertNull(service.playingFile)
+        assertTrue(memo.file.exists())
+    }
+
     @Test fun aRenameIsMetadataOnlyAndLeavesPlaybackRunning() = runBlocking<Unit> {
         play()
         settle()

@@ -630,6 +630,52 @@ class BackupServiceTest {
         }
 
     @Test
+    fun aSuspensionStoredWhileARecordingDownloadsKeepsItFromBeingPlaced() = runBlocking<Unit> {
+        // iOS third pass item 3: the restore commit re-reads the tombstones after the download
+        // wait, immediately before staging; an unknown-time suspension stored meanwhile wins.
+        repository.saveProjects(listOf(song("p")))
+        val bytes = "remote take".toByteArray()
+        val r = entry("p", "r.m4a", bytes)
+        putRaw(r, bytes)
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(r)))
+        val key = androidx.datastore.preferences.core.stringPreferencesKey("sync_deletions_json")
+        drive.duringDownloadOf = BackupManifest.recordingDriveName(r.id) to suspend {
+            dataStore.edit { it[key] = """[{"projectId":"p","fileName":"r.m4a","recordingId":"${r.id}"}]""" }
+        }
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        assertNull(drive.duringDownloadOf)
+        assertTrue(repository.recordingRecords().none { it.id == r.id })
+        assertFalse(RecordingFileStore.targetFile(filesDir, "p", r.id, "r.m4a").exists())
+        assertTrue(repository.syncDeletions().any { it.recordingId == r.id && !it.timeKnown })
+    }
+
+    @Test
+    fun aRecordingSuspendedByTheIncomingManifestIsNotDownloaded() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val bytes = "remote take".toByteArray()
+        val r = entry("p", "r.m4a", bytes)
+        putRaw(r, bytes)
+        // Another writer's manifest whose tombstone for r has no time (this app never writes one).
+        val text = String(BackupManifest.encode(SyncBlob(projects = listOf(song("p")), recordings = listOf(r),
+            deletions = listOf(SyncDeletion("p", "r.m4a", 1L, recordingId = r.id))), 1_000L, "other-device"))
+        val root = Json.parseToJsonElement(text).jsonObject
+        val body = JsonObject(root - BackupManifest.HASH_KEY).let { b ->
+            JsonObject(b + ("deletions" to kotlinx.serialization.json.JsonArray(b.getValue("deletions").jsonArray.map { JsonObject(it.jsonObject - "deletedAt") })))
+        }
+        val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray())
+        drive.failDownloadOf = BackupManifest.recordingDriveName(r.id)
+
+        // A download of r would fail the run: it is never attempted.
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        assertTrue(repository.recordingRecords().none { it.id == r.id })
+        assertTrue(repository.syncDeletions().any { it.recordingId == r.id && !it.timeKnown })
+    }
+
+    @Test
     fun backUpKeepsADifferentRemoteVersionOfASongThisDeviceAlsoHolds() = runBlocking<Unit> {
         // Final review 2, finding 1: this device holds "s" ("old", repaired 300); Drive holds a
         // Trash version of "s" with other lyrics ("remote", repaired 200); a real tombstone at 100.
@@ -1687,6 +1733,8 @@ class BackupServiceTest {
         var afterNextDownload: (() -> Unit)? = null
         /** A download of the file with this name fails, as a dropped connection would. */
         var failDownloadOf: String? = null
+        /** Runs while the file with this name downloads (after its bytes are read, before they return). */
+        var duringDownloadOf: Pair<String, suspend () -> Unit>? = null
         val revoked = mutableListOf<String>()
 
         fun put(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()) {
@@ -1735,6 +1783,7 @@ class BackupServiceTest {
             calls++
             val bytes = files.getValue(fileId).bytes
             if (files.getValue(fileId).name == failDownloadOf) throw DriveNetworkException("injected download failure")
+            duringDownloadOf?.takeIf { it.first == files.getValue(fileId).name }?.let { (_, hook) -> duringDownloadOf = null; hook() }
             if (bytes.size > maxBytes) throw DriveNetworkException("Drive download exceeds the allowed size")
             afterNextDownload?.let { afterNextDownload = null; it() }
             return bytes
