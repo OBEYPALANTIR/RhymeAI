@@ -73,7 +73,9 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   Import) may move local files: a recording whose name another, earlier
   recording claims is renamed to its "<stem> 2" variant (A30, through
   `voice-memos-parking/` when names swap), and a recording whose deletion won is
-  moved to `voice-memos-quarantine/` (A28). Neither deletes bytes. Recordings over
+  moved to `voice-memos-quarantine/` (A28). Neither deletes bytes. Back up never
+  renames local files; it writes the allocated names and each recording's
+  `claimedName` (A34) to the manifest. Recordings over
   16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, iOS with the refresh token) and
