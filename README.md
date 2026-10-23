@@ -101,10 +101,11 @@ are one recording with that id; whichever order they appear in, the live copy
 (else the most recently trashed) keeps it, and the others move to a quarantine
 folder that is never listed, backed up or deleted. That adoption is all or nothing: a file, folder or
 folder entry that cannot be read stops Delete Forever, Trash expiry, Restore and
-Import with nothing changed. A backup moves no file: its only local writes are
-that first-seen stamping and finishing or undoing an interrupted recording move
-(metadata reconciliation), a file still awaiting its new name is left out and
-counted, and it never touches restore staging. After Restore or Import, a recording whose
+Import with nothing changed. A backup moves no file: its local writes are
+metadata only (first-seen stamping, finishing or undoing an interrupted recording
+move, precedence repairs, and the display names it just wrote), a file still
+awaiting its new name is left out and counted, and it never touches restore
+staging. After Restore or Import, a recording whose
 deletion won moves to quarantine; if that move fails it is retried at the next
 launch, and meanwhile the recordings and Trash lists hide it (refreshing when the
 tombstones change) and playback refuses it. Recording files are named by their
