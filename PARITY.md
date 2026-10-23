@@ -140,7 +140,7 @@ below is the contract it must meet, not verified behaviour.
   as absence: reconciling an interrupted move, or dropping a record whose file is
   gone, throws on a file that cannot be examined and commits nothing, and records
   of songs outside a scan are kept unexamined. A backup (and an export) moves no
-  file (A17). Its local writes are metadata only: record stamping, finishing or
+  file (A17). Its local writes are metadata (and the recovery store's kept songs): record stamping, finishing or
   undoing an interrupted move (reconciliation), the A32/A37 precedence repairs,
   and, after a verified manifest write, each held recording's display name as
   written (clearing a rename that was written). A duplicate copy stays where it
@@ -351,8 +351,14 @@ below is the contract it must meet, not verified behaviour.
   imported recording, its listing, playback and an export all use it. A v4 entry
   without `uploadedAt` reads as unknown (0) and gets its first-seen time; a
   malformed value is refused.
-- Tombstone values (A33): a deletion time must be positive, checked where
-  tombstones are read and where they are written on both platforms; duplicates of
+- Tombstone values (A33): a device always writes a positive deletion time. A
+  tombstone read without one (absent, or 0) has an unknown time: it is never
+  given the current time; it suspends only its own identity: it removes nothing
+  (not even a repaired time), the recording it names is hidden and refused for
+  playback with its bytes kept, the tombstone is kept and carried forward (Drive
+  writes it without `deletedAt`), and a later tombstone of the same identity with
+  a valid time replaces it. Every other tombstone still applies. A negative time
+  or a wrong type is malformed and makes the whole input unreadable. Duplicates of
   one identity count their newest deletion everywhere (Android collapses them at
   the store and in `SyncMerger.Tombstones`). A song tombstone has neither a
   recording id nor a file name; an id tombstone without a file name is a recording
@@ -396,6 +402,10 @@ below is the contract it must meet, not verified behaviour.
   cannot be finished and files left in place are reported after launch; the
   Trash Bin lists each unreadable Trash file by name and size (kept, never
   removed).
+- New Song (Android): once the current draft is saved, the editor opens the new
+  song at once; the stored selection is written afterwards, and only if nothing
+  was typed meanwhile. A navigation asked for while a draft is being saved runs
+  once that save is done (the latest one wins), saving the editor first again.
 - A manifest or archive listing one recording id twice is refused before anything
   is applied. Restore and Import reconcile again right before their transactional
   apply and stop if that fails.
@@ -432,9 +442,12 @@ below is the contract it must meet, not verified behaviour.
   time newer than its tombstone survives and the tombstone is dropped. A song
   (active or in Trash) on this device that loses only because its time was a
   repair is not erased, from whichever input it came (this device, Drive, an
-  archive): Back up, Restore and Import keep its content and recording ids in a
-  local recovery store (`recovered_songs_json`) before the manifest or the local
-  lists that held it are written, and report "1 song with an unknown date was
+  archive): Back up, Restore and Import keep its content (with both repair flags
+  and its Trash time) and recording ids in a local recovery store
+  (`recovered_songs_json`) before the manifest or the local lists that held it are
+  written, and read it back (a mismatch stops the run). Back up skips only a
+  version this device still lists with the same content; any other version of
+  the same id is kept, and report "1 song with an unknown date was
   removed by a deletion; a copy is kept on this device." The store is readable
   through `ProjectRepository.recoveredSongs`; it has no UI yet, is not bounded and
   is not exported. A song that loses with a real time is a genuine deletion.
@@ -474,7 +487,8 @@ below is the contract it must meet, not verified behaviour.
   id, never by name.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and change no songs or recordings here (reconciliation and the
-  first-seen stamping above are their only local writes). Restore merges both ways, uploads local-only
+  first-seen stamping above, and the songs kept aside in the recovery store, are
+  their only local writes). Restore merges both ways, uploads local-only
   items, then downloads recordings this device does not hold (live or in Trash).
   Restore and import apply in one repository transaction that resolves the
   incoming inputs with the current songs, Trash, tombstones and recording records,
