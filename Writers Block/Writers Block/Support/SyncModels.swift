@@ -69,13 +69,17 @@ struct SyncDeletion: Codable, Equatable, Hashable, Sendable {
     /// True when this tombstone names the recording (or its whole song) and is
     /// newer than the recording's precedence time.
     func covers(_ entry: SyncRecording) -> Bool {
-        covers(projectId: entry.projectId, recordingId: entry.id, fileName: entry.fileName, at: entry.uploadedAt)
+        covers(projectId: entry.projectId, recordingId: entry.id, sha256: entry.sha256, at: entry.uploadedAt)
     }
 
-    func covers(projectId: String, recordingId: String, fileName: String, at time: Date) -> Bool {
+    /// A pre-id name tombstone names only the recording that name had before v4:
+    /// the one whose id is the legacy id derived from that name and its audio. It
+    /// never matches another recording that later took the name.
+    func covers(projectId: String, recordingId: String, sha256: String, at time: Date) -> Bool {
         guard self.projectId == projectId, deletedAt > time.epochMilliseconds else { return false }
         if let id = self.recordingId { return id == recordingId }
-        return self.fileName == nil || self.fileName == fileName
+        guard let fileName else { return true }
+        return recordingId == RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: fileName, sha256: sha256)
     }
 
     enum CodingKeys: String, CodingKey { case projectId, recordingId, fileName, deletedAt }
@@ -563,14 +567,20 @@ extension LegacySyncBlob {
     /// The same content in the v4 model. Recordings get the ids `recordingId`
     /// hands out (persisted by the caller, so an old entry keeps its id).
     func upgraded(recordingId: (SyncRecordingManifestEntry) -> String) -> SyncBlob {
-        SyncBlob(
+        // A name tombstone for an old recording listed here becomes a tombstone for its id.
+        let normalized = deletions.map { deletion -> SyncDeletion in
+            guard deletion.recordingId == nil, let fileName = deletion.fileName,
+                  let entry = recordings.first(where: { $0.projectId == deletion.projectId && $0.fileName == fileName }) else { return deletion }
+            return SyncDeletion(projectId: deletion.projectId, recordingId: recordingId(entry), fileName: fileName, deletedAt: deletion.deletedAt)
+        }
+        return SyncBlob(
             projects: projects,
             trashed: trashed,
             // An entry without a usable SHA-256 cannot be verified, so v4 does not carry it.
             recordings: recordings
                 .map { SyncRecording(id: recordingId($0), projectId: $0.projectId, fileName: $0.fileName, bytes: $0.sizeBytes, sha256: $0.sha256.lowercased(), uploadedAt: $0.modifiedAt) }
                 .filter { (try? $0.validate()) != nil },
-            deletions: deletions,
+            deletions: normalized,
             savedAt: savedAt,
             savedByClientId: savedByClientId
         )

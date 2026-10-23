@@ -217,15 +217,24 @@ enum RecordingFiles {
 
     nonisolated static func restoredURL(originalName: String, folder: URL) -> URL {
         var target = folder.appendingPathComponent(originalName)
-        if FileManager.default.fileExists(atPath: target.path) {
-            let stem = (originalName as NSString).deletingPathExtension
-            var suffix = 2
-            repeat {
-                target = folder.appendingPathComponent("\(stem) \(suffix).\((originalName as NSString).pathExtension)")
-                suffix += 1
-            } while FileManager.default.fileExists(atPath: target.path) && suffix < 1000
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: target.path) && suffix < 1000 {
+            target = folder.appendingPathComponent(numberedName(originalName, suffix))
+            suffix += 1
         }
         return target
+    }
+
+    /// The byte limit for a recording's file name (shared with Android and the manifest).
+    nonisolated static let maxFileNameBytes = 240
+
+    /// "stem n.ext", shortening the stem so the whole name stays within the limit.
+    nonisolated static func numberedName(_ name: String, _ number: Int) -> String {
+        let ext = (name as NSString).pathExtension
+        var stem = (name as NSString).deletingPathExtension
+        let suffix = " \(number)" + (ext.isEmpty ? "" : ".\(ext)")
+        while stem.utf8.count + suffix.utf8.count > maxFileNameBytes, !stem.isEmpty { stem.removeLast() }
+        return stem + suffix
     }
 
     nonisolated static func renamedURL(for url: URL, sanitizedName sanitized: String) -> URL {
@@ -250,6 +259,29 @@ enum RecordingFiles {
     /// place; beside the memos root, so the move is a rename on the same volume.
     nonisolated static func stagingRoot(for memosRoot: URL) -> URL {
         memosRoot.deletingLastPathComponent().appendingPathComponent("recording-staging", isDirectory: true)
+    }
+
+    /// Where copies that are not a recording's canonical file, and audio a known
+    /// deletion covers, are kept (A26/A28): never listed, adopted or deleted.
+    nonisolated static func quarantineRoot(for memosRoot: URL) -> URL {
+        memosRoot.deletingLastPathComponent().appendingPathComponent("recording-quarantine", isDirectory: true)
+    }
+
+    /// Moves `file` into quarantine under a unique name; never replaces anything.
+    nonisolated static func quarantine(_ file: URL, projectId: String, memosRoot: URL) throws {
+        let folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent("\(UUID().uuidString.lowercased())\(trashNameSeparator)\(file.lastPathComponent)"))
+    }
+
+    /// Trash entries for adoption: an unreadable Trash fails rather than looking empty.
+    static func readableTrashedMemos(in trashRoot: URL) throws -> [TrashedVoiceMemo] {
+        guard FileManager.default.fileExists(atPath: trashRoot.path) else { return [] }
+        let folders = try FileManager.default.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+        for folder in folders where folder.hasDirectoryPath || (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            _ = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+        }
+        return trashedMemos(in: trashRoot)
     }
 
     /// Recovery for an interrupted restore or import, run only as one starts:
