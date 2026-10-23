@@ -9,8 +9,9 @@ when the last backup ran, or why it failed with a Retry. There is no passphrase
 any more. If you used Drive backup before, tap Connect Google Drive once after
 updating; if you used a passphrase, backups then copy the older encrypted
 backup into the new format in Drive, without changing what is on this phone,
-and delete it only after every song and recording in it checks out. Anything
-that cannot move keeps the old backup, and Settings says how much; if this
+and stop asking once every song and recording in it checks out. The older files
+stay in your Drive. Anything that cannot move keeps the migration offered, and
+Settings says how much; if this
 phone no longer has the passphrase, "Migrate older encrypted backup…" asks for
 it once and leaves the old backup untouched until then. On a new phone, connecting
 Drive offers to restore your songs; nothing is restored without asking, and a

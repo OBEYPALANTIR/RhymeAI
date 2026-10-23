@@ -149,7 +149,7 @@ below is the contract it must meet, not verified behaviour.
   names and were left out…"; Export counts those in songs and in the Trash Bin:
   "N recordings with an old file name left out", and always adds that Trash Bin
   recordings, takes waiting to be saved and recordings set aside are never
-  exported). It writes nothing to the file system: an empty claim left by an
+  exported). It writes nothing to the file system: a claim left by an
   interrupted move stays, with its intent pending, until launch, Restore or
   Import reconciles it, and an empty file is never adopted as a recording. Rows
   without a path (from the first record store) are kept by identity until the
@@ -204,8 +204,16 @@ below is the contract it must meet, not verified behaviour.
   Retry saves it only if the recorder finalized it: its MPEG-4 index is intact,
   every sample its tables list lies inside the media data, and the extractor
   reads every sample to the end of the stream. Bytes that fail that are marked
-  failed and never offered again; a file that cannot be read right now stays
-  waiting. A failed stop is recorded as failed. Retry finishes any interrupted
+  failed: Retry skips them, and the sheet keeps listing them ("1 recording did
+  not finish") with Set aside, which moves their bytes to quarantine (kept,
+  never deleted). A file that cannot be read right now stays waiting. A take
+  whose marker cannot be read is never given an invented id: Retry says "A
+  recording's save details can't be read, so it can't be saved yet. Its audio
+  stays on this device." The `.waiting` marker of the build before take markers
+  ("<id>\n<finish time>\n") is converted to a finished `.take` marker at launch.
+  An import in staging carries a `<file>.import` ownership marker; one that no
+  running import owns is set aside in quarantine at launch, and a staging file
+  with no marker of any kind is kept and reported. A failed stop is recorded as failed. Retry finishes any interrupted
   save first and counts a take whose id is already published as saved.
 - Metadata before publication (A24): restore, import, rename, move to Trash and
   restore from Trash write the record's intent (id, name, time, hash, size, new
@@ -332,7 +340,7 @@ below is the contract it must meet, not verified behaviour.
   recording again." (failed stop); "Couldn't save the recording. Free up storage,
   then tap Retry." (save failed, with Retry); in the recordings sheet "N
   recording(s) waiting to be saved" and "N recording(s) could not be saved" with
-  Retry.
+  Retry, and "N recording(s) did not finish" with Set aside.
 - Precedence on every path (A32): Android also fixes missing times for each
   duplicate manifest before they are compared, for a conflicting read-back, for
   the restore offer's probe, and for this device's own state inside the
@@ -367,6 +375,22 @@ below is the contract it must meet, not verified behaviour.
 - Ownership (Android): every move that relies on owning a file hashes it under the
   lock; size, modification time and the record row are never proof, so a
   same-length rewrite keeps its old time but not its old identity.
+- Verified transitions (Android): every byte move (publish, Trash, restore from
+  Trash, migration, quarantine, staging, parking and historical recovery) follows
+  one procedure: a journal (`voice-memos-journal/<token>.move`: kind, id, source,
+  destination, SHA-256, length, claim token) or the record's pending intent is
+  written; playback of the id is stopped; an exclusive claim file
+  ("rhymeai-claim\n<token>\n") is created at the destination and checked by
+  content and file key; the source's digest and length are verified
+  immediately before the rename; then the journal is cleared. Recovery removes
+  only a file holding exactly its own claim, never an empty or unknown file.
+  Expiry and Delete Forever of a recording are one locked operation: the record
+  must still be in Trash with no pending intent and, for expiry, past its
+  deadline at that moment; then the tombstone, the stop, the verify and the
+  unlink happen under the same lock, so a restore cannot slip in between.
+  Parked files from builds before A36 (`voice-memos-parking/<song>/<id>.<ext>`)
+  return to their song at launch. Unreadable Trash file names, moves that
+  cannot be finished and files left in place are reported after launch.
 - A manifest or archive listing one recording id twice is refused before anything
   is applied. Restore and Import reconcile again right before their transactional
   apply and stop if that fails.
@@ -394,12 +418,20 @@ below is the contract it must meet, not verified behaviour.
   Drive's entry wins; per tombstone identity the newest `deletedAt` wins; a real
   time beats a repair and of two repairs the smaller wins (A37).
   Tombstones apply by timestamp (A38): a song tombstone removes an active song
-  only when its `deletedAt` is newer than the song's `updatedAt`, and a Trash
-  entry only when newer than the entry's `trashedAt` (the entry's own
+  when its `deletedAt` is newer than the song's real `updatedAt`, and a Trash
+  entry when newer than the entry's real `trashedAt` (the entry's own
   `updatedAt` never overrides a tombstone; never the larger of the two); a
-  recording tombstone, or its song's, removes a recording only when newer than
-  its `uploadedAt`. A song or recording newer than its tombstone survives and
-  the tombstone is dropped. When a song tombstone removes a recording, that
+  recording tombstone, or its song's, removes a recording when newer than its
+  real `uploadedAt`. A tombstone is itself a real time, so it beats any repaired
+  (first-seen) time whatever the numbers (A41). A song or recording with a real
+  time newer than its tombstone survives and the tombstone is dropped. A song
+  (active or in Trash) on this device that loses only because its time was a
+  repair is not erased: Restore and Import keep its content and recording ids
+  in a local recovery store (`recovered_songs_json`) in the same transaction and
+  report "1 song with an unknown date was removed by a deletion from another
+  device; a copy is kept on this device." A song that loses with a real time is
+  a genuine deletion. Recordings follow the same split: one whose time was a
+  repair is quarantined, one with a real time is deleted. When a song tombstone removes a recording, that
   recording gets its own tombstone at the same time, and deleting a song
   (Delete Forever or Trash expiry) writes tombstones for every recording this
   device holds for it in the same write, so reviving the song cannot bring the
@@ -414,18 +446,20 @@ below is the contract it must meet, not verified behaviour.
   once; recordings this device cannot upload (Trash, too large, older ones that
   could not move) shape tombstones but are listed only if Drive already lists
   them. A raw file counts as present only when its `appProperties` hash and size
-  both match. One id has one digest forever (A40): this device uploads its own
-  bytes for an id only when Drive holds no object under it, or only objects whose
-  `appProperties` carry the same `sha256` (a torn or mis-sized copy of the same
-  audio, which is then replaced); an object with another digest, or none, is
-  never written over, and the recording is reported ("N recordings were not
+  both match. One id has one digest and one length forever (A40): this device
+  uploads its own bytes for an id only when Drive holds no object under it; an
+  object with another digest, another length, or no metadata is never written
+  over or replaced, and the recording is reported ("N recordings were not
   uploaded because Google Drive holds different audio for them."). Several raw objects under one `rec_<id>` name
   (after a race) are all candidates: a download tries the one whose
   `appProperties` match first, then the others, and uses the first whose bytes
   match the manifest's size and digest, whatever order Drive lists them in.
-  Android never deletes a raw `rec_` object (it only replaces a same-digest copy
-  with this device's verified bytes), so no unlisted object is ever judged
-  covered by a tombstone.
+  Android never writes over a raw `rec_` object: any object already under the
+  id, whether its digest or its size differs, is refused and reported, and
+  both stay. After a verified manifest write, a raw object is deleted only
+  when a winning tombstone covers its id and its `appProperties` digest and
+  size match an entry gathered in that same run; it is deleted by Drive file
+  id, never by name.
 - Back up versus restore: Back up now and the automatic backup merge this device
   into Drive and change no songs or recordings here (reconciliation and the
   first-seen stamping above are their only local writes). Restore merges both ways, uploads local-only
@@ -437,7 +471,17 @@ below is the contract it must meet, not verified behaviour.
   download whose SHA-256 or size does not match the manifest is discarded and
   counted; recordings over 16 MiB are skipped with a visible count. An
   interrupted restore leaves only complete recordings; its recovery (run only at
-  the start of Restore and Import) deletes the staging folder. Android hard
+  the start of Restore and Import) deletes the staging folder, which holds only
+  verified downloads. A staging folder from the encrypted-sync build may hold
+  that build's binary restore journal (magic `0x5248594D`, version 1, entries of
+  index, project id, file name and had-original) with copies of the originals
+  it replaced (`backup-<n>.tmp`), with or without `restore-complete`. At launch
+  each original that differs from what its file holds now is first moved,
+  journaled and verified, into its song as "<name> (original).<ext>" (or
+  "(original 2)", …; never replacing a file), where migration adopts it; only
+  then does the folder go. A journal that cannot be read keeps the folder
+  untouched and the launch reports "An interrupted restore from an older
+  version could not be finished. Its files were kept." Android hard
   links are not used because SELinux forbids them in app storage.
 - Lost updates between devices: just before writing, the manifest list is read
   again; if another device wrote since the backup read it, the backup merges that
@@ -472,17 +516,22 @@ below is the contract it must meet, not verified behaviour.
   manifests, RAI1 recordings; PBKDF2-HMAC-SHA256 210,000 iterations, AES-256-GCM,
   header as AAD), read only, and never applied to this device: with a stored
   passphrase each backup decrypts it, uploads its recordings raw (in memory) and
-  merges its songs into the Drive manifest. Deleted old recordings are uploaded
-  raw too (unlisted), so nothing in the old backup is destroyed. Every old
+  merges its songs into the Drive manifest. The old files are never deleted:
+  another older device may still write to them. A deleted old recording needs no
+  raw copy (its encrypted original stays). Every old
   recording entry, with its original time, is gathered with all observed
   tombstones before resolving, so a song revived past its tombstone keeps the
-  old takes that tombstone covered deleted. The old
-  manifest, its `rec_*` files and the passphrase are removed only when the
-  written manifest verifies, every old song not removed by a newer tombstone is
-  in it with the same content or a newer edit, and every old recording, deleted
-  or not, is a raw file whose `appProperties` hash and size match (live ones
-  also listed with that hash); cleanup deletes only encrypted files whose raw
-  copy was verified. Older recordings keep their derived ids and original times;
+  old takes that tombstone covered deleted. The migration counts as done, and
+  the passphrase is forgotten, only when the written manifest verifies, every
+  old song not removed by a tombstone (an active one compared by its
+  `updatedAt`, a Trash entry by its `trashedAt`, A38) is in it with the same
+  content or a newer edit, and every old recording not deleted is a raw file
+  whose `appProperties` hash and size match and is listed with that hash. The
+  device then remembers the migrated version (by the old file's id and
+  modification time) and stops offering it; the old files stay in Drive, and a
+  newer version written by an older device is offered again. The status reads
+  "Your older encrypted backup was moved to the new format. Its files stay in
+  your Google Drive." Older recordings keep their derived ids and original times;
   one that cannot move never stands in for another recording. Anything too
   large, unreadable or missing keeps the old backup, the
   passphrase and the "Migrate older encrypted backup…" row, and is reported ("2
