@@ -798,6 +798,89 @@ class BackupServiceTest {
     }
 
     @Test
+    fun aDirectoryWhoseEntriesCannotBeExaminedStopsDeleteForeverAndExpiry() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("gone")))
+        repository.moveProjectToTrash("gone", 10L)
+        val trash = RecordingFiles.trashDirectory(filesDir, "gone").apply { mkdirs() }
+        val trashed = File(trash, "1500__old.m4a").apply { writeBytes("old".toByteArray()) }
+        // Readable but not searchable: names list, but no entry's metadata can be read.
+        trash.setExecutable(false)
+        val blocked = runCatching { java.nio.file.Files.readAttributes(trashed.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java) }.isFailure
+        org.junit.Assume.assumeTrue("permissions are not enforced for this user", blocked && trash.list() != null)
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+        try {
+            assertFailsWith<java.io.IOException> { repository.permanentlyDeleteTrashedProject("gone", now = 5_000L, adopt = adopt) }
+            assertFailsWith<java.io.IOException> {
+                repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, adopt = adopt)
+            }
+            assertEquals(listOf("gone"), repository.trashedProjectsFlow.first().map { it.project.id })
+            assertTrue(repository.snapshotLocalSyncBase().blob.deletions.isEmpty())
+        } finally {
+            trash.setExecutable(true)
+        }
+        assertTrue(trashed.exists())
+    }
+
+    @Test
+    fun aQuarantineThatFailsAfterTheCommitKeepsTheRecordingHiddenAndIsRetried() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val take = writeMemo("p", "take.m4a", "old take".toByteArray(), modifiedAt = 1_000L)
+        putRemote(SyncBlob(
+            projects = listOf(song("p", updatedAt = 9_000L)),
+            deletions = listOf(SyncDeletion("p", "take.m4a", 5_000L, recordingId = take.id))
+        ))
+        // A file where the quarantine folder belongs makes the move fail after the commit.
+        val blocker = RecordingFiles.quarantineRoot(filesDir).apply { writeText("in the way") }
+
+        assertFalse(service.restore(repository) is SyncResult.Success)
+
+        val memo = RecordingFileStore.targetFile(filesDir, "p", "take.m4a")
+        assertTrue(memo.exists())
+        assertEquals(9_000L, repository.projectsFlow.first().single().updatedAt)
+        // Until the move happens, the lists hide it: its path is a deleted one.
+        val deleted = com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions())
+        assertEquals(setOf(com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, memo)), deleted)
+
+        // The next launch retries it.
+        blocker.delete()
+        quarantineDeletedRecordings(repository, filesDir)
+        assertFalse(memo.exists())
+        assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "p").list().orEmpty().size)
+        assertTrue(com.rhymeai.app.data.recording.RecordingTransitions.deletedPaths(repository.recordingRecords(), repository.syncDeletions()).isEmpty())
+    }
+
+    @Test
+    fun oversizedRecordingsAreCountedOncePerRecordingAcrossLiveTrashRemoteAndDeleted() = runBlocking<Unit> {
+        val size = (RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1).toInt()
+        repository.saveProjects(listOf(song("p")))
+        // Live, backed up: raw object matches.
+        val backedBytes = ByteArray(size) { 1 }
+        val backed = writeMemo("p", "backed.m4a", backedBytes).copy(uploadedAt = 1_000L)
+        drive.put(BackupManifest.recordingDriveName(backed.id), backedBytes, recordingAppProperties(backed))
+        // Live, never uploaded anywhere: skipped.
+        writeMemo("p", "local.m4a", ByteArray(size) { 2 })
+        // In Trash here, backed up: held, so not a remote recording this device lacks.
+        val trashedBytes = ByteArray(size) { 3 }
+        File(RecordingFiles.trashDirectory(filesDir, "p").apply { mkdirs() }, "1500__trashed.m4a").apply { writeBytes(trashedBytes); setLastModified(1_000L) }
+        val trashed = RecordingManifestEntry("p", "trashed.m4a", sizeBytes = size.toLong(), modifiedAt = 0L,
+            sha256 = BackupManifest.sha256Hex(trashedBytes), uploadedAt = 1_000L)
+        drive.put(BackupManifest.recordingDriveName(trashed.id), trashedBytes, recordingAppProperties(trashed))
+        // Only in Drive: this device cannot download it, so skipped.
+        val remoteOnly = entry("p", "remote.m4a", byteArrayOf(4), uploadedAt = 1_000L).copy(sizeBytes = size.toLong())
+        // Deleted: a newer song tombstone removes it, so it is a deletion, not a skip.
+        val deleted = entry("gone", "deleted.m4a", byteArrayOf(5), uploadedAt = 1_000L).copy(sizeBytes = size.toLong())
+        writeMemo("p", "small.m4a", "small".toByteArray())
+        putRemote(SyncBlob(
+            projects = listOf(song("p")),
+            recordings = listOf(backed, trashed, remoteOnly, deleted),
+            deletions = listOf(SyncDeletion("gone", deletedAt = 5_000L))
+        ))
+
+        assertEquals(2, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+        assertEquals(2, assertIs<SyncResult.Success>(service.restore(repository)).skippedLargeRecordings)
+    }
+
+    @Test
     fun withoutAPassphraseTheOlderBackupIsLeftAloneAndOffered() = runBlocking<Unit> {
         repository.saveProjects(listOf(song("here")))
         putLegacy(SyncBlob(projects = listOf(song("legacy"))))

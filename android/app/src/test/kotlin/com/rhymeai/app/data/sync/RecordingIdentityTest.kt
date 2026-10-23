@@ -328,4 +328,40 @@ class RecordingIdentityTest {
         assertEquals("Recording 2.m4a", second.name)
         assertEquals(2, snapshot().size)
     }
+
+    @Test
+    fun twoTrashCopiesSettleOnTheSameCanonicalCopyAndTimeInEitherArrivalOrder() = runBlocking<Unit> {
+        val bytes = "old take".toByteArray()
+        fun put(dir: File, name: String, mtime: Long) =
+            File(RecordingFiles.trashDirectory(dir, "song").apply { mkdirs() }, name).apply { writeBytes(bytes); setLastModified(mtime) }
+        val outcomes = listOf(
+            listOf("1500__take.m4a" to 1_000L, "2500__take.m4a" to 2_000L),
+            listOf("2500__take.m4a" to 2_000L, "1500__take.m4a" to 1_000L)
+        ).map { order ->
+            val dir = kotlin.io.path.createTempDirectory("rhymeai-order").toFile()
+            try {
+                val catalog = MemoryCatalog()
+                for ((name, mtime) in order) {
+                    put(dir, name, mtime)
+                    RecordingTransitions.snapshot(catalog, dir, emptySet())
+                }
+                // And a device that sees both at once.
+                val listed = RecordingTransitions.snapshot(catalog, dir, emptySet()).single()
+                Triple(listed.file.name, listed.entry.uploadedAt, listed.entry.id)
+            } finally {
+                dir.deleteRecursively()
+            }
+        }
+        val together = kotlin.io.path.createTempDirectory("rhymeai-order").toFile()
+        try {
+            put(together, "1500__take.m4a", 1_000L)
+            put(together, "2500__take.m4a", 2_000L)
+            val listed = RecordingTransitions.snapshot(MemoryCatalog(), together, emptySet()).single()
+            val expected = Triple("2500__take.m4a", 1_000L, RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex(bytes)))
+            assertEquals(expected, Triple(listed.file.name, listed.entry.uploadedAt, listed.entry.id))
+            assertEquals(listOf(expected, expected), outcomes)
+        } finally {
+            together.deleteRecursively()
+        }
+    }
 }

@@ -1090,7 +1090,8 @@ class DriveSyncService(
             // A29: a recording too large to move counts as backed up only when its raw Drive
             // object is there with this hash and size; otherwise it is reported as skipped.
             val allowed = recordingsAllowedForUpload(liveFiles.map { it.entry }, emptyList(), merged.deletions)
-            val heldIds = liveFiles.mapTo(HashSet()) { it.entry.id }
+            // Held here, live or in Trash: not a remote recording this device lacks.
+            val heldIds = localFiles.mapTo(HashSet()) { it.entry.id }
             val skipped = allowed.count { !it.isTransferable && !onDrive(it) } +
                 merged.recordings.count { !it.isTransferable && it.id !in heldIds }
             return PushOutcome(merged, committed, skipped, damaged)

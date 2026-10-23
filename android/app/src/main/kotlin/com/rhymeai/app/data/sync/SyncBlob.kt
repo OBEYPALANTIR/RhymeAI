@@ -270,6 +270,9 @@ data class RecordingRecord(
         const val IMPORTED = "imported"
         const val MIGRATED = "migrated"
 
+        /** A pre-v4 file first seen here; its time is the earliest file time among its copies (A26). */
+        const val ADOPTED = "adopted"
+
         /** The bytes were being placed from a staging file; undo removes the record. */
         const val OP_PUBLISH = "publish"
 
