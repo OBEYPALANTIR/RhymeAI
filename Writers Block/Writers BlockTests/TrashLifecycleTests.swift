@@ -920,7 +920,10 @@ extension TrashLifecycleTests {
         #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).map(\.deletedAt) == [0])
         #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).map(\.deletedAt) == [0])
         #expect(try Data(contentsOf: library.memosRoot.appendingPathComponent("s/\(recordingId).m4a")) == Data([5]))
-        #expect(viewModel.recordingRecordsDamaged && viewModel.recordingNotes.contains { $0.contains("no usable time") })
+        // Only what those tombstones name is held back; the recordings are not paused.
+        #expect(!viewModel.recordingRecordsDamaged)
+        #expect(viewModel.recordingNotes.contains { $0.contains("no time") && $0.contains(recordingId) })
+        #expect(!viewModel.isPlayableRecording(library.memosRoot.appendingPathComponent("s/\(recordingId).m4a")))
     }
 }
 
@@ -1087,5 +1090,104 @@ extension TrashLifecycleTests {
 
         #expect(try context.fetch(FetchDescriptor<Recording>()).count == 70)
         #expect(!viewModel.recordingNotes.joined().contains("Waiting to be read"))
+    }
+}
+
+
+/// Round 15.
+extension TrashLifecycleTests {
+    /// BLOCKER 1: with two active copies of a song, the newer one is what an expired
+    /// Trash entry meets: it stands, in either fetch order; nothing is tombstoned and
+    /// the song's recording stays.
+    @MainActor
+    @Test(arguments: [false, true])
+    func aNewerActiveCopyDefeatsAnExpiredTrashEntry(newerFirst: Bool) async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("ActiveCopies")
+        _ = container
+        let now = Date()
+        let deletedAt = now.addingTimeInterval(-trashRetentionInterval - 600)
+        let older = SongProject(id: "s", title: "Old", lyrics: "older words", theme: "", updatedAt: deletedAt.addingTimeInterval(-60))
+        let newer = SongProject(id: "s", title: "New", lyrics: "newer words", theme: "", updatedAt: deletedAt.addingTimeInterval(60))
+        for song in newerFirst ? [newer, older] : [older, newer] { context.insert(song) }
+        context.insert(TrashedSongProject(id: "s", title: "Binned", lyrics: "", theme: "", updatedAt: deletedAt.addingTimeInterval(-120),
+                                          deletedAt: deletedAt, deleteAfter: deletedAt.addingTimeInterval(trashRetentionInterval)))
+        try context.save()
+        let memo = library.memosRoot.appendingPathComponent("s/take.m4a")
+        try FileManager.default.createDirectory(at: memo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([9, 1]).write(to: memo)
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).contains { $0.lyrics == "newer words" })
+        let row = try #require(try context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(try Data(contentsOf: library.memosRoot.appendingPathComponent("s/\(row.id).m4a")) == Data([9, 1]))
+    }
+
+    /// T2.50: scheduling the next expiry (here after a song goes to Trash, with no
+    /// purge) fixes and keeps a Trash time that arrived missing.
+    @MainActor
+    @Test func schedulingTheNextExpiryFixesAMissingTrashTime() async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("ScheduleTimes")
+        _ = container
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let lateId = "late-\(UUID().uuidString)"
+        context.insert(TrashedSongProject(id: lateId, title: "Late", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                          deletedAt: Date(timeIntervalSince1970: 0), deleteAfter: Date(timeIntervalSince1970: 0)))
+        let other = SongProject(id: "other-\(UUID().uuidString)", title: "Other", lyrics: "x", theme: "", updatedAt: Date())
+        context.insert(other)
+        try context.save()
+        let before = Date().addingTimeInterval(-1)
+
+        #expect(viewModel.moveProjectToTrash(other))
+
+        let late = try #require(try context.fetch(FetchDescriptor<TrashedSongProject>()).first { $0.id == lateId })
+        #expect(late.trashedAtRepaired && late.deletedAt >= before && !context.hasChanges)
+    }
+
+    /// T5.24: a tombstone without a time holds only what it names (kept, not shown or
+    /// played); other tombstones apply; a tombstone of the same recording with a time
+    /// supersedes it and then applies.
+    @MainActor
+    @Test func anUndatedTombstoneHoldsOnlyWhatItNamesUntilADatedOneArrives() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("Undated")
+        _ = container
+        for (song, bytes) in [("a", Data([1])), ("b", Data([2]))] {
+            context.insert(SongProject(id: song, title: song, lyrics: song, theme: "", updatedAt: Date(timeIntervalSince1970: 1_000)))
+            let url = library.memosRoot.appendingPathComponent("\(song)/take.m4a")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: url)
+        }
+        // A tombstone of song "a"'s recording without a time, and one of song "b" with one.
+        let heldId = RecordingBackupManifest.legacyRecordingId(projectId: "a", fileName: "take.m4a", sha256: RecordingBackupManifest.sha256Hex(Data([1])))
+        context.insert(SyncRecordingDeletion(projectId: "a", recordingId: heldId, fileName: "take.m4a", deletedAt: 0))
+        context.insert(SyncDeletionRecord(projectId: "b", deletedAt: Date().epochMilliseconds + 60_000))
+        try context.save()
+
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        #expect(try context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["a"])
+        #expect(!viewModel.recordingRecordsDamaged)
+        // Song "b" and its recording went; "a"'s recording is kept but not listed.
+        #expect(try library.liveRecordings(in: context).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Recording>()).map(\.id) == [heldId])
+        #expect(try Data(contentsOf: library.memosRoot.appendingPathComponent("a/\(heldId).m4a")) == Data([1]))
+        #expect(viewModel.recordingNotes.contains { $0.contains(heldId) })
+
+        // A tombstone of the same recording with a time arrives (here directly, as
+        // Drive or Import store it): it supersedes the undated one and applies.
+        try DeletionStore.upsert(SyncDeletion(projectId: "a", recordingId: heldId, fileName: "take.m4a", deletedAt: Date().epochMilliseconds), in: context)
+        try context.save()
+        #expect(try DeletionStore.undated(in: context).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).filter { $0.recordingId == heldId }.count == 1)
+        #expect(await viewModel.reconcileRecordings())
+        #expect(!FileManager.default.fileExists(atPath: library.memosRoot.appendingPathComponent("a/\(heldId).m4a").path))
+        #expect(!viewModel.recordingNotes.contains { $0.contains(heldId) })
     }
 }
