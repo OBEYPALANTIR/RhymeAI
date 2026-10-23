@@ -127,8 +127,10 @@ class RecordingFailureUiTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithContentDescription("Rename recording").performClick()
+        // The dialog composes on the running clock; pause it only once the confirm button is there.
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("renameRecordingConfirm").fetchSemanticsNodes().isNotEmpty() }
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithText("OK").performClick()
+        compose.onNodeWithTag("renameRecordingConfirm").performClick()
         waitForText("Couldn't rename recording. Check free storage, then try again.")
         compose.mainClock.autoAdvance = true
 
