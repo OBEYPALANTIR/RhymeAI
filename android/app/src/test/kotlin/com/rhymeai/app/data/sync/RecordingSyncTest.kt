@@ -100,15 +100,23 @@ class RecordingSyncTest {
     }
 
     @Test
-    fun importedFormatsPassManifestValidationWithoutRelaxingFilenameSafety() {
-        listOf("m4a", "mp3", "wav", "aac").forEach { extension ->
-            recording("song", "take.$extension", 1L, "digest").validate()
-            assertFailsWith<IllegalArgumentException> {
-                recording("song", "../take.$extension", 1L, "digest").validate()
+    fun displayNamesAreMetadataWhileFileNamesStayIdPaths() {
+        val root = Files.createTempDirectory("rhymeai-display-names").toFile()
+        try {
+            // A39: separators, long names and names without an extension are valid display names.
+            for (name in listOf("take.m4a", "../verse/idea.m4a", "no extension", "\u00e9".repeat(125) + ".m4a", "take.mp4")) {
+                val entry = recording("song", name, 1L, "digest")
+                entry.validate()
+                // The file is still named by the id inside the song's folder.
+                val file = RecordingFileStore.targetFile(root, "song", entry.id, name)
+                assertEquals(RecordingFiles.memoDirectory(root, "song"), file.parentFile)
+                assertTrue(file.name.startsWith(entry.id + "."))
             }
-        }
-        assertFailsWith<IllegalArgumentException> {
-            recording("song", "take.mp4", 1L, "digest").validate()
+            assertFailsWith<IllegalArgumentException> { recording("song", "", 1L, "digest").validate() }
+            assertFailsWith<IllegalArgumentException> { recording("song", "bad\u0000.m4a", 1L, "digest").validate() }
+            assertFailsWith<IllegalArgumentException> { recording("song", "x".repeat(1025), 1L, "digest").validate() }
+        } finally {
+            root.deleteRecursively()
         }
     }
 

@@ -230,6 +230,38 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    @Test fun aMigrationThatNeedsDriveConsentResumesAsAMigrationAfterIt() {
+        launchConnectedWithEmptyLibrary()
+        val consent = android.app.PendingIntent.getActivity(
+            context, 0, android.content.Intent(context, MainActivity::class.java), android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val needConsent = java.util.concurrent.atomic.AtomicBoolean(true)
+        val authorizations = java.util.concurrent.atomic.AtomicInteger()
+        BackupTestHooks.authorizer = object : DriveAuthorizer {
+            override suspend fun authorize(): DriveAuthorization {
+                authorizations.incrementAndGet()
+                return if (needConsent.get()) DriveAuthorization.NeedsConsent(consent) else DriveAuthorization.Granted("token")
+            }
+        }
+        // The service reads the hook when the view model builds it, so rebuild the activity.
+        scenario?.close()
+        lateinit var fresh: MainViewModel
+        scenario = ActivityScenario.launch(MainActivity::class.java).also { s -> s.onActivity { fresh = ViewModelProvider(it)[MainViewModel::class.java] } }
+        val before = authorizations.get()
+
+        instrumentation.runOnMainSync { fresh.migrateLegacyBackup("correct horse battery staple") }
+        waitUntil({ "authorizations ${authorizations.get()}" }) { authorizations.get() > before && !fresh.migrationInProgress }
+        // Consent granted: the retry is the migration again (with the passphrase kept in memory), not a plain backup.
+        needConsent.set(false)
+        var resumedAsMigration = false
+        instrumentation.runOnMainSync {
+            fresh.retryAfterDriveAuthorization()
+            resumedAsMigration = fresh.migrationInProgress
+        }
+        assertTrue(resumedAsMigration)
+        waitUntil { !fresh.migrationInProgress }
+    }
+
     @Test fun exportLeavesOutAndReportsARecordingStillAwaitingItsNewName() {
         val vm = launchConnectedWithEmptyLibrary()
         val dir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "export-legacy").also { it.mkdirs() }

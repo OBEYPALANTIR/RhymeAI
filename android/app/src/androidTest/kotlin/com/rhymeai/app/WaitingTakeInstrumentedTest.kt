@@ -8,6 +8,8 @@ import com.rhymeai.app.data.recording.RecordingCatalog
 import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.sync.RecordingRecord
 import com.rhymeai.app.service.VoiceMemoService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -234,5 +236,24 @@ class WaitingTakeInstrumentedTest {
         assertEquals(a, catalog.records.single().id)
         assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
         assertTrue(service.waitingTakes("song").isEmpty())
+    }
+
+    @Test fun aRetryInspectingATakeWhileMigrationMovesItStillSavesItOnce() = runBlocking<Unit> {
+        val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        TestRecordings.recordFinalizedM4a(context, File(staging, "1700000000000.m4a"))
+        // Its finish was never recorded: Retry must inspect it before saving.
+        File(staging, "1700000000000.m4a.take").writeText("$a\nrecording\n0\n")
+        val listed = service.waitingTakes("song").single()
+        assertFalse(listed.finished)
+
+        val saving = async(Dispatchers.IO) { service.saveListedTake(listed) }
+        val migrating = async(Dispatchers.IO) { service.migrateStaging() }
+
+        assertTrue(saving.await())
+        assertTrue(migrating.await().isEmpty())
+        assertEquals(a, catalog.records.single().id)
+        assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
+        assertTrue(service.waitingTakes("song").isEmpty())
+        assertTrue(staging.list().orEmpty().none { it.endsWith(".take") || it.endsWith(".migrate") })
     }
 }

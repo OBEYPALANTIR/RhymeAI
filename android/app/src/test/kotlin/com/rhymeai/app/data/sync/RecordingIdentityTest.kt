@@ -492,4 +492,22 @@ class RecordingIdentityTest {
         assertTrue(live.exists())
         assertEquals(listOf("1700__take.m4a"), q.list()!!.toList())
     }
+
+    @Test
+    fun aQuarantineMigrationKilledAfterItsClaimIsFinishedFromItsJournal() = runBlocking<Unit> {
+        val q = RecordingFiles.quarantineDirectory(filesDir, "song").apply { mkdirs() }
+        val bytes = "kept copy".toByteArray()
+        val source = File(q, "1700__take.m4a").apply { writeBytes(bytes) }
+        val sha = BackupManifest.sha256Hex(bytes)
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", sha)
+        // The state a kill leaves between the journal, the exclusive claim and the rename.
+        val claim = File(q, "1700/$id.m4a").apply { parentFile!!.mkdirs(); createNewFile() }
+        File(q, "1700__take.m4a.migrate").writeText("1700__take.m4a\n1700/$id.m4a\n$id\n$sha\n${bytes.size}\n")
+
+        assertEquals(emptyList(), RecordingTransitions.migrate(catalog, filesDir))
+
+        assertContentEquals(bytes, claim.readBytes())
+        assertFalse(source.exists())
+        assertEquals(listOf("1700/$id.m4a"), q.walk().filter { it.isFile }.map { it.relativeTo(q).path }.toList())
+    }
 }

@@ -79,7 +79,7 @@ internal object RecordingTransitions {
         if (skipIfPresent && catalog?.recordingRecords()?.any { it.id == id && it.path != null } == true) {
             return@withLock null
         }
-        SyncIdentity.validateFileName(displayName)
+        SyncIdentity.validateDisplayName(displayName)
         val dir = RecordingFiles.memoDirectory(filesDir, projectId)
         if (!dir.exists() && !dir.mkdirs()) throw IOException("Could not create memo directory for $projectId")
         val target = RecordingFiles.memoFile(filesDir, projectId, id, displayName)
@@ -163,7 +163,7 @@ internal object RecordingTransitions {
      */
     suspend fun rename(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String, displayName: String): RecordingRecord? =
         namespace.withLock {
-            SyncIdentity.validateFileName(displayName)
+            SyncIdentity.validateDisplayName(displayName)
             val record = recordForLocked(catalog, filesDir, file, projectId) ?: return@withLock null
             val renamed = record.copy(displayName = displayName, displayNameChanged = true)
             catalog.putRecord(renamed)
@@ -288,25 +288,50 @@ internal object RecordingTransitions {
         val left = mutableListOf<File>()
         for (dir in listStrictly(RecordingFiles.quarantineRoot(filesDir))) {
             if (!isDirectoryStrictly(dir)) continue
+            // Each move is journaled first (source, target, id, SHA-256, length): a run after a
+            // crash removes an empty claim, then finishes or redoes the move from the journal.
+            for (journal in listStrictly(dir).filter { it.name.endsWith(QUARANTINE_JOURNAL_SUFFIX) }) {
+                val lines = journal.readLines()
+                val source = File(dir, lines.getOrNull(0) ?: continue)
+                val target = File(dir, lines.getOrNull(1) ?: continue)
+                val sha = lines.getOrNull(3) ?: continue
+                val length = lines.getOrNull(4)?.toLongOrNull() ?: continue
+                fun holds(file: File) = isRegularFileStrictly(file) && file.length() == length && RecordingFileStore.sha256Hex(file) == sha
+                if (length > 0L && isRegularFileStrictly(target) && target.length() == 0L) target.delete()
+                when {
+                    holds(target) || holds(source) -> journal.delete()
+                    else -> left += source
+                }
+            }
             for (file in listStrictly(dir)) {
-                if (!isRegularFileStrictly(file)) continue
+                if (!isRegularFileStrictly(file) || file.name.endsWith(QUARANTINE_JOURNAL_SUFFIX) ||
+                    file.name.endsWith("$QUARANTINE_JOURNAL_SUFFIX.tmp")) continue
                 val (movedAt, name) = VoiceMemoService.parseTrashedName(file.name) ?: (file.lastModified() to file.name)
-                val id = RecordingManifestEntry.legacyRecordingId(dir.name, name, RecordingFileStore.sha256Hex(file))
+                val sha = RecordingFileStore.sha256Hex(file)
+                val length = file.length()
+                val id = RecordingManifestEntry.legacyRecordingId(dir.name, name, sha)
                 val target = File(File(dir, movedAt.toString()), RecordingFiles.idFileName(id, name))
-                if (target.exists() || isRegularFileStrictly(target)) {
+                val journal = File(dir, file.name + QUARANTINE_JOURNAL_SUFFIX)
+                if (target.exists() || isRegularFileStrictly(target) || journal.exists()) {
                     left += file
                     continue
                 }
+                val temp = File(dir, journal.name + ".tmp")
+                temp.writeText("${file.name}\n${target.relativeTo(dir).path}\n$id\n$sha\n$length\n")
+                Files.move(temp.toPath(), journal.toPath(), StandardCopyOption.ATOMIC_MOVE)
                 target.parentFile?.mkdirs()
                 try {
                     moveNoReplace(file, target)
                 } catch (_: java.nio.file.FileAlreadyExistsException) {
                     left += file
                 }
+                journal.delete()
             }
         }
         return left
     }
+
+    private const val QUARANTINE_JOURNAL_SUFFIX = ".migrate"
 
     private suspend fun recordForLocked(catalog: RecordingCatalog, filesDir: File, file: File, projectId: String): RecordingRecord? {
         val scan = snapshotLocked(catalog, filesDir, emptySet(), setOf(projectId))
@@ -407,19 +432,25 @@ internal object RecordingTransitions {
     /** A24: finishes a move whose file reached its target, undoes one that did not. */
     suspend fun reconcile(catalog: RecordingCatalog, filesDir: File) = namespace.withLock { reconcileLocked(catalog, filesDir) }
 
-    private suspend fun reconcileLocked(catalog: RecordingCatalog, filesDir: File) {
+    private suspend fun reconcileLocked(catalog: RecordingCatalog, filesDir: File, mutateFiles: Boolean = true) {
         // A33: every adoption, reconciliation and move starts here; none runs on unreadable tombstones.
         catalog.requireDeletionsReadable()
         val pending = catalog.recordingRecords().filter { it.pendingOp != null }
         if (pending.isEmpty()) return
         // An empty file at a journaled target is the exclusive claim of a move a crash interrupted.
+        // Removing it is a file change, so a read-only pass (Back up, export) leaves that intent pending.
+        fun claimed(record: RecordingRecord): Boolean {
+            val target = record.path?.let { RecordingFiles.fileAt(filesDir, it) } ?: return false
+            return record.bytes > 0L && isRegularFileStrictly(target) && target.length() == 0L
+        }
+        val unresolved = HashSet<String>()
         for (record in pending) {
-            val target = record.path?.let { RecordingFiles.fileAt(filesDir, it) } ?: continue
-            if (record.bytes > 0L && isRegularFileStrictly(target) && target.length() == 0L) target.delete()
+            if (!claimed(record)) continue
+            if (mutateFiles) RecordingFiles.fileAt(filesDir, record.path!!).delete() else unresolved += record.id
         }
         catalog.updateRecordingRecords { records ->
             records.mapNotNull { record ->
-                if (record.pendingOp == null) return@mapNotNull record
+                if (record.pendingOp == null || record.id in unresolved) return@mapNotNull record
                 val target = record.path?.let { RecordingFiles.fileAt(filesDir, it) }
                 val source = record.pendingFrom?.let { RecordingFiles.fileAt(filesDir, it) }
                 when {
@@ -505,7 +536,7 @@ internal object RecordingTransitions {
         onlyProjects: Set<String>?,
         moveFiles: Boolean = true
     ): Scan {
-        reconcileLocked(catalog, filesDir)
+        reconcileLocked(catalog, filesDir, mutateFiles = moveFiles)
         val items = mutableListOf<Item>()
         for ((root, inTrash) in listOf(RecordingFiles.memosRoot(filesDir) to false, RecordingFiles.trashRoot(filesDir) to true)) {
             for (dir in listStrictly(root)) {
@@ -516,11 +547,13 @@ internal object RecordingTransitions {
                 for (file in listStrictly(dir)) {
                     val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
                     if (!attributes.isRegularFile || file.extension.lowercase(Locale.ROOT) !in RecordingFiles.SUPPORTED_AUDIO_EXTENSIONS) continue
+                    // An empty file is never a recording: it is the claim of an interrupted move.
+                    if (attributes.size() == 0L) continue
                     val idName = RecordingFiles.idOf(file)
                     // A pre-A36 Trash file carries its trash time and original name in its name.
                     val legacyTrash = if (inTrash && idName == null) VoiceMemoService.parseTrashedName(file.name) ?: continue else null
                     val name = legacyTrash?.second ?: file.name
-                    if (idName == null) SyncIdentity.validateFileName(name)
+                    if (idName == null) SyncIdentity.validateDisplayName(name)
                     items += Item(file, relativePath(filesDir, file), dir.name, idName, name, RecordingFileStore.sha256Hex(file),
                         inTrash, legacyTrash?.first, attributes.size(), attributes.lastModifiedTime().toMillis())
                 }
@@ -539,10 +572,12 @@ internal object RecordingTransitions {
             // A record not matched by this scan goes only when its file is confirmed absent; a song
             // outside this scan (or pending deletion) keeps its records unexamined.
             val kept = records.filter { record ->
-                val path = record.path ?: return@filter false
+                // A song outside this scan keeps its records unexamined; a row without a path (from
+                // the first record store) waits, by identity, for the scan that adopts its file.
+                if (record.projectId in pendingDeletionIds || (onlyProjects != null && record.projectId !in onlyProjects)) return@filter true
+                val path = record.path ?: return@filter true
                 when {
                     path in itemPaths -> false
-                    record.projectId in pendingDeletionIds || (onlyProjects != null && record.projectId !in onlyProjects) -> true
                     else -> isRegularFileStrictly(RecordingFiles.fileAt(filesDir, path))
                 }
             }.associateByTo(LinkedHashMap()) { it.id }
@@ -600,7 +635,7 @@ internal object RecordingTransitions {
                         // Not moved now (the id's name is taken by other bytes, or nothing may move):
                         // left where it is, reported, never deleted, and its record kept unchanged
                         // so its identity, time and tombstone protection survive the next scan.
-                        byPath[canonical.path]?.takeIf { intact(it, canonical) }?.let { kept[it.id] = it }
+                        (byPath[canonical.path]?.takeIf { intact(it, canonical) } ?: existing)?.let { kept[it.id] = it }
                         leftInPlace += canonical.file
                         continue
                     }

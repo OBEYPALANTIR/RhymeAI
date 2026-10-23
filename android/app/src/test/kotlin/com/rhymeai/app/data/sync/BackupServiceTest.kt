@@ -1778,4 +1778,55 @@ class BackupServiceTest {
         assertEquals(Triple(1_000L, RecordingRecord.RECORDED, "voice-memos/p/$id.m4a"), Triple(record.uploadedAt, record.origin, record.path))
         assertEquals("take.m4a", record.displayName)
     }
+
+    @Test
+    fun anIdLessRowSurvivesABackupAnExportAndAnUnrelatedAdoptionBeforeItsMigration() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p"), song("other")))
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        val take = File(dir, "take.m4a").apply { writeBytes("take".toByteArray()); setLastModified(9_000L) }
+        val sha = BackupManifest.sha256Hex(take.readBytes())
+        dataStore.edit {
+            it[androidx.datastore.preferences.core.stringPreferencesKey("recording_records_json")] =
+                """[{"projectId":"p","fileName":"take.m4a","uploadedAt":1000,"sha256":"$sha","bytes":4,"origin":"recorded"}]"""
+        }
+        val id = RecordingManifestEntry.legacyRecordingId("p", "take.m4a", sha)
+
+        // Back up and an export read without moving anything; another song is adopted on its own.
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        snapshotLocalRecordings(repository, filesDir, emptySet(), moveFiles = false)
+        writeMemo("other", "verse.m4a", "verse".toByteArray())
+        com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, setOf("other"))
+        assertEquals(1_000L, repository.recordingRecords().single { it.id == id }.uploadedAt)
+
+        com.rhymeai.app.data.recording.RecordingTransitions.migrate(repository, filesDir)
+        val record = repository.recordingRecords().single { it.id == id }
+        assertEquals(Triple(1_000L, RecordingRecord.RECORDED, "voice-memos/p/$id.m4a"), Triple(record.uploadedAt, record.origin, record.path))
+    }
+
+    @Test
+    fun aBackupSnapshotWritesNothingToTheFileSystem() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val dir = RecordingFiles.memoDirectory(filesDir, "p").apply { mkdirs() }
+        // A legacy file, a duplicate copy in Trash, and an interrupted publish's empty claim.
+        File(dir, "take.m4a").writeBytes("take".toByteArray())
+        File(RecordingFiles.trashDirectory(filesDir, "p").apply { mkdirs() }, "1500__take.m4a").writeBytes("take".toByteArray())
+        val id = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val staged = File(RecordingFiles.stagingDirectory(filesDir, "p").apply { mkdirs() }, "$id.m4a").apply { writeBytes("staged".toByteArray()) }
+        val claim = File(dir, "$id.m4a").apply { createNewFile() }
+        repository.updateRecordingRecords {
+            listOf(RecordingRecord(id, "p", "staged.m4a", 1L, BackupManifest.sha256Hex(staged.readBytes()), 6L, RecordingRecord.RECORDED,
+                path = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, claim),
+                pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(filesDir, staged),
+                pendingOp = RecordingRecord.OP_PUBLISH))
+        }
+        fun state() = filesDir.walk().filter { !it.path.contains("datastore") }
+            .map { Triple(it.relativeTo(filesDir).path, it.length(), it.lastModified()) }.toSet()
+        val before = state()
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        snapshotLocalRecordings(repository, filesDir, emptySet(), moveFiles = false)
+
+        assertEquals(before, state())
+        assertEquals(RecordingRecord.OP_PUBLISH, repository.recordingRecords().single { it.id == id }.pendingOp)
+    }
 }
