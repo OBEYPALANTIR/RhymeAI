@@ -33,6 +33,7 @@ import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
 import com.rhymeai.app.data.sync.DRIVE_SIGN_IN_CANCELLED
 import com.rhymeai.app.data.sync.actionAfterAuthorization
+import com.rhymeai.app.data.sync.backupFailureReason
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DamagedBackupException
 import com.rhymeai.app.data.sync.DriveAuthorizer
@@ -879,7 +880,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The consent screen came back without approval (dismissed, or Google refused the request). */
     fun cancelDriveAuthorization() {
-        val action = actionAfterAuthorization(pendingAuthAction, BackupAction.BackUp)
+        // After process death there is no pending action; while disconnected only Connect shows the notice.
+        val fallback = if (isBackupConnected()) BackupAction.BackUp else BackupAction.Connect
+        val action = actionAfterAuthorization(pendingAuthAction, fallback)
         pendingAuthAction = null
         pendingMigrationPassphrase = null
         syncPendingIntent = null
@@ -941,34 +944,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 backupStatus = BackupStatus.Connected(lastBackupAt)
                 false
             }
-            SyncResult.NotConfigured -> {
-                backupStatus = BackupStatus.Failed("Google Drive is not available on this device.", lastBackupAt)
+            SyncResult.NotConfigured, SyncResult.CorruptRemote, SyncResult.UnsupportedVersion -> {
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
                 false
             }
             is SyncResult.AuthorizationFailed -> {
-                backupStatus = BackupStatus.Failed(result.reason, lastBackupAt)
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
                 result.retryable
             }
-            SyncResult.CorruptRemote -> {
-                backupStatus = BackupStatus.Failed(BackupManifest.DAMAGED_MESSAGE, lastBackupAt)
-                false
-            }
-            SyncResult.UnsupportedVersion -> {
-                backupStatus = BackupStatus.Failed(
-                    "This backup was made by a newer version of Writers Block. Update the app to use it.",
-                    lastBackupAt
-                )
-                false
-            }
-            is SyncResult.NetworkError -> {
-                backupStatus = BackupStatus.Failed("Backup failed: ${result.message}", lastBackupAt)
-                true
-            }
-            is SyncResult.UnknownError -> {
-                backupStatus = BackupStatus.Failed(
-                    "Backup failed: ${result.cause.message ?: "unexpected error"}",
-                    lastBackupAt
-                )
+            is SyncResult.NetworkError, is SyncResult.UnknownError -> {
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
                 true
             }
         }
