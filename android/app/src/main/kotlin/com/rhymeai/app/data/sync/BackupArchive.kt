@@ -30,36 +30,46 @@ object BackupArchive {
     }
 
     /**
-     * A36: export is the only place a display name becomes a file name. Within each song,
-     * recordings sharing a display name are told apart by " 2", " 3" in precedence order
-     * (then id); the archive's reader applies the same rule to find each recording's audio.
-     * These names never feed back into the recordings.
+     * A36/A39: export is the only place a display name becomes a file name, by the one
+     * allocator both platforms share (pinned by `shared/fixtures/archive-names-v1.json`).
+     * Within each song, recordings are visited by precedence time, then id; each takes its
+     * sanitized display name ("/" and "\\" and leading dots become "_"), or else
+     * "<stem> 2<ext>", "<stem> 3<ext>", … (the first free counter); "taken" compares NFC
+     * and case-folded names; nothing is reserved ahead of its turn; the stem is cut so the
+     * whole name fits 240 UTF-8 bytes. The reader applies the same rule to find each
+     * recording's audio by id; these names never feed back into the recordings.
      */
     internal fun exportNames(entries: List<RecordingManifestEntry>): Map<String, String> {
         val names = HashMap<String, String>()
         for ((_, song) in entries.groupBy { it.projectId }) {
-            val taken = song.mapTo(HashSet()) { it.fileName }
-            val ordered = song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })
-            val owners = ordered.groupBy { it.fileName }.mapValues { it.value.first().id }
-            for (entry in ordered) {
-                if (owners[entry.fileName] == entry.id) {
-                    names[entry.id] = entry.fileName
-                    continue
+            val taken = HashSet<String>()
+            for (entry in song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })) {
+                val name = sanitizeArchiveName(entry.fileName)
+                val dot = name.lastIndexOf('.')
+                val (stem, extension) = if (dot > 0) name.substring(0, dot) to name.substring(dot) else name to ""
+                var n = 1
+                var candidate: String
+                while (true) {
+                    val suffix = (if (n == 1) "" else " $n") + extension
+                    candidate = fitBytes(stem, SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - suffix.toByteArray().size) + suffix
+                    if (taken.add(archiveNameKey(candidate))) break
+                    n++
                 }
-                val stem = entry.fileName.substringBeforeLast('.').ifEmpty { "Recording" }
-                val extension = entry.fileName.substringAfterLast('.', "m4a")
-                var n = 2
-                var name: String
-                do {
-                    val suffix = " ${n++}.$extension"
-                    name = fitBytes(stem, SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - suffix.toByteArray().size) + suffix
-                } while (name in taken)
-                taken += name
-                names[entry.id] = name
+                names[entry.id] = candidate
             }
         }
         return names
     }
+
+    private fun sanitizeArchiveName(name: String): String {
+        val separated = name.replace('/', '_').replace('\\', '_')
+        val dots = separated.takeWhile { it == '.' }.length
+        return "_".repeat(dots) + separated.substring(dots)
+    }
+
+    /** NFC, then case-folded (upper then lower case, which folds "ß" to "ss" like full case folding). */
+    private fun archiveNameKey(name: String): String =
+        java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC).uppercase(java.util.Locale.ROOT).lowercase(java.util.Locale.ROOT)
 
     /** [text] cut to at most [maxBytes] UTF-8 bytes at a whole code point. */
     private fun fitBytes(text: String, maxBytes: Int): String {
