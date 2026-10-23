@@ -1263,6 +1263,106 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func cleanupDeletesOnlyTheObjectWhoseContentTheDeletionCovers() async throws {
+        let harness = try await makeHarness()
+        let audio = Data([1, 1])
+        let entry = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "S", fileName: "take.m4a", bytes: 2,
+                                  sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_000))
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(recordings: [entry], deletions: [SyncDeletion(projectId: "S", deletedAt: 5_000_000)]).encodedManifest())
+        harness.drive.seedRecording(entry, content: audio)
+        // Another object under the same id with other bytes (A40: never this recording).
+        var other = entry
+        other.sha256 = RecordingBackupManifest.sha256Hex(Data([9, 9, 9]))
+        other.bytes = 3
+        harness.drive.seedDuplicateRecording(other, content: Data([9, 9, 9]), id: "~other")
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.drive.objects(named: entry.driveName) == 1)
+        #expect(harness.drive.content(named: entry.driveName) == nil, "the covered object is gone")
+        #expect(harness.service.lastReport?.conflictingDriveObjects == [entry.driveName])
+    }
+
+    @MainActor
+    @Test func anUploadNeverChangesAnExistingObject() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([4, 4]), projectId: "song", fileName: "take.m4a")
+        let id = try harness.rowId("take.m4a")
+        // Drive already holds other bytes under this id's name.
+        harness.drive.seed(name: RecordingBackupManifest.driveName(recordingId: id), content: Data([8]),
+                           appProperties: ["id": id, "projectId": "song", "fileName": "take.m4a", "sha256": RecordingBackupManifest.sha256Hex(Data([8])), "bytes": "1"])
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        #expect(harness.drive.objects(named: RecordingBackupManifest.driveName(recordingId: id)) == 2)
+        #expect(harness.drive.contents(named: RecordingBackupManifest.driveName(recordingId: id)) == [Data([8]), Data([4, 4])])
+    }
+
+    @MainActor
+    @Test func fixtureDisplayNamesRoundTripThroughARealArchive() async throws {
+        final class Token {}
+        let url = try #require(Bundle(for: Token.self).url(forResource: "archive-names-v1", withExtension: "json"))
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let cases = try #require(root["cases"] as? [[String: Any]])
+        let source = try await makeHarness()
+        var expected: [String: (path: String, name: String, audio: Data)] = [:]
+        for (index, item) in cases.enumerated() {
+            let id = try #require(item["id"] as? String), projectId = try #require(item["projectId"] as? String)
+            let name = try #require(item["displayName"] as? String)
+            let audio = Data([UInt8(index + 1), 7])
+            if try source.context.fetch(FetchDescriptor<SongProject>()).first(where: { $0.id == projectId }) == nil {
+                source.context.insert(SongProject(id: projectId, title: projectId, updatedAt: Date(timeIntervalSince1970: 1)))
+            }
+            let entry = SyncRecording(id: id, projectId: projectId, fileName: name, bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio),
+                                      uploadedAt: Date(millisecondsSince1970: try #require((item["precedenceTime"] as? NSNumber)?.int64Value)))
+            try source.service.library.commitRestored(audio, entry: entry, origin: .restored, context: source.context)
+            expected[id] = (try #require(item["archivePath"] as? String), name, audio)
+        }
+        try source.context.save()
+        let archive = try source.service.exportArchive(modelContext: source.context, now: Date())
+        let files = try BackupArchive.unzip(archive.data)
+        for (_, value) in expected { #expect(files[value.path] == value.audio, "\(value.path)") }
+
+        let target = try await makeHarness()
+        try await target.service.importArchive(archive.data, modelContext: target.context)
+        let rows = Dictionary(uniqueKeysWithValues: try target.context.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) })
+        for (id, value) in expected { #expect(rows[id]?.displayName == value.name && rows[id]?.audio == value.audio) }
+        #expect(target.service.lastReport?.damagedRecordings.isEmpty == true)
+    }
+
+    @MainActor
+    @Test func backupAndExportWriteNothingToTheRecordingFolders() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([1]), projectId: "song", fileName: "kept.m4a")
+        try await harness.writeMemo(Data([2]), projectId: "song", fileName: "binned.m4a")
+        _ = try harness.service.library.trashRecording(at: harness.file(try harness.rowId("binned.m4a"), "song"), trashedAt: Date())
+        // A file not taken in yet and a staged leftover.
+        try harness.writeFile(Data([3]), projectId: "song", fileName: "new.m4a")
+        let staging = RecordingFiles.stagingRoot(for: harness.memosRoot)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try Data([5]).write(to: staging.appendingPathComponent("left.partial"))
+        func snapshot() throws -> [String: String] {
+            let scratch = harness.memosRoot.deletingLastPathComponent()
+            var state: [String: String] = [:]
+            let walker = try #require(FileManager.default.enumerator(at: scratch, includingPropertiesForKeys: nil))
+            for case let url as URL in walker {
+                let facts = try RecordingFiles.facts(url)
+                let isFile = (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true
+                state[url.path] = "\(facts.size)/\(facts.modified.timeIntervalSince1970)/\(facts.inode)/" + (isFile ? try RecordingFiles.sha256(of: url) : "dir")
+            }
+            return state
+        }
+        let before = try snapshot()
+        try await harness.service.backupNow(modelContext: harness.context)
+        _ = try harness.service.exportArchive(modelContext: harness.context, now: Date())
+        #expect(try snapshot() == before)
+    }
+
+    @MainActor
     @Test func cleanupKeepsAnUnlistedUploadOfATombstonedId() async throws {
         let harness = try await makeHarness()
         let audio = Data([3])
@@ -1295,7 +1395,27 @@ struct BackupCoreTests {
 
         let archive = try harness.service.exportArchive(modelContext: harness.context, now: Date())
         #expect(try BackupArchive.unzip(archive.data).keys.filter { $0.hasPrefix("recordings/") } == ["recordings/song/kept.m4a"])
-        #expect(Set(harness.service.lastReport?.leftOutRecordings ?? []) == ["blocked.m4a", "\(id).m4a"])
+        #expect(Set(harness.service.lastReport?.leftOutRecordings ?? []) == ["blocked.m4a (not in the library yet)", "\(id).m4a (not in the library yet)"])
+    }
+
+    @MainActor
+    @Test func exportNamesEveryKindOfRecordingItDoesNotHold() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "song", title: "Song", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        try await harness.writeMemo(Data([1]), projectId: "song", fileName: "kept.m4a")
+        try await harness.writeMemo(Data([2]), projectId: "song", fileName: "binned.m4a")
+        _ = try harness.service.library.trashRecording(at: harness.file(try harness.rowId("binned.m4a"), "song"), trashedAt: Date())
+        try await harness.writeMemo(Data(repeating: 5, count: Int(SyncRecording.maxBytes) + 1), projectId: "song", fileName: "long.m4a")
+        let quarantine = RecordingFiles.quarantineRoot(for: harness.memosRoot).appendingPathComponent("song", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try Data([7]).write(to: quarantine.appendingPathComponent("gone.m4a"))
+
+        _ = try harness.service.exportArchive(modelContext: harness.context, now: Date())
+
+        let report = try #require(harness.service.lastReport)
+        #expect(Set(report.leftOutRecordings) == ["binned.m4a (recordings Trash)", "long.m4a (over 16 MB)"])
+        #expect(report.quarantinedNotExported == 1)
     }
 
     @MainActor
@@ -2691,6 +2811,9 @@ private final class FakeDriveClient: DriveAppDataClient {
 
     func objects(named name: String) -> Int { (filesByName[name] == nil ? 0 : 1) + extraFiles.filter { $0.file.name == name }.count }
 
+    /// Every object's content under a name, the older first.
+    func contents(named name: String) -> [Data] { extraFiles.filter { $0.file.name == name }.map(\.content) + (filesByName[name].map { [$0.content] } ?? []) }
+
     func uploads(named name: String) -> Int { uploadsByName[name] ?? 0 }
 
     func seed(name: String, content: Data, appProperties: [String: String]? = nil) {
@@ -2765,6 +2888,8 @@ private final class FakeDriveClient: DriveAppDataClient {
             }
         }
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "upload-\(UUID().uuidString)", version: UUID().uuidString, appProperties: appProperties)
+        // As on Drive, a new file beside any other with the same name.
+        if name.hasPrefix("rec_"), let existing = filesByName[name] { extraFiles.append(existing) }
         filesByName[name] = StoredFile(file: file, content: content)
         uploadsByName[name, default: 0] += 1
         return file

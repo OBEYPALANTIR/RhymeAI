@@ -514,6 +514,56 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func aLaunchTombstoneIsComparedWithTheTrashDeletionTimeOnly() async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("TrashTombstone")
+        _ = container
+        let trash = TrashedSongProject(id: "t", title: "T", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 300), deletedAt: Date(timeIntervalSince1970: 100))
+        trash.precedenceRepaired = true
+        context.insert(trash)
+        context.insert(SyncDeletionRecord(projectId: "t", deletedAt: 200_000))
+        try context.save()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func anUnfinishedOversizedTrashMoveNeverExpiresOtherBytesAtItsPlace() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("OversizedConflict")
+        _ = container
+        library.context = context
+        try await library.reconcile(context: context)
+        let take = Data(repeating: 1, count: Int(SyncRecording.maxBytes) + 1)
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("big-\(UUID().uuidString).m4a")
+        try take.write(to: staged)
+        let live = try library.publishFinished(staged, projectId: "song", preferredName: "long.m4a", origin: .recorded)
+        let id = try #require(RecordingFiles.storedId(of: live))
+        // Its Trash move was journalled long ago; other audio of the same length sits at its Trash place.
+        var entry = try #require(OversizedRecordings.read(for: library.memosRoot)[id])
+        entry.trashedAt = 1_000
+        entry.source = live.path
+        entry.completed = false
+        try OversizedRecordings.record(id: id, entry: entry, for: library.memosRoot)
+        let place = library.trashRoot.appendingPathComponent("song/\(id).m4a")
+        try FileManager.default.createDirectory(at: place.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 9, count: Int(SyncRecording.maxBytes) + 1).write(to: place)
+
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        viewModel.purgeExpiredTrashedProjects()
+
+        #expect(try Data(contentsOf: place).first == 9 && FileManager.default.fileExists(atPath: live.path))
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+        #expect(Set(viewModel.recordingsNeedingAttention.map(\.lastPathComponent)) == ["\(id).m4a"])
+        #expect(Set(viewModel.recordingsNeedingAttention.map { $0.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent }) == ["voice-memos", "voice-memos-trash"])
+
+        // Kept separately: the other audio gets its own id, and the move finishes.
+        await viewModel.keepRecordingSeparately(place)
+        #expect(try Data(contentsOf: place).first == 1 && !FileManager.default.fileExists(atPath: live.path))
+        #expect(try OversizedRecordings.read(for: library.memosRoot).values.filter { $0.completed != false }.count == 2)
+    }
+
+    @MainActor
     @Test func aReconcileMoveStopsPlaybackThroughTheHook() async throws {
         let (viewModel, library, context, container) = try await Self.libraryViewModel("HookStop")
         _ = container
