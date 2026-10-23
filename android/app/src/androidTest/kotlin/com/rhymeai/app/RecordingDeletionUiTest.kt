@@ -40,9 +40,21 @@ class RecordingDeletionUiTest {
     private lateinit var filesDir: File
     private lateinit var projectId: String
 
+    private val drive = InMemoryDrive()
+
+    private fun backupPrefs() = InstrumentationRegistry.getInstrumentation().targetContext
+        .getSharedPreferences("rhymeai_backup", android.content.Context.MODE_PRIVATE)
+
     @Before fun openEditor() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName, Manifest.permission.RECORD_AUDIO)
+        check(instrumentation.targetContext.packageName == "com.rhymeai.app.motionqa") { "Restore fixtures require the owned isolated QA app." }
+        // The app's real Restore runs against an in-memory Drive (read when the view model is built).
+        BackupTestHooks.driveClient = drive
+        BackupTestHooks.authorizer = object : com.rhymeai.app.data.sync.DriveAuthorizer {
+            override suspend fun authorize() = com.rhymeai.app.data.sync.DriveAuthorization.Granted("token")
+        }
+        backupPrefs().edit().clear().putBoolean("drive_connected", true).commit()
         scenario = ActivityScenario.launch(MainActivity::class.java)
         compose.onNodeWithText("New Song").performClick()
         scenario.onActivity { viewModel = ViewModelProvider(it)[MainViewModel::class.java] }
@@ -54,6 +66,9 @@ class RecordingDeletionUiTest {
     @After fun closeEditor() {
         if (::projectId.isInitialized) RecordingFiles.memoDirectory(filesDir, projectId).deleteRecursively()
         scenario.close()
+        BackupTestHooks.driveClient = null
+        BackupTestHooks.authorizer = null
+        backupPrefs().edit().clear().commit()
     }
 
     @Test fun aDeletionThatWinsWhileTheSheetIsOpenHidesStopsAndBlocksPlayback() {
@@ -87,5 +102,65 @@ class RecordingDeletionUiTest {
         compose.runOnIdle { service.play(VoiceMemo(memo, "Take", 1_000L)) }
         Thread.sleep(1_000)
         compose.runOnIdle { assertNull(service.playingFile) }
+    }
+
+    @Test fun aRealRestoreThatRenamesAndThenQuarantinesStopsPlaybackFirst() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        try {
+            val service = viewModel.voiceMemoService
+            val catalog = requireNotNull(service.catalog)
+            val dir = RecordingFiles.memoDirectory(filesDir, projectId)
+            val x = TestRecordings.recordFinalizedM4a(context, File(dir, "take.m4a"))
+            val xId = runBlocking {
+                RecordingTransitions.snapshot(catalog, filesDir, emptySet())
+                catalog.recordingRecords().single { it.path == RecordingTransitions.relativePath(filesDir, x) }.id
+            }
+            // Drive holds an earlier recording Y under the same name: A30 gives it take.m4a.
+            val yBytes = TestRecordings.recordFinalizedM4a(context, File(filesDir, "y-${projectId}.m4a")).readBytes()
+            val y = com.rhymeai.app.data.sync.RecordingManifestEntry(
+                projectId, "take.m4a", sizeBytes = yBytes.size.toLong(), modifiedAt = 0L,
+                sha256 = com.rhymeai.app.data.sync.BackupManifest.sha256Hex(yBytes), uploadedAt = 1_000L,
+                id = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"
+            )
+            drive.put(com.rhymeai.app.data.sync.BackupManifest.recordingDriveName(y.id), yBytes)
+            drive.put(
+                com.rhymeai.app.data.sync.BackupManifest.FILE_NAME,
+                com.rhymeai.app.data.sync.BackupManifest.encode(com.rhymeai.app.data.sync.SyncBlob(recordings = listOf(y)), 0L, "other-device")
+            )
+
+            compose.runOnIdle { service.play(VoiceMemo(x, "take", 1_500L)) }
+            compose.waitUntil(10_000) { service.playingFile == x.canonicalFile || service.playingFile == x }
+            compose.runOnIdle { viewModel.restoreFromBackup() }
+            try {
+                compose.waitUntil(30_000) { File(dir, "take 2.m4a").exists() && File(dir, "take.m4a").exists() && viewModel.backupBusyLabel == null }
+            } catch (e: Throwable) {
+                throw AssertionError("restore: notice=${viewModel.backupNotice} status=${viewModel.backupStatus} files=${dir.list()?.toList()}", e)
+            }
+            // The rename moved X's bytes; its playback stopped first.
+            assertNull(service.playingFile)
+
+            // Play X under its new name, then a deletion of X arrives through the next Restore.
+            val renamed = File(dir, "take 2.m4a")
+            compose.runOnIdle { service.play(VoiceMemo(renamed, "take 2", 1_500L)) }
+            compose.waitUntil(10_000) { service.playingFile?.name == "take 2.m4a" }
+            val manifest = com.rhymeai.app.data.sync.BackupManifest.decode(requireNotNull(drive.bytes(com.rhymeai.app.data.sync.BackupManifest.FILE_NAME)))
+            drive.put(
+                com.rhymeai.app.data.sync.BackupManifest.FILE_NAME,
+                com.rhymeai.app.data.sync.BackupManifest.encode(
+                    manifest.copy(deletions = manifest.deletions + com.rhymeai.app.data.sync.SyncDeletion(
+                        projectId, "take 2.m4a", System.currentTimeMillis() + 60_000L, recordingId = xId
+                    )),
+                    0L, "other-device"
+                )
+            )
+            compose.runOnIdle { viewModel.restoreFromBackup() }
+            compose.waitUntil(30_000) { !renamed.exists() && viewModel.backupBusyLabel == null }
+            assertNull(service.playingFile)
+            assertTrue(RecordingFiles.quarantineDirectory(filesDir, projectId).listFiles().orEmpty().isNotEmpty())
+        } finally {
+            RecordingFiles.quarantineDirectory(filesDir, projectId).deleteRecursively()
+            File(filesDir, "y-${projectId}.m4a").delete()
+        }
     }
 }

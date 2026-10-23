@@ -11,7 +11,12 @@ class MemoryCatalog : RecordingCatalog {
     var records: List<RecordingRecord> = emptyList()
     var failWrites = false
     var failOnWrite: Int? = null
+    var deletionsUnreadable = false
     private var writes = 0
+
+    override suspend fun requireDeletionsReadable() {
+        if (deletionsUnreadable) throw IOException("injected unreadable tombstones")
+    }
 
     override suspend fun recordingRecords(): List<RecordingRecord> = records
 

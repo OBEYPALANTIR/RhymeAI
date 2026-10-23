@@ -71,4 +71,32 @@ class Mp4IntegrityTest {
     fun aTakeWithoutAnIndexFails() {
         assertFailsWith<Mp4Integrity.InvalidMp4> { Mp4Integrity.check(write("noindex.m4a", ftyp + box("mdat", media))) }
     }
+
+    @Test
+    fun aChunkOffsetThatWouldOverflowFails() {
+        val longs = ByteArrayOutputStream().also { out ->
+            DataOutputStream(out).apply { writeInt(0); writeInt(1); writeLong(Long.MAX_VALUE - 4) }
+        }.toByteArray()
+        val moov = box(
+            "moov",
+            box(
+                "trak",
+                box(
+                    "mdia",
+                    box("mdhd", ints(0, 0, 0, 44_100, 88_200)),
+                    box("hdlr", ints(0, 0), "soun".toByteArray(), ints(0, 0, 0), byteArrayOf(0)),
+                    box("minf", box("stbl", box("stsz", ints(0, 0, 3, 10, 10, 10)), box("stsc", ints(0, 1, 1, 3, 1)), box("co64", longs)))
+                )
+            )
+        )
+        assertFailsWith<Mp4Integrity.InvalidMp4> { Mp4Integrity.check(write("overflow.m4a", ftyp + box("mdat", media) + moov)) }
+    }
+
+    @Test
+    fun aZeroedPayloadOfTheSameLengthIsStructurallyIntactSoContentIsCheckedSeparately() {
+        // The structure alone cannot tell; VoiceMemoService.inspectFinalized rejects it by content
+        // (WaitingTakeInstrumentedTest runs that on a device with a real recording).
+        val zeroed = ftyp + box("mdat", ByteArray(media.size)) + moov(ftyp.size + 8)
+        assertEquals(3, Mp4Integrity.check(write("zeroed.m4a", zeroed)).single().sampleCount)
+    }
 }

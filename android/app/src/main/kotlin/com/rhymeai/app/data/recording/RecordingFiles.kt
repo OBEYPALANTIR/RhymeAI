@@ -12,6 +12,7 @@ internal object RecordingFiles {
 
     private const val MEMOS_STAGING_ROOT_DIR = "voice-memos-staging"
     private const val MEMOS_QUARANTINE_ROOT_DIR = "voice-memos-quarantine"
+    private const val MEMOS_PARKING_ROOT_DIR = "voice-memos-parking"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -38,6 +39,13 @@ internal object RecordingFiles {
 
     fun quarantineDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(quarantineRoot(filesDir), projectId)
+
+    /** A30: where a recording waits for a moment while names swap; never listed or backed up. */
+    fun parkingRoot(filesDir: File): File =
+        File(filesDir, MEMOS_PARKING_ROOT_DIR)
+
+    fun parkingDirectory(filesDir: File, projectId: String): File =
+        safeProjectDirectory(parkingRoot(filesDir), projectId)
 
     fun memoDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(memosRoot(filesDir), projectId)

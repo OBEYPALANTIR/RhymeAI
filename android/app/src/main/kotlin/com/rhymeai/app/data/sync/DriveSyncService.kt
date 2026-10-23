@@ -1054,11 +1054,7 @@ class DriveSyncService(
             }
 
             val writtenAt = now()
-            // Every entry keeps its own precedence time (the stored record, Drive's entry or
-            // the older backup's); only an entry with none is stamped with this upload.
-            merged = merged.copy(
-                recordings = merged.recordings.map { if (it.uploadedAt > 0L) it else it.copy(uploadedAt = writtenAt) }
-            )
+            // A32: every entry keeps the precedence time fixed when it was gathered; a write never stamps one.
             val bytes = BackupManifest.encode(merged, writtenAt, clientId())
             if (bytes.size > MAX_SYNC_BLOB_BYTES) throw DriveNetworkException("Drive backup exceeds the allowed size")
             // Another device wrote while recordings uploaded: merge its manifest before writing ours.

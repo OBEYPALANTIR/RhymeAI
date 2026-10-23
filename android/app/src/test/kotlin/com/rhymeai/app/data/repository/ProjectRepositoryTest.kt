@@ -1136,7 +1136,7 @@ class ProjectRepositoryTest {
     }
 
     private fun syncedRecording(id: String) = RecordingManifestEntry(
-        projectId = id, fileName = "take.m4a", sizeBytes = 3L, modifiedAt = 500L, sha256 = "synthetic"
+        projectId = id, fileName = "take.m4a", sizeBytes = 3L, modifiedAt = 500L, sha256 = "synthetic", uploadedAt = 500L
     )
 
     private fun gateFirstWrite(

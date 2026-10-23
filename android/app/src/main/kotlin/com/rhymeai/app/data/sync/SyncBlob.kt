@@ -317,7 +317,9 @@ object SyncMerger {
         for (input in inputs) {
             projects = mergeProjects(projects, input.projects)
             trashed = mergeTrash(trashed, input.trashed)
-            recordings = mergeRecordings(recordings, input.recordings)
+            // A32: every entry's precedence time is fixed here, before any resolution or
+            // naming, and never changes afterwards (an entry without one keeps its file time or 0).
+            recordings = mergeRecordings(recordings, input.recordings.map { it.copy(uploadedAt = it.precedenceTime) })
         }
         return SyncBlob(
             version = SyncBlob.CURRENT_VERSION,
