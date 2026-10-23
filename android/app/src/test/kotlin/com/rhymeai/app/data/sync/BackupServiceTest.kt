@@ -713,6 +713,91 @@ class BackupServiceTest {
     }
 
     @Test
+    fun anOversizedRecordingCountsAsBackedUpOnlyWhenItsRawObjectMatches() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val bytes = ByteArray((RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES + 1).toInt()) { 7 }
+        val big = writeMemo("p", "big.m4a", bytes).copy(uploadedAt = 1_000L)
+        // Another version listed it, but its raw object is missing.
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(big)))
+        assertEquals(1, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+
+        // A raw object with another size does not count either.
+        drive.put(BackupManifest.recordingDriveName(big.id), byteArrayOf(1), recordingAppProperties(big.copy(sizeBytes = 1L)))
+        assertEquals(1, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+
+        // With the matching raw object it is backed up.
+        drive.put(BackupManifest.recordingDriveName(big.id), bytes, recordingAppProperties(big))
+        assertEquals(0, assertIs<SyncResult.Success>(service.backUp(repository)).skippedLargeRecordings)
+    }
+
+    @Test
+    fun aDeletionThatWinsOnRestoreTakesTheRecordingOutOfTheLibraryIntoQuarantine() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val take = writeMemo("p", "take.m4a", "old take".toByteArray(), modifiedAt = 1_000L)
+        // Elsewhere the take was deleted at 5000 and the song was edited later, at 9000.
+        putRemote(SyncBlob(
+            projects = listOf(song("p", updatedAt = 9_000L)),
+            deletions = listOf(SyncDeletion("p", "take.m4a", 5_000L, recordingId = take.id))
+        ))
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        assertEquals(listOf("p"), repository.projectsFlow.first().map { it.id })
+        // The recordings listing reads the song's memo folder: the take is no longer there.
+        assertTrue(RecordingFiles.memoDirectory(filesDir, "p").list().orEmpty().isEmpty())
+        val kept = RecordingFiles.quarantineDirectory(filesDir, "p").listFiles().orEmpty().single()
+        assertContentEquals("old take".toByteArray(), kept.readBytes())
+        assertTrue(repository.recordingRecords().isEmpty())
+        assertTrue(snapshotLocalRecordingFiles(filesDir, emptySet()).isEmpty())
+    }
+
+    @Test
+    fun anUnreadableRecordingStopsDeleteForeverAndExpiryAndChangesNothing() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("gone")))
+        repository.moveProjectToTrash("gone", 10L)
+        val dir = RecordingFiles.memoDirectory(filesDir, "gone").apply { mkdirs() }
+        val unreadable = File(dir, "take.m4a").apply { writeBytes("take".toByteArray()) }
+        unreadable.setReadable(false)
+        org.junit.Assume.assumeFalse("permissions are not enforced for this user", unreadable.canRead())
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+        try {
+            assertFailsWith<java.io.IOException> { repository.permanentlyDeleteTrashedProject("gone", now = 5_000L, adopt = adopt) }
+            assertFailsWith<java.io.IOException> {
+                repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, adopt = adopt)
+            }
+
+            assertEquals(listOf("gone"), repository.trashedProjectsFlow.first().map { it.project.id })
+            assertTrue(repository.snapshotLocalSyncBase().blob.deletions.isEmpty())
+            assertTrue(unreadable.exists())
+        } finally {
+            unreadable.setReadable(true)
+        }
+    }
+
+    @Test
+    fun aFolderThatCannotBeListedStopsDeleteForeverAndExpiryAndChangesNothing() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("gone")))
+        repository.moveProjectToTrash("gone", 10L)
+        val trash = RecordingFiles.trashDirectory(filesDir, "gone").apply { mkdirs() }
+        val trashed = File(trash, "1500__old.m4a").apply { writeBytes("old".toByteArray()) }
+        trash.setReadable(false)
+        org.junit.Assume.assumeTrue("permissions are not enforced for this user", trash.listFiles() == null)
+        val adopt: suspend (Set<String>) -> Unit = { com.rhymeai.app.data.recording.RecordingTransitions.adopt(repository, filesDir, it) }
+        try {
+            assertFailsWith<java.io.IOException> { repository.permanentlyDeleteTrashedProject("gone", now = 5_000L, adopt = adopt) }
+            assertFailsWith<java.io.IOException> {
+                repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, adopt = adopt)
+            }
+
+            assertEquals(listOf("gone"), repository.trashedProjectsFlow.first().map { it.project.id })
+            assertTrue(repository.snapshotLocalSyncBase().blob.deletions.isEmpty())
+        } finally {
+            trash.setReadable(true)
+        }
+        assertTrue(trashed.exists())
+    }
+
+    @Test
     fun withoutAPassphraseTheOlderBackupIsLeftAloneAndOffered() = runBlocking<Unit> {
         repository.saveProjects(listOf(song("here")))
         putLegacy(SyncBlob(projects = listOf(song("legacy"))))

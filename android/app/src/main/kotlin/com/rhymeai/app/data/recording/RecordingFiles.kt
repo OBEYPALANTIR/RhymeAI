@@ -11,6 +11,7 @@ internal object RecordingFiles {
     val SUPPORTED_AUDIO_EXTENSIONS = setOf("m4a", "mp3", "wav", "aac")
 
     private const val MEMOS_STAGING_ROOT_DIR = "voice-memos-staging"
+    private const val MEMOS_QUARANTINE_ROOT_DIR = "voice-memos-quarantine"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -27,6 +28,16 @@ internal object RecordingFiles {
 
     fun stagingDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(stagingRoot(filesDir), projectId)
+
+    /**
+     * Bytes kept for recovery only (A26/A28): duplicate copies of a pre-v4 recording and
+     * recordings whose deletion won a merge. Never listed, adopted, backed up or deleted.
+     */
+    fun quarantineRoot(filesDir: File): File =
+        File(filesDir, MEMOS_QUARANTINE_ROOT_DIR)
+
+    fun quarantineDirectory(filesDir: File, projectId: String): File =
+        safeProjectDirectory(quarantineRoot(filesDir), projectId)
 
     fun memoDirectory(filesDir: File, projectId: String): File =
         safeProjectDirectory(memosRoot(filesDir), projectId)
@@ -92,11 +103,13 @@ internal object RecordingFiles {
      */
     fun resolveCollision(dir: File, base: String, extension: String = "m4a"): File {
         var candidate = File(dir, "$base.$extension")
+        // A name like ".m4a" is valid but has no stem to number.
+        val stem = base.trim().ifEmpty { "Recording" }
         var suffix = 2
         while (candidate.exists()) {
             val tail = " $suffix.$extension"
             val room = SyncIdentity.MAX_RECORDING_FILE_NAME_BYTES - tail.toByteArray(Charsets.UTF_8).size
-            candidate = File(dir, truncateUtf8(base, room).trimEnd() + tail)
+            candidate = File(dir, truncateUtf8(stem, room).trimEnd() + tail)
             suffix++
         }
         return candidate

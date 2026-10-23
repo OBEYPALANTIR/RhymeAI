@@ -529,25 +529,6 @@ object RecordingSyncPlanner {
         }
     }
 
-    /**
-     * Identities this device left out of sync because of the transfer limit:
-     * a local file too large to upload, or a manifest entry too large to
-     * download, whose content is not already the same on both sides.
-     */
-    fun countSkippedAsTooLarge(
-        local: List<RecordingManifestEntry>,
-        manifest: List<RecordingManifestEntry>
-    ): Int {
-        val localByIdentity = local.associateBy { it.identityKey }
-        val manifestByIdentity = manifest.associateBy { it.identityKey }
-        return (localByIdentity.keys + manifestByIdentity.keys).count { identity ->
-            val localEntry = localByIdentity[identity]
-            val manifestEntry = manifestByIdentity[identity]
-            val tooLarge = localEntry?.isTransferable == false || manifestEntry?.isTransferable == false
-            tooLarge && localEntry?.sha256 != manifestEntry?.sha256
-        }
-    }
-
     /** Downloads only fill gaps: a local file is never replaced by a remote one. */
     fun planRestores(
         local: List<RecordingManifestEntry>,
@@ -733,14 +714,14 @@ object RecordingFileStore {
     }
 }
 
-/** Tombstoned recordings are deletions, not size skips. */
-internal fun skippedLargeRecordingCount(
-    localRecordings: List<RecordingManifestEntry>,
-    merged: SyncBlob
-): Int = RecordingSyncPlanner.countSkippedAsTooLarge(
-    local = recordingsAllowedForUpload(localRecordings, emptyList(), merged.deletions),
-    manifest = merged.recordings
-)
+/**
+ * A28: after Restore or Import commits, a recording whose winning tombstone is now
+ * known here leaves the library: its bytes move to quarantine and its record goes.
+ */
+internal suspend fun quarantineDeletedRecordings(repository: ProjectRepository, filesDir: File) {
+    val base = repository.snapshotLocalSyncBase()
+    RecordingTransitions.quarantineDeleted(repository, filesDir, base.blob.deletions, base.pendingIds)
+}
 
 internal data class LocalRecordingFile(val entry: RecordingManifestEntry, val file: File, val inTrash: Boolean = false)
 
@@ -1104,8 +1085,15 @@ class DriveSyncService(
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
                 committed = repository.applySyncResult(gathered, base)
+                quarantineDeletedRecordings(repository, filesDir)
             }
-            return PushOutcome(merged, committed, skippedLargeRecordingCount(liveFiles.map { it.entry }, merged), damaged)
+            // A29: a recording too large to move counts as backed up only when its raw Drive
+            // object is there with this hash and size; otherwise it is reported as skipped.
+            val allowed = recordingsAllowedForUpload(liveFiles.map { it.entry }, emptyList(), merged.deletions)
+            val heldIds = liveFiles.mapTo(HashSet()) { it.entry.id }
+            val skipped = allowed.count { !it.isTransferable && !onDrive(it) } +
+                merged.recordings.count { !it.isTransferable && it.id !in heldIds }
+            return PushOutcome(merged, committed, skipped, damaged)
         }
         throw DriveNetworkException(CONFLICT_MESSAGE)
     }

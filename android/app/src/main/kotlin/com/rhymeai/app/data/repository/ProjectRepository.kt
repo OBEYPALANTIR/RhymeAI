@@ -338,10 +338,20 @@ class ProjectRepository internal constructor(
         }
     }
 
+    /**
+     * [adopt] gives every recording file of the songs a record first (A26), so the
+     * deletion tombstones each of them; if it throws, nothing is deleted.
+     */
     suspend fun permanentlyDeleteTrashedProject(
         id: String,
-        now: Long = System.currentTimeMillis()
-    ): List<TrashedSongProject>? = projectSaveMutex.withLock {
+        now: Long = System.currentTimeMillis(),
+        adopt: suspend (Set<String>) -> Unit = {}
+    ): List<TrashedSongProject>? {
+        adopt(setOf(id))
+        return permanentlyDeleteAdopted(id, now)
+    }
+
+    private suspend fun permanentlyDeleteAdopted(id: String, now: Long): List<TrashedSongProject>? = projectSaveMutex.withLock {
         var committed: List<TrashedSongProject>? = null
         dataStore.edit { prefs ->
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
@@ -361,12 +371,20 @@ class ProjectRepository internal constructor(
         committed
     }
 
-    suspend fun purgeExpiredTrashedProjects(now: Long): TrashPurge = projectSaveMutex.withLock {
+    suspend fun purgeExpiredTrashedProjects(now: Long, adopt: suspend (Set<String>) -> Unit = {}): TrashPurge {
+        val expiring = trashedProjectsStore.decode(dataStore.data.first()[TRASHED_PROJECTS_KEY] ?: "[]")
+            .filter { it.deleteAfter <= now }.mapTo(HashSet()) { it.project.id }
+        adopt(expiring)
+        return purgeAdopted(now, expiring)
+    }
+
+    /** Only songs whose recordings were adopted expire in this pass. */
+    private suspend fun purgeAdopted(now: Long, adopted: Set<String>): TrashPurge = projectSaveMutex.withLock {
         lateinit var committed: TrashPurge
         dataStore.edit { prefs ->
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-            val expired = trash.filter { it.deleteAfter <= now }.map { it.project.id }
-            val retained = trash.filter { it.deleteAfter > now }
+            val expired = trash.filter { it.deleteAfter <= now && it.project.id in adopted }.map { it.project.id }
+            val retained = trash.filterNot { it.project.id in expired }
             if (expired.isNotEmpty()) {
                 val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
                 val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")

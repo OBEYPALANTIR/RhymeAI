@@ -3,6 +3,7 @@ package com.rhymeai.app
 import android.app.Application
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -20,7 +21,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -54,6 +54,9 @@ class RecordingFailureUiTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         compose.onNodeWithText("New Song").performClick()
         scenario.onActivity { viewModel = ViewModelProvider(it)[MainViewModel::class.java] }
+        // New Song finishes asynchronously (it clears the current song, then opens the editor);
+        // reserving the recording song before that would race it and cancel with "Song changed".
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("songActionsMenuButton").fetchSemanticsNodes().isNotEmpty() }
         projectId = runBlocking(Dispatchers.Main) { viewModel.ensureProjectForRecording() }
         filesDir = viewModel.getApplication<Application>().filesDir
         compose.runOnIdle {
@@ -71,28 +74,49 @@ class RecordingFailureUiTest {
         scenario.close()
     }
 
-    private fun waitForText(text: String) =
-        compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    /**
+     * Steps the Compose clock one frame at a time while polling. With the auto-advancing
+     * test clock a snackbar's display delay can elapse between two polls, so the
+     * message could come and go unseen.
+     */
+    private fun awaitManually(what: String, condition: () -> Boolean) {
+        compose.mainClock.autoAdvance = false
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!condition()) {
+            check(System.currentTimeMillis() < deadline) { "Timed out waiting for $what" }
+            compose.mainClock.advanceTimeByFrame()
+            Thread.sleep(20)
+        }
+    }
 
-    @Test fun aTakeThatCannotBeSavedShowsRetryAndRetrySavesIt() {
+    private fun waitForText(text: String) =
+        awaitManually(text) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+
+    @Test fun aTakeThatCannotBeSavedWaitsInTheRecordingsSheetUntilRetrySavesIt() {
         val service = viewModel.voiceMemoService
         val take = File(RecordingFiles.stagingDirectory(filesDir, projectId).apply { mkdirs() }, "1700000000000.m4a")
             .apply { writeBytes(ByteArray(64) { it.toByte() }) }
         compose.runOnIdle { service.seedRecordingForTesting(take) }
 
+        compose.mainClock.autoAdvance = false
         compose.onAllNodesWithContentDescription("Stop recording").onFirst().performClick()
         waitForText("Couldn't save the recording. Free up storage, then tap Retry.")
+        compose.mainClock.autoAdvance = true
 
         assertTrue(take.exists())
         assertTrue(RecordingFiles.memoDirectory(filesDir, projectId).listFiles().orEmpty().isEmpty())
-        assertNotNull(service.pendingTake)
         assertFalse(service.isRecording)
 
+        // The recordings sheet lists the waiting take and saves it on Retry.
         failing.failWrites = false
-        compose.onNodeWithText("Retry").performClick()
-        compose.waitUntil(10_000) { !take.exists() && service.pendingTake == null }
+        compose.onNodeWithTag("songActionsMenuButton").performClick()
+        compose.onNodeWithTag("songRecordings").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("1 recording waiting to be saved").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("retryWaitingTakes").performClick()
+        compose.waitUntil(10_000) { !take.exists() && runBlocking { service.waitingTakes(projectId) }.isEmpty() }
         assertEquals(listOf("1700000000000.m4a"), RecordingFiles.memoDirectory(filesDir, projectId).list().orEmpty().toList())
         assertEquals("1700000000000.m4a", failing.records.single().fileName)
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("1 recording waiting to be saved").fetchSemanticsNodes().isEmpty() }
     }
 
     @Test fun aRenameWhoseRecordCannotBeWrittenShowsAnErrorAndKeepsTheName() {
@@ -103,8 +127,10 @@ class RecordingFailureUiTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Rename recording").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithContentDescription("Rename recording").performClick()
+        compose.mainClock.autoAdvance = false
         compose.onNodeWithText("OK").performClick()
         waitForText("Couldn't rename recording. Check free storage, then try again.")
+        compose.mainClock.autoAdvance = true
 
         assertTrue(take.exists())
         assertEquals(listOf("Take.m4a"), RecordingFiles.memoDirectory(filesDir, projectId).list().orEmpty().toList())

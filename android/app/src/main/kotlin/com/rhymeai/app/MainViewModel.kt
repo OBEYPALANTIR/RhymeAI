@@ -1769,13 +1769,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun adoptRecordings(projectIds: Set<String>) =
+        com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, projectIds)
+
     fun permanentlyDeleteTrashedProject(id: String) {
         if (restoringDraft || savingBeforeNavigation) return
         viewModelScope.launch {
             try {
                 // Every recording of the song gets a record first, so the deletion tombstones all of them.
-                com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, setOf(id))
-                val committed = repo.permanentlyDeleteTrashedProject(id)
+                val committed = repo.permanentlyDeleteTrashedProject(id, adopt = ::adoptRecordings)
                     ?: return@launch reportMissingTrashProject()
                 trashedProjects = committed
                 pendingProjectCreationIds.remove(id)
@@ -1811,10 +1813,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // Finish interrupted moves and give every expiring song's recordings a record
                 // before the expiry builds their tombstones.
-                val expiring = repo.trashedProjectsFlow.first().filter { it.deleteAfter <= now }.mapTo(HashSet()) { it.project.id }
                 com.rhymeai.app.data.recording.RecordingTransitions.reconcile(repo, getApplication<Application>().filesDir)
-                com.rhymeai.app.data.recording.RecordingTransitions.adopt(repo, getApplication<Application>().filesDir, expiring)
-                val committed = repo.purgeExpiredTrashedProjects(now)
+                val committed = repo.purgeExpiredTrashedProjects(now, adopt = ::adoptRecordings)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
                 for (id in committed.purgedIds) pendingProjectCreationIds.remove(id)

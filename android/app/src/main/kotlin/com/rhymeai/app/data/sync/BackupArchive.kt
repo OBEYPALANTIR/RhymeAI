@@ -149,6 +149,7 @@ object BackupArchive {
             if (RecordingFileStore.importVerified(repository, filesDir, entry, bytes, RecordingRecord.IMPORTED)) added++
         }
         repository.applySyncResult(gathered, base)
+        quarantineDeletedRecordings(repository, filesDir)
         return ImportSummary(
             songs = contents.manifest.projects.size,
             recordingsAdded = added,

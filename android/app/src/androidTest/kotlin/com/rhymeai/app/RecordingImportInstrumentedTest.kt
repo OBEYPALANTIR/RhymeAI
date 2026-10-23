@@ -55,12 +55,16 @@ class RecordingImportInstrumentedTest {
     private class Catalog : com.rhymeai.app.data.recording.RecordingCatalog {
         var records = listOf<com.rhymeai.app.data.sync.RecordingRecord>()
         var failWrites = false
+        var failOnWrite: Int? = null
+        private var writes = 0
         override suspend fun recordingRecords() = records
         override suspend fun updateRecordingRecords(
             transform: (List<com.rhymeai.app.data.sync.RecordingRecord>) -> List<com.rhymeai.app.data.sync.RecordingRecord>
         ) {
-            if (failWrites) throw java.io.IOException("injected metadata write failure")
-            records = transform(records)
+            val next = transform(records)
+            if (next == records) return
+            if (failWrites || ++writes == failOnWrite) throw java.io.IOException("injected metadata write failure")
+            records = next
         }
     }
 
@@ -142,14 +146,49 @@ class RecordingImportInstrumentedTest {
             assertTrue(take.exists())
             assertTrue(service.memosForProject("song").isEmpty())
             assertTrue(catalog.records.isEmpty())
-            assertNull(service.pendingTake)
         } finally {
             service.release()
             owned.deleteRecursively()
         }
     }
 
-    @Test fun aFinishedTakeWhoseRecordCannotBeWrittenStaysInStagingAndRetrySavesIt() = runBlocking {
+    @Test fun aFinishedTakeWhoseSaveFailedWaitsAcrossARestartAndALaterTakeUntilRetrySavesIt() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
+        val isolated = object : ContextWrapper(context) { override fun getFilesDir(): File = owned }
+        val service = VoiceMemoService(isolated)
+        val catalog = Catalog()
+        service.catalog = catalog
+        val staging = RecordingFiles.stagingDirectory(owned, "song").apply { mkdirs() }
+        try {
+            val first = File(staging, "1700000000000.m4a").apply { writeBytes(wav()) }
+            catalog.failWrites = true
+            val failure = runCatching { service.finishTake(first, null) }.exceptionOrNull()
+            assertTrue(failure is VoiceMemoService.RecordingNotSavedException)
+            assertTrue(first.exists())
+            assertTrue(service.memosForProject("song").isEmpty())
+
+            // A new service instance (as after process death) still sees the waiting take.
+            val restarted = VoiceMemoService(isolated).apply { this.catalog = catalog }
+            val waiting = restarted.waitingTakes("song").single()
+            catalog.failWrites = false
+            // A later take that saves leaves the earlier one waiting.
+            restarted.finishTake(File(staging, "1700000005000.m4a").apply { writeBytes(wav()) }, null)
+            assertEquals(listOf(waiting.id), restarted.waitingTakes("song").map { it.id })
+
+            assertEquals(1, restarted.retryWaitingTakes("song"))
+            assertTrue(restarted.waitingTakes("song").isEmpty())
+            assertFalse(first.exists())
+            assertEquals(2, restarted.memosForProject("song").size)
+            assertEquals(waiting.recordedAt, catalog.records.single { it.id == waiting.id }.uploadedAt)
+            restarted.release()
+        } finally {
+            service.release()
+            owned.deleteRecursively()
+        }
+    }
+
+    @Test fun aRetryAfterTheTakeMovedButItsFinalRecordFailedCountsAsSaved() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val owned = File(context.filesDir, "recording-test-${UUID.randomUUID()}").apply { mkdirs() }
         val service = VoiceMemoService(object : ContextWrapper(context) { override fun getFilesDir(): File = owned })
@@ -158,22 +197,17 @@ class RecordingImportInstrumentedTest {
         try {
             val take = File(RecordingFiles.stagingDirectory(owned, "song").apply { mkdirs() }, "1700000000000.m4a")
                 .apply { writeBytes(wav()) }
-            catalog.failWrites = true
-
-            val failure = runCatching { service.finishTake(take, null) }.exceptionOrNull()
-
-            assertTrue(failure is VoiceMemoService.RecordingNotSavedException)
-            assertTrue(take.exists())
-            assertTrue(service.memosForProject("song").isEmpty())
-            val pending = requireNotNull(service.pendingTake)
-
-            catalog.failWrites = false
-            val saved = requireNotNull(service.retryPendingTake())
+            // Write 1 is the intent; write 2, the final record, fails after the file moved.
+            catalog.failOnWrite = 2
+            assertTrue(runCatching { service.finishTake(take, null) }.exceptionOrNull() is VoiceMemoService.RecordingNotSavedException)
             assertFalse(take.exists())
-            assertEquals(listOf(saved.file.name), service.memosForProject("song").map { it.file.name })
-            assertEquals(pending.id, catalog.records.single().id)
-            assertEquals(pending.recordedAt, catalog.records.single().uploadedAt)
-            assertNull(service.pendingTake)
+            val waiting = service.waitingTakes("song").single()
+
+            assertEquals(1, service.retryWaitingTakes("song"))
+            assertTrue(service.waitingTakes("song").isEmpty())
+            assertEquals(listOf("1700000000000.m4a"), service.memosForProject("song").map { it.file.name })
+            assertEquals(waiting.id, catalog.records.single().id)
+            assertNull(catalog.records.single().pendingOp)
         } finally {
             service.release()
             owned.deleteRecursively()

@@ -145,18 +145,17 @@ class VoiceMemoService(private val context: Context) {
         isRecording = true
     }
 
-    /** A finished take whose publication failed; it stays in staging until [retryPendingTake] publishes it. */
-    class PendingTake internal constructor(val file: File, val projectId: String, val id: String, val recordedAt: Long)
-
-    /** Set while a finished take waits in staging for a retry (A22/A24). */
-    var pendingTake by mutableStateOf<PendingTake?>(null)
-        private set
+    /**
+     * A finished take waiting in staging to be saved (A27). A marker file beside it
+     * records its id and time, so it survives process death and later recordings.
+     */
+    class WaitingTake internal constructor(val file: File, val projectId: String, val id: String, val recordedAt: Long)
 
     /** The recorder did not finish the take, so it was not published (A22). */
     class RecordingNotFinishedException(cause: Throwable) : java.io.IOException("Recording could not be finished", cause)
 
-    /** The finished take could not be saved; it is kept in staging and [pendingTake] retries it. */
-    class RecordingNotSavedException(cause: Throwable) : java.io.IOException("Recording could not be saved", cause)
+    /** The finished take could not be saved; it waits in staging and [retryWaitingTakes] saves it. */
+    class RecordingNotSavedException(val projectId: String, cause: Throwable) : java.io.IOException("Recording could not be saved", cause)
 
     // ---------------------------------------------------------------------------
     // Recording
@@ -232,7 +231,7 @@ class VoiceMemoService(private val context: Context) {
      * nothing was being recorded or the take is empty. Throws
      * [RecordingNotFinishedException] when the recorder fails to finish (the take stays
      * unpublished in staging) and [RecordingNotSavedException] when its record cannot be
-     * written (the take stays in staging for [retryPendingTake]).
+     * written (the take waits in staging for [retryWaitingTakes]).
      */
     suspend fun stopRecording(): VoiceMemo? = withContext(Dispatchers.IO) {
         if (!isRecording) return@withContext null
@@ -271,27 +270,74 @@ class VoiceMemoService(private val context: Context) {
         // Bytes without a finished container are not a recording; keep them out of the library.
         if (stopError != null) throw RecordingNotFinishedException(stopError)
         val projectId = file.parentFile?.name ?: return null
-        return publishTake(PendingTake(file, projectId, RecordingManifestEntry.newRecordingId(), System.currentTimeMillis()))
+        val take = WaitingTake(file, projectId, RecordingManifestEntry.newRecordingId(), System.currentTimeMillis())
+        // shortcut: if this marker cannot be written either (storage full), a take whose save
+        // also fails stays in staging without a Retry; the save below is still attempted.
+        runCatching { markWaiting(take) }
+        return publishTake(take)
     }
 
-    /** Publishes the take kept by a failed save; null when there is none. */
-    suspend fun retryPendingTake(): VoiceMemo? = withContext(Dispatchers.IO) {
-        pendingTake?.let { publishTake(it) }
+    /** Finished takes still waiting to be saved, for one song or all. */
+    suspend fun waitingTakes(projectId: String? = null): List<WaitingTake> = withContext(Dispatchers.IO) {
+        val root = RecordingFiles.stagingRoot(context.filesDir)
+        root.listFiles().orEmpty()
+            .filter { it.isDirectory && (projectId == null || it.name == projectId) }
+            .flatMap { dir ->
+                dir.listFiles().orEmpty().filter { it.name.endsWith(WAITING_SUFFIX) }.mapNotNull { marker ->
+                    val lines = runCatching { marker.readLines() }.getOrNull() ?: return@mapNotNull null
+                    val recordedAt = lines.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
+                    WaitingTake(File(dir, marker.name.removeSuffix(WAITING_SUFFIX)), dir.name, lines[0], recordedAt)
+                }
+            }
+            .sortedBy { it.recordedAt }
     }
 
-    private suspend fun publishTake(take: PendingTake): VoiceMemo? {
+    /**
+     * Saves every waiting take (of [projectId], or all). A take whose record already
+     * holds its id was saved before and counts as saved. Throws
+     * [RecordingNotSavedException] if any take still cannot be saved.
+     */
+    suspend fun retryWaitingTakes(projectId: String? = null): Int = withContext(Dispatchers.IO) {
+        var saved = 0
+        var failure: RecordingNotSavedException? = null
+        for (take in waitingTakes(projectId)) {
+            try {
+                publishTake(take)
+                saved++
+            } catch (e: RecordingNotSavedException) {
+                failure = e
+            }
+        }
+        failure?.let { throw it }
+        saved
+    }
+
+    private fun markWaiting(take: WaitingTake) {
+        val marker = File(take.file.parentFile, take.file.name + WAITING_SUFFIX)
+        val temp = File(take.file.parentFile, marker.name + ".tmp")
+        temp.writeText("${take.id}\n${take.recordedAt}\n")
+        java.nio.file.Files.move(temp.toPath(), marker.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+    }
+
+    private suspend fun publishTake(take: WaitingTake): VoiceMemo? {
         val published = try {
             RecordingTransitions.publish(
                 catalog, context.filesDir, take.file, take.projectId, take.file.name,
-                take.id, take.recordedAt, RecordingRecord.RECORDED
-            )
+                take.id, take.recordedAt, RecordingRecord.RECORDED, skipIfPresent = true
+            ) ?: catalog?.recordingRecords()?.firstOrNull { it.id == take.id }?.path?.let { File(context.filesDir, it) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            pendingTake = take
-            throw RecordingNotSavedException(e)
+            val intentKept = runCatching { catalog?.recordingRecords()?.any { it.id == take.id } }.getOrNull() != false
+            if (!take.file.exists() && !intentKept) {
+                // Nothing left to save: the bytes are gone and no record holds the id.
+                File(take.file.parentFile, take.file.name + WAITING_SUFFIX).delete()
+                return null
+            }
+            // The take is still staged, or moved with its save unfinished; Retry finishes it.
+            throw RecordingNotSavedException(take.projectId, e)
         }
-        pendingTake = null
+        File(take.file.parentFile, take.file.name + WAITING_SUFFIX).delete()
         return published?.let { memoFromFile(it) }?.also { memoChangeEvents.tryEmit(Unit) }
     }
 
@@ -546,10 +592,14 @@ class VoiceMemoService(private val context: Context) {
     suspend fun permanentlyDeleteTrashedMemo(trashed: TrashedVoiceMemo): Boolean {
         if (playingFile == trashed.file) stopPlayback()
         try {
-            val recordingId = catalog?.let {
-                RecordingTransitions.recordFor(it, context.filesDir, trashed.file, trashed.projectId, trashed.originalName).id
-            } ?: RecordingManifestEntry.newRecordingId()
-            recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, recordingId, System.currentTimeMillis())
+            val catalog = catalog
+            if (catalog != null) {
+                // Null: the file was a duplicate copy of a pre-v4 recording and now sits in
+                // quarantine (A26); it has left the Trash and its deletion must not tombstone the live copy.
+                val record = RecordingTransitions.recordFor(catalog, context.filesDir, trashed.file, trashed.projectId)
+                    ?: return true.also { trashChangeEvents.tryEmit(Unit); memoChangeEvents.tryEmit(Unit) }
+                recordingDeletionRecorder?.invoke(trashed.projectId, trashed.originalName, record.id, System.currentTimeMillis())
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -700,6 +750,9 @@ class VoiceMemoService(private val context: Context) {
         private val LABEL_FORMAT = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
         /** Separates the deletion timestamp from the original name in trash filenames. */
         const val TRASH_NAME_SEPARATOR = "__"
+
+        /** Marks a finished take in staging that is waiting to be saved (A27). */
+        private const val WAITING_SUFFIX = ".waiting"
 
         /** Splits a trashed file name `<deletedAt>__<original>`; null when it is not one. */
         internal fun parseTrashedName(name: String): Pair<Long, String>? {

@@ -674,13 +674,14 @@ internal fun RecordingMemoRow(
     isSelecting: Boolean,
     isSelected: Boolean,
     snackbarHostState: SnackbarHostState,
+    /** Outlives this row: the list can drop the row (keyboard resize, scroll) while a rename runs. */
+    actionScope: kotlinx.coroutines.CoroutineScope,
     onSelectionChanged: (Boolean) -> Unit,
     onTrashRequest: (VoiceMemo) -> Unit,
     onMemoListChanged: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val isPlaying = service.playingFile == memo.file
     var pendingRename by remember { mutableStateOf(false) }
     var renameText by remember(memo.file.absolutePath) {
@@ -702,7 +703,7 @@ internal fun RecordingMemoRow(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    scope.launch {
+                    actionScope.launch {
                         val renamed = service.renameMemo(memo, renameText)
                         pendingRename = false
                         if (renamed != null) {

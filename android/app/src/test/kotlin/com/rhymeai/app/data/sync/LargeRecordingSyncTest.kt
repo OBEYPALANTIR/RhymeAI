@@ -60,7 +60,6 @@ class LargeRecordingSyncTest {
             remoteFilesByName = v4Names(large to "drive-large", small to "drive-small")
         )
         assertEquals(listOf(small), restores.map { it.entry })
-        assertEquals(1, skippedLargeRecordingCount(listOf(localOnly), decision.merged))
     }
 
     @Test
@@ -82,7 +81,6 @@ class LargeRecordingSyncTest {
         val unlisted = decide(local, remote = SyncBlob())
         assertEquals(emptyList(), unlisted.merged.recordings)
         assertEquals(emptyList(), unlisted.merged.deletions)
-        assertEquals(1, skippedLargeRecordingCount(local.recordings, unlisted.merged))
 
         val listed = decide(local, remote = SyncBlob(recordings = listOf(remoteLarge)))
         assertEquals(listOf(remoteLarge), listed.merged.recordings)
@@ -134,7 +132,7 @@ class LargeRecordingSyncTest {
     }
 
     @Test
-    fun tombstonesStillRemoveOversizeEntriesAndAreNotCountedAsSizeSkips() {
+    fun tombstonesStillRemoveOversizeEntries() {
         val remoteLarge = recording("gone", "session.wav", sizeBytes = limit + 1L)
         val localLarge = recording("gone", "local.wav", sizeBytes = limit + 1L)
         val keptLarge = recording("kept", "session.wav", sizeBytes = limit + 1L)
@@ -148,25 +146,5 @@ class LargeRecordingSyncTest {
         )
 
         assertEquals(listOf(keptLarge), decision.merged.recordings)
-        assertEquals(1, skippedLargeRecordingCount(listOf(localLarge), decision.merged))
-    }
-
-    @Test
-    fun skippedCountIsPerIdentityAndIgnoresRecordingsAlreadyIdenticalOnBothSides() {
-        val same = recording("p1", "same.wav", sizeBytes = limit + 1L)
-        val localOnly = recording("p1", "local.wav", sizeBytes = limit + 1L)
-        val remoteOnly = recording("p1", "remote.wav", sizeBytes = limit + 1L)
-        val localDiverged = recording("p1", "both.wav", sizeBytes = limit + 1L, sha256 = BackupManifest.sha256Hex("local".toByteArray()))
-        val remoteDiverged = localDiverged.copy(sizeBytes = 12L, sha256 = BackupManifest.sha256Hex("remote".toByteArray()))
-        val smallMissingLocally = recording("p1", "take.m4a")
-
-        assertEquals(
-            3,
-            RecordingSyncPlanner.countSkippedAsTooLarge(
-                local = listOf(same, localOnly, localDiverged),
-                manifest = listOf(same, remoteOnly, remoteDiverged, smallMissingLocally)
-            )
-        )
-        assertEquals(0, RecordingSyncPlanner.countSkippedAsTooLarge(listOf(smallMissingLocally), emptyList()))
     }
 }
