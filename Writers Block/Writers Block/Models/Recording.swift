@@ -109,6 +109,8 @@ enum RecordingLibraryError: Error, Equatable {
     /// The move record is damaged or from a build this one cannot read; nothing was
     /// changed until it is set aside (T5.2).
     case journalDamaged
+    /// A tombstone without a time names this recording: it is kept as it is (T5.24).
+    case held
 }
 
 extension RecordingLibraryError: LocalizedError {
@@ -121,6 +123,7 @@ extension RecordingLibraryError: LocalizedError {
         case .notChecked: return "Your recordings are being checked, so nothing was changed. Try again in a moment."
         case .notVerified: return "This recording changed on this device, so nothing was changed. Try again in a moment."
         case .busy: return "Your recordings are being updated, so nothing was changed. Try again in a moment."
+        case .held: return "A deletion without a time names this recording, so it is kept as it is and can't be changed."
         case .journalDamaged: return "The record of recordings being moved is damaged, so nothing was changed. Every file is kept; you can set the record aside in Settings."
         }
     }
@@ -1566,19 +1569,48 @@ final class RecordingLibrary: RecordingPublishing {
     /// pre-id names (`projectId/name`). Kept as they are, not listed or played.
     struct Held {
         var ids = Set<String>(), songs = Set<String>(), names = Set<String>()
+        /// A known recording is held by its id (a name hold is bound to the ids it
+        /// names, so a later rename does not release it); only a file not known by an
+        /// id yet is matched by its name.
         func contains(projectId: String, recordingId: String?, displayName: String) -> Bool {
-            songs.contains(projectId) || recordingId.map(ids.contains) == true || names.contains("\(projectId)/\(displayName)")
+            if songs.contains(projectId) { return true }
+            if let recordingId { return ids.contains(recordingId) }
+            return names.contains("\(projectId)/\(displayName)")
         }
     }
 
     func held(in context: ModelContext) throws -> Held {
         var held = Held()
+        var names: [(projectId: String, name: String)] = []
         for deletion in try DeletionStore.undated(in: context) {
             if let id = deletion.recordingId { held.ids.insert(id) }
-            else if let name = deletion.fileName { held.names.insert("\(deletion.projectId)/\(name)") }
+            else if let name = deletion.fileName {
+                held.names.insert("\(deletion.projectId)/\(name)")
+                names.append((deletion.projectId, name))
+            }
             else { held.songs.insert(deletion.projectId) }
         }
+        guard !names.isEmpty else { return held }
+        // A pre-id name tombstone names the recording that had that name before ids:
+        // the one whose id is derived from the song, that name and its bytes (A21).
+        // Bound here to every recording known by such an id, whatever its name now.
+        var known: [(projectId: String, id: String, sha256: String)] = try context.fetch(FetchDescriptor<Recording>()).map { ($0.projectId, $0.id, $0.sha256) }
+        for (id, entry) in try OversizedRecordings.read(for: memosRoot) { if let sha = entry.sha256 { known.append((entry.projectId, id, sha)) } }
+        for entry in try RecordingFiles.readPendingMoves(for: memosRoot).detach {
+            known.append((URL(fileURLWithPath: entry.destination).deletingLastPathComponent().lastPathComponent, entry.recordingId, entry.sha256))
+        }
+        for (projectId, name) in names {
+            for item in known where item.projectId == projectId
+                && RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: name, sha256: item.sha256) == item.id {
+                held.ids.insert(item.id)
+            }
+        }
         return held
+    }
+
+    /// Refuses a change to a recording a tombstone without a time holds (T5.24).
+    private func requireNotHeld(projectId: String, recordingId: String?, displayName: String, in context: ModelContext) throws {
+        if try held(in: context).contains(projectId: projectId, recordingId: recordingId, displayName: displayName) { throw RecordingLibraryError.held }
     }
 
     /// Live recordings, newest first: rows, files over the cap, and files left
@@ -1885,6 +1917,7 @@ final class RecordingLibrary: RecordingPublishing {
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
         if let row = try verifiedRow(at: url, trashed: false, in: context) {
+            try requireNotHeld(projectId: row.projectId, recordingId: row.id, displayName: row.displayName, in: context)
             guard row.displayName != displayName else { return }
             let previous = (row.displayName, row.displayNameChanged)
             row.displayName = displayName
@@ -1902,6 +1935,7 @@ final class RecordingLibrary: RecordingPublishing {
         guard let id = RecordingFiles.storedId(of: url), var entry = try OversizedRecordings.read(for: memosRoot)[id] else {
             throw RecordingLibraryError.notVerified
         }
+        try requireNotHeld(projectId: entry.projectId, recordingId: id, displayName: entry.fileName, in: context)
         entry.fileName = displayName
         try OversizedRecordings.record(id: id, entry: entry, for: memosRoot)
     }
@@ -1962,6 +1996,8 @@ final class RecordingLibrary: RecordingPublishing {
     func keepSeparately(_ url: URL) throws -> URL {
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
+        try requireNotHeld(projectId: url.deletingLastPathComponent().lastPathComponent, recordingId: RecordingFiles.storedId(of: url),
+                           displayName: url.lastPathComponent, in: context)
         // The source of an oversized move blocked by other bytes at its place (a take
         // in the recorder's staging, T5.5): those other bytes are kept separately, then
         // the take's own move is finished under its id.
