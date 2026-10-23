@@ -550,6 +550,23 @@ struct PendingTakeTests {
         #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.finishedAt == 77_000)
     }
 
+    @Test func anOversizedTakeInterruptedBetweenItsJournalAndItsMoveIsFinished() async throws {
+        let store = try await makeStore()
+        let staged = try take(Data(count: Int(SyncRecording.maxBytes) + 1), in: store, finishedAt: Date(timeIntervalSince1970: 88))
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        // The app stopped right after journalling the publication, before the move.
+        try OversizedRecordings.record(id: id, entry: .init(projectId: "song", fileName: staged.lastPathComponent, finishedAt: 88_000,
+                                                             source: staged.path, completed: false), for: store.library.memosRoot)
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        await service.retryPendingTakes()
+
+        let destination = store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)")
+        #expect(FileManager.default.fileExists(atPath: destination.path) && !FileManager.default.fileExists(atPath: staged.path))
+        #expect(service.pendingTakes.isEmpty && service.failedTakes.isEmpty)
+        #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.completed == true)
+    }
+
     @Test func takesThatCannotBeListedOrReadStayWaiting() async throws {
         let store = try await makeStore()
         let unreadable = try take(Data([1, 2]), in: store)
