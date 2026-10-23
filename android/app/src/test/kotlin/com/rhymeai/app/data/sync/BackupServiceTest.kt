@@ -379,17 +379,39 @@ class BackupServiceTest {
     }
 
     @Test
-    fun aRawFileWithoutMatchingMetadataIsUploadedAgain() = runBlocking<Unit> {
+    fun aRawObjectWithTheSameDigestButWrongSizeIsReplacedWithTheVerifiedBytes() = runBlocking<Unit> {
         repository.saveProjects(listOf(song("p")))
         val memo = writeMemo("p", "take.m4a", "healthy".toByteArray())
         putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(memo.copy(uploadedAt = 2_000L))))
-        drive.put(BackupManifest.recordingDriveName(memo.id), "damaged".toByteArray()) // no appProperties
-
-        assertIs<SyncResult.Success>(service.backUp(repository))
-
         val name = BackupManifest.recordingDriveName(memo.id)
+        // Same recording (same digest), but a torn copy whose size does not match.
+        drive.put(name, "heal".toByteArray(), recordingAppProperties(memo) + ("bytes" to "4"))
+
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(0, result.conflictingRecordings)
         assertContentEquals("healthy".toByteArray(), drive.bytes(name))
         assertEquals(memo.sha256, drive.file(name)!!.appProperties["sha256"])
+        assertEquals(1, drive.count(name))
+    }
+
+    @Test
+    fun aRawObjectWithAnotherDigestOrNoneIsNeverOverwrittenAndIsReported() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("p")))
+        val memo = writeMemo("p", "take.m4a", "healthy".toByteArray())
+        val other = writeMemo("p", "verse.m4a", "verse".toByteArray())
+        putRemote(SyncBlob(projects = listOf(song("p")), recordings = listOf(memo.copy(uploadedAt = 2_000L), other.copy(uploadedAt = 2_000L))))
+        val name = BackupManifest.recordingDriveName(memo.id)
+        val otherName = BackupManifest.recordingDriveName(other.id)
+        // A40: one id, one digest. Different audio under this id, and an object without metadata.
+        drive.put(name, "different".toByteArray(), recordingAppProperties(memo) + ("sha256" to BackupManifest.sha256Hex("different".toByteArray())))
+        drive.put(otherName, "unknown".toByteArray())
+
+        val result = assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals(2, result.conflictingRecordings)
+        assertContentEquals("different".toByteArray(), drive.bytes(name))
+        assertContentEquals("unknown".toByteArray(), drive.bytes(otherName))
         assertEquals(1, drive.count(name))
     }
 

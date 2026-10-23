@@ -150,6 +150,11 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         1 -> "1 recording is over 16 MB and was skipped."
         else -> "${result.skippedLargeRecordings} recordings are over 16 MB and were skipped."
     },
+    when (result.conflictingRecordings) {
+        0 -> null
+        1 -> "1 recording was not uploaded because Google Drive holds different audio for it."
+        else -> "${result.conflictingRecordings} recordings were not uploaded because Google Drive holds different audio for them."
+    },
     when (result.unmigratedRecordings) {
         0 -> null
         1 -> "1 recording still has its old file name and was left out. Reopen the app to finish updating it."
