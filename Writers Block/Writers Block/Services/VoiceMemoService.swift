@@ -255,13 +255,12 @@ final class VoiceMemoService {
             }
             guard frames > 0 else { throw ImportError.emptyAudio }
             try Task.checkCancellation()
-            let target = try RecordingFiles.importURL(basename: source.deletingPathExtension().lastPathComponent, extension: ext, projectId: projectId)
+            // The source's name becomes the recording's display name; its file is `<id>.<ext>`.
+            let stem = RecordingFiles.sanitizeName(source.deletingPathExtension().lastPathComponent)
+            let displayName = "\(stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem).\(ext)"
             return try await MainActor.run {
-                if let publisher {
-                    return try publisher.publishFinished(copied, projectId: projectId, preferredName: target.lastPathComponent, origin: .imported)
-                }
-                try FileManager.default.moveItem(at: copied, to: target)
-                return target
+                guard let publisher else { throw RecordingLibraryError.unavailable }
+                return try publisher.publishFinished(copied, projectId: projectId, preferredName: displayName, origin: .imported)
             }
         }
         return try await withTaskCancellationHandler {
@@ -281,49 +280,23 @@ final class VoiceMemoService {
     @discardableResult
     func trashMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
         stopPlayback(ifPlayingAnyOf: [url])
-        let folder = RecordingFiles.trashFolder(for: projectId)
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            // Bump the timestamp on collision so a same-named file trashed twice
-            // in one millisecond never overwrites an existing trashed recording.
-            var deletedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-            var target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
-            while FileManager.default.fileExists(atPath: target.path) {
-                deletedAtMs += 1
-                target = folder.appendingPathComponent("\(deletedAtMs)\(RecordingFiles.trashNameSeparator)\(url.lastPathComponent)")
-            }
-            let trashedAt = Date(timeIntervalSince1970: Double(deletedAtMs) / 1000)
-            if let publisher {
-                try publisher.trashRecording(at: url, to: target, trashedAt: trashedAt)
-            } else {
-                try FileManager.default.moveItem(at: url, to: target)
-            }
+            guard let publisher else { throw RecordingLibraryError.unavailable }
+            let trashed = try publisher.trashRecording(at: url, trashedAt: Date())
             onFilesChanged?()
-            return TrashedVoiceMemo(
-                url: target,
-                projectId: projectId,
-                originalName: url.lastPathComponent,
-                deletedAt: Date(timeIntervalSince1970: Double(deletedAtMs) / 1000)
-            )
+            return trashed
         } catch {
             lastError = "Couldn't move recording to trash: \(error.localizedDescription)"
             return nil
         }
     }
 
-    /// Move a trashed recording back into its project's live memo folder under
-    /// its original name (suffixed if that name is now taken).
+    /// Moves a trashed recording back to its song; it keeps its id and file name (A36).
     func restoreTrashedMemo(_ trashed: TrashedVoiceMemo) {
         stopPlayback(ifPlayingAnyOf: [trashed.url])
-        let folder = RecordingFiles.memoFolder(for: trashed.projectId)
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let target = RecordingFiles.restoredURL(originalName: trashed.originalName, folder: folder)
-            if let publisher {
-                try publisher.untrashRecording(trashed, to: target)
-            } else {
-                try FileManager.default.moveItem(at: trashed.url, to: target)
-            }
+            guard let publisher else { throw RecordingLibraryError.unavailable }
+            _ = try publisher.untrashRecording(trashed)
             RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
             onFilesChanged?()
         } catch {
@@ -331,32 +304,21 @@ final class VoiceMemoService {
         }
     }
 
+    /// The recordings Trash this service removes files from (the library's).
+    @ObservationIgnored var trashRoot: URL = RecordingFiles.memosTrashRoot()
+
     /// Permanently delete a trashed recording.
     @discardableResult
     func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
         stopPlayback(ifPlayingAnyOf: [trashed.url])
         do {
             try SyncIdentity.validateProjectId(trashed.projectId)
-            try SyncIdentity.validateFileName(trashed.originalName)
-            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: RecordingFiles.memosTrashRoot())
+            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: trashRoot)
             RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
             return true
         } catch {
             lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
             return false
-        }
-    }
-
-    func deletePermanentRecordingFiles(projectId: String, fileName: String) {
-        do {
-            let live = try RecordingFiles.localURL(projectId: projectId, fileName: fileName, memosRoot: RecordingFiles.memosRoot())
-            _ = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosTrashRoot())
-            try RecordingFiles.removeItemIfPresent(at: live, within: RecordingFiles.memosRoot())
-            for trashed in RecordingFiles.trashedMemos() where trashed.projectId == projectId && trashed.originalName == fileName {
-                _ = permanentlyDeleteTrashedMemo(trashed)
-            }
-        } catch {
-            lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
         }
     }
 
@@ -631,48 +593,18 @@ final class VoiceMemoService {
 
     // MARK: - Delete
 
-    func deleteMemo(at url: URL) {
-        stopPlayback(ifPlayingAnyOf: [url])
-        do {
-            try FileManager.default.removeItem(at: url)
-            onFilesChanged?()
-        } catch {
-            lastError = "Couldn't delete recording: \(error.localizedDescription)"
-        }
-    }
-
     // MARK: - Rename
 
-    /// Rename the memo at `url` to `newBasename` (without extension).
-    /// - The sanitized name is used; if empty after sanitization the rename is skipped.
-    /// - If a file with the target name already exists, " 2" is appended (once).
-    /// - Returns the new URL on success; throws on FileManager error.
+    /// Renames for the user: the recording's display name changes and its file
+    /// keeps its name (A36). Returns the file, which does not move.
     @discardableResult
     func renameMemo(at url: URL, to newBasename: String) throws -> URL {
         let sanitized = RecordingFiles.sanitizeName(newBasename)
         guard !sanitized.isEmpty else { return url }
-
-        let targetURL = RecordingFiles.renamedURL(for: url, sanitizedName: sanitized)
-
-        // The same name: no move, but choosing it makes it the recording's claim (A35).
-        guard targetURL != url else {
-            if let publisher {
-                try publisher.renameRecording(at: url, to: targetURL)
-                onFilesChanged?()
-            }
-            return url
-        }
-
-        // If active playback is on this file, stop it before rename.
-        stopPlayback(ifPlayingAnyOf: [url])
-
-        if let publisher {
-            try publisher.renameRecording(at: url, to: targetURL)
-        } else {
-            try FileManager.default.moveItem(at: url, to: targetURL)
-        }
+        guard let publisher else { throw RecordingLibraryError.unavailable }
+        try publisher.renameRecording(at: url, to: "\(sanitized).\(url.pathExtension.lowercased())")
         onFilesChanged?()
-        return targetURL
+        return url
     }
 
     /// A take the recorder reported finished: its marker (with the finish time)
@@ -731,13 +663,10 @@ final class VoiceMemoService {
         guard case .finished(let finishedAt) = take.state else { return }
         let staged = take.audio ?? take.folder.appendingPathComponent("missing.m4a")
         do {
-            if let publisher {
-                _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded, id: take.id, finishedAt: finishedAt)
-            } else {
-                let folder = RecordingFiles.memoFolder(for: take.projectId)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try FileManager.default.moveItem(at: staged, to: RecordingFiles.restoredURL(originalName: staged.lastPathComponent, folder: folder))
-            }
+            // The take's name for the user is its finish time; its file becomes `<id>.m4a`.
+            guard let publisher else { throw RecordingLibraryError.unavailable }
+            _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded,
+                                              id: take.id, finishedAt: finishedAt)
         } catch RecordingLibraryError.takeMissing {
             // Neither a row nor its audio: definitively nothing to save.
             markFailed(take)

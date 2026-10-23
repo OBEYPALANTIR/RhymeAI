@@ -69,6 +69,9 @@ struct ProjectsDrawerView: View {
         let url: URL
         let projectId: String
         let projectTitle: String // "Deleted song" when projectId not in SwiftData
+        /// The recording's name (A36: metadata; the file is `<id>.<ext>`).
+        let displayName: String
+        let date: Date
     }
 
     private struct UndoToast: Identifiable {
@@ -160,7 +163,7 @@ struct ProjectsDrawerView: View {
             }
 
             let matchingItems = folder.items.filter { item in
-                displayLabel(url: item.url).localizedCaseInsensitiveContains(query)
+                displayLabel(item).localizedCaseInsensitiveContains(query)
             }
 
             return matchingItems.isEmpty
@@ -659,14 +662,14 @@ struct ProjectsDrawerView: View {
 
             PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
 
-            Text(displayLabel(url: item.url))
+            Text(displayLabel(item))
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
-                let stem = item.url.deletingPathExtension().lastPathComponent
+                let stem = (item.displayName as NSString).deletingPathExtension
                 renameText = isTimestampStem(stem) ? "" : stem
                 renamingItem = item
             } label: {
@@ -697,10 +700,10 @@ struct ProjectsDrawerView: View {
     /// Display label beneath the project title in a recording row.
     /// Shows the custom display name when it isn't a raw timestamp; otherwise
     /// falls back to the human-readable date string.
-    private func displayLabel(url: URL) -> String {
-        let stem = url.deletingPathExtension().lastPathComponent
+    private func displayLabel(_ item: RecordingItem) -> String {
+        let stem = (item.displayName as NSString).deletingPathExtension
         if isTimestampStem(stem) {
-            return formattedDate(url: url)
+            return formattedDate(stem: stem)
         }
         return stem
     }
@@ -712,8 +715,7 @@ struct ProjectsDrawerView: View {
         return formatter
     }()
 
-    private func formattedDate(url: URL) -> String {
-        let stem = url.deletingPathExtension().lastPathComponent
+    private func formattedDate(stem: String) -> String {
         if let ms = Double(stem) {
             let date = Date(timeIntervalSince1970: ms / 1000)
             return Self.recordingDateFormatter.string(from: date)
@@ -725,54 +727,19 @@ struct ProjectsDrawerView: View {
         // Snapshot SwiftData-backed project titles on the main actor before
         // doing file-system work in a detached task.
         let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
-        let root = RecordingFiles.memosRoot()
         reloadGeneration += 1
-        let generation = reloadGeneration
         guard !viewModel.recordingListsSuspended else {
             recordingFolders = []
             return
         }
-
-        Task {
-            let folders = await Task.detached(priority: .userInitiated) { () -> [RecordingFolder] in
-                guard let subfolders = try? FileManager.default.contentsOfDirectory(
-                    at: root,
-                    includingPropertiesForKeys: nil,
-                    options: .skipsHiddenFiles
-                ) else {
-                    return []
-                }
-
-                var folders: [RecordingFolder] = []
-                for folder in subfolders {
-                    let projectId = folder.lastPathComponent
-                    let memos = RecordingFiles.memos(for: projectId)
-                    guard !memos.isEmpty else { continue }
-                    let title = titleMap[projectId] ?? "Deleted song"
-                    let items = memos
-                        .map {
-                            RecordingItem(
-                                id: $0.absoluteString,
-                                url: $0,
-                                projectId: projectId,
-                                projectTitle: title
-                            )
-                        }
-                        .sorted { $0.url.lastPathComponent > $1.url.lastPathComponent }
-                    folders.append(RecordingFolder(id: projectId, title: title, items: items))
-                }
-
-                return folders.sorted {
-                    ($0.items.first?.url.lastPathComponent ?? "") > ($1.items.first?.url.lastPathComponent ?? "")
-                }
-            }.value
-
-            await MainActor.run {
-                // A newer reload, or a failed check meanwhile, wins over this result.
-                guard generation == reloadGeneration, !viewModel.recordingListsSuspended else { return }
-                recordingFolders = folders
-            }
-        }
+        // Names and dates come from the recordings' metadata (A36).
+        let items = viewModel.recordingItems()
+        recordingFolders = Dictionary(grouping: items, by: \.projectId).map { projectId, songItems in
+            let title = titleMap[projectId] ?? "Deleted song"
+            return RecordingFolder(id: projectId, title: title, items: songItems.map {
+                RecordingItem(id: $0.id, url: $0.url, projectId: projectId, projectTitle: title, displayName: $0.displayName, date: $0.date)
+            }.sorted { $0.date > $1.date })
+        }.sorted { ($0.items.first?.date ?? .distantPast) > ($1.items.first?.date ?? .distantPast) }
     }
 
     private var trashBinButtonLabel: some View {

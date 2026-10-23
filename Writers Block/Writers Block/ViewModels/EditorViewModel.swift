@@ -78,7 +78,11 @@ final class OpenRecordingSnapshot {
     private let recordingsRoot: URL
     private let snapshotFolder: URL
 
-    init?(projectId: String, recordingsRoot: URL) throws {
+    /// The display names of the snapshot's files, kept beside them (A36: files
+    /// are `<id>.<ext>`, the names are metadata).
+    private static let namesFile = "names.json"
+
+    init?(projectId: String, recordingsRoot: URL, displayNames: [String: String] = [:]) throws {
         let recordings = try RecordingBackupManifest.scanFiles(projectId: projectId, memosRoot: recordingsRoot)
         guard !recordings.isEmpty else { return nil }
         self.recordingsRoot = recordingsRoot
@@ -92,6 +96,7 @@ final class OpenRecordingSnapshot {
                     to: snapshotFolder.appendingPathComponent(recording.fileName)
                 )
             }
+            try JSONEncoder().encode(displayNames).write(to: snapshotFolder.appendingPathComponent(Self.namesFile), options: .atomic)
         } catch {
             try? FileManager.default.removeItem(at: snapshotFolder)
             throw error
@@ -121,26 +126,37 @@ final class OpenRecordingSnapshot {
     /// at creation. Rollback removes only those, and only if still the same file.
     private var createdCopies: [String: (folder: URL?, files: [(url: URL, identity: [AnyHashable]?)])] = [:]
 
-    /// Copies the snapshot's recordings into the song's memo folder. A file
-    /// already there is never replaced or removed: if it holds other audio, the
-    /// snapshot's copy lands beside it under a numbered name.
-    func copy(to projectId: String) throws {
+    /// Copies the snapshot's recordings into the song's memo folder as new
+    /// recordings: each copy is `<id>.<ext>` with an id derived from the song, the
+    /// source and its bytes, so a repeated copy finds the earlier one. Returns the
+    /// copies for the library to take in under those ids and names. A file already
+    /// there is never replaced or removed.
+    @discardableResult
+    func copy(to projectId: String) throws -> [(url: URL, recordingId: String, displayName: String, sha256: String)] {
         let fileManager = FileManager.default
         let destination = try RecordingFiles.projectURL(projectId: projectId, memosRoot: recordingsRoot)
         let createdFolder = !fileManager.fileExists(atPath: destination.path)
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        let names = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: snapshotFolder.appendingPathComponent(Self.namesFile)))) ?? [:]
         var created: [(url: URL, identity: [AnyHashable]?)] = []
+        var copies: [(url: URL, recordingId: String, displayName: String, sha256: String)] = []
         do {
             let sources = try fileManager.contentsOfDirectory(at: snapshotFolder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
             for source in sources.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                var target = destination.appendingPathComponent(source.lastPathComponent)
+                let digest = try RecordingFiles.sha256(of: source)
+                let displayName = names[source.lastPathComponent] ?? source.lastPathComponent
+                let id = RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: source.lastPathComponent, sha256: digest)
+                let target = destination.appendingPathComponent(RecordingFiles.storedName(id: id, displayName: displayName))
                 if fileManager.fileExists(atPath: target.path) {
-                    if fileManager.contentsEqual(atPath: target.path, andPath: source.path) { continue }
-                    target = RecordingFiles.restoredURL(originalName: source.lastPathComponent, folder: destination)
+                    // Copied by an earlier attempt: taken in as it is.
+                    if try RecordingFiles.sha256(of: target) == digest { copies.append((target, id, displayName, digest)) }
+                    continue
                 }
                 // Refuses an existing destination, so a file that appeared meanwhile is kept.
                 try fileManager.copyItem(at: source, to: target)
                 created.append((target, Self.identity(of: target)))
+                copies.append((target, id, displayName, digest))
             }
         } catch {
             Self.remove(created, folder: createdFolder ? destination : nil)
@@ -148,6 +164,7 @@ final class OpenRecordingSnapshot {
         }
         let earlier = createdCopies[projectId]
         createdCopies[projectId] = (earlier?.folder ?? (createdFolder ? destination : nil), (earlier?.files ?? []) + created)
+        return copies
     }
 
     /// Undoes this snapshot's copies for a song whose save failed.
@@ -714,6 +731,7 @@ final class EditorViewModel: ObservableObject {
             self?.scheduleAutomaticBackup()
         }
         voiceMemoService.publisher = recordingLibrary
+        if let recordingLibrary { voiceMemoService.trashRoot = recordingLibrary.trashRoot }
         voiceMemoService.playbackAllowed = { [weak self] url in self?.isPlayableRecording(url) ?? true }
         voiceMemoService.playbackIdentity = { [weak self] url in self?.recordingIdentity(url) }
         recordingLibrary?.willMove = { [weak self] files in self?.voiceMemoService.stopPlayback(ifPlayingAnyOf: files) }
@@ -1485,7 +1503,7 @@ final class EditorViewModel: ObservableObject {
             if activeCloudEditorOperation != nil,
                let root = backupService?.recordingRecoveryRoot {
                 nextRecordingSnapshot = try OpenRecordingSnapshot(
-                    projectId: project.id, recordingsRoot: root
+                    projectId: project.id, recordingsRoot: root, displayNames: recordingDisplayNames(project.id)
                 )
             } else {
                 nextRecordingSnapshot = nil
@@ -1601,11 +1619,16 @@ final class EditorViewModel: ObservableObject {
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         let now = Date()
-        let expiredMemos = RecordingFiles.trashedMemos().filter { $0.deleteAfter <= now }
+        let expiredMemos = trashedRecordings().filter { $0.deleteAfter <= now }
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.deleteAfter <= now }
         )
-        guard let expiredProjects = try? context.fetch(descriptor), !expiredProjects.isEmpty || !expiredMemos.isEmpty else {
+        // Chosen on the normalized deadline: a row without a deletion time is never
+        // expired, and a repaired row's deadline is its repaired time plus retention (A37).
+        let expiredProjects = ((try? context.fetch(descriptor)) ?? []).filter {
+            $0.deletedAt.epochMilliseconds > 0 && (!$0.precedenceRepaired || $0.deletedAt.addingTimeInterval(trashRetentionInterval) <= now)
+        }
+        guard !expiredProjects.isEmpty || !expiredMemos.isEmpty else {
             scheduleTrashPurge()
             return
         }
@@ -1656,13 +1679,29 @@ final class EditorViewModel: ObservableObject {
             // A32: songs without a time get the time first seen here, saved on the rows
             // before any tombstone is compared, whether or not there are tombstones.
             var repaired = false
+            // A37: each repair is marked, and the Trash deadline follows a repaired deletion time.
             for project in try context.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
                 project.updatedAt = firstSeenTime("project:\(project.id)")
+                project.precedenceRepaired = true
                 repaired = true
             }
             for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) {
-                if project.updatedAt.epochMilliseconds <= 0 { project.updatedAt = firstSeenTime("project:\(project.id)"); repaired = true }
-                if project.deletedAt.epochMilliseconds <= 0 { project.deletedAt = firstSeenTime("trashed:\(project.id)"); repaired = true }
+                if project.updatedAt.epochMilliseconds <= 0 {
+                    project.updatedAt = firstSeenTime("project:\(project.id)")
+                    project.precedenceRepaired = true
+                    repaired = true
+                }
+                if project.deletedAt.epochMilliseconds <= 0 {
+                    project.deletedAt = firstSeenTime("trashed:\(project.id)")
+                    project.precedenceRepaired = true
+                    repaired = true
+                }
+                // A repaired row's deadline always follows its deletion time.
+                let deadline = project.deletedAt.addingTimeInterval(trashRetentionInterval)
+                if project.precedenceRepaired, project.deleteAfter != deadline {
+                    project.deleteAfter = deadline
+                    repaired = true
+                }
             }
             if repaired { try saveModelContext(context) }
             let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: context))
@@ -1686,11 +1725,11 @@ final class EditorViewModel: ObservableObject {
             }
             // The deleted songs' recordings (adopted by the library just before) get
             // their own tombstones in the same save; only their files go.
-            var removedFiles: [(url: URL, sha256: String)] = []
+            var removedFiles: [(url: URL, sha256: String, recordingId: String)] = []
             for projectId in deletedProjects {
                 for row in try RecordingLibrary.tombstoneRecordings(ofProject: projectId, deletedAt: tombstones[projectId] ?? 0, in: context) {
                     if let library = recordingLibrary, let file = row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot) {
-                        removedFiles.append((file, row.sha256))
+                        removedFiles.append((file, row.sha256, row.id))
                     }
                 }
             }
@@ -1734,17 +1773,11 @@ final class EditorViewModel: ObservableObject {
             if let row = identity.row { context.delete(row) }
             return
         }
-        let row = try context.fetch(FetchDescriptor<Recording>()).first {
-            $0.projectId == trashed.projectId && $0.fileName == trashed.originalName
-                && $0.trashedAt?.epochMilliseconds == trashed.deletedAt.epochMilliseconds
-        }
-        // A Trash entry without a row is named by the id every device derives for it;
-        // one that cannot be read is not deleted.
-        let recordingId = try row?.id ?? RecordingBackupManifest.legacyRecordingId(
+        // Without the library (tests of the editor alone): the id derived from its bytes.
+        let recordingId = try trashed.recordingId ?? RecordingBackupManifest.legacyRecordingId(
             projectId: trashed.projectId, fileName: trashed.originalName, sha256: RecordingFiles.sha256(of: trashed.url)
         )
         try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: recordingId, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
-        if let row { context.delete(row) }
     }
 
     private func scheduleTrashPurge() {
@@ -1758,7 +1791,7 @@ final class EditorViewModel: ObservableObject {
         descriptor.fetchLimit = 1
         let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
         // Already-expired recordings were purged above; only future expiries count.
-        let nextMemoExpiry = RecordingFiles.nextTrashedMemoExpiry().flatMap { $0 > now ? $0 : nil }
+        let nextMemoExpiry = trashedRecordings().map(\.deleteAfter).min().flatMap { $0 > now ? $0 : nil }
         guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
 
         let delay = max(nextExpiry.timeIntervalSinceNow, 0)
@@ -1862,6 +1895,7 @@ final class EditorViewModel: ObservableObject {
         project.lyrics = "yellow music"
         project.theme = ""
         project.updatedAt = Date()
+        project.precedenceRepaired = false  // an edit beats a repair (A37)
         try? context.save()
 
         title = project.title
@@ -2024,10 +2058,12 @@ final class EditorViewModel: ObservableObject {
                     project.lyrics = lyrics
                     project.theme = theme
                     project.updatedAt = Date()
+                    project.precedenceRepaired = false
+        project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
             } else {
                 let project = makeUntitledSongProject()
-                try pendingRecordingRecovery?.copy(to: project.id)
+                try copyRecordings(of: pendingRecordingRecovery, to: project.id)
                 context.insert(project)
                 createdProjectID = project.id
             }
@@ -2194,6 +2230,33 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Recordings library
 
+    /// A song's recordings' names by file name, for a draft snapshot (A36).
+    private func recordingDisplayNames(_ projectId: String) -> [String: String] {
+        guard let recordingLibrary, let modelContext else { return [:] }
+        return (try? recordingLibrary.displayNames(projectId: projectId, in: modelContext)) ?? [:]
+    }
+
+    /// Copies a draft snapshot's recordings to a song as new recordings, recorded
+    /// for the library to take in with their names.
+    private func copyRecordings(of snapshot: OpenRecordingSnapshot?, to projectId: String) throws {
+        guard let copies = try snapshot?.copy(to: projectId) else { return }
+        try recordingLibrary?.expectCopies(copies)
+    }
+
+    /// What the song's recordings list shows (A36: names come from the rows).
+    func recordingItems(projectId: String? = nil) -> [RecordingListItem] {
+        guard !recordingListsSuspended else { return [] }
+        guard let recordingLibrary, let modelContext else { return [] }
+        return (try? recordingLibrary.liveRecordings(projectId: projectId, in: modelContext)) ?? []
+    }
+
+    /// What the recordings Trash shows.
+    func trashedRecordings() -> [TrashedVoiceMemo] {
+        guard !recordingListsSuspended else { return [] }
+        guard let recordingLibrary, let modelContext else { return [] }
+        return (try? recordingLibrary.trashedRecordings(in: modelContext)) ?? []
+    }
+
     /// Retry for takes waiting to be saved: the library is brought up to date
     /// first, so a take published before an interruption counts as saved.
     func retryPendingRecordings() {
@@ -2277,6 +2340,11 @@ final class EditorViewModel: ObservableObject {
             oversizedRecordingCount = recordingLibrary.oversizedCount
             recordingListsSuspended = false
             voiceMemoService.recordingsChanged()
+            // Files left for a later run (finding 10): every run takes in at least
+            // one per pass, so this ends.
+            if recordingLibrary.pendingAdoption > 0 {
+                Task { [weak self] in await self?.reconcileRecordings() }
+            }
             return true
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -2604,7 +2672,7 @@ final class EditorViewModel: ObservableObject {
         let recordingSnapshot: OpenRecordingSnapshot?
         do {
             if let id = currentProjectId, let root = backupService?.recordingRecoveryRoot {
-                recordingSnapshot = try OpenRecordingSnapshot(projectId: id, recordingsRoot: root)
+                recordingSnapshot = try OpenRecordingSnapshot(projectId: id, recordingsRoot: root, displayNames: recordingDisplayNames(id))
             } else {
                 recordingSnapshot = pendingRecordingRecovery
             }
@@ -2638,7 +2706,7 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return false }
         let recoveredID = operation.separateDraftID
         do {
-            try operation.recordingSnapshot?.copy(to: recoveredID)
+            try copyRecordings(of: operation.recordingSnapshot, to: recoveredID)
             let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
             context.insert(recovered)
             try saveModelContext(context)
@@ -2837,9 +2905,10 @@ final class EditorViewModel: ObservableObject {
         }
 
         for snapshot in snapshots where !needed.contains(snapshot.lastPathComponent) {
-            guard let files = try? fileManager.contentsOfDirectory(
+            // Only the audio counts (the names file beside it is metadata).
+            guard let files = (try? fileManager.contentsOfDirectory(
                 at: snapshot, includingPropertiesForKeys: [.fileSizeKey], options: .skipsHiddenFiles
-            ) else { continue }
+            ))?.filter({ RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }) else { continue }
             var sizes: [String: Int] = [:]
             for file in files {
                 guard let bytes = size(file) else { break }
@@ -2933,6 +3002,7 @@ final class EditorViewModel: ObservableObject {
                 stored.theme = draft.theme
                 // The time the text was typed, so timestamp merges rank it as that edit.
                 stored.updatedAt = record.savedAt
+                stored.precedenceRepaired = false
                 recovered = stored
             } else {
                 // The song was replaced, deleted, or changed after this copy was
@@ -2942,7 +3012,7 @@ final class EditorViewModel: ObservableObject {
                 // were left by an attempt killed before its save; they are kept and
                 // only missing copies are added.
                 copiedSnapshot = recordingSnapshot
-                try recordingSnapshot?.copy(to: separateID)
+                try copyRecordings(of: recordingSnapshot, to: separateID)
                 recoveredCopyID = separateID
                 recovered = SongProject(
                     id: separateID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
@@ -2984,12 +3054,13 @@ final class EditorViewModel: ObservableObject {
                     stored.0.lyrics = draft.lyrics
                     stored.0.theme = draft.theme
                     stored.0.updatedAt = Date()
+                    stored.0.precedenceRepaired = false
                     try saveModelContext(context)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
                 let recoveredID = operation.separateDraftID
-                try operation.recordingSnapshot?.copy(to: recoveredID)
+                try copyRecordings(of: operation.recordingSnapshot, to: recoveredID)
                 let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
                 context.insert(recovered)
                 do {

@@ -2,15 +2,17 @@ import AVFoundation
 import CryptoKit
 import Foundation
 
-// A recording sitting in the Trash Bin. The trash filename encodes the deletion
-// timestamp as "<deletedAtMs>__<originalName>" so trash state survives restarts
-// without a separate metadata store — mirrors the Android TrashedVoiceMemo.
+// A recording sitting in the Trash Bin. On disk it is `<recordingId>.<ext>`
+// (A36); its name and deletion time come from the recording's metadata.
 struct TrashedVoiceMemo: Identifiable, Sendable {
     let url: URL
     let projectId: String
-    /// Original filename (with extension) the memo had before it was trashed.
+    /// The recording's display name (with extension).
     let originalName: String
     let deletedAt: Date
+    /// The recording's id, when it has one (every recording except a file the
+    /// library has not taken in yet).
+    var recordingId: String? = nil
     // nonisolated: the project builds with -default-isolation=MainActor, and these
     // are read from nonisolated static purge/expiry helpers.
     nonisolated var deleteAfter: Date { deletedAt.addingTimeInterval(trashRetentionInterval) }
@@ -147,28 +149,35 @@ enum RecordingFiles {
         return folder.appendingPathComponent("\(timestamp).m4a")
     }
 
-    /// Newest recordings first. Renaming a recording does not change its file date.
-    nonisolated static func memos(for projectId: String) -> [URL] {
-        let folder = memoFolder(for: projectId)
-        guard let items = try? FileManager.default.contentsOfDirectory(
-            at: folder,
-            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
-            options: .skipsHiddenFiles
-        ) else { return [] }
-        // A recording waiting to move to quarantine is not listed (A28).
-        // Fail closed: an unreadable record lists nothing rather than deleted audio.
-        guard let hidden = pendingQuarantine(for: memosRoot()) else { return [] }
-        let memoURLs = items.filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) && !hidden.contains(canonicalPath($0)) }
-        let datedMemos = memoURLs.map { url -> (url: URL, date: Date) in
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
-            return (url: url, date: values?.contentModificationDate ?? values?.creationDate ?? .distantPast)
-        }
-        return datedMemos.sorted { lhs, rhs in
-                lhs.date == rhs.date
-                    ? lhs.url.lastPathComponent < rhs.url.lastPathComponent
-                    : lhs.date > rhs.date
-            }
-            .map(\.url)
+    // MARK: - Names on disk (A36)
+
+    /// The file name a recording has on disk: `<recordingId>.<ext>`, the extension
+    /// taken from its display name (m4a when that has none we play).
+    nonisolated static func storedName(id: String, displayName: String) -> String {
+        "\(id).\(storedExtension(of: displayName))"
+    }
+
+    nonisolated static func storedExtension(of name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return supportedAudioExtensions.contains(ext) ? ext : "m4a"
+    }
+
+    /// The recording id a file is named by, when its name is `<lower-case uuid>.<ext>`.
+    nonisolated static func storedId(of url: URL) -> String? {
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard UUID(uuidString: stem) != nil, stem == stem.lowercased(),
+              supportedAudioExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+        return stem
+    }
+
+    /// A Trash file name from before A36, "<deletedAtMs>__<originalName>".
+    nonisolated static func legacyTrashName(_ name: String) -> (deletedAt: Date, originalName: String)? {
+        guard let separatorRange = name.range(of: trashNameSeparator),
+              separatorRange.lowerBound != name.startIndex,
+              let deletedAtMs = Double(name[..<separatorRange.lowerBound]) else { return nil }
+        let originalName = String(name[separatorRange.upperBound...])
+        guard !originalName.isEmpty else { return nil }
+        return (Date(timeIntervalSince1970: deletedAtMs / 1000), originalName)
     }
 
     /// Remove a project's entire memo folder — live and trashed. Called on
@@ -189,7 +198,7 @@ enum RecordingFiles {
 
     // MARK: - Recordings Trash
 
-    /// Separates the deletion timestamp from the original name in trash filenames.
+    /// Separated the deletion time from the original name in Trash file names before A36.
     nonisolated static let trashNameSeparator = "__"
 
     nonisolated static func memosTrashRoot() -> URL {
@@ -200,58 +209,6 @@ enum RecordingFiles {
 
     nonisolated static func trashFolder(for projectId: String) -> URL {
         memosTrashRoot().appendingPathComponent(projectId, isDirectory: true)
-    }
-
-    /// All trashed recordings across every project, newest deletion first.
-    nonisolated static func trashedMemos(in trashRoot: URL = memosTrashRoot()) -> [TrashedVoiceMemo] {
-        guard let hidden = pendingQuarantine(for: trashRoot) else { return [] }
-        guard let folders = try? FileManager.default.contentsOfDirectory(
-            at: trashRoot,
-            includingPropertiesForKeys: nil,
-            options: .skipsHiddenFiles
-        ) else { return [] }
-
-        return folders
-            .flatMap { folder -> [TrashedVoiceMemo] in
-                let projectId = folder.lastPathComponent
-                guard let files = try? FileManager.default.contentsOfDirectory(
-                    at: folder,
-                    includingPropertiesForKeys: nil,
-                    options: .skipsHiddenFiles
-                ) else { return [] }
-                return files
-                    .filter { Self.supportedAudioExtensions.contains($0.pathExtension.lowercased()) && !hidden.contains(canonicalPath($0)) }
-                    .compactMap { trashedMemo(at: $0, projectId: projectId) }
-            }
-            .sorted { $0.deletedAt > $1.deletedAt }
-    }
-
-    nonisolated private static func trashedMemo(at url: URL, projectId: String) -> TrashedVoiceMemo? {
-        let name = url.lastPathComponent
-        guard let separatorRange = name.range(of: trashNameSeparator),
-              separatorRange.lowerBound != name.startIndex,
-              let deletedAtMs = Double(name[..<separatorRange.lowerBound]) else { return nil }
-        let originalName = String(name[separatorRange.upperBound...])
-        guard !originalName.isEmpty else { return nil }
-        return TrashedVoiceMemo(
-            url: url,
-            projectId: projectId,
-            originalName: originalName,
-            deletedAt: Date(timeIntervalSince1970: deletedAtMs / 1000)
-        )
-    }
-
-    /// Delete every trashed recording whose retention window has passed.
-    nonisolated static func purgeExpiredTrashedMemos(now: Date = Date()) {
-        for trashed in trashedMemos() where trashed.deleteAfter <= now {
-            try? removeItemIfPresent(at: trashed.url, within: memosTrashRoot())
-            cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
-        }
-    }
-
-    /// Earliest deleteAfter among trashed recordings, or nil when trash is empty.
-    nonisolated static func nextTrashedMemoExpiry() -> Date? {
-        trashedMemos().map(\.deleteAfter).min()
     }
 
     /// Remove a project's trash folder once its last recording leaves it.
@@ -305,29 +262,6 @@ enum RecordingFiles {
         return s
     }
 
-    nonisolated static func importURL(basename: String, extension ext: String, projectId: String) throws -> URL {
-        let stem = RecordingFiles.sanitizeName(basename)
-        let name = stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem
-        var suffix = 1
-        var target: URL
-        repeat {
-            let filename = suffix == 1 ? "\(name).\(ext)" : "\(name) \(suffix).\(ext)"
-            target = try RecordingFiles.localURL(projectId: projectId, fileName: filename, memosRoot: RecordingFiles.memosRoot())
-            suffix += 1
-        } while FileManager.default.fileExists(atPath: target.path)
-        return target
-    }
-
-    nonisolated static func restoredURL(originalName: String, folder: URL) -> URL {
-        var target = folder.appendingPathComponent(originalName)
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: target.path) && suffix < 1000 {
-            target = folder.appendingPathComponent(numberedName(originalName, suffix))
-            suffix += 1
-        }
-        return target
-    }
-
     /// The byte limit for a recording's file name (shared with Android and the manifest).
     nonisolated static let maxFileNameBytes = 240
 
@@ -338,18 +272,6 @@ enum RecordingFiles {
         let suffix = " \(number)" + (ext.isEmpty ? "" : ".\(ext)")
         while stem.utf8.count + suffix.utf8.count > maxFileNameBytes, !stem.isEmpty { stem.removeLast() }
         return stem + suffix
-    }
-
-    nonisolated static func renamedURL(for url: URL, sanitizedName sanitized: String) -> URL {
-        let folder = url.deletingLastPathComponent()
-        var targetURL = folder.appendingPathComponent(sanitized).appendingPathExtension(url.pathExtension)
-
-        // Collision avoidance: append " 2" if target already exists (and isn't the source itself).
-        if targetURL != url && FileManager.default.fileExists(atPath: targetURL.path) {
-            targetURL = folder.appendingPathComponent(sanitized + " 2").appendingPathExtension(url.pathExtension)
-        }
-
-        return targetURL
     }
 
     /// Where restored audio is written before it is verified and moved into
@@ -364,13 +286,18 @@ enum RecordingFiles {
         memosRoot.deletingLastPathComponent().appendingPathComponent("recording-quarantine", isDirectory: true)
     }
 
-    /// Moves `file` (in a memo or Trash project folder) into quarantine under a
-    /// unique name; never replaces anything.
-    nonisolated static func quarantine(_ file: URL, memosRoot: URL) throws {
+    /// Moves `file` (in a memo or Trash project folder) into quarantine as
+    /// `<recordingId>.<ext>` (A36); a second copy of one id goes in a folder of
+    /// its own. Never replaces anything.
+    nonisolated static func quarantine(_ file: URL, recordingId: String, memosRoot: URL) throws {
         let projectId = file.deletingLastPathComponent().lastPathComponent
-        let folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
+        var folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
+        let name = "\(recordingId).\(storedExtension(of: file.lastPathComponent))"
+        if try exists(folder.appendingPathComponent(name)) {
+            folder = folder.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent("\(UUID().uuidString.lowercased())\(trashNameSeparator)\(file.lastPathComponent)"))
+        try FileManager.default.moveItem(at: file, to: folder.appendingPathComponent(name))
     }
 
     /// Size and modification time, read now; a file that cannot be read throws.
@@ -390,12 +317,6 @@ enum RecordingFiles {
         var hasher = SHA256()
         while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Where a reconcile parks audio between its old and new names, so a swap of
-    /// names never overwrites; parked files are named by the rows that hold them.
-    nonisolated static func parkingRoot(for memosRoot: URL) -> URL {
-        memosRoot.deletingLastPathComponent().appendingPathComponent("recording-parking", isDirectory: true)
     }
 
     /// True or false only when the file system confirms it; any other failure to
@@ -420,25 +341,52 @@ enum RecordingFiles {
     nonisolated struct PendingMoves: Codable, Equatable, Sendable {
         var quarantine: [Quarantine] = []
         var detach: [Detach] = []
+        /// Files written outside the library (a draft's copied recordings) that the
+        /// next reconcile takes in under this identity.
+        var adopt: [Adopt] = []
 
         /// A file going to quarantine, with the digest it was decided on: at replay
         /// other bytes there are not moved (they are adopted on their own).
         nonisolated struct Quarantine: Codable, Equatable, Hashable, Sendable {
             var path: String
             var sha256: String
+            /// The id the bytes are kept under in quarantine.
+            var recordingId: String
         }
 
+        /// A recording removed on another device, moved to the recordings Trash here.
+        /// It keeps its id, name and precedence time, so a later tombstone still
+        /// applies to it and restoring it keeps its id.
         nonisolated struct Detach: Codable, Equatable, Hashable, Sendable {
             var recordingId: String
             /// Empty once the move is done.
             var source: String
             var destination: String
-            /// The removed recording's digest: only those bytes are moved.
+            /// The removed recording's digest: only those bytes are moved or kept.
+            var sha256: String
+            var displayName: String
+            /// Its precedence time (epoch ms).
+            var at: Int64
+            /// When it was moved to the Trash (epoch ms); the Trash deadline counts from it.
+            var detachedAt: Int64
+            /// A37: `at` is a repaired time (absent in older records: false).
+            var repaired: Bool? = nil
+        }
+
+        nonisolated struct Adopt: Codable, Equatable, Hashable, Sendable {
+            var path: String
+            var recordingId: String
+            var displayName: String
             var sha256: String
         }
 
+        var isEmpty: Bool { quarantine.isEmpty && detach.isEmpty && adopt.isEmpty }
         /// Never adopted: waiting for quarantine, or a detached entry either side of its move.
-        var adoptionHidden: Set<String> { Set(quarantine.map(\.path) + detach.flatMap { [$0.source, $0.destination] }.filter { !$0.isEmpty }) }
+        /// A finished detach stays listed: the reconcile keeps it under its id while
+        /// its bytes are its own, and applies later tombstones to it.
+        var adoptionHidden: Set<String> {
+            Set(quarantine.map(\.path) + detach.filter { !$0.source.isEmpty }.flatMap { [$0.source, $0.destination] })
+        }
         /// Not listed or played: waiting for quarantine, or still at its source.
         var listingHidden: Set<String> { Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }) }
     }
@@ -453,7 +401,7 @@ enum RecordingFiles {
 
     nonisolated static func writePendingMoves(_ moves: PendingMoves, for root: URL) throws {
         let url = pendingMovesURL(for: root)
-        if moves.quarantine.isEmpty && moves.detach.isEmpty {
+        if moves.isEmpty {
             if try exists(url) { try FileManager.default.removeItem(at: url) }
             return
         }
@@ -469,26 +417,15 @@ enum RecordingFiles {
     /// Records files for quarantine with their current digests (tests).
     nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
         var moves = try readPendingMoves(for: root)
-        moves.quarantine = try paths.sorted().map { PendingMoves.Quarantine(path: $0, sha256: try sha256(of: URL(fileURLWithPath: $0))) }
+        moves.quarantine = try paths.sorted().map { path in
+            let digest = try sha256(of: URL(fileURLWithPath: path))
+            return PendingMoves.Quarantine(path: path, sha256: digest, recordingId: storedId(of: URL(fileURLWithPath: path)) ?? UUID().uuidString.lowercased())
+        }
         try writePendingMoves(moves, for: root)
     }
 
     private nonisolated static func pendingMovesURL(for root: URL) -> URL {
         quarantineRoot(for: root).appendingPathComponent("pending-moves.json")
-    }
-
-    /// Trash entries for adoption: an unreadable Trash fails rather than looking empty.
-    nonisolated static func readableTrashedMemos(in trashRoot: URL) throws -> [TrashedVoiceMemo] {
-        guard try exists(trashRoot) else { return [] }
-        var memos: [TrashedVoiceMemo] = []
-        for folder in try FileManager.default.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
-            guard try folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
-            for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-            where supportedAudioExtensions.contains(file.pathExtension.lowercased()) {
-                if let memo = trashedMemo(at: file, projectId: folder.lastPathComponent) { memos.append(memo) }
-            }
-        }
-        return memos
     }
 
     /// Recovery for an interrupted restore or import, run only as one starts:
@@ -499,9 +436,11 @@ enum RecordingFiles {
 
     /// Writes `data` to a new staging file, reads it back and checks its digest;
     /// runs off the main actor. The caller moves it into place or removes it.
-    nonisolated static func stageVerified(_ data: Data, sha256: String, in staging: URL, modifiedAt: Date) throws -> URL {
+    /// `storedName` is the recording's `<id>.<ext>` (A36); the staging folder is
+    /// the library's own and its runs are serialised.
+    nonisolated static func stageVerified(_ data: Data, sha256: String, storedName: String, in staging: URL, modifiedAt: Date) throws -> URL {
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-        let staged = staging.appendingPathComponent("\(UUID().uuidString).partial")
+        let staged = staging.appendingPathComponent(storedName)
         do {
             try data.write(to: staged, options: .atomic)
             guard try RecordingFiles.sha256(of: staged) == sha256, try facts(staged).size == Int64(data.count) else {
@@ -512,34 +451,6 @@ enum RecordingFiles {
         } catch {
             try? FileManager.default.removeItem(at: staged)
             throw error
-        }
-    }
-
-    /// Stages `data`, verifies the staged bytes, then moves them to `target` only
-    /// if that name is still free. Never replaces or removes a file already in
-    /// place; false when one is there. Main-actor isolated, so it is serialised
-    /// with memo rename, trash and restore-from-Trash.
-    @discardableResult
-    static func commitIfAbsent(_ data: Data, sha256: String, to target: URL, memosRoot: URL, modifiedAt: Date? = nil) throws -> Bool {
-        let staging = stagingRoot(for: memosRoot)
-        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-        let staged = staging.appendingPathComponent("\(UUID().uuidString).partial")
-        // Only the staged name is ever removed; after a move it no longer exists.
-        defer { try? FileManager.default.removeItem(at: staged) }
-        try data.write(to: staged, options: .atomic)
-        guard let written = try? Data(contentsOf: staged), written.count == data.count,
-              RecordingBackupManifest.sha256Hex(written) == sha256 else {
-            throw SyncValidationError.invalidRecording
-        }
-        if let modifiedAt { try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: staged.path) }
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard !FileManager.default.fileExists(atPath: target.path) else { return false }
-        do {
-            // FileManager's move refuses an existing destination rather than replacing it.
-            try FileManager.default.moveItem(at: staged, to: target)
-            return true
-        } catch CocoaError.fileWriteFileExists {
-            return false
         }
     }
 

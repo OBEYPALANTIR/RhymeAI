@@ -28,6 +28,9 @@ struct SongRecordingsView: View {
         let url: URL
         let projectId: String
         let projectTitle: String // "Deleted song" when projectId not in SwiftData
+        /// The recording's name (A36: metadata; the file is `<id>.<ext>`).
+        let displayName: String
+        let date: Date
     }
 
     private struct UndoToast: Identifiable {
@@ -102,7 +105,7 @@ struct SongRecordingsView: View {
             }
 
             let matchingItems = folder.items.filter { item in
-                displayLabel(url: item.url).localizedCaseInsensitiveContains(query)
+                displayLabel(item).localizedCaseInsensitiveContains(query)
             }
 
             return matchingItems.isEmpty
@@ -369,14 +372,14 @@ struct SongRecordingsView: View {
 
             PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
 
-            Text(displayLabel(url: item.url))
+            Text(displayLabel(item))
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
-                let stem = item.url.deletingPathExtension().lastPathComponent
+                let stem = (item.displayName as NSString).deletingPathExtension
                 renameText = isTimestampStem(stem) ? "" : stem
                 renamingItem = item
             } label: {
@@ -407,10 +410,10 @@ struct SongRecordingsView: View {
     /// Display label beneath the project title in a recording row.
     /// Shows the custom display name when it isn't a raw timestamp; otherwise
     /// falls back to the human-readable date string.
-    private func displayLabel(url: URL) -> String {
-        let stem = url.deletingPathExtension().lastPathComponent
+    private func displayLabel(_ item: RecordingItem) -> String {
+        let stem = (item.displayName as NSString).deletingPathExtension
         if isTimestampStem(stem) {
-            return formattedDate(url: url)
+            return formattedDate(stem: stem)
         }
         return stem
     }
@@ -422,8 +425,7 @@ struct SongRecordingsView: View {
         return formatter
     }()
 
-    private func formattedDate(url: URL) -> String {
-        let stem = url.deletingPathExtension().lastPathComponent
+    private func formattedDate(stem: String) -> String {
         if let ms = Double(stem) {
             let date = Date(timeIntervalSince1970: ms / 1000)
             return Self.recordingDateFormatter.string(from: date)
@@ -458,8 +460,8 @@ struct SongRecordingsView: View {
     }
 
     private func reloadRecordings() {
-        let items = (viewModel.recordingListsSuspended ? [] : RecordingFiles.memos(for: projectId)).map {
-            RecordingItem(id: $0.absoluteString, url: $0, projectId: projectId, projectTitle: projectTitle)
+        let items = viewModel.recordingItems(projectId: projectId).map {
+            RecordingItem(id: $0.id, url: $0.url, projectId: projectId, projectTitle: projectTitle, displayName: $0.displayName, date: $0.date)
         }
         recordingFolders = items.isEmpty ? [] : [RecordingFolder(id: projectId, title: projectTitle, items: items)]
         expandedFolders = [projectId]
