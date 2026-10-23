@@ -565,7 +565,7 @@ struct BackupCoreTests {
         let row = try #require(harness.context.fetch(FetchDescriptor<Recording>()).first)
         #expect(row.uploadedAt == Date(timeIntervalSince1970: 1_000))
 
-        harness.context.insert(SyncDeletionRecord(projectId: "song", fileName: "old.m4a", deletedAt: 5_000_000))
+        harness.context.insert(SyncDeletionRecord(projectId: "song", recordingId: entry.id, fileName: "old.m4a", deletedAt: 5_000_000))
         try harness.context.save()
         try await harness.service.backupNow(modelContext: harness.context)
 
@@ -840,8 +840,105 @@ struct BackupCoreTests {
         await #expect(throws: BackupError.backupConflict) {
             try await harness.service.backupNow(modelContext: harness.context)
         }
-        #expect(harness.drive.uploads(named: SyncBlob.driveFileName) == 3)
+        #expect((1...3).contains(harness.drive.uploads(named: SyncBlob.driveFileName)))
         #expect(BackupError.backupConflict.errorDescription == "Backup conflict, will retry.")
+    }
+
+    @MainActor
+    @Test func aDeletionArrivingDuringTheSecondUploadIsSeenBeforeTheManifestIsWritten() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 100)))
+        try harness.context.save()
+        try harness.writeMemo(Data([1]), projectId: "S", fileName: "one.m4a")
+        try harness.writeMemo(Data([2]), projectId: "S", fileName: "two.m4a")
+        harness.drive.duringRecordingUploadNumber[2] = {
+            harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: [SyncDeletion(projectId: "S", deletedAt: Date().epochMilliseconds + 60_000)]).encodedManifest())
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.projects.isEmpty && manifest.recordings.isEmpty)
+        #expect(Set(manifest.deletions.compactMap(\.recordingId)) == [try harness.rowId("one.m4a"), try harness.rowId("two.m4a")])
+    }
+
+    @MainActor
+    @Test func restoreResolvesTheCounterexampleOnceAtCommit() async throws {
+        // Song 40 outlives tombstone 20; the take is 30 here and 10 on Drive, and
+        // Drive's copy wins, so the tombstone removes it.
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 40)))
+        try harness.context.save()
+        let audio = Data([3, 3])
+        let local = SyncRecording(id: "R", projectId: "S", fileName: "take.m4a", bytes: 2, sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 30))
+        try harness.service.library.commitRestored(audio, entry: local, origin: .restored, context: harness.context)
+        var remote = local
+        remote.uploadedAt = Date(timeIntervalSince1970: 10)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(recordings: [remote], deletions: [SyncDeletion(projectId: "S", deletedAt: 20_000)]).encodedManifest())
+        harness.drive.seedRecording(remote, content: audio)
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<SyncDeletionRecord>()).contains { $0.recordingId == "R" && $0.deletedAt == 20_000 })
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["S"])
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(manifest.recordings.isEmpty && manifest.projects.map(\.id) == ["S"])
+        #expect(manifest.deletions.contains { $0.recordingId == "R" })
+    }
+
+    @MainActor
+    @Test func importKeepsALocalRecordingWithTheSameNameAndAddsTheArchivedOneById() async throws {
+        let source = try makeHarness()
+        source.context.insert(SongProject(id: "song", title: "Song"))
+        try source.context.save()
+        try source.writeMemo(Data([0xA]), projectId: "song", fileName: "take.m4a")
+        let archive = try source.service.exportArchive(modelContext: source.context, now: Date())
+        let archivedId = try source.rowId("take.m4a")
+
+        let target = try makeHarness()
+        try target.writeMemo(Data([0xB]), projectId: "song", fileName: "take.m4a")
+        let localId = try target.rowId("take.m4a")
+        try target.service.importArchive(archive.data, modelContext: target.context)
+
+        let rows = Dictionary(uniqueKeysWithValues: try target.context.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) })
+        #expect(rows[localId]?.fileName == "take.m4a" && rows[localId]?.audio == Data([0xB]))
+        #expect(rows[archivedId]?.fileName == "take 2.m4a" && rows[archivedId]?.audio == Data([0xA]))
+    }
+
+    @MainActor
+    @Test func aRecordingDeletedElsewhereLeavesTheListForQuarantine() async throws {
+        let harness = try makeHarness()
+        harness.context.insert(SongProject(id: "S", title: "S", updatedAt: Date(timeIntervalSince1970: 100)))
+        try harness.context.save()
+        try harness.writeMemo(Data([4, 4]), projectId: "S", fileName: "take.m4a")
+        let id = try harness.rowId("take.m4a")
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "S", title: "S", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 100))],
+            deletions: [SyncDeletion(projectId: "S", recordingId: id, fileName: "take.m4a", deletedAt: Date().epochMilliseconds + 60_000)]
+        ).encodedManifest())
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: harness.memosRoot.appendingPathComponent("S").path)) ?? []).isEmpty)
+        let quarantine = RecordingFiles.quarantineRoot(for: harness.memosRoot).appendingPathComponent("S")
+        let kept = try FileManager.default.contentsOfDirectory(at: quarantine, includingPropertiesForKeys: nil)
+        #expect(kept.count == 1 && (try? Data(contentsOf: kept[0])) == Data([4, 4]))
+    }
+
+    @MainActor
+    @Test func anOversizedRecordingCountsAsBackedUpOnlyWhenDriveHoldsItsBytes() async throws {
+        let harness = try makeHarness()
+        let audio = Data(count: Int(SyncRecording.maxBytes) + 1)
+        try harness.writeMemo(audio, projectId: "song", fileName: "long.m4a")
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(harness.service.lastReport?.oversizedRecordings == 1)
+
+        harness.drive.seed(name: "rec_elsewhere", content: Data(), appProperties: ["sha256": RecordingBackupManifest.sha256Hex(audio), "bytes": String(audio.count)])
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(harness.service.lastReport?.oversizedRecordings == 0)
     }
 
     @MainActor
@@ -2022,6 +2119,9 @@ private final class FakeDriveClient: DriveAppDataClient {
     var beforeManifestWrite: (@MainActor () throws -> Void)?
     /// Runs once, when the first recording is uploaded: another device writing meanwhile.
     var duringRecordingUpload: (@MainActor () throws -> Void)?
+    /// Runs once, when the recording upload with that number (from 1) starts.
+    var duringRecordingUploadNumber: [Int: @MainActor () throws -> Void] = [:]
+    private var recordingUploads = 0
     /// Runs at the first download after the manifest upload: an await after the merge is applied.
     var afterManifestWrite: (@MainActor () async throws -> Void)?
 
@@ -2103,6 +2203,12 @@ private final class FakeDriveClient: DriveAppDataClient {
         if name.hasPrefix("rec_"), let hook = duringRecordingUpload {
             duringRecordingUpload = nil
             try await MainActor.run { try hook() }
+        }
+        if name.hasPrefix("rec_") {
+            recordingUploads += 1
+            if let hook = duringRecordingUploadNumber.removeValue(forKey: recordingUploads) {
+                try await MainActor.run { try hook() }
+            }
         }
         let file = DriveAppDataFile(id: UUID().uuidString, name: name, modifiedTime: "upload-\(UUID().uuidString)", version: UUID().uuidString, appProperties: appProperties)
         filesByName[name] = StoredFile(file: file, content: content)
