@@ -75,8 +75,9 @@ below is the contract it must meet, not verified behaviour.
 - Backup format (v4): Drive `appDataFolder` holds the plain manifest
   `rhymeai-manifest.json` and one raw file `rec_<recordingId>` per recording,
   uploaded with `appProperties` `id`, `projectId`, `fileName`, `sha256` and
-  `bytes` (both platforms omit a property whose key plus value exceeds Drive's
-  124-byte limit, which would fail the upload; the manifest stays authoritative). Manifest keys: `version` (4),
+  `bytes` (both platforms omit a `fileName` whose key plus value exceeds Drive's
+  124-byte limit, which would fail the upload, and Android omits any other
+  over-limit property too; the manifest stays authoritative). Manifest keys: `version` (4),
   `savedAt` (ISO-8601 UTC with milliseconds, `2026-10-22T21:00:05.123Z`),
   `savedByClientId`, `platform`, `projects`, `trashed` (project fields plus
   `trashedAt`), `recordings` (`id`, `projectId`, `fileName`, `bytes`, `sha256`,

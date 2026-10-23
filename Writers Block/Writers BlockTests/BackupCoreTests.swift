@@ -61,11 +61,17 @@ struct BackupCoreTests {
         let properties = BackupService.recordingAppProperties(long)
 
         #expect(properties["fileName"] == nil)
+        #expect(properties["id"] == long.id)
+        #expect(properties["projectId"] == "song-a")
         #expect(properties["sha256"] == sha)
         #expect(properties["bytes"] == "3")
         #expect(properties.allSatisfy { ($0.key + $0.value).utf8.count <= 124 })
         let short = SyncRecording(projectId: "song-a", fileName: "late.m4a", bytes: 3, sha256: sha)
         #expect(BackupService.recordingAppProperties(short)["fileName"] == "late.m4a")
+        // Deleting the Drive object by tombstone needs its id, so a long valid id is never dropped.
+        var longId = short
+        longId.id = String(repeating: "a", count: 128)
+        #expect(BackupService.recordingAppProperties(longId)["id"] == longId.id)
     }
 
     @MainActor

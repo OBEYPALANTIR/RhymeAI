@@ -864,10 +864,12 @@ final class BackupService {
 
     /// Drive caps each appProperties entry at 124 bytes of key plus value, and one over the cap
     /// fails the whole upload. A long display name is left out, as on Android; the manifest
-    /// stays authoritative.
+    /// stays authoritative. The other properties are kept whatever their size: verifying and
+    /// deleting the object (`intact`, `deleteRemoteRecordingsCoveredByDeletions`) need them.
     static func recordingAppProperties(_ entry: SyncRecording) -> [String: String] {
-        ["id": entry.id, "projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes)]
-            .filter { ($0.key + $0.value).utf8.count <= 124 }
+        var properties = ["id": entry.id, "projectId": entry.projectId, "sha256": entry.sha256, "bytes": String(entry.bytes)]
+        if ("fileName" + entry.fileName).utf8.count <= 124 { properties["fileName"] = entry.fileName }
+        return properties
     }
 
     /// The object under a name whose properties carry this hash and size, if any.
