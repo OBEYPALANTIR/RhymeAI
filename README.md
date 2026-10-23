@@ -95,27 +95,31 @@ songs: the moment it was recorded or imported from audio, the backup entry's own
 time when it was restored or imported from an archive, or, for a file seen for
 the first time (a memo from before this version, or bytes that no longer match
 the record at that path), its file time, stamped once with the derived pre-v4
-id. Copies of one pre-v4 recording (same project, name and bytes, such as a live
-and a Trash copy) are one recording with that id; whichever order they appear in,
-the live copy (else the most recently trashed) keeps it, with the earliest file
-time among the copies, and the others move to a quarantine folder that is never
-listed, backed up or deleted. That adoption is all or nothing: a file, folder or
+id. Once stamped, that time never follows the file time again. Copies of one
+pre-v4 recording (same project, name and bytes, such as a live and a Trash copy)
+are one recording with that id; whichever order they appear in, the live copy
+(else the most recently trashed) keeps it, and the others move to a quarantine
+folder that is never listed, backed up or deleted. That adoption is all or nothing: a file, folder or
 folder entry that cannot be read stops Delete Forever, Trash expiry, Restore and
 Import with nothing changed. A backup's only
 local writes are that first-seen stamping (with its quarantine moves) and
 finishing or undoing an interrupted recording move (metadata reconciliation); it
 never touches restore staging. After Restore or Import, a recording whose
 deletion won moves to quarantine; if that move fails it is retried at the next
-launch, and the recordings and Trash lists hide it meanwhile. A name-only tombstone from before v4 removes only a recording
+launch, and meanwhile the recordings and Trash lists hide it (refreshing when the
+tombstones change) and playback refuses it. When two recordings of one song claim
+one name, the earlier keeps it and the other becomes "<stem> 2" on every device;
+Restore and Import rename local files to match, never replacing one. A name-only tombstone from before v4 removes only a recording
 whose id is the pre-v4 id of that name and its own bytes, never a v4 recording
 that reuses the name. Unfinished recordings stay in a staging folder until the
 recorder finishes them, so a backup never sees them; a take the recorder fails to
 finish is never saved. Restore, import, rename, Trash and restore from Trash write
 the record's intent before the file moves; if that write fails the operation fails
 with a message (a finished take waits in staging, survives a restart, and the
-song's recordings sheet offers Retry; a take whose finish could not be recorded
-shows as "could not be saved" and Retry saves it only if the recorder finalized
-the file), and every later
+song's recordings sheet offers Retry with the take's own id and finish time; a
+take whose finish could not be recorded shows as "could not be saved" and Retry
+saves it only if its MPEG-4 index and every listed sample are intact and readable
+to the end, while one that cannot be read right now stays waiting), and every later
 transition, deletion and snapshot first finishes or undoes an interrupted move.
 Delete Forever and Trash expiry first give every recording of the song a record,
 so each one is tombstoned with the song. Variant names stay within the 240-byte
