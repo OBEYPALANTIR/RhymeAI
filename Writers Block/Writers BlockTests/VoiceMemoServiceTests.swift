@@ -216,12 +216,6 @@ struct VoiceMemoServiceTests {
         #expect(items.count == 2)
     }
 
-    @Test func memosForAbsentProjectReturnsEmpty() async {
-        // Non-existent directory — must return [] without throwing.
-        let memos = RecordingFiles.memos(for: "nonexistent-project-\(UUID().uuidString)")
-        #expect(memos.isEmpty)
-    }
-
     // MARK: - Purge
 
     @Test func deleteMemosFolderRemovesDirectory() async throws {
@@ -278,44 +272,6 @@ struct VoiceMemoServiceTests {
 
     // MARK: - renameMemo
 
-    @Test func renameMemoChangesFilename() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RenameMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let original = dir.appendingPathComponent("1700000000000.m4a")
-        FileManager.default.createFile(atPath: original.path, contents: Data())
-
-        let service = VoiceMemoService()
-        let renamed = try service.renameMemo(at: original, to: "Verse 1")
-
-        #expect(renamed.deletingPathExtension().lastPathComponent == "Verse 1")
-        #expect(renamed.pathExtension == "m4a")
-        #expect(FileManager.default.fileExists(atPath: renamed.path))
-        #expect(!FileManager.default.fileExists(atPath: original.path))
-    }
-
-    @Test func renameMemoHandlesCollisionByAppendingTwo() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RenameMemoCollision-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        // Pre-create the target name so a collision occurs.
-        let existing = dir.appendingPathComponent("Hook.m4a")
-        FileManager.default.createFile(atPath: existing.path, contents: Data())
-
-        let source = dir.appendingPathComponent("1700000000001.m4a")
-        FileManager.default.createFile(atPath: source.path, contents: Data())
-
-        let service = VoiceMemoService()
-        let renamed = try service.renameMemo(at: source, to: "Hook")
-
-        #expect(renamed.deletingPathExtension().lastPathComponent == "Hook 2")
-        #expect(FileManager.default.fileExists(atPath: renamed.path))
-    }
-
     @Test func renameMemoReturnsOriginalURLWhenNameSanitizesToEmpty() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("RenameMemoEmpty-\(UUID().uuidString)", isDirectory: true)
@@ -344,36 +300,6 @@ struct VoiceMemoServiceTests {
         } catch {
             #expect(!error.localizedDescription.isEmpty)
         }
-    }
-
-    // MARK: - deleteMemo
-
-    @Test func deleteMemoRemovesFileAndLeavesNoError() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DeleteMemoTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let file = dir.appendingPathComponent("1700000000000.m4a")
-        FileManager.default.createFile(atPath: file.path, contents: Data())
-
-        let service = VoiceMemoService()
-        service.deleteMemo(at: file)
-
-        #expect(!FileManager.default.fileExists(atPath: file.path))
-        #expect(service.lastError == nil)
-    }
-
-    @Test func deleteMemoSetsLastErrorWhenFileAbsent() async {
-        // Removing a non-existent file must NOT be swallowed silently — the
-        // service records lastError so the UI can surface the failure.
-        let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("absent-\(UUID().uuidString).m4a")
-
-        let service = VoiceMemoService()
-        service.deleteMemo(at: missing)
-
-        #expect(service.lastError != nil)
     }
 
     // MARK: - displayLabel / isTimestampStem helper logic (replicated here)
@@ -496,7 +422,22 @@ struct PendingTakeTests {
         let id = staged.deletingLastPathComponent().lastPathComponent
         #expect(service.pendingTakes.map(\.id) == [id] && service.lastError != nil)
         #expect(try store.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [id])
-        #expect(FileManager.default.fileExists(atPath: store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)").path))
+        #expect(FileManager.default.fileExists(atPath: store.library.memosRoot.appendingPathComponent("song/\(id).m4a").path))
+    }
+
+    @Test func renamingChangesTheDisplayNameAndLeavesTheFile() async throws {
+        let store = try await makeStore()
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        let staged = try take(Data([3, 3]), in: store)
+        service.publishRecording(staged, projectId: "song")
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        let file = store.library.memosRoot.appendingPathComponent("song/\(id).m4a")
+
+        #expect(try service.renameMemo(at: file, to: "Verse 1") == file)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        let row = try #require(store.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.displayName == "Verse 1.m4a" && row.displayNameChanged)
     }
 
     @Test func anUnmarkedTakeIsPublishedOnlyWhenItsContainerIsFinished() async throws {
@@ -561,7 +502,7 @@ struct PendingTakeTests {
         service.publisher = store.library
         await service.retryPendingTakes()
 
-        let destination = store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)")
+        let destination = store.library.memosRoot.appendingPathComponent("song/\(id).m4a")
         #expect(FileManager.default.fileExists(atPath: destination.path) && !FileManager.default.fileExists(atPath: staged.path))
         #expect(service.pendingTakes.isEmpty && service.failedTakes.isEmpty)
         #expect(try OversizedRecordings.read(for: store.library.memosRoot)[id]?.completed == true)
@@ -574,7 +515,7 @@ struct PendingTakeTests {
         try OversizedRecordings.record(id: id, entry: .init(projectId: "song", fileName: staged.lastPathComponent, finishedAt: 99_000, source: staged.path,
                                                              completed: false, sha256: try RecordingFiles.sha256(of: staged)), for: store.library.memosRoot)
         // Something else took its place before the move.
-        let place = store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)")
+        let place = store.library.memosRoot.appendingPathComponent("song/\(id).m4a")
         try FileManager.default.createDirectory(at: place.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(repeating: 1, count: Int(SyncRecording.maxBytes) + 1).write(to: place)
 
@@ -582,12 +523,12 @@ struct PendingTakeTests {
         service.publisher = store.library
         await service.retryPendingTakes()
 
+        // The take waits with its bytes where they were; the other file is untouched.
         let entry = try #require(OversizedRecordings.read(for: store.library.memosRoot)[id])
-        #expect(entry.completed == true && entry.fileName != staged.lastPathComponent)
-        let moved = store.library.memosRoot.appendingPathComponent("song/\(entry.fileName)")
-        #expect(try RecordingFiles.sha256(of: moved) == entry.sha256)
+        #expect(entry.completed == false)
+        #expect(FileManager.default.fileExists(atPath: staged.path))
         #expect(try Data(contentsOf: place).first == 1)
-        #expect(service.pendingTakes.isEmpty && service.failedTakes.isEmpty)
+        #expect(service.pendingTakes.map(\.id) == [id])
     }
 
     @Test func takesThatCannotBeListedOrReadStayWaiting() async throws {

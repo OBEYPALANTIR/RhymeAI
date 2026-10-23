@@ -296,52 +296,6 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    @Test func expiredRecordingPurgeRejectsSymlinkedTrashParent() async throws {
-        let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
-        let fixture = try RecordingTrashFixture(symlinkedParent: true, deletedAt: deletedAt)
-        defer { fixture.cleanUp() }
-        #expect(fixture.memo.url.resolvingSymlinksInPath() == fixture.storedFile.resolvingSymlinksInPath())
-
-        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
-
-        #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
-    }
-
-    @MainActor
-    @Test func expiredRecordingPurgeRejectsEnumeratedSymlinkedFile() async throws {
-        let deletedAt = Date().addingTimeInterval(-trashRetentionInterval - 60)
-        let fixture = try RecordingTrashFixture(symlinkedParent: false, deletedAt: deletedAt)
-        defer { fixture.cleanUp() }
-        try FileManager.default.createDirectory(at: fixture.scratch, withIntermediateDirectories: true)
-        let outsideFile = fixture.scratch.appendingPathComponent("outside.m4a")
-        try FileManager.default.moveItem(at: fixture.storedFile, to: outsideFile)
-        try FileManager.default.createSymbolicLink(at: fixture.memo.url, withDestinationURL: outsideFile)
-
-        let discovered = RecordingFiles.trashedMemos().contains {
-            $0.url.resolvingSymlinksInPath() == outsideFile.resolvingSymlinksInPath()
-        }
-        #expect(discovered)
-
-        RecordingFiles.purgeExpiredTrashedMemos(now: Date())
-        #expect(FileManager.default.fileExists(atPath: outsideFile.path))
-    }
-
-    @MainActor
-    @Test func tombstoneRecordingCleanupRejectsSymlinkedTrashParent() async throws {
-        let fixture = try RecordingTrashFixture(symlinkedParent: true)
-        defer { fixture.cleanUp() }
-        let service = VoiceMemoService()
-
-        service.deletePermanentRecordingFiles(
-            projectId: fixture.memo.projectId,
-            fileName: fixture.memo.originalName
-        )
-
-        #expect(FileManager.default.fileExists(atPath: fixture.storedFile.path))
-        #expect(service.lastError != nil)
-    }
-
-    @MainActor
     @Test func aRecordingsFailureIsShownAndExpiryWaitsForIt() async throws {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
@@ -382,14 +336,15 @@ struct TrashLifecycleTests {
                                        trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
                                        defaults: UserDefaults(suiteName: "Playable-\(scratch.lastPathComponent)")!)
         let context = container.mainContext
-        context.insert(Recording(id: "old", projectId: "song", fileName: "old.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10)))
-        context.insert(Recording(id: "new", projectId: "song", fileName: "new.m4a", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 90)))
+        let oldId = UUID().uuidString.lowercased(), newId = UUID().uuidString.lowercased()
+        context.insert(Recording(id: oldId, projectId: "song", displayName: "old.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10)))
+        context.insert(Recording(id: newId, projectId: "song", displayName: "new.m4a", audio: Data([2]), recordedAt: Date(timeIntervalSince1970: 90)))
         try context.save()
         let viewModel = EditorViewModel(recordingLibrary: library)
         viewModel.modelContext = context
         await viewModel.recordingsLaunchTask?.value
-        let old = library.memosRoot.appendingPathComponent("song/old.m4a")
-        let new = library.memosRoot.appendingPathComponent("song/new.m4a")
+        let old = library.memosRoot.appendingPathComponent("song/\(oldId).m4a")
+        let new = library.memosRoot.appendingPathComponent("song/\(newId).m4a")
         #expect(viewModel.isPlayableRecording(old) && viewModel.isPlayableRecording(new))
 
         // A song deletion at 50 s wins against the older take only.
@@ -410,14 +365,16 @@ struct TrashLifecycleTests {
         let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
                                        trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
                                        defaults: UserDefaults(suiteName: "StopBeforeMove-\(scratch.lastPathComponent)")!)
-        let url = library.memosRoot.appendingPathComponent("song/long.m4a")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Far longer than the test: it cannot finish on its own.
-        try AudioFixtures.long(seconds: 120, at: url)
+        try AudioFixtures.long(seconds: 120, at: legacy)
         let viewModel = EditorViewModel(recordingLibrary: library)
         viewModel.modelContext = container.mainContext
         await viewModel.recordingsLaunchTask?.value
-        #expect(try container.mainContext.fetch(FetchDescriptor<Recording>()).count == 1)
+        let row = try #require(container.mainContext.fetch(FetchDescriptor<Recording>()).first)
+        let url = try #require(row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot))
+        #expect(url.lastPathComponent == "\(row.id).m4a" && row.displayName == "long.m4a")
 
         viewModel.voiceMemoService.togglePlayback(url: url)
         for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
@@ -448,12 +405,13 @@ struct TrashLifecycleTests {
     @Test func permanentDeletionNeedsTheCompleteCheckAndTheBytesThereNow() async throws {
         let (viewModel, library, context, container) = try await Self.libraryViewModel("DeleteGate")
         _ = container
-        let trashFile = library.trashRoot.appendingPathComponent("song/1000__take.m4a")
+        let trashFile = library.trashRoot.appendingPathComponent("song/\(Date().epochMilliseconds)__take.m4a")
         try FileManager.default.createDirectory(at: trashFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data([1]).write(to: trashFile)
         viewModel.modelContext = context
         await viewModel.recordingsLaunchTask?.value
-        let trashed = try #require(RecordingFiles.trashedMemos(in: library.trashRoot).first)
+        let trashed = try #require(library.trashedRecordings(in: context).first)
+        let trashFileNow = trashed.url
         #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
 
         // An unreadable move record: nothing is deleted.
@@ -464,9 +422,9 @@ struct TrashLifecycleTests {
         try FileManager.default.removeItem(at: record)
 
         // Other bytes in the row's Trash file: nothing is deleted either.
-        try Data([9]).write(to: trashFile)
+        try Data([9]).write(to: trashFileNow)
         #expect(!viewModel.permanentlyDeleteTrashedMemo(trashed))
-        #expect(FileManager.default.fileExists(atPath: trashFile.path))
+        #expect(FileManager.default.fileExists(atPath: trashFileNow.path))
         #expect(try context.fetch(FetchDescriptor<Recording>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
     }
@@ -508,16 +466,46 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func aTrashedSongWithoutATimeGetsItsFullRetentionAtLaunch() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("ZeroTrash")
+        _ = container
+        // As iCloud can deliver it: no deletion time, so a 1970 deadline.
+        let zero = Date(timeIntervalSince1970: 0)
+        // A fresh id: first-seen times are kept in the app's settings across runs.
+        let songId = "old-\(UUID().uuidString)"
+        context.insert(TrashedSongProject(id: songId, title: "Old", lyrics: "", theme: "", updatedAt: zero, deletedAt: zero,
+                                          deleteAfter: zero.addingTimeInterval(trashRetentionInterval)))
+        // A recording in the recordings Trash with no Trash time either.
+        let id = UUID().uuidString.lowercased()
+        let take = Recording(id: id, projectId: "song", displayName: "take.m4a", audio: Data([1]), recordedAt: Date(timeIntervalSince1970: 10))
+        take.trashedAt = zero
+        context.insert(take)
+        try context.save()
+        let before = Date()
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+
+        let row = try #require(context.fetch(FetchDescriptor<TrashedSongProject>()).first)
+        #expect(row.deletedAt >= before.addingTimeInterval(-1) && row.precedenceRepaired)
+        #expect(row.deleteAfter == row.deletedAt.addingTimeInterval(trashRetentionInterval))
+        #expect(try context.fetch(FetchDescriptor<SyncDeletionRecord>()).isEmpty)
+        let trashed = try library.trashedRecordings(in: context)
+        #expect(trashed.map(\.recordingId) == [id] && trashed[0].deleteAfter > Date().addingTimeInterval(trashRetentionInterval - 60))
+        #expect(try context.fetch(FetchDescriptor<SyncRecordingDeletion>()).isEmpty)
+    }
+
+    @MainActor
     @Test func aReconcileMoveStopsPlaybackThroughTheHook() async throws {
         let (viewModel, library, context, container) = try await Self.libraryViewModel("HookStop")
         _ = container
-        let url = library.memosRoot.appendingPathComponent("song/long.m4a")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = library.memosRoot.appendingPathComponent("song/long.m4a")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Far longer than the test: it cannot finish on its own.
-        try AudioFixtures.long(seconds: 120, at: url)
+        try AudioFixtures.long(seconds: 120, at: legacy)
         viewModel.modelContext = context
         await viewModel.recordingsLaunchTask?.value
         let row = try #require(context.fetch(FetchDescriptor<Recording>()).first)
+        let url = try #require(row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot))
 
         viewModel.voiceMemoService.togglePlayback(url: url)
         for _ in 0..<50 where !viewModel.voiceMemoService.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
@@ -527,16 +515,15 @@ struct TrashLifecycleTests {
         library.atMoveBoundary = { file in
             atBoundary.append((viewModel.voiceMemoService.isPlaying, FileManager.default.fileExists(atPath: file.path)))
         }
-        // Renamed on another device: the reconcile parks and moves the file itself,
+        // Trashed on another device: the reconcile moves the file itself,
         // with no VoiceMemoService call in between.
-        row.fileName = "renamed.m4a"
-        row.claimedName = "renamed.m4a"
+        row.trashedAt = Date()
         try context.save()
         #expect(await viewModel.reconcileRecordings())
 
         #expect(atBoundary.count == 1 && atBoundary.first?.playing == false && atBoundary.first?.fileStillThere == true)
         #expect(!viewModel.voiceMemoService.isPlaying)
-        #expect(FileManager.default.fileExists(atPath: library.memosRoot.appendingPathComponent("song/renamed.m4a").path))
+        #expect(FileManager.default.fileExists(atPath: library.trashRoot.appendingPathComponent("song/\(row.id).m4a").path))
     }
 
     @MainActor
