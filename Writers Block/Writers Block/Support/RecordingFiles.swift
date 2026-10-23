@@ -1,5 +1,6 @@
 import AVFoundation
 import CryptoKit
+import Darwin
 import Foundation
 
 // A recording sitting in the Trash Bin. On disk it is `<recordingId>.<ext>`
@@ -41,10 +42,11 @@ enum RecordingFiles {
     /// only when it finishes, so nothing reads it while it is being written.
     /// Each take records into its own folder named by the take's id, which is
     /// its recording id from the start (A27).
+    /// The take's audio is `<takeId>.m4a` (A36 applies to staging too).
     nonisolated static func recorderStagingURL(for projectId: String, takeId: String, root: URL = recorderStagingRoot()) -> URL {
         root.appendingPathComponent(projectId, isDirectory: true)
             .appendingPathComponent(takeId, isDirectory: true)
-            .appendingPathComponent(newMemoURL(for: projectId).lastPathComponent)
+            .appendingPathComponent("\(takeId).m4a")
     }
 
     /// Takes in the recorder's staging folder (finished or not yet published).
@@ -71,12 +73,25 @@ enum RecordingFiles {
         try Data(String(finishedAt.epochMilliseconds).utf8).write(to: folder.appendingPathComponent(finishedTakeMarker), options: .atomic)
     }
 
-    /// Nil when the marker cannot be read or parsed.
+    /// Nil when the marker cannot be read or parsed. A marker from an earlier
+    /// build that held nothing (written only after the recorder finished) is read
+    /// as finished at the time it was written, and rewritten in the current form.
     nonisolated static func readFinishedMarker(in folder: URL) -> Date? {
-        guard let data = try? Data(contentsOf: folder.appendingPathComponent(finishedTakeMarker)),
-              let text = String(data: data, encoding: .utf8), let millis = Int64(text) else { return nil }
+        let marker = folder.appendingPathComponent(finishedTakeMarker)
+        guard let data = try? Data(contentsOf: marker) else { return nil }
+        if data.isEmpty {
+            guard let written = try? facts(marker).modified, written.epochMilliseconds > 0 else { return nil }
+            let finishedAt = Date(millisecondsSince1970: written.epochMilliseconds)
+            try? writeFinishedMarker(finishedAt, in: folder)
+            return finishedAt
+        }
+        guard let text = String(data: data, encoding: .utf8), let millis = Int64(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              millis > 0, millis < maxPlausibleMilliseconds else { return nil }
         return Date(millisecondsSince1970: millis)
     }
+
+    /// Times past this (year 3000) are not times a recording was made.
+    nonisolated static let maxPlausibleMilliseconds: Int64 = 32_503_680_000_000
 
     enum ContainerCheck: Equatable { case complete, invalid, uninspectable }
 
@@ -170,22 +185,28 @@ enum RecordingFiles {
         return supportedAudioExtensions.contains(ext) ? ext : "m4a"
     }
 
-    /// The recording id a file is named by, when its name is `<lower-case uuid>.<ext>`.
+    /// The recording id a file is named by, when its name is `<uuid>.<ext>`. Ids are
+    /// lower-case now; earlier builds made upper-case ones, which keep their case
+    /// (an id is never re-cased, so it stays the same identity everywhere).
     nonisolated static func storedId(of url: URL) -> String? {
         let stem = url.deletingPathExtension().lastPathComponent
-        guard UUID(uuidString: stem) != nil, stem == stem.lowercased(),
-              supportedAudioExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+        guard UUID(uuidString: stem) != nil, supportedAudioExtensions.contains(url.pathExtension.lowercased()) else { return nil }
         return stem
     }
 
     /// A Trash file name from before A36, "<deletedAtMs>__<originalName>".
+    /// The time is whole epoch milliseconds; anything else (not finite, negative,
+    /// past year 3000) is not a time, and the name is read as having none (0), which
+    /// is then repaired and persisted like any missing time (A32).
     nonisolated static func legacyTrashName(_ name: String) -> (deletedAt: Date, originalName: String)? {
         guard let separatorRange = name.range(of: trashNameSeparator),
-              separatorRange.lowerBound != name.startIndex,
-              let deletedAtMs = Double(name[..<separatorRange.lowerBound]) else { return nil }
+              separatorRange.lowerBound != name.startIndex else { return nil }
         let originalName = String(name[separatorRange.upperBound...])
         guard !originalName.isEmpty else { return nil }
-        return (Date(timeIntervalSince1970: deletedAtMs / 1000), originalName)
+        let stamp = name[..<separatorRange.lowerBound]
+        guard stamp.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        let millis = Int64(stamp) ?? 0
+        return (Date(millisecondsSince1970: millis > 0 && millis < maxPlausibleMilliseconds ? millis : 0), originalName)
     }
 
     /// Remove a project's entire memo folder — live and trashed. Called on
@@ -285,18 +306,22 @@ enum RecordingFiles {
         memosRoot.deletingLastPathComponent().appendingPathComponent("recording-quarantine", isDirectory: true)
     }
 
-    /// Moves `file` (in a memo or Trash project folder) into quarantine as
-    /// `<recordingId>.<ext>` (A36); a second copy of one id goes in a folder of
-    /// its own. Never replaces anything.
-    nonisolated static func quarantine(_ file: URL, recordingId: String, memosRoot: URL, trashRoot: URL) throws {
-        guard isRecordingFile(file, in: [memosRoot, trashRoot]) else { throw SyncValidationError.pathOutsideMemoRoot }
+    /// Where a file going to quarantine goes: `<recordingId>.<ext>` in its song's
+    /// quarantine folder, or in a folder of its own when that name is taken. Chosen
+    /// when the move is recorded, so the record holds its destination.
+    nonisolated static func quarantineDestination(for file: URL, recordingId: String, memosRoot: URL) throws -> URL {
         let projectId = file.deletingLastPathComponent().lastPathComponent
-        var folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
         let name = "\(recordingId).\(storedExtension(of: file.lastPathComponent))"
-        if try exists(folder.appendingPathComponent(name)) {
-            folder = folder.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
-        }
-        try safeMove(file, to: folder.appendingPathComponent(name), within: [quarantineRoot(for: memosRoot)])
+        let folder = quarantineRoot(for: memosRoot).appendingPathComponent(projectId, isDirectory: true)
+        if try !exists(folder.appendingPathComponent(name)) { return folder.appendingPathComponent(name) }
+        return folder.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true).appendingPathComponent(name)
+    }
+
+    /// Moves `file` (in a memo or Trash project folder) into quarantine at its
+    /// recorded destination, verified and never replacing anything.
+    nonisolated static func quarantine(_ file: URL, to destination: URL, sha256: String, bytes: Int64, memosRoot: URL, trashRoot: URL) throws {
+        guard isRecordingFile(file, in: [memosRoot, trashRoot]) else { throw SyncValidationError.pathOutsideMemoRoot }
+        try verifiedMove(file, to: destination, sha256: sha256, bytes: bytes, within: [quarantineRoot(for: memosRoot)])
     }
 
     /// Moves `source` to `target` without ever replacing, after checking that the
@@ -308,7 +333,32 @@ enum RecordingFiles {
         guard isSafeDestination(target, in: roots) else { throw SyncValidationError.pathOutsideMemoRoot }
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard isSafeDestination(target, in: roots) else { throw SyncValidationError.pathOutsideMemoRoot }
-        try FileManager.default.moveItem(at: source, to: target)
+        try exclusiveRename(source, to: target)
+    }
+
+    /// The one move every recording byte transition ends in: the source's digest
+    /// and length are checked immediately before an exclusive rename into a checked
+    /// destination, so neither other bytes nor an occupied destination are ever moved
+    /// or replaced.
+    nonisolated static func verifiedMove(_ source: URL, to target: URL, sha256: String, bytes: Int64, within roots: [URL]) throws {
+        guard try facts(source).size == bytes, try self.sha256(of: source) == sha256 else { throw SyncValidationError.invalidRecording }
+        try safeMove(source, to: target, within: roots)
+    }
+
+    /// `rename(2)` with `RENAME_EXCL`: atomic, and it fails rather than replace an
+    /// existing destination (the file system checks and renames in one step).
+    nonisolated static func exclusiveRename(_ source: URL, to target: URL) throws {
+        let result = source.withUnsafeFileSystemRepresentation { from in
+            target.withUnsafeFileSystemRepresentation { to in
+                guard let from, let to else { return Int32(-1) }
+                return renamex_np(from, to, UInt32(RENAME_EXCL))
+            }
+        }
+        guard result == 0 else {
+            if errno == EEXIST { throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path]) }
+            if errno == ENOENT { throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: source.path]) }
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(errno))])
+        }
     }
 
     /// True when every folder from `target`'s up to one of `roots` (at most two
@@ -373,7 +423,8 @@ enum RecordingFiles {
     /// Moves recorded before the save that decides them and finished after it, or
     /// at the next run (A28, finding 4): files going to quarantine, and files of
     /// recordings removed on another device going to the recordings Trash. A
-    /// detached Trash entry stays recorded, so it is never adopted again.
+    /// detached Trash entry stays recorded, so it is never adopted again. Every
+    /// entry carries its identity, source, destination, digest and length.
     nonisolated struct PendingMoves: Codable, Equatable, Sendable {
         var quarantine: [Quarantine] = []
         var detach: [Detach] = []
@@ -388,6 +439,10 @@ enum RecordingFiles {
             var sha256: String
             /// The id the bytes are kept under in quarantine.
             var recordingId: String
+            /// Where it goes, chosen when recorded (nil only in records from before
+            /// this field, filled in by `upgradePendingMoves`).
+            var destination: String? = nil
+            var bytes: Int64? = nil
         }
 
         /// A recording removed on another device, moved to the recordings Trash here.
@@ -407,6 +462,7 @@ enum RecordingFiles {
             var detachedAt: Int64
             /// A37: `at` is a repaired time (absent in older records: false).
             var repaired: Bool? = nil
+            var bytes: Int64? = nil
         }
 
         nonisolated struct Adopt: Codable, Equatable, Hashable, Sendable {
@@ -425,14 +481,139 @@ enum RecordingFiles {
         }
         /// Not listed or played: waiting for quarantine, or still at its source.
         var listingHidden: Set<String> { Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }) }
+
+        /// Every field a replay relies on, checked when the record is read (T3.23):
+        /// absolute paths, valid ids, digests and lengths, and times.
+        func validate() throws {
+            func path(_ value: String) throws { guard value.hasPrefix("/"), !value.contains("\0") else { throw PendingMovesError.invalid } }
+            func digest(_ value: String) throws {
+                guard value.count == 64, value.unicodeScalars.allSatisfy({ "0123456789abcdef".unicodeScalars.contains($0) }) else { throw PendingMovesError.invalid }
+            }
+            for item in quarantine {
+                try path(item.path); try digest(item.sha256); try SyncIdentity.validateRecordingId(item.recordingId)
+                if let destination = item.destination { try path(destination) }
+                if let bytes = item.bytes, bytes < 0 { throw PendingMovesError.invalid }
+            }
+            for item in detach {
+                if !item.source.isEmpty { try path(item.source) }
+                try path(item.destination); try digest(item.sha256); try SyncIdentity.validateRecordingId(item.recordingId)
+                try SyncIdentity.validateDisplayName(item.displayName)
+                guard item.at > 0, item.detachedAt > 0 else { throw PendingMovesError.invalid }
+                if let bytes = item.bytes, bytes < 0 { throw PendingMovesError.invalid }
+            }
+            for item in adopt {
+                try path(item.path); try digest(item.sha256); try SyncIdentity.validateRecordingId(item.recordingId)
+                try SyncIdentity.validateDisplayName(item.displayName)
+            }
+        }
+    }
+
+    nonisolated enum PendingMovesError: Error, Equatable {
+        /// The record is not one this build or an earlier one wrote, or a field in it is wrong.
+        case invalid
+        /// A record from an earlier build, not yet upgraded by `upgradePendingMoves`.
+        case needsUpgrade
     }
 
     /// `root` is the memo or the Trash root; both sit in the same folder. A missing
-    /// record is empty; one that cannot be read or parsed throws (fail closed, A31).
+    /// record is empty; one that cannot be read, parsed or validated throws (fail
+    /// closed, A31). A record from an earlier build throws `needsUpgrade` until
+    /// `upgradePendingMoves` has rewritten it.
     nonisolated static func readPendingMoves(for root: URL) throws -> PendingMoves {
         let url = pendingMovesURL(for: root)
         guard try exists(url) else { return PendingMoves() }
-        return try JSONDecoder().decode(PendingMoves.self, from: Data(contentsOf: url))
+        let data = try Data(contentsOf: url)
+        guard let moves = try? JSONDecoder().decode(PendingMoves.self, from: data) else {
+            if HistoricalMoves.decode(data) != nil { throw PendingMovesError.needsUpgrade }
+            throw PendingMovesError.invalid
+        }
+        try moves.validate()
+        return moves
+    }
+
+    /// The shapes earlier builds wrote: a list of paths (cbc39e1); paths and
+    /// three-field detaches (c725690); paths with digests and four-field detaches
+    /// (89a9aa5 to a25a2c3); and the A36 shape before destinations and lengths.
+    nonisolated enum HistoricalMoves {
+        struct Detach: Decodable { var recordingId: String; var source: String; var destination: String; var sha256: String? }
+        struct Quarantine: Decodable { var path: String; var sha256: String? }
+        struct Shape: Decodable { var quarantine: [Quarantine]; var detach: [Detach]? }
+        struct PathsShape: Decodable { var quarantine: [String]; var detach: [Detach]? }
+
+        static func decode(_ data: Data) -> (quarantine: [Quarantine], detach: [Detach])? {
+            if let paths = try? JSONDecoder().decode([String].self, from: data) { return (paths.map { Quarantine(path: $0) }, []) }
+            if let shape = try? JSONDecoder().decode(PathsShape.self, from: data) { return (shape.quarantine.map { Quarantine(path: $0) }, shape.detach ?? []) }
+            if let shape = try? JSONDecoder().decode(Shape.self, from: data) { return (shape.quarantine, shape.detach ?? []) }
+            return nil
+        }
+    }
+
+    /// Rewrites a move record from an earlier build (or the A36 shape without
+    /// destinations and lengths) in the current shape, run before anything reads it.
+    /// Proof missing from an old record is taken from the file now at its path (the
+    /// bytes the record was decided on, as nothing moves a recorded file but its
+    /// replay); a file gone since needs nothing. Suppression is kept: every old entry
+    /// stays recorded. An old detach keeps its destination and gets a repaired time.
+    /// A record in no known shape is left in place for `readPendingMoves` to refuse.
+    nonisolated static func upgradePendingMoves(for memosRoot: URL, now: Int64, displayName: (String) -> String) throws {
+        let url = pendingMovesURL(for: memosRoot)
+        guard try exists(url) else { return }
+        let data = try Data(contentsOf: url)
+        var moves: PendingMoves
+        if let current = try? JSONDecoder().decode(PendingMoves.self, from: data) {
+            moves = current
+        } else if let old = HistoricalMoves.decode(data) {
+            moves = PendingMoves()
+            for item in old.quarantine {
+                let file = URL(fileURLWithPath: item.path)
+                guard try exists(file) else { continue }
+                let sha = try item.sha256 ?? sha256(of: file)
+                let id = storedId(of: file) ?? RecordingBackupManifest.legacyRecordingId(
+                    projectId: file.deletingLastPathComponent().lastPathComponent,
+                    fileName: legacyTrashName(file.lastPathComponent)?.originalName ?? file.lastPathComponent, sha256: sha)
+                moves.quarantine.append(.init(path: canonicalPath(file), sha256: sha, recordingId: id))
+            }
+            for item in old.detach {
+                let held = URL(fileURLWithPath: item.source.isEmpty ? item.destination : item.source)
+                guard try exists(held) else { continue }
+                let sha = try item.sha256 ?? sha256(of: held)
+                let name = legacyTrashName(URL(fileURLWithPath: item.destination).lastPathComponent)
+                moves.detach.append(.init(recordingId: item.recordingId, source: item.source, destination: item.destination, sha256: sha,
+                                          displayName: name?.originalName ?? displayName(item.recordingId), at: now,
+                                          detachedAt: name.map(\.deletedAt.epochMilliseconds).flatMap { $0 > 0 ? $0 : nil } ?? now,
+                                          repaired: true, bytes: try facts(held).size))
+            }
+        } else {
+            return
+        }
+        // Destinations and lengths, when missing, are filled in from the files now.
+        for index in moves.quarantine.indices {
+            let file = URL(fileURLWithPath: moves.quarantine[index].path)
+            guard try exists(file) else { continue }
+            if moves.quarantine[index].bytes == nil { moves.quarantine[index].bytes = try facts(file).size }
+            if moves.quarantine[index].destination == nil {
+                moves.quarantine[index].destination = try quarantineDestination(for: file, recordingId: moves.quarantine[index].recordingId, memosRoot: memosRoot).path
+            }
+        }
+        for index in moves.detach.indices where moves.detach[index].bytes == nil {
+            let held = URL(fileURLWithPath: moves.detach[index].source.isEmpty ? moves.detach[index].destination : moves.detach[index].source)
+            if try exists(held) { moves.detach[index].bytes = try facts(held).size }
+            if moves.detach[index].at <= 0 { moves.detach[index].at = now; moves.detach[index].repaired = true }
+            if moves.detach[index].detachedAt <= 0 { moves.detach[index].detachedAt = now }
+        }
+        guard let rewritten = try? JSONEncoder().encode(moves), rewritten != data else { return }
+        try moves.validate()
+        try writePendingMoves(moves, for: memosRoot)
+    }
+
+    /// Sets a damaged move record aside (kept beside it for diagnosis) so the
+    /// library can run again; files it named stay where they are (T5.2).
+    nonisolated static func setAsidePendingMoves(for memosRoot: URL, at time: Date = Date()) throws -> URL? {
+        let url = pendingMovesURL(for: memosRoot)
+        guard try exists(url) else { return nil }
+        let aside = url.deletingLastPathComponent().appendingPathComponent("pending-moves.damaged-\(time.epochMilliseconds).json")
+        try exclusiveRename(url, to: aside)
+        return aside
     }
 
     nonisolated static func writePendingMoves(_ moves: PendingMoves, for root: URL) throws {
@@ -454,8 +635,11 @@ enum RecordingFiles {
     nonisolated static func setPendingQuarantine(_ paths: Set<String>, for root: URL) throws {
         var moves = try readPendingMoves(for: root)
         moves.quarantine = try paths.sorted().map { path in
-            let digest = try sha256(of: URL(fileURLWithPath: path))
-            return PendingMoves.Quarantine(path: path, sha256: digest, recordingId: storedId(of: URL(fileURLWithPath: path)) ?? UUID().uuidString.lowercased())
+            let file = URL(fileURLWithPath: path)
+            let id = storedId(of: file) ?? UUID().uuidString.lowercased()
+            return PendingMoves.Quarantine(path: path, sha256: try sha256(of: file), recordingId: id,
+                                           destination: try quarantineDestination(for: file, recordingId: id, memosRoot: root).path,
+                                           bytes: try facts(file).size)
         }
         try writePendingMoves(moves, for: root)
     }
@@ -464,35 +648,178 @@ enum RecordingFiles {
         quarantineRoot(for: root).appendingPathComponent("pending-moves.json")
     }
 
-    /// Recovery for an interrupted restore or import, run only as one starts:
-    /// anything still staged never reached the memo folders, so it is dropped.
-    nonisolated static func clearStaging(for memosRoot: URL) {
-        try? FileManager.default.removeItem(at: stagingRoot(for: memosRoot))
+    // MARK: - Verified deletion
+
+    /// A deletion the user asked for (permanent delete, expiry, a song's
+    /// recordings), recorded with each file's digest and length before anything is
+    /// unlinked: only a file that still holds exactly those bytes is removed, at the
+    /// boundary, and an interrupted deletion is finished the same way (T1.1–T1.4).
+    nonisolated struct DeletionPlan: Codable, Equatable, Sendable {
+        nonisolated struct Item: Codable, Equatable, Hashable, Sendable {
+            var path: String
+            var sha256: String
+            var bytes: Int64
+        }
+        var items: [Item] = []
     }
 
-    /// Writes `data` to a new staging file, reads it back and checks its digest;
-    /// runs off the main actor. The caller moves it into place or removes it.
-    /// Writes `data` to staging as `storedName` (the recording's `<id>.<ext>`, A36)
-    /// through a temporary name and a move that never replaces: the bytes are read
-    /// back and checked first. A staged file of that name left by an interrupted run
-    /// is used only when it holds the same bytes. Runs off the main actor; the caller
-    /// moves the result into place or removes it.
-    nonisolated static func stageVerified(_ data: Data, sha256: String, storedName: String, in staging: URL, modifiedAt: Date) throws -> URL {
-        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-        let temporary = staging.appendingPathComponent("\(UUID().uuidString).partial")
+    private nonisolated static func deletionPlanURL(for memosRoot: URL) -> URL {
+        quarantineRoot(for: memosRoot).appendingPathComponent("deletion-plan.json")
+    }
+
+    nonisolated static func readDeletionPlan(for memosRoot: URL) throws -> DeletionPlan {
+        let url = deletionPlanURL(for: memosRoot)
+        guard try exists(url) else { return DeletionPlan() }
+        return try JSONDecoder().decode(DeletionPlan.self, from: Data(contentsOf: url))
+    }
+
+    /// Records the plan, removes every file that still holds its recorded bytes and
+    /// lies inside `roots`, then clears what was done. Returns the files kept (other
+    /// bytes, or not a recording file there).
+    @discardableResult
+    nonisolated static func deleteVerified(_ items: [DeletionPlan.Item], memosRoot: URL, within roots: [URL]) throws -> [URL] {
+        var plan = try readDeletionPlan(for: memosRoot)
+        plan.items += items.filter { !plan.items.contains($0) }
+        try writeDeletionPlan(plan, for: memosRoot)
+        return try finishDeletionPlan(memosRoot: memosRoot, within: roots)
+    }
+
+    @discardableResult
+    nonisolated static func finishDeletionPlan(memosRoot: URL, within roots: [URL]) throws -> [URL] {
+        let plan = try readDeletionPlan(for: memosRoot)
+        var kept: [URL] = []
+        var remaining: [DeletionPlan.Item] = []
+        for item in plan.items {
+            let file = URL(fileURLWithPath: item.path)
+            do {
+                guard try exists(file) else { continue }
+                // Immediately before the unlink: still a recording file there, and still those bytes.
+                guard isRecordingFile(file, in: roots), try facts(file).size == item.bytes, try sha256(of: file) == item.sha256 else {
+                    kept.append(file)
+                    continue
+                }
+                try FileManager.default.removeItem(at: file)
+            } catch {
+                remaining.append(item)
+            }
+        }
+        try writeDeletionPlan(DeletionPlan(items: remaining), for: memosRoot)
+        return kept
+    }
+
+    private nonisolated static func writeDeletionPlan(_ plan: DeletionPlan, for memosRoot: URL) throws {
+        let url = deletionPlanURL(for: memosRoot)
+        if plan.items.isEmpty {
+            if try exists(url) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(plan).write(to: url, options: .atomic)
+    }
+
+    /// Removes a song's memo and Trash folders once nothing is left in them.
+    nonisolated static func removeEmptySongFolders(_ projectId: String, memosRoot: URL, trashRoot: URL) {
+        for root in [memosRoot, trashRoot] {
+            let folder = root.appendingPathComponent(projectId, isDirectory: true)
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path), contents.isEmpty {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+    }
+
+    // MARK: - Staging
+
+    /// Recovery for an interrupted restore or import, run only as one starts and
+    /// under the library's gate: a staged file goes only when nothing claims it (a
+    /// row's recorded source, or the staging journal), so audio a row is waiting
+    /// for is never dropped (T1.7).
+    nonisolated static func clearStaging(for memosRoot: URL, keeping claimed: Set<String>) {
+        let staging = stagingRoot(for: memosRoot)
+        let journal = (try? readStagingJournal(for: memosRoot)) ?? StagingJournal()
+        // The journal itself stays while it holds moves (an unreadable one is kept too).
+        let keep = claimed.union(journal.moves.flatMap { [$0.source, $0.destination] })
+            .union([canonicalPath(stagingJournalURL(for: memosRoot))])
+        guard let walker = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: [.isRegularFileKey]) else { return }
+        for case let file as URL in walker where (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            if !keep.contains(canonicalPath(file)) { try? FileManager.default.removeItem(at: file) }
+        }
+        let partial = staging.appendingPathComponent("partial", isDirectory: true)
+        if (try? FileManager.default.contentsOfDirectory(atPath: partial.path))?.isEmpty == true { try? FileManager.default.removeItem(at: partial) }
+    }
+
+    /// Partial → staged moves inside the staging folder, recorded before they are
+    /// made (T1.10): the id, both paths, the digest and the length.
+    nonisolated struct StagingJournal: Codable, Equatable, Sendable {
+        nonisolated struct Move: Codable, Equatable, Sendable {
+            var recordingId: String
+            var source: String
+            var destination: String
+            var sha256: String
+            var bytes: Int64
+        }
+        var moves: [Move] = []
+    }
+
+    private nonisolated static func stagingJournalURL(for memosRoot: URL) -> URL {
+        stagingRoot(for: memosRoot).appendingPathComponent("journal.json")
+    }
+
+    nonisolated static func readStagingJournal(for memosRoot: URL) throws -> StagingJournal {
+        let url = stagingJournalURL(for: memosRoot)
+        guard try exists(url) else { return StagingJournal() }
+        return try JSONDecoder().decode(StagingJournal.self, from: Data(contentsOf: url))
+    }
+
+    private nonisolated static func writeStagingJournal(_ journal: StagingJournal, for memosRoot: URL) throws {
+        let url = stagingJournalURL(for: memosRoot)
+        if journal.moves.isEmpty {
+            if try exists(url) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(journal).write(to: url, options: .atomic)
+    }
+
+    /// Writes `data` for recording `recordingId` into staging (A36: the staged file
+    /// is `<recordingId>.<ext>`, and its private partial copy is too, in its own
+    /// folder): written, read back and checked, then moved by a recorded, verified,
+    /// exclusive move. A staged file of that name left by an interrupted run is used
+    /// only when it holds the same bytes. Runs off the main actor under the library's
+    /// gate; the caller moves the result into place or removes it with `unstage`.
+    nonisolated static func stageVerified(_ data: Data, sha256: String, recordingId: String, storedName: String, memosRoot: URL, modifiedAt: Date) throws -> URL {
+        let staging = stagingRoot(for: memosRoot)
+        let partialFolder = staging.appendingPathComponent("partial", isDirectory: true)
+        try FileManager.default.createDirectory(at: partialFolder, withIntermediateDirectories: true)
+        let partial = partialFolder.appendingPathComponent(storedName)
         let staged = staging.appendingPathComponent(storedName)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try data.write(to: temporary, options: .withoutOverwriting)
-        guard try RecordingFiles.sha256(of: temporary) == sha256, try facts(temporary).size == Int64(data.count) else {
+        let bytes = Int64(data.count)
+        if try exists(staged) {
+            guard try facts(staged).size == bytes, try self.sha256(of: staged) == sha256 else { throw SyncValidationError.invalidRecording }
+            return staged
+        }
+        // The partial is this recording's private copy: one left by an interrupted write goes.
+        if try exists(partial) { try FileManager.default.removeItem(at: partial) }
+        try data.write(to: partial, options: .withoutOverwriting)
+        guard try self.sha256(of: partial) == sha256, try facts(partial).size == bytes else {
+            try? FileManager.default.removeItem(at: partial)
             throw SyncValidationError.invalidRecording
         }
-        try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: temporary.path)
-        do {
-            try FileManager.default.moveItem(at: temporary, to: staged)
-        } catch CocoaError.fileWriteFileExists {
-            guard try RecordingFiles.sha256(of: staged) == sha256, try facts(staged).size == Int64(data.count) else { throw SyncValidationError.invalidRecording }
-        }
+        try? FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: partial.path)
+        var journal = try readStagingJournal(for: memosRoot)
+        let move = StagingJournal.Move(recordingId: recordingId, source: canonicalPath(partial), destination: canonicalPath(staged), sha256: sha256, bytes: bytes)
+        journal.moves.append(move)
+        try writeStagingJournal(journal, for: memosRoot)
+        try verifiedMove(partial, to: staged, sha256: sha256, bytes: bytes, within: [staging])
+        journal.moves.removeAll { $0 == move }
+        try writeStagingJournal(journal, for: memosRoot)
+        rmdir(partialFolder.path) // only when empty
         return staged
+    }
+
+    /// Removes a staged file only while it holds the bytes it was staged with (T1.11).
+    nonisolated static func unstage(_ staged: URL, sha256: String, bytes: Int64) {
+        guard (try? facts(staged).size) == bytes, (try? self.sha256(of: staged)) == sha256 else { return }
+        try? FileManager.default.removeItem(at: staged)
     }
 
     nonisolated static func projectURL(projectId: String, memosRoot: URL) throws -> URL {

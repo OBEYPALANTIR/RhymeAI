@@ -568,11 +568,23 @@ struct SyncBlob: Equatable, Sendable {
                     )
                 },
                 recordings: try fields.array("recordings").map { entry in
-                    SyncRecording(
-                        id: try entry.string("id"),
+                    // v4 manifests from before A21 (ef9badf) carry no id: the recording
+                    // gets the one every device derives from its song, name and bytes (T3.6).
+                    let id = entry["id"] == nil
+                        ? RecordingBackupManifest.legacyRecordingId(projectId: try entry.string("projectId"), fileName: try entry.string("fileName"), sha256: try entry.string("sha256"))
+                        : try entry.string("id")
+                    // That shape wrote `uploadedAt` as an ISO-8601 string.
+                    let uploadedAt: Int64
+                    if entry["id"] == nil, case .string(let text)? = entry["uploadedAt"] {
+                        uploadedAt = try Self.parseSavedAt(text).epochMilliseconds
+                    } else {
+                        uploadedAt = try entry.time("uploadedAt")
+                    }
+                    return SyncRecording(
+                        id: id,
                         projectId: try entry.string("projectId"), fileName: try entry.string("fileName"),
                         bytes: try entry.int("bytes"), sha256: try entry.string("sha256"),
-                        uploadedAt: Date(millisecondsSince1970: try entry.time("uploadedAt")),
+                        uploadedAt: Date(millisecondsSince1970: uploadedAt),
                         precedenceRepaired: try entry.repairedFlag()
                     )
                 },
@@ -923,7 +935,7 @@ enum SyncMerger {
     /// Of two times with their repair flags, the one that stands (A37): a recorded
     /// time beats a repair, of two repairs the smaller, of two recorded the later.
     /// Nil when they are equal.
-    private static func standingTime(_ new: (Date, Bool), over old: (Date, Bool)) -> Bool? {
+    static func standingTime(_ new: (Date, Bool), over old: (Date, Bool)) -> Bool? {
         if new.1 != old.1 { return !new.1 }
         if new.0 == old.0 { return nil }
         return new.1 ? new.0 < old.0 : new.0 > old.0
@@ -1097,5 +1109,20 @@ extension Date {
 
     init(millisecondsSince1970 milliseconds: Int64) {
         self.init(timeIntervalSince1970: TimeInterval(milliseconds) / 1000.0)
+    }
+}
+
+/// A first-seen registry (A32) in UserDefaults: absent is empty; a value of the wrong
+/// shape is set aside under `<key>.damaged` for diagnosis and reported, never
+/// silently reset and restamped (T3.33–T3.36).
+enum RepairRegistry {
+    static func read(_ defaults: UserDefaults, key: String) -> (times: [String: Int64], damaged: Bool) {
+        guard let raw = defaults.object(forKey: key) else { return ([:], false) }
+        if let dictionary = raw as? [String: NSNumber], dictionary.values.allSatisfy({ $0.int64Value > 0 }) {
+            return (dictionary.mapValues(\.int64Value), false)
+        }
+        if defaults.object(forKey: "\(key).damaged") == nil { defaults.set(raw, forKey: "\(key).damaged") }
+        defaults.removeObject(forKey: key)
+        return ([:], true)
     }
 }

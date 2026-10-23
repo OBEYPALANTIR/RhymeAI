@@ -128,6 +128,30 @@ final class VoiceMemoService {
     @ObservationIgnored private var playingIdentity: String?
     /// Set when the take folders could not be listed; the last known takes stay.
     private(set) var pendingTakesUnreadable = false
+    /// Audio in the recorder's staging that is not in a take folder and could not be
+    /// given one (T3.29, T5.13): kept and listed.
+    private(set) var unmigratedTakes = Set<String>()
+
+    /// Builds before take folders (d185048) recorded straight into the song's staging
+    /// folder. Each such file becomes a take of its own, `<newId>/<newId>.<ext>`, by an
+    /// exclusive rename; with no finished marker its container is checked before it
+    /// is published. One that cannot be moved stays and is reported.
+    private func migrateFlatTakes(in project: URL) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: project, includingPropertiesForKeys: [.isRegularFileKey], options: .skipsHiddenFiles) else { return }
+        for file in entries where (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            && RecordingFiles.supportedAudioExtensions.contains(file.pathExtension.lowercased()) {
+            let id = UUID().uuidString.lowercased()
+            let folder = project.appendingPathComponent(id, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                try RecordingFiles.exclusiveRename(file, to: folder.appendingPathComponent("\(id).\(file.pathExtension.lowercased())"))
+                unmigratedTakes.remove(file.path)
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                unmigratedTakes.insert(file.path)
+            }
+        }
+    }
 
     // MARK: - Private (not tracked by @Observable)
 
@@ -173,8 +197,13 @@ final class VoiceMemoService {
             // a listing that fails keeps the last known takes (finding 8).
             if try RecordingFiles.exists(stagingRoot) {
                 for project in try fm.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
-                    for folder in try fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                    migrateFlatTakes(in: project)
+                    for folder in try fm.contentsOfDirectory(at: project, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)
                     where !active.contains(folder.standardizedFileURL.path) {
+                        guard (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                            unmigratedTakes.insert(folder.path)
+                            continue
+                        }
                         let contents = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
                         let audio = contents.first { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
                         let names = Set(contents.map(\.lastPathComponent))
@@ -198,6 +227,9 @@ final class VoiceMemoService {
             return
         }
         pendingTakesUnreadable = false
+        if !unmigratedTakes.isEmpty {
+            lastError = "\(unmigratedTakes.count) \(unmigratedTakes.count == 1 ? "recording waiting to be saved is" : "recordings waiting to be saved are") in an older layout and could not be read. They are kept on this device."
+        }
         takes.sort { $0.id < $1.id }
         pendingTakes = takes.filter { $0.state != .failed }
         failedTakes = takes.filter { $0.state == .failed }
@@ -211,19 +243,88 @@ final class VoiceMemoService {
 
     /// Copy provider-owned bytes into staging, decode them, then atomically publish.
     /// No microphone or audio session is needed to import a recording.
-    nonisolated static func importMemo(from source: URL, projectId: String, publisher: (any RecordingPublishing)? = nil) async throws -> URL {
+    /// Where imports copy audio before it is published.
+    nonisolated static var defaultImportRoot: URL {
+        RecordingFiles.memosRoot().deletingLastPathComponent().appendingPathComponent("recording-import", isDirectory: true)
+    }
+
+    /// What an import's private copy is for, written before it is copied.
+    nonisolated struct ImportRecord: Codable {
+        var id: String
+        var projectId: String
+        var displayName: String
+        /// True once the copy decoded in full: only then is it published.
+        var verified: Bool
+
+        func write(in folder: URL) throws {
+            try JSONEncoder().encode(self).write(to: folder.appendingPathComponent("import.json"), options: .atomic)
+        }
+    }
+
+    /// Publishes a verified import under the library's gate, on the main actor.
+    @MainActor
+    private static func publishImported(_ copied: URL, projectId: String, displayName: String, id: String, publisher: (any RecordingPublishing)?) async throws -> URL {
+        guard let publisher else { throw RecordingLibraryError.unavailable }
+        return try await publisher.withGate {
+            try publisher.publishFinished(copied, projectId: projectId, preferredName: displayName, origin: .imported, id: id, finishedAt: nil)
+        }
+    }
+
+    /// Imports a killed app left behind (T1.21): a copy that had decoded in full is
+    /// published under its id; one that had not is disposed of (the user's original
+    /// file is untouched); a folder whose record cannot be read is kept and reported.
+    @discardableResult
+    static func recoverImports(publisher: any RecordingPublishing, importRoot: URL = defaultImportRoot) async -> [String] {
+        var kept: [String] = []
+        let folders = (try? FileManager.default.contentsOfDirectory(at: importRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+        for folder in folders {
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("import.json")),
+                  let record = try? JSONDecoder().decode(ImportRecord.self, from: data), record.id == folder.lastPathComponent else {
+                kept.append(folder.lastPathComponent)
+                continue
+            }
+            let audio = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
+                .first { $0.deletingPathExtension().lastPathComponent == record.id && RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+            guard record.verified, let audio else {
+                try? FileManager.default.removeItem(at: folder)
+                continue
+            }
+            do {
+                _ = try await publisher.withGate {
+                    try publisher.publishFinished(audio, projectId: record.projectId, preferredName: record.displayName, origin: .imported, id: record.id, finishedAt: nil)
+                }
+                try? FileManager.default.removeItem(at: folder)
+            } catch {
+                kept.append(record.displayName)
+            }
+        }
+        return kept
+    }
+
+    nonisolated static func importMemo(from source: URL, projectId: String, publisher: (any RecordingPublishing)? = nil,
+                                       importRoot: URL = defaultImportRoot) async throws -> URL {
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
             let ext = source.pathExtension.lowercased()
             guard RecordingFiles.supportedAudioExtensions.contains(ext) else { throw ImportError.unsupportedAudio }
-            let folder = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosRoot())
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let staging = folder.appendingPathComponent(".import-" + UUID().uuidString, isDirectory: true)
+            _ = try RecordingFiles.projectURL(projectId: projectId, memosRoot: RecordingFiles.memosRoot())
+            // The import's id is fixed before anything is copied; its private copy is
+            // `<id>.<ext>` beside a record of what it is for, so a killed import is
+            // recovered or disposed of at the next launch (T1.21, T1.22).
+            let id = UUID().uuidString.lowercased()
+            let stem = RecordingFiles.sanitizeName(source.deletingPathExtension().lastPathComponent)
+            let displayName = "\(stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem).\(ext)"
+            let staging = importRoot.appendingPathComponent(id, isDirectory: true)
+            try FileManager.default.createDirectory(at: importRoot, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
-            defer { try? FileManager.default.removeItem(at: staging) }
-            let copied = staging.appendingPathComponent("audio").appendingPathExtension(ext)
+            var record = ImportRecord(id: id, projectId: projectId, displayName: displayName, verified: false)
+            try record.write(in: staging)
+            var finished = false
+            // A failed import disposes of its own private copy; a finished one is gone with publication.
+            defer { if !finished { try? FileManager.default.removeItem(at: staging) } }
+            let copied = staging.appendingPathComponent("\(id).\(ext)")
             guard FileManager.default.createFile(atPath: copied.path, contents: nil) else {
                 throw ImportError.cannotCreateFile
             }
@@ -255,13 +356,13 @@ final class VoiceMemoService {
             }
             guard frames > 0 else { throw ImportError.emptyAudio }
             try Task.checkCancellation()
+            record.verified = true
+            try record.write(in: staging)
             // The source's name becomes the recording's display name; its file is `<id>.<ext>`.
-            let stem = RecordingFiles.sanitizeName(source.deletingPathExtension().lastPathComponent)
-            let displayName = "\(stem.isEmpty || stem.hasPrefix(".") ? "Imported recording" : stem).\(ext)"
-            return try await MainActor.run {
-                guard let publisher else { throw RecordingLibraryError.unavailable }
-                return try publisher.publishFinished(copied, projectId: projectId, preferredName: displayName, origin: .imported)
-            }
+            let url = try await publishImported(copied, projectId: projectId, displayName: displayName, id: id, publisher: publisher)
+            finished = true
+            try? FileManager.default.removeItem(at: staging)
+            return url
         }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -307,19 +408,37 @@ final class VoiceMemoService {
     /// The recordings Trash this service removes files from (the library's).
     @ObservationIgnored var trashRoot: URL = RecordingFiles.memosTrashRoot()
 
-    /// Permanently delete a trashed recording.
+    /// Permanently delete a trashed recording: recorded with its digest and length,
+    /// playback of it stopped by id, and unlinked only while it holds those bytes (T1.25).
     @discardableResult
-    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
-        stopPlayback(ifPlayingAnyOf: [trashed.url])
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo, sha256: String, bytes: Int64) -> Bool {
+        stopPlayback(ids: trashed.recordingId.map { [$0] } ?? [], files: [trashed.url])
         do {
             try SyncIdentity.validateProjectId(trashed.projectId)
-            try RecordingFiles.removeItemIfPresent(at: trashed.url, within: trashRoot)
-            RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            if let publisher {
+                try publisher.deleteTrashedFile(trashed, sha256: sha256, bytes: bytes)
+            } else {
+                let kept = try RecordingFiles.deleteVerified([.init(path: RecordingFiles.canonicalPath(trashed.url), sha256: sha256, bytes: bytes)],
+                                                             memosRoot: trashRoot, within: [trashRoot])
+                guard kept.isEmpty else { throw RecordingLibraryError.notVerified }
+                RecordingFiles.cleanUpEmptyTrashFolder(trashed.url.deletingLastPathComponent())
+            }
             return true
         } catch {
             lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
             return false
         }
+    }
+
+    /// The same, with the bytes there now as the proof.
+    @discardableResult
+    func permanentlyDeleteTrashedMemo(_ trashed: TrashedVoiceMemo) -> Bool {
+        stopPlayback(ids: trashed.recordingId.map { [$0] } ?? [], files: [trashed.url])
+        guard let sha = try? RecordingFiles.sha256(of: trashed.url), let bytes = try? RecordingFiles.facts(trashed.url).size else {
+            lastError = "Couldn't remove the local recording file. Writers Block will retry cleanup."
+            return false
+        }
+        return permanentlyDeleteTrashedMemo(trashed, sha256: sha, bytes: bytes)
     }
 
     // MARK: - Permission
@@ -566,6 +685,20 @@ final class VoiceMemoService {
         isPlaying = true
     }
 
+    /// Stops playback (or a pending start) of any of these recordings, by id, or of
+    /// any of these files.
+    func stopPlayback(ids: Set<String>, files: [URL]) {
+        if let identity = playingIdentity, ids.contains(identity) {
+            stopPlayback()
+            return
+        }
+        if let playing = activePlayURL ?? pendingPlayURL, let id = RecordingFiles.storedId(of: playing), ids.contains(id) {
+            stopPlayback()
+            return
+        }
+        stopPlayback(ifPlayingAnyOf: files)
+    }
+
     /// Stops playback (or a pending start) of any of these files.
     func stopPlayback(ifPlayingAnyOf files: [URL]) {
         let paths = Set(files.map(RecordingFiles.canonicalPath))
@@ -629,13 +762,35 @@ final class VoiceMemoService {
     /// first, so a take already published (by id) counts as saved. A take without
     /// a marker is published only when its container is a finished recording.
     func retryPendingTakes() async {
+        guard let publisher else {
+            await retryPendingTakesHoldingGate()
+            return
+        }
+        await publisher.withGate { await retryPendingTakesHoldingGate() }
+    }
+
+    private func retryPendingTakesHoldingGate() async {
         refreshPendingTakes()
         for take in pendingTakes {
             switch take.state {
             case .finished:
                 publish(take)
             case .unreadableMarker:
-                lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                // A marker no build can read (T5.11): it is kept aside, and the take's
+                // own container decides, as for a take with no marker.
+                let marker = take.folder.appendingPathComponent(RecordingFiles.finishedTakeMarker)
+                try? RecordingFiles.exclusiveRename(marker, to: take.folder.appendingPathComponent("finished.unreadable-\(Date().epochMilliseconds)"))
+                guard let audio = take.audio else { continue }
+                switch await RecordingFiles.checkFinishedContainer(audio) {
+                case .complete:
+                    if let finishedAt = try? RecordingFiles.facts(audio).modified, (try? RecordingFiles.writeFinishedMarker(finishedAt, in: take.folder)) != nil {
+                        publish(PendingTake(id: take.id, projectId: take.projectId, folder: take.folder, audio: audio, state: .finished(finishedAt)))
+                    }
+                case .invalid:
+                    markFailed(take)
+                case .uninspectable:
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                }
             case .unconfirmed:
                 guard let audio = take.audio else { continue }
                 switch await RecordingFiles.checkFinishedContainer(audio) {
@@ -665,8 +820,13 @@ final class VoiceMemoService {
         do {
             // The take's name for the user is its finish time; its file becomes `<id>.m4a`.
             guard let publisher else { throw RecordingLibraryError.unavailable }
-            _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded,
-                                              id: take.id, finishedAt: finishedAt)
+            _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: "\(finishedAt.epochMilliseconds).\(staged.pathExtension.lowercased())",
+                                              origin: .recorded, id: take.id, finishedAt: finishedAt)
+        } catch RecordingLibraryError.busy {
+            // Another recordings change holds the library: the take waits (its marker is
+            // written) and is published as soon as the gate is free.
+            Task { [weak self] in await self?.retryPendingTakes() }
+            return
         } catch RecordingLibraryError.takeMissing {
             // Neither a row nor its audio: definitively nothing to save.
             markFailed(take)
@@ -680,6 +840,17 @@ final class VoiceMemoService {
         forget(take)
         publishedRevision &+= 1
         onFilesChanged?()
+    }
+
+    /// Deletes a take that could not be saved, on the user's explicit choice (T5.12).
+    func deleteFailedTake(_ take: PendingTake) {
+        guard failedTakes.contains(take) else { return }
+        do {
+            try FileManager.default.removeItem(at: take.folder)
+        } catch {
+            lastError = "Couldn't delete that recording. It is kept on this device."
+        }
+        refreshPendingTakes()
     }
 
     private func markFailed(_ take: PendingTake) {
