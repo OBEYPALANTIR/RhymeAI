@@ -220,7 +220,10 @@ class ProjectRepository internal constructor(
                             theme = project.theme,
                             updatedAt = if (current.title == project.title &&
                                 current.lyrics == project.lyrics && current.theme == project.theme
-                            ) current.updatedAt else maxOf(current.updatedAt, project.updatedAt)
+                            ) current.updatedAt else maxOf(current.updatedAt, project.updatedAt),
+                            // A37: an edit is a real time and clears a repair.
+                            precedenceRepaired = current.precedenceRepaired && current.title == project.title &&
+                                current.lyrics == project.lyrics && current.theme == project.theme
                         )
                     }
                 }
@@ -312,7 +315,7 @@ class ProjectRepository internal constructor(
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
-            val nextActive = listOf(entry.project.copy(updatedAt = now)) + active.filterNot { it.id == id }
+            val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active.filterNot { it.id == id }
             val nextTrash = trash.filterNot { it.project.id == id }
             prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
@@ -342,7 +345,7 @@ class ProjectRepository internal constructor(
         return ids.flatMap { id ->
             listOf(SyncDeletion(projectId = id, deletedAt = deletedAt)) +
                 records.filter { it.projectId == id && it.path != null }
-                    .map { SyncDeletion(id, it.fileName, deletedAt, recordingId = it.id) }
+                    .map { SyncDeletion(id, it.displayName, deletedAt, recordingId = it.id) }
         }
     }
 
@@ -432,33 +435,50 @@ class ProjectRepository internal constructor(
         val projects = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
         val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
         val records = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
-        val needed = buildSet {
-            for (blob in inputs) {
-                blob.projects.filter { it.updatedAt <= 0L }.forEach { add("song:${it.id}") }
-                blob.trashed.filter { it.deletedAt <= 0L }.forEach { add("trash:${it.project.id}") }
-                blob.recordings.filter { it.precedenceTime <= 0L }.forEach { add("rec:${it.id}") }
-            }
-            projects.filter { it.updatedAt <= 0L }.forEach { add("song:${it.id}") }
-            trash.filter { it.deletedAt <= 0L }.forEach { add("trash:${it.project.id}") }
-            records.filter { it.uploadedAt <= 0L }.forEach { add("rec:${it.id}") }
-        }
-        if (needed.isEmpty()) return inputs
+        // A37: every repaired time known for an identity, here or in any input; the smallest stands.
         val known = firstSeenStore.decode(prefs[FIRST_SEEN_KEY] ?: "{}")
-        val seen = known + (needed - known.keys).associateWith { now }
-        if (seen != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(seen)
-        fun song(p: SongProject) = if (p.updatedAt > 0L) p else p.copy(updatedAt = seen.getValue("song:${p.id}"))
-        fun trashed(t: TrashedSongProject) = if (t.deletedAt > 0L) t else seen.getValue("trash:${t.project.id}")
-            .let { at -> t.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS) }
-        if (projects.any { it.updatedAt <= 0L }) prefs[PROJECTS_KEY] = json.encodeToString(projects.map(::song))
-        if (trash.any { it.deletedAt <= 0L }) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(trash.map(::trashed))
-        if (records.any { it.uploadedAt <= 0L }) {
-            prefs[RECORDING_RECORDS_KEY] = json.encodeToString(records.map { r -> if (r.uploadedAt > 0L) r else r.copy(uploadedAt = seen.getValue("rec:${r.id}")) })
+        val repairs = HashMap(known)
+        val needed = HashSet<String>()
+        fun see(key: String, time: Long, repaired: Boolean) {
+            if (time <= 0L) needed += key else if (repaired) repairs.merge(key, time, ::minOf)
         }
+        fun seeSong(p: SongProject) = see("song:${p.id}", p.updatedAt, p.precedenceRepaired)
+        fun seeTrash(t: TrashedSongProject) {
+            seeSong(t.project)
+            see("trash:${t.project.id}", t.deletedAt, t.deletedAtRepaired)
+        }
+        for (blob in inputs) {
+            blob.projects.forEach(::seeSong)
+            blob.trashed.forEach(::seeTrash)
+            blob.recordings.forEach { see("rec:${it.id}", it.precedenceTime, it.precedenceRepaired) }
+        }
+        projects.forEach(::seeSong)
+        trash.forEach(::seeTrash)
+        records.forEach { see("rec:${it.id}", it.uploadedAt, it.precedenceRepaired) }
+        for (key in needed) repairs.putIfAbsent(key, now)
+        if (repairs != known) prefs[FIRST_SEEN_KEY] = json.encodeToString(repairs.toMap())
+        fun song(p: SongProject) =
+            if (p.updatedAt > 0L && !p.precedenceRepaired) p else p.copy(updatedAt = repairs.getValue("song:${p.id}"), precedenceRepaired = true)
+        fun trashed(t: TrashedSongProject): TrashedSongProject {
+            val withSong = t.copy(project = song(t.project))
+            if (t.deletedAt > 0L && !t.deletedAtRepaired) return withSong
+            // The Trash deadline always follows the repaired time.
+            val at = repairs.getValue("trash:${t.project.id}")
+            return withSong.copy(deletedAt = at, deleteAfter = at + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, deletedAtRepaired = true)
+        }
+        fun record(r: RecordingRecord) =
+            if (r.uploadedAt > 0L && !r.precedenceRepaired) r else r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+        projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = json.encodeToString(it) }
+        trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(it) }
+        records.map(::record).let { if (it != records) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(it) }
         return inputs.map { blob ->
             blob.copy(
                 projects = blob.projects.map(::song),
                 trashed = blob.trashed.map(::trashed),
-                recordings = blob.recordings.map { r -> if (r.precedenceTime > 0L) r else r.copy(uploadedAt = seen.getValue("rec:${r.id}")) }
+                recordings = blob.recordings.map { r ->
+                    if (r.precedenceTime > 0L && !r.precedenceRepaired) r
+                    else r.copy(uploadedAt = repairs.getValue("rec:${r.id}"), precedenceRepaired = true)
+                }
             )
         }
     }
@@ -559,40 +579,44 @@ class ProjectRepository internal constructor(
     suspend fun retryPendingRecordingDeletions(
         onlyId: String? = null,
         deleteDirectory: suspend (String) -> Boolean
-    ): Boolean =
-        projectSaveMutex.withLock {
-            var complete = true
-            for (id in pendingRecordingDeletionIds()) {
-                if (onlyId != null && id != onlyId) continue
-                val prefs = dataStore.data.first()
-                val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
-                val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-                // A33: no recording bytes are deleted unless the deletion state is readable and valid.
-                deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-                if (active.any { it.id == id } || trash.any { it.project.id == id }) {
-                    complete = false
-                    continue
-                }
-                val removed = try {
-                    deleteDirectory(id)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    false
-                }
-                if (!removed) {
-                    complete = false
-                    continue
-                }
+    ): Boolean {
+        // Decided under this lock, cleaned outside it: the cleanup takes the recording lock,
+        // which is always taken before this one (lock order). The cleanup itself deletes only
+        // recordings a winning tombstone removes, so a song revived meanwhile loses nothing.
+        val (blocked, ready) = projectSaveMutex.withLock {
+            val prefs = dataStore.data.first()
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
+            // A33: no recording bytes are deleted unless the deletion state is readable and valid.
+            deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
+            pendingRecordingDeletionIds().filter { onlyId == null || it == onlyId }
+                .partition { id -> active.any { it.id == id } || trash.any { it.project.id == id } }
+        }
+        var complete = blocked.isEmpty()
+        for (id in ready) {
+            val removed = try {
+                deleteDirectory(id)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            if (!removed) {
+                complete = false
+                continue
+            }
+            projectSaveMutex.withLock {
                 dataStore.edit { current ->
-                    projectsStore.decode(current[PROJECTS_KEY] ?: "[]")
-                    trashedProjectsStore.decode(current[TRASHED_PROJECTS_KEY] ?: "[]")
-                    current[PENDING_RECORDING_DELETIONS_KEY] =
-                        (current[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
+                    val active = projectsStore.decode(current[PROJECTS_KEY] ?: "[]")
+                    val trash = trashedProjectsStore.decode(current[TRASHED_PROJECTS_KEY] ?: "[]")
+                    if (active.none { it.id == id } && trash.none { it.project.id == id }) {
+                        current[PENDING_RECORDING_DELETIONS_KEY] = (current[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
+                    }
                 }
             }
-            complete
         }
+        return complete
+    }
 
     suspend fun setCurrentProjectId(id: String?) {
         dataStore.edit { prefs ->

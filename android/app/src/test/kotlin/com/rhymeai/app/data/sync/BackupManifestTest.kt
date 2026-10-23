@@ -143,4 +143,20 @@ class BackupManifestTest {
             "iOS fixture copy differs from shared/fixtures/sync-manifest-v4.json"
         )
     }
+
+    @Test
+    fun theFixturesFileNamesAreDisplayNamesAndFilesAreNamedById() {
+        val uploaded = fixture.getValue("uploadedBytes").jsonPrimitive.content.toByteArray(Charsets.UTF_8)
+        val dir = kotlin.io.path.createTempDirectory("rhymeai-fixture").toFile()
+        try {
+            for (entry in BackupManifest.decode(uploaded).recordings) {
+                val record = entry.toRecord(RecordingRecord.RESTORED, null)
+                assertEquals(entry.fileName, record.displayName)
+                assertEquals(entry.fileName, record.toEntry().fileName)
+                assertEquals("${entry.id}.m4a", RecordingFileStore.targetFile(dir, entry.projectId, entry.id, entry.fileName).name)
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

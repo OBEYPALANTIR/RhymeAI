@@ -81,48 +81,16 @@ class RecordingFilesTest {
     }
 
     @Test
-    fun resolveCollisionReturnsPrimaryNameWhenFree() {
-        val dir = File(tempFolder.root, "voice-memos/proj-collision")
-        dir.mkdirs()
-        // No files exist — should return base.m4a.
-        val result = RecordingFiles.resolveCollision(dir, "chorus")
-        assertEquals("chorus.m4a", result.name)
-    }
-
-    @Test
-    fun resolveCollisionAppendsNumberOnConflict() {
-        val dir = File(tempFolder.root, "voice-memos/proj-conflict")
-        dir.mkdirs()
-        File(dir, "chorus.m4a").createNewFile()
-
-        val result = RecordingFiles.resolveCollision(dir, "chorus")
-        assertEquals("chorus 2.m4a", result.name)
-    }
-
-    @Test
-    fun resolveCollisionIncrementsPastMultipleConflicts() {
-        val dir = File(tempFolder.root, "voice-memos/proj-multi")
-        dir.mkdirs()
-        File(dir, "verse.m4a").createNewFile()
-        File(dir, "verse 2.m4a").createNewFile()
-        File(dir, "verse 3.m4a").createNewFile()
-
-        val result = RecordingFiles.resolveCollision(dir, "verse")
-        assertEquals("verse 4.m4a", result.name)
-    }
-
-    @Test
-    fun renameFileToDifferentBasenameSucceeds() {
-        val dir = File(tempFolder.root, "voice-memos/proj-rename")
-        dir.mkdirs()
-        val original = File(dir, "1718000000000.m4a").also { it.createNewFile() }
-
-        val sanitized = RecordingFiles.sanitizeBasename("Bridge Hook")
-        val target = RecordingFiles.resolveCollision(dir, sanitized)
-
-        assertTrue(original.renameTo(target))
-        assertTrue(target.exists())
-        assertEquals("Bridge Hook.m4a", target.name)
-        assertFalse(original.exists())
+    fun recordingFilesAreNamedByTheirId() {
+        val id = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        assertEquals("$id.m4a", RecordingFiles.idFileName(id, "Chorus idea.m4a"))
+        assertEquals("$id.wav", RecordingFiles.idFileName(id, "take.WAV"))
+        assertEquals("$id.m4a", RecordingFiles.idFileName(id, "no extension"))
+        assertEquals(id, RecordingFiles.idOf(File("$id.m4a")))
+        assertEquals(null, RecordingFiles.idOf(File("take.m4a")))
+        assertEquals(null, RecordingFiles.idOf(File("$id.txt")))
+        val memo = RecordingFiles.memoFile(tempFolder.root, "p", id, "take.m4a")
+        assertEquals("$id.m4a", memo.name)
+        assertEquals("p", memo.parentFile!!.name)
     }
 }

@@ -98,87 +98,88 @@ class RecordingIdentityTest {
     }
 
     @Test
-    fun aStampedTimeDoesNotFollowTheFileTimeAndARenameKeepsIt() = runBlocking<Unit> {
-        val file = File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a")
+    fun aStampedTimeDoesNotFollowTheFileTimeAndARenameIsMetadataOnly() = runBlocking<Unit> {
+        File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a")
             .apply { writeBytes("take".toByteArray()); setLastModified(1_000L) }
-        val stamped = snapshot().single().entry
-        file.setLastModified(99_000L)
+        val listed = snapshot().single()
+        val stamped = listed.entry
+        // A36 migration: the file is named by its id, its old name is the display name.
+        assertEquals("${stamped.id}.m4a", listed.file.name)
+        assertEquals("take.m4a", stamped.fileName)
+        listed.file.setLastModified(99_000L)
         assertEquals(stamped, snapshot().single().entry)
 
-        val renamed = RecordingTransitions.move(
-            catalog, filesDir, file, "song", file.name,
-            pick = { File(file.parentFile, "Verse.m4a") }, renamesTo = { it.name }
-        )!!
+        val renamed = RecordingTransitions.rename(catalog, filesDir, listed.file, "song", "Verse.m4a")!!
 
-        val after = snapshot().single().entry
-        assertEquals(stamped.id, after.id)
-        assertEquals(1_000L, after.uploadedAt)
-        assertEquals("Verse.m4a", after.fileName)
-        assertEquals("Verse.m4a", renamed.name)
+        val after = snapshot().single()
+        assertEquals(stamped.id, after.entry.id)
+        assertEquals(1_000L, after.entry.uploadedAt)
+        assertEquals("Verse.m4a", after.entry.fileName)
+        assertTrue(renamed.displayNameChanged)
+        // Nothing on disk changed.
+        assertEquals(listed.file.canonicalFile, after.file.canonicalFile)
+        assertEquals(listOf("${stamped.id}.m4a"), RecordingFiles.memoDirectory(filesDir, "song").list()!!.toList())
     }
 
     @Test
     fun aMetadataWriteFailureFailsEachTransitionAndMovesNothing() = runBlocking<Unit> {
-        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val live = File(dir, "take.m4a").apply { writeBytes("take".toByteArray()) }
-        val trashed = File(RecordingFiles.trashDirectory(filesDir, "song").apply { mkdirs() }, "1500__old.m4a")
-            .apply { writeBytes("old".toByteArray()) }
+        val liveId = RecordingManifestEntry.newRecordingId()
+        val trashId = RecordingManifestEntry.newRecordingId()
+        val live = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "take".toByteArray()), "song", "take.m4a", liveId, 1L, RecordingRecord.RECORDED)!!
+        val toTrash = RecordingTransitions.publish(catalog, filesDir, staged("song", "b.m4a", "old".toByteArray()), "song", "old.m4a", trashId, 1L, RecordingRecord.RECORDED)!!
+        val trashed = RecordingTransitions.moveToTrash(catalog, filesDir, toTrash, "song", 1_500L)!!
         val incoming = staged("song", "incoming.m4a", "incoming".toByteArray())
+        val before = catalog.records
         catalog.failWrites = true
 
         // Import / Drive restore.
         assertFailsWith<IOException> {
             RecordingTransitions.publish(catalog, filesDir, incoming, "song", "incoming.m4a", RecordingManifestEntry.newRecordingId(), 1L, RecordingRecord.IMPORTED)
         }
-        // Rename.
-        assertFailsWith<IOException> {
-            RecordingTransitions.move(catalog, filesDir, live, "song", live.name, pick = { File(dir, "Renamed.m4a") }, renamesTo = { it.name })
-        }
-        // Restore from Trash.
-        assertFailsWith<IOException> {
-            RecordingTransitions.move(catalog, filesDir, trashed, "song", "old.m4a", pick = { File(dir, "old.m4a") }, renamesTo = { it.name })
-        }
+        assertFailsWith<IOException> { RecordingTransitions.rename(catalog, filesDir, live, "song", "Renamed.m4a") }
+        assertFailsWith<IOException> { RecordingTransitions.restoreFromTrash(catalog, filesDir, trashed, "song") }
+        assertFailsWith<IOException> { RecordingTransitions.moveToTrash(catalog, filesDir, live, "song", 2_000L) }
 
         assertTrue(incoming.exists())
-        assertFalse(File(dir, "incoming.m4a").exists())
         assertTrue(live.exists())
-        assertFalse(File(dir, "Renamed.m4a").exists())
         assertTrue(trashed.exists())
-        assertFalse(File(dir, "old.m4a").exists())
+        assertEquals(before, catalog.records)
+        assertEquals(setOf(live.name), RecordingFiles.memoDirectory(filesDir, "song").list()!!.toSet())
     }
 
     @Test
     fun anInterruptedMoveIsFinishedOrUndoneAtTheNextLaunch() = runBlocking<Unit> {
-        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val moved = File(dir, "Moved.m4a").apply { writeBytes("moved".toByteArray()) }
-        val notMoved = File(dir, "stayed.m4a").apply { writeBytes("stayed".toByteArray()) }
+        val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
+        val b = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"
+        val moved = RecordingFiles.trashFile(filesDir, "song", a, "a.m4a").apply { parentFile!!.mkdirs(); writeBytes("moved".toByteArray()) }
+        val notMoved = RecordingFiles.memoFile(filesDir, "song", b, "b.m4a").apply { parentFile!!.mkdirs(); writeBytes("stayed".toByteArray()) }
         fun rel(f: File) = RecordingTransitions.relativePath(filesDir, f)
         catalog.records = listOf(
-            // The rename reached the file system before the process died.
-            RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", "Moved.m4a", 1_000L, RecordingFileStore.sha256Hex(moved), 5L,
-                RecordingRecord.RECORDED, path = rel(moved), pendingFrom = "voice-memos/song/before.m4a", pendingFromName = "before.m4a",
+            // The move to Trash reached the file system before the process died.
+            RecordingRecord(a, "song", "a.m4a", 1_000L, RecordingFileStore.sha256Hex(moved), 5L, RecordingRecord.RECORDED,
+                path = rel(moved), trashedAt = 1_500L, pendingFrom = rel(RecordingFiles.memoFile(filesDir, "song", a, "a.m4a")),
                 pendingOp = RecordingRecord.OP_MOVE),
-            // This one did not: the record goes back to the old name and path.
-            RecordingRecord("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2", "song", "Target.m4a", 2_000L, RecordingFileStore.sha256Hex(notMoved), 6L,
-                RecordingRecord.RECORDED, path = "voice-memos/song/Target.m4a", pendingFrom = rel(notMoved), pendingFromName = "stayed.m4a",
+            // This one did not: the record goes back to its live path, out of Trash.
+            RecordingRecord(b, "song", "b.m4a", 2_000L, RecordingFileStore.sha256Hex(notMoved), 6L, RecordingRecord.RECORDED,
+                path = rel(RecordingFiles.trashFile(filesDir, "song", b, "b.m4a")), trashedAt = 2_500L, pendingFrom = rel(notMoved),
                 pendingOp = RecordingRecord.OP_MOVE),
             // A publish whose staged file is gone leaves no record.
             RecordingRecord("b2a1c3d4-e5f6-4789-8abc-def012345678", "song", "lost.m4a", 3_000L, "a".repeat(64), 4L,
-                RecordingRecord.RESTORED, path = "voice-memos/song/lost.m4a", pendingFrom = "voice-memos-staging/song/x.m4a",
-                pendingOp = RecordingRecord.OP_PUBLISH)
+                RecordingRecord.RESTORED, path = "voice-memos/song/b2a1c3d4-e5f6-4789-8abc-def012345678.m4a",
+                pendingFrom = "voice-memos-staging/song/x.m4a", pendingOp = RecordingRecord.OP_PUBLISH)
         )
 
         RecordingTransitions.reconcile(catalog, filesDir)
 
         val byId = catalog.records.associateBy { it.id }
-        assertEquals(2, byId.size)
-        assertEquals(rel(moved), byId.getValue("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b").path)
-        assertNull(byId.getValue("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b").pendingOp)
-        val undone = byId.getValue("7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2")
+        assertEquals(setOf(a, b), byId.keys)
+        assertEquals(rel(moved), byId.getValue(a).path)
+        assertEquals(1_500L, byId.getValue(a).trashedAt)
+        assertNull(byId.getValue(a).pendingOp)
+        val undone = byId.getValue(b)
         assertEquals(rel(notMoved), undone.path)
-        assertEquals("stayed.m4a", undone.fileName)
+        assertNull(undone.trashedAt)
         assertEquals(2_000L, undone.uploadedAt)
-        // Snapshots then see both with their original times.
         assertEquals(setOf(1_000L, 2_000L), snapshot().mapTo(HashSet()) { it.entry.uploadedAt })
     }
 
@@ -219,55 +220,80 @@ class RecordingIdentityTest {
     }
 
     @Test
-    fun aMoveInterruptedAfterTheFileMovedKeepsTheRecordingsId() = runBlocking<Unit> {
+    fun aMigrationInterruptedAfterTheFileMovedIsFinishedWithTheSameIdAndName() = runBlocking<Unit> {
         val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val file = File(dir, "take.m4a").apply { writeBytes("take".toByteArray()); setLastModified(1_000L) }
-        val stamped = snapshot().single().entry
-        // Write 1 was the stamp, write 2 is the intent; write 3, the final record, fails after the file moved.
-        catalog.failOnWrite = 3
-        assertFailsWith<IOException> {
-            RecordingTransitions.move(catalog, filesDir, file, "song", file.name, pick = { File(dir, "Verse.m4a") }, renamesTo = { it.name })
-        }
-        val moved = File(dir, "Verse.m4a")
-        assertTrue(moved.exists())
+        File(dir, "take.m4a").apply { writeBytes("take".toByteArray()); setLastModified(1_000L) }
+        val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex("take".toByteArray()))
+        // Write 1 is the journaled intent; write 2, clearing it, fails after the file moved.
+        catalog.failOnWrite = 2
+        assertFailsWith<IOException> { RecordingTransitions.migrate(catalog, filesDir) }
+        assertEquals(listOf("$id.m4a"), dir.list()!!.toList())
+        assertEquals(RecordingRecord.OP_MOVE, catalog.records.single().pendingOp)
 
-        // The next consumer reconciles first and finds the same recording.
-        val record = RecordingTransitions.recordFor(catalog, filesDir, moved, "song")!!
-        assertEquals(stamped.id, record.id)
+        // The next launch reconciles from the journal and finds the same recording.
+        assertEquals(emptyList(), RecordingTransitions.migrate(catalog, filesDir))
+        val record = catalog.records.single()
+        assertEquals(id, record.id)
+        assertEquals("take.m4a", record.displayName)
         assertEquals(1_000L, record.uploadedAt)
-        assertEquals(stamped.id, snapshot().single().entry.id)
-        assertEquals("Verse.m4a", snapshot().single().entry.fileName)
+        assertNull(record.pendingOp)
+        // And migrating again changes nothing.
+        val settled = catalog.records
+        RecordingTransitions.migrate(catalog, filesDir)
+        assertEquals(settled, catalog.records)
     }
 
     @Test
-    fun aMaximumLengthNameStaysValidThroughCollisionSnapshotReExportAndRename() = runBlocking<Unit> {
-        val base = "\u00e9".repeat(118) // 236 UTF-8 bytes
-        val name = "$base.m4a" // the 240-byte limit
+    fun migrationNamesLiveAndTrashFilesByIdAndLeavesATakenIdNameAlone() = runBlocking<Unit> {
+        val live = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
+        val trash = RecordingFiles.trashDirectory(filesDir, "song").apply { mkdirs() }
+        File(live, "Chorus idea.m4a").apply { writeBytes("chorus".toByteArray()); setLastModified(1_000L) }
+        File(trash, "1500__verse.m4a").apply { writeBytes("verse".toByteArray()); setLastModified(900L) }
+        val blocked = File(live, "blocked.m4a").apply { writeBytes("blocked".toByteArray()) }
+        val blockedId = RecordingManifestEntry.legacyRecordingId("song", "blocked.m4a", BackupManifest.sha256Hex("blocked".toByteArray()))
+        // Something else already sits at the blocked file's id name.
+        val squatter = File(live, "$blockedId.m4a").apply { writeBytes("squatter".toByteArray()) }
+
+        val left = RecordingTransitions.migrate(catalog, filesDir)
+
+        assertEquals(listOf(blocked.canonicalFile), left.map { it.canonicalFile })
+        assertEquals("blocked", blocked.readText())
+        assertEquals("squatter", squatter.readText())
+        val byName = catalog.records.associateBy { it.displayName }
+        val chorus = byName.getValue("Chorus idea.m4a")
+        assertEquals("voice-memos/song/${chorus.id}.m4a", chorus.path)
+        val verse = byName.getValue("verse.m4a")
+        assertEquals("voice-memos-trash/song/${verse.id}.m4a", verse.path)
+        assertEquals(1_500L, verse.trashedAt)
+        assertEquals(900L, verse.uploadedAt)
+        // Nothing was deleted: every byte is still on disk.
+        val all = filesDir.walk().filter { it.isFile }.map { it.readText() }.toSet()
+        assertTrue(all.containsAll(setOf("chorus", "verse", "blocked", "squatter")))
+    }
+
+    @Test
+    fun maximumLengthDisplayNamesStayValidThroughSnapshotAndExport() = runBlocking<Unit> {
+        val name = "\u00e9".repeat(118) + ".m4a" // the 240-byte limit
         fun bytesOf(s: String) = s.toByteArray(Charsets.UTF_8).size
         val first = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "first".toByteArray()), "song", name,
             RecordingManifestEntry.newRecordingId(), 1_000L, RecordingRecord.RECORDED)!!
         val second = RecordingTransitions.publish(catalog, filesDir, staged("song", "b.m4a", "second".toByteArray()), "song", name,
             RecordingManifestEntry.newRecordingId(), 2_000L, RecordingRecord.RECORDED)!!
-
-        assertEquals(name, first.name)
-        assertTrue(bytesOf(second.name) <= 240 && second.name.endsWith(" 2.m4a"), second.name)
+        assertNotEquals(first.name, second.name)
         val listed = snapshot()
-        assertEquals(2, listed.size)
+        assertEquals(listOf(name, name), listed.map { it.entry.fileName })
         listed.forEach { it.entry.validate() }
 
-        // Re-export and read back.
+        // Export tells the two apart with a bounded " 2" and reads back both ids with their display names.
+        val exportNames = BackupArchive.exportNames(listed.map { it.entry })
+        assertEquals(2, exportNames.values.toSet().size)
+        assertTrue(exportNames.values.all { bytesOf(it) <= 240 }, exportNames.toString())
+        assertTrue(exportNames.values.any { it.endsWith(" 2.m4a") })
         val archive = File(filesDir, "export.zip")
         archive.outputStream().use { BackupArchive.write(it, SyncBlob(), listed, 3_000L, "device") }
-        assertEquals(listed.map { it.entry.id }.toSet(), BackupArchive.read(archive).manifest.recordings.map { it.id }.toSet())
-
-        // Renaming the variant back onto the taken name gives another bounded variant and keeps the id.
-        val secondId = listed.single { it.file.canonicalFile == second.canonicalFile }.entry.id
-        val renamed = RecordingTransitions.move(catalog, filesDir, second, "song", second.name,
-            pick = { RecordingFiles.resolveCollision(second.parentFile!!, base, "m4a") }, renamesTo = { it.name })!!
-        assertTrue(bytesOf(renamed.name) <= 240, renamed.name)
-        val after = snapshot()
-        assertEquals(2, after.size)
-        assertEquals(renamed.name, after.single { it.entry.id == secondId }.entry.fileName)
+        val read = BackupArchive.read(archive)
+        assertEquals(listed.associate { it.entry.id to name }, read.manifest.recordings.associate { it.id to it.fileName })
+        assertEquals(setOf("first", "second"), read.recordings.values.map { String(it) }.toSet())
     }
 
     @Test
@@ -293,7 +319,7 @@ class RecordingIdentityTest {
                 assertEquals(listOf(id), listed.map { it.entry.id })
                 assertFalse(listed.single().inTrash)
                 // The Trash copy is kept, never deleted, in quarantine.
-                assertContentEquals(bytes, RecordingFiles.quarantineDirectory(dir, "song").listFiles().orEmpty().single().readBytes())
+                assertContentEquals(bytes, RecordingFiles.quarantineDirectory(dir, "song").walk().single { it.isFile }.readBytes())
                 assertTrue(RecordingFiles.trashDirectory(dir, "song").list().orEmpty().isEmpty())
             }
         } finally {
@@ -315,18 +341,6 @@ class RecordingIdentityTest {
         assertEquals(1_000L, after.entry.uploadedAt)
         assertFalse(after.inTrash)
         assertEquals(1, RecordingFiles.quarantineDirectory(filesDir, "song").list().orEmpty().size)
-    }
-
-    @Test
-    fun anEmptyStemNameGetsANamedVariantOnCollision() = runBlocking<Unit> {
-        val first = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "first".toByteArray()), "song", ".m4a",
-            RecordingManifestEntry.newRecordingId(), 1_000L, RecordingRecord.RESTORED)!!
-        val second = RecordingTransitions.publish(catalog, filesDir, staged("song", "b.m4a", "second".toByteArray()), "song", ".m4a",
-            RecordingManifestEntry.newRecordingId(), 2_000L, RecordingRecord.RESTORED)!!
-
-        assertEquals(".m4a", first.name)
-        assertEquals("Recording 2.m4a", second.name)
-        assertEquals(2, snapshot().size)
     }
 
     @Test
@@ -357,45 +371,13 @@ class RecordingIdentityTest {
             put(together, "1500__take.m4a", 1_000L)
             put(together, "2500__take.m4a", 2_000L)
             val listed = RecordingTransitions.snapshot(MemoryCatalog(), together, emptySet()).single()
-            val expected = Triple("2500__take.m4a", 1_000L, RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex(bytes)))
+            val id = RecordingManifestEntry.legacyRecordingId("song", "take.m4a", BackupManifest.sha256Hex(bytes))
+            val expected = Triple("$id.m4a", 1_000L, id)
             assertEquals(expected, Triple(listed.file.name, listed.entry.uploadedAt, listed.entry.id))
             assertEquals(listOf(expected, expected), outcomes)
         } finally {
             together.deleteRecursively()
         }
-    }
-
-    @Test
-    fun aRenameChecksUnderTheLockThatTheFileIsStillThePlannedRecording() = runBlocking<Unit> {
-        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val x = RecordingTransitions.publish(catalog, filesDir, staged("song", "x.m4a", "x take".toByteArray()), "song", "take.m4a",
-            "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", 1_000L, RecordingRecord.RECORDED)!!
-        val planned = RecordingTransitions.relativePath(filesDir, x)
-        // Between planning and the rename, X is renamed away and Y is imported under its old name.
-        RecordingTransitions.move(catalog, filesDir, x, "song", x.name, pick = { File(dir, "elsewhere.m4a") }, renamesTo = { it.name })
-        RecordingTransitions.publish(catalog, filesDir, staged("song", "y.m4a", "y take".toByteArray()), "song", "take.m4a",
-            "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2", 2_000L, RecordingRecord.IMPORTED)
-
-        assertNull(RecordingTransitions.renameIfOwned(catalog, filesDir, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", planned, File(dir, "take 2.m4a")))
-        assertEquals("y take", File(dir, "take.m4a").readText())
-        assertEquals(planned, catalog.records.single { it.id == "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2" }.path)
-        assertFalse(File(dir, "take 2.m4a").exists())
-    }
-
-    @Test
-    fun namesThatOnlySwapAreAppliedThroughParkingWithoutReplacingAnything() = runBlocking<Unit> {
-        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val x = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
-        val y = "7d6c5b4a-3e2f-4a1b-9c8d-e7f6a5b4c3d2"
-        RecordingTransitions.publish(catalog, filesDir, staged("song", "x.m4a", "x take".toByteArray()), "song", "a.m4a", x, 1_000L, RecordingRecord.RECORDED)
-        RecordingTransitions.publish(catalog, filesDir, staged("song", "y.m4a", "y take".toByteArray()), "song", "b.m4a", y, 2_000L, RecordingRecord.RECORDED)
-
-        RecordingTransitions.applyNames(catalog, filesDir, mapOf(x to "b.m4a", y to "a.m4a"))
-
-        assertEquals("x take", File(dir, "b.m4a").readText())
-        assertEquals("y take", File(dir, "a.m4a").readText())
-        assertEquals(mapOf(x to "b.m4a", y to "a.m4a"), catalog.records.associate { it.id to it.fileName })
-        assertTrue(RecordingFiles.parkingRoot(filesDir).walk().none { it.isFile })
     }
 
     @Test
@@ -407,13 +389,14 @@ class RecordingIdentityTest {
     }
 
     @Test
-    fun aDifferentDigestAtAKnownPathIsAdoptedAsItsOwnRecording() = runBlocking<Unit> {
-        val file = File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a")
+    fun differentBytesUnderAnIdNameAreAdoptedAsTheirOwnRecording() = runBlocking<Unit> {
+        File(RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }, "take.m4a")
             .apply { writeBytes("first take".toByteArray()); setLastModified(1_000L) }
-        val first = snapshot().single().entry
-        // Other bytes appear at the same path: the stored identity is not applied to them.
-        file.writeBytes("other bytes".toByteArray())
-        file.setLastModified(5_000L)
+        val firstListed = snapshot().single()
+        val first = firstListed.entry
+        // Other bytes appear under the first recording's id name: its identity is not applied to them.
+        firstListed.file.writeBytes("other bytes".toByteArray())
+        firstListed.file.setLastModified(5_000L)
         val second = snapshot().single().entry
 
         assertNotEquals(first.id, second.id)
@@ -429,31 +412,33 @@ class RecordingIdentityTest {
         val source = File(dir, "before.m4a").apply { writeBytes("other bytes".toByteArray()) }
         catalog.records = listOf(RecordingRecord("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", "song", "after.m4a", 1_000L,
             BackupManifest.sha256Hex("the take".toByteArray()), 8L, RecordingRecord.RECORDED,
-            path = "voice-memos/song/after.m4a", pendingFrom = RecordingTransitions.relativePath(filesDir, source),
-            pendingFromName = "before.m4a", pendingOp = RecordingRecord.OP_MOVE))
+            path = "voice-memos-trash/song/0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a", trashedAt = 1_500L,
+            pendingFrom = RecordingTransitions.relativePath(filesDir, source), pendingOp = RecordingRecord.OP_MOVE))
 
         val listed = snapshot().single()
 
         // Not moved, not given the old id: the bytes are adopted on their own.
-        assertTrue(source.exists())
+        assertEquals("other bytes", listed.file.readText())
         assertNotEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", listed.entry.id)
         assertEquals(BackupManifest.sha256Hex("other bytes".toByteArray()), listed.entry.sha256)
     }
 
     @Test
-    fun aSameLengthRewriteWithItsOldTimeIsNotMovedByARemoteRename() = runBlocking<Unit> {
-        val dir = RecordingFiles.memoDirectory(filesDir, "song").apply { mkdirs() }
-        val file = File(dir, "take.m4a").apply { writeBytes("first take".toByteArray()); setLastModified(1_000L) }
-        val id = snapshot().single().entry.id
-        // Rewritten in place: same length, old modification time, record row kept.
-        file.writeBytes("other take".toByteArray())
-        file.setLastModified(1_000L)
+    fun wholeSongCleanupDeletesOnlyRecordingsAWinningTombstoneCovers() = runBlocking<Unit> {
+        val covered = RecordingTransitions.publish(catalog, filesDir, staged("song", "a.m4a", "old take".toByteArray()), "song", "old.m4a",
+            RecordingManifestEntry.newRecordingId(), 1_000L, RecordingRecord.RECORDED)!!
+        // A take that finished after the deletion, and a file dropped in later.
+        val later = RecordingTransitions.publish(catalog, filesDir, staged("song", "b.m4a", "new take".toByteArray()), "song", "new.m4a",
+            RecordingManifestEntry.newRecordingId(), 9_000L, RecordingRecord.RECORDED)!!
+        File(RecordingFiles.memoDirectory(filesDir, "song"), "dropped.m4a").apply { writeBytes("dropped".toByteArray()); setLastModified(9_500L) }
 
-        RecordingTransitions.applyNames(catalog, filesDir, mapOf(id to "renamed.m4a"))
+        val done = RecordingTransitions.cleanUpDeletedSong(catalog, filesDir, "song", listOf(SyncDeletion("song", deletedAt = 5_000L)))
 
-        // Ownership needs the recorded bytes: nothing moved, and the bytes are their own recording.
-        assertTrue(file.exists())
-        assertFalse(File(dir, "renamed.m4a").exists())
-        assertNotEquals(id, snapshot().single().entry.id)
+        assertFalse(done)
+        assertFalse(covered.exists())
+        assertEquals("new take", later.readText())
+        val left = RecordingFiles.memoDirectory(filesDir, "song").listFiles()!!.map { it.readText() }.toSet()
+        assertEquals(setOf("new take", "dropped"), left)
+        assertEquals(2, catalog.records.size)
     }
 }

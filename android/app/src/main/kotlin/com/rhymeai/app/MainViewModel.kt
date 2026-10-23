@@ -1205,17 +1205,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Unreadable tombstones: the lists already fail closed.
                 }
             }
-            // A28: finish moving recordings whose deletion won into quarantine (an interrupted
-            // or failed move after Restore or Import); until then the lists hide them.
+            // Launch upkeep: A36 migration of pre-A36 files to their id names (journaled,
+            // idempotent), then A28 quarantine of recordings whose deletion won (retried here
+            // after an interrupted or failed move). The lists reconcile on their own and fail
+            // closed meanwhile; they refresh when this finishes, whether it worked or not.
             launch(Dispatchers.IO) {
+                val filesDir = getApplication<Application>().filesDir
+                var leftReported = false
+                voiceMemoService.maintenance = {
+                    // A32: this device's own missing times are fixed before anything compares them.
+                    repo.establishPrecedence(emptyList(), System.currentTimeMillis())
+                    val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir)
+                    if (left.isNotEmpty() && !leftReported) {
+                        leftReported = true
+                        withContext(Dispatchers.Main) {
+                            reportRecordingMaintenance(
+                                "${left.size} older recording file(s) could not be renamed because a file with their new name already exists. They were left in place."
+                            )
+                        }
+                    }
+                    com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
+                }
                 try {
-                    // A recording parked by an interrupted name swap returns to its name first (A30).
-                    com.rhymeai.app.data.recording.RecordingTransitions.applyNames(repo, getApplication<Application>().filesDir, emptyMap())
-                    com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, getApplication<Application>().filesDir)
+                    voiceMemoService.runMaintenance()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    // Retried at the next launch, Restore or Import.
+                    // Both lists show nothing until a retry (when either list is opened) succeeds.
+                    withContext(Dispatchers.Main) {
+                        reportRecordingMaintenance("Recordings could not be checked. They are hidden until the app can read them again.")
+                    }
                 }
             }
             if (isBackupConnected()) checkBackupAtLaunch()
@@ -1824,6 +1843,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Exception) {
                 persistenceError = trashFailureMessage("permanently delete the song", error)
             }
+        }
+    }
+
+    private fun reportRecordingMaintenance(detail: String) {
+        val existing = persistenceError
+        persistenceError = when {
+            existing == null -> detail
+            detail in existing -> existing
+            else -> "$existing $detail"
         }
     }
 

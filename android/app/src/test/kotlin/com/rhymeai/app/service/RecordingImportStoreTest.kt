@@ -14,26 +14,33 @@ import kotlin.test.*
 class RecordingImportStoreTest {
     @get:Rule val temporary = TemporaryFolder()
 
-    @Test fun duplicateNamesKeepOriginalBytesAndOtherSongsIsolated() {
+    private var ids = 0
+    private fun nextId() = "0f8fad5b-d9cb-469f-a165-%012d".format(++ids)
+    private fun stage(input: InputStream, dir: File, id: String, name: String, check: () -> Unit, validate: (File) -> Unit) =
+        RecordingImportStore.stage(input, dir, id, name, check, validate)
+
+    @Test fun importsAreStagedUnderTheirIdAndKeepTheDisplayName() {
         val song = temporary.newFolder("song")
         val other = temporary.newFolder("other")
         val existing = File(song, "take.wav").apply { writeText("original") }
         val untouched = File(other, "take.wav").apply { writeText("other song") }
-        val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1, 2, 3)), song, "take.WAV", {}, { assertEquals(3, it.length()) })
-        assertEquals("take 2.wav", imported.name)
+        val id = nextId()
+        val imported = stage(ByteArrayInputStream(byteArrayOf(1, 2, 3)), song, id, "take.WAV", {}, { assertEquals(3, it.length()) })
+        assertEquals("$id.wav", imported.file.name)
+        assertEquals("take.wav", imported.desiredName)
         assertEquals("original", existing.readText())
         assertEquals("other song", untouched.readText())
-        assertContentEquals(byteArrayOf(1, 2, 3), imported.readBytes())
-        assertTrue(RecordingFiles.isMemoFile(imported))
+        assertContentEquals(byteArrayOf(1, 2, 3), imported.file.readBytes())
+        assertTrue(RecordingFiles.isMemoFile(imported.file))
     }
 
     @Test fun invalidAudioAndEmptyInputLeaveNoFile() {
         val song = temporary.newFolder()
         assertFailsWith<IllegalArgumentException> {
-            RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "bad.mp3", {}, { throw IllegalArgumentException("invalid") })
+            stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), "bad.mp3", {}, { throw IllegalArgumentException("invalid") })
         }
         assertFailsWith<IllegalArgumentException> {
-            RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf()), song, "empty.m4a", {}, { fail("Empty file must not reach validation") })
+            stage(ByteArrayInputStream(byteArrayOf()), song, nextId(), "empty.m4a", {}, { fail("Empty file must not reach validation") })
         }
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
@@ -42,7 +49,7 @@ class RecordingImportStoreTest {
         val song = temporary.newFolder()
         var validated = false
         assertFailsWith<CancellationException> {
-            RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "take.aac",
+            stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), "take.aac",
                 { if (validated) throw CancellationException() }, { validated = true })
         }
         assertTrue(validated)
@@ -55,7 +62,7 @@ class RecordingImportStoreTest {
             override fun close() { throw IOException("provider close failed") }
         }
         assertFailsWith<IOException> {
-            RecordingImportStore.copy(source, song, "take.wav", {}, { fail("Provider must close before validation") })
+            stage(source, song, nextId(), "take.wav", {}, { fail("Provider must close before validation") })
         }
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
@@ -65,7 +72,7 @@ class RecordingImportStoreTest {
         val input = object : InputStream() {
             override fun read(): Int = throw IOException("read failed")
         }
-        assertFailsWith<IOException> { RecordingImportStore.copy(input, song, "take.wav", {}, {}) }
+        assertFailsWith<IOException> { stage(input, song, nextId(), "take.wav", {}, {}) }
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
 
@@ -81,32 +88,31 @@ class RecordingImportStoreTest {
                 return count
             }
         }
-        assertFailsWith<IllegalArgumentException> { RecordingImportStore.copy(input, song, "long.wav", {}, {}) }
+        assertFailsWith<IllegalArgumentException> { stage(input, song, nextId(), "long.wav", {}, {}) }
         assertTrue(song.listFiles().orEmpty().isEmpty())
     }
 
     @Test fun hiddenImportNamesBecomeVisibleOnBothPlatforms() {
         val song = temporary.newFolder()
-        val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, ".take.wav", {}, {})
-        assertEquals("Imported recording.wav", imported.name)
-        assertFalse(imported.isHidden)
+        val imported = stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), ".take.wav", {}, {})
+        assertEquals("Imported recording.wav", imported.desiredName)
+        assertFalse(imported.file.isHidden)
     }
 
-    @Test fun unicodeNamesLeaveRoomForDuplicateAndTrashNames() {
+    @Test fun longUnicodeNamesAreTrimmedAndDuplicatesStageSideBySide() {
         val song = temporary.newFolder()
         val name = "曲".repeat(80) + ".wav"
-        val first = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, name, {}, {})
-        val duplicate = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(2)), song, name, {}, {})
-        assertEquals("曲".repeat(66) + ".wav", first.name)
-        assertEquals("曲".repeat(66) + " 2.wav", duplicate.name)
-        assertTrue(("${System.currentTimeMillis()}__${duplicate.name}").toByteArray().size <= 240)
+        val first = stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), name, {}, {})
+        val duplicate = stage(ByteArrayInputStream(byteArrayOf(2)), song, nextId(), name, {}, {})
+        assertEquals("曲".repeat(66) + ".wav", first.desiredName)
+        assertEquals(first.desiredName, duplicate.desiredName)
         assertEquals(2, song.listFiles().orEmpty().size)
     }
 
     @Test fun importedNamesRemoveControlsAndRetainWholeUnicodeCharacters() {
         val song = temporary.newFolder()
-        val imported = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "verse\u0000\u0001\u200B\nidea.wav", {}, {})
-        assertEquals("verse idea.wav", imported.name)
+        val imported = stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), "verse\u0000\u0001\u200B\nidea.wav", {}, {})
+        assertEquals("verse idea.wav", imported.desiredName)
         val emoji = RecordingFiles.sanitizeBasename("🎵".repeat(60))
         assertEquals("🎵".repeat(50), emoji)
         assertEquals(200, emoji.toByteArray().size)
@@ -114,12 +120,12 @@ class RecordingImportStoreTest {
 
     @Test fun filenamesCannotEscapeSongAndStagingFilesAreNotRecordings() {
         val song = temporary.newFolder()
-        val result = RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "../outside.wav", {}, {})
-        assertEquals(song.canonicalFile, result.canonicalFile.parentFile)
+        val result = stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), "../outside.wav", {}, {})
+        assertEquals(song.canonicalFile, result.file.canonicalFile.parentFile)
         val pending = File(song, "import.pending").apply { writeText("partial") }
         assertFalse(RecordingFiles.isMemoFile(pending))
         assertFailsWith<IllegalArgumentException> {
-            RecordingImportStore.copy(ByteArrayInputStream(byteArrayOf(1)), song, "video.mp4", {}, {})
+            stage(ByteArrayInputStream(byteArrayOf(1)), song, nextId(), "video.mp4", {}, {})
         }
     }
 }

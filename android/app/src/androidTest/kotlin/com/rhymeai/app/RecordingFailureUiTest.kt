@@ -94,7 +94,7 @@ class RecordingFailureUiTest {
 
     @Test fun aTakeThatCannotBeSavedWaitsInTheRecordingsSheetUntilRetrySavesIt() {
         val service = viewModel.voiceMemoService
-        val take = File(RecordingFiles.stagingDirectory(filesDir, projectId).apply { mkdirs() }, "1700000000000.m4a")
+        val take = File(RecordingFiles.stagingDirectory(filesDir, projectId).apply { mkdirs() }, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a")
             .apply { writeBytes(ByteArray(64) { it.toByte() }) }
         TestRecordings.startMarker(take, "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b")
         compose.runOnIdle { service.seedRecordingForTesting(take) }
@@ -115,8 +115,9 @@ class RecordingFailureUiTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithText("1 recording waiting to be saved").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("retryWaitingTakes").performClick()
         compose.waitUntil(10_000) { !take.exists() && runBlocking { service.waitingTakes(projectId) }.isEmpty() }
-        assertEquals(listOf("1700000000000.m4a"), RecordingFiles.memoDirectory(filesDir, projectId).list().orEmpty().toList())
-        assertEquals("1700000000000.m4a", failing.records.single().fileName)
+        // A36: saved under its id; its display name is its finish time.
+        assertEquals(listOf("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b.m4a"), RecordingFiles.memoDirectory(filesDir, projectId).list().orEmpty().toList())
+        assertTrue(Regex("[0-9]+\\.m4a").matches(failing.records.single().displayName))
         compose.waitUntil(10_000) { compose.onAllNodesWithText("1 recording waiting to be saved").fetchSemanticsNodes().isEmpty() }
     }
 

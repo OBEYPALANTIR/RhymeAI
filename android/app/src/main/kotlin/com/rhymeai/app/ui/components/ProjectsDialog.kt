@@ -686,7 +686,7 @@ internal fun RecordingMemoRow(
     val isPlaying = service.playingFile == memo.file
     var pendingRename by remember { mutableStateOf(false) }
     var renameText by remember(memo.file.absolutePath) {
-        mutableStateOf(VoiceMemoService.displayName(memo.file))
+        mutableStateOf(VoiceMemoService.displayLabel(memo.displayName))
     }
 
     if (pendingRename) {
@@ -760,7 +760,7 @@ internal fun RecordingMemoRow(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = VoiceMemoService.displayName(memo.file),
+                        text = VoiceMemoService.displayLabel(memo.displayName),
                         fontSize = DesignTokens.Typography.caption,
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.onSurface
@@ -774,7 +774,7 @@ internal fun RecordingMemoRow(
 
                 IconButton(
                     onClick = {
-                        renameText = VoiceMemoService.displayName(memo.file)
+                        renameText = VoiceMemoService.displayLabel(memo.displayName)
                         pendingRename = true
                     },
                     modifier = Modifier.size(DesignTokens.Touch.minTarget)
@@ -926,6 +926,7 @@ private fun TrashBinPage(
     // Trashed recordings are scanned from disk; bump the version to re-scan
     // after any restore/delete mutation.
     var trashedMemoVersion by remember { mutableIntStateOf(0) }
+    var trashedMemosFailed by remember { mutableStateOf(false) }
     val trashedMemos: List<TrashedVoiceMemo>? by produceState<List<TrashedVoiceMemo>?>(
         initialValue = null,
         service,
@@ -941,10 +942,11 @@ private fun TrashBinPage(
         if (!complete) onRecordingPurgeIncomplete()
         // Fails closed: if what is deleted cannot be read, no trashed recording is listed (A28/A31).
         value = try {
-            service?.trashedMemos() ?: emptyList()
+            (service?.trashedMemos() ?: emptyList()).also { trashedMemosFailed = false }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
+            trashedMemosFailed = true
             emptyList()
         }
     }
@@ -1116,7 +1118,11 @@ private fun TrashBinPage(
                         trashedMemos.orEmpty().isEmpty() -> {
                             EmptyDrawerState(
                                 icon = { Icon(Icons.Default.Mic, contentDescription = null) },
-                                text = "No recordings in the Trash Bin."
+                                text = if (trashedMemosFailed) {
+                                    "Trashed recordings could not be read. Close and reopen the Trash Bin to try again."
+                                } else {
+                                    "No recordings in the Trash Bin."
+                                }
                             )
                         }
                         else -> {
@@ -1220,7 +1226,7 @@ private fun TrashRecordingSelectableRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val displayName = remember(trashedMemo.originalName) {
-        VoiceMemoService.displayName(File(trashedMemo.originalName))
+        VoiceMemoService.displayLabel(trashedMemo.originalName)
     }
 
     Row(

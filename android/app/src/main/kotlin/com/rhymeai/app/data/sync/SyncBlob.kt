@@ -185,23 +185,20 @@ data class RecordingManifestEntry(
      * derived from its project, name and hash, so every device derives the same id.
      */
     val id: String = legacyRecordingId(projectId, fileName, sha256),
-    /** A34: the name the user chose, when it differs from the allocated [fileName]; null means [fileName]. */
-    val claimedName: String? = null
+    /** A37: [uploadedAt] is a first-seen repair of a missing time (A32). */
+    val precedenceRepaired: Boolean = false
 ) {
-    /** A34: the name this recording claims; allocation gives it [fileName]. */
-    val claim: String
-        get() = claimedName ?: fileName
-
     /** Merge, tombstones and presence all key on the id. */
     val identityKey: String
         get() = id
 
-    /** The pre-v4 identity, for name-only tombstones and archive paths. */
+    /** The pre-v4 identity, for name-only tombstones. */
     val nameKey: String
         get() = "$projectId/$fileName"
 
+    /** A36: [fileName] is the recording's display name; on disk the file is named by [id]. */
     fun toRecord(origin: String, path: String?) =
-        RecordingRecord(id, projectId, fileName, precedenceTime, sha256, sizeBytes, origin, path, claimedName = claimedName)
+        RecordingRecord(id, projectId, fileName, precedenceTime, sha256, sizeBytes, origin, path, precedenceRepaired = precedenceRepaired)
 
     /** The time a tombstone must beat to remove this recording. */
     val precedenceTime: Long
@@ -219,7 +216,6 @@ data class RecordingManifestEntry(
         SyncIdentity.validateProjectId(projectId)
         SyncIdentity.validateFileName(fileName)
         SyncIdentity.validateRecordingId(id)
-        claimedName?.let(SyncIdentity::validateFileName)
         require(driveName == driveNameFor(projectId, fileName)) { "Invalid recording Drive name" }
         require(sizeBytes >= 0L) { "Invalid recording size" }
         require(uploadedAt >= 0L) { "Invalid recording time" }
@@ -250,34 +246,36 @@ data class RecordingManifestEntry(
 }
 
 /**
- * What this device knows about one recording (A20/A21), kept in DataStore beside
- * the songs and keyed by the recording's stable [id]: its display [fileName], the
- * precedence time tombstones are compared with ([uploadedAt]), its hash and size,
- * how it arrived, and where its bytes are now ([path], relative to the app's files
- * folder, live or in Trash). While a file is being moved, [pendingFrom] names the
- * source so an interrupted move can be finished or undone at the next launch (A24).
+ * What this device knows about one recording (A20/A21/A36), kept in DataStore beside
+ * the songs and keyed by the recording's stable [id]: its [displayName] (the name the
+ * user sees; on disk the file is `<id>.<ext>`), the precedence time tombstones are
+ * compared with ([uploadedAt]), its hash and size, how it arrived, where its bytes are
+ * now ([path], relative to the app's files folder) and, in Trash, when it was trashed
+ * ([trashedAt]). While a file is being moved, [pendingFrom] names the source so an
+ * interrupted move can be finished or undone at the next launch (A24).
+ * [displayNameChanged] marks a rename made here that a backup has not written yet.
  */
 @Serializable
 data class RecordingRecord(
     val id: String,
     val projectId: String,
-    val fileName: String,
+    val displayName: String,
     val uploadedAt: Long,
     val sha256: String,
     val bytes: Long,
     val origin: String,
     val path: String? = null,
+    val trashedAt: Long? = null,
     val pendingFrom: String? = null,
-    val pendingFromName: String? = null,
     val pendingOp: String? = null,
-    /** A30: the name the user chose (recorded, imported or renamed to); null means [fileName]. */
-    val claimedName: String? = null,
-    /** A30: the name this recording last had in a manifest this device wrote; null if never written. */
-    val syncedName: String? = null
+    val pendingTrashedAt: Long? = null,
+    val displayNameChanged: Boolean = false,
+    /** A37: [uploadedAt] is a first-seen repair of a missing time (A32). */
+    val precedenceRepaired: Boolean = false
 ) {
     fun toEntry() = RecordingManifestEntry(
-        projectId = projectId, fileName = fileName, sizeBytes = bytes, modifiedAt = 0L,
-        sha256 = sha256, uploadedAt = uploadedAt, id = id, claimedName = claimedName?.takeIf { it != fileName }
+        projectId = projectId, fileName = displayName, sizeBytes = bytes, modifiedAt = 0L,
+        sha256 = sha256, uploadedAt = uploadedAt, id = id, precedenceRepaired = precedenceRepaired
     )
 
     companion object {
@@ -414,45 +412,6 @@ object SyncMerger {
     }
 
     /**
-     * A30: within one song, when several recordings claim one file name, the one with
-     * the earliest precedence time (then the smaller id) keeps it and each other takes
-     * the first free "<stem> N<ext>" in that same order. Every device computes the same
-     * names from the same entries, so names converge without renaming loops.
-     */
-    fun assignNames(recordings: List<RecordingManifestEntry>): List<RecordingManifestEntry> {
-        val allocated = HashMap<String, String>()
-        for ((_, song) in recordings.groupBy { it.projectId }) {
-            // A34: allocation works on claims (the names users chose), never on earlier allocations.
-            val ordered = song.sortedWith(compareBy<RecordingManifestEntry> { it.precedenceTime }.thenBy { it.id })
-            val owners = ordered.groupBy { it.claim }.mapValues { it.value.first().id }
-            val taken = owners.keys.toHashSet()
-            for (entry in ordered) {
-                if (owners[entry.claim] == entry.id) {
-                    allocated[entry.id] = entry.claim
-                    continue
-                }
-                val base = entry.claim.substringBeforeLast('.')
-                val extension = entry.claim.substringAfterLast('.', "m4a")
-                var n = 2
-                var name: String
-                do {
-                    name = com.rhymeai.app.data.recording.RecordingFiles.variantName(base, extension, n++)
-                } while (name in taken)
-                taken += name
-                allocated[entry.id] = name
-            }
-        }
-        return recordings.map { entry ->
-            val name = allocated.getValue(entry.id)
-            entry.copy(
-                fileName = name,
-                driveName = RecordingManifestEntry.driveNameFor(entry.projectId, name),
-                claimedName = entry.claim.takeIf { it != name }
-            )
-        }
-    }
-
-    /**
      * Song, recording-id and pre-v4 name-only tombstones, applied by timestamp. A
      * name-only tombstone can only name a pre-v4 recording: it applies to a recording
      * whose id is the legacy id of that name and the recording's own bytes, never to a
@@ -491,7 +450,7 @@ object SyncMerger {
         }
         for (project in remote) {
             val existing = byId[project.id]
-            if (existing == null || project.updatedAt > existing.updatedAt) {
+            if (existing == null || supersedes(project.updatedAt, project.precedenceRepaired, existing.updatedAt, existing.precedenceRepaired)) {
                 byId[project.id] = project
             }
         }
@@ -508,7 +467,7 @@ object SyncMerger {
         }
         for (entry in remote) {
             val existing = byId[entry.project.id]
-            if (existing == null || entry.deletedAt > existing.deletedAt) {
+            if (existing == null || supersedes(entry.deletedAt, entry.deletedAtRepaired, existing.deletedAt, existing.deletedAtRepaired)) {
                 byId[entry.project.id] = entry
             }
         }
@@ -526,9 +485,24 @@ object SyncMerger {
             byIdentity[entry.identityKey] = entry
         }
         for (entry in remote) {
-            byIdentity[entry.identityKey] = entry
+            val existing = byIdentity[entry.identityKey]
+            // A37: of two repaired times the smaller stands; a real time beats a repair.
+            val keep = existing != null && (existing.precedenceRepaired || entry.precedenceRepaired) &&
+                !supersedes(entry.uploadedAt, entry.precedenceRepaired, existing.uploadedAt, existing.precedenceRepaired)
+            if (!keep) byIdentity[entry.identityKey] = entry
         }
         return byIdentity.values.toList()
+    }
+
+    /**
+     * A37: whether a candidate time replaces the held one for the same identity. A real
+     * time (an edit) beats a first-seen repair; of two repairs the smaller wins, so every
+     * replica settles on the earliest; of two real times the newer wins.
+     */
+    internal fun supersedes(time: Long, repaired: Boolean, heldTime: Long, heldRepaired: Boolean): Boolean = when {
+        repaired != heldRepaired -> !repaired
+        repaired -> time < heldTime
+        else -> time > heldTime
     }
 
     private fun resolveActiveTrashConflicts(
@@ -539,7 +513,12 @@ object SyncMerger {
         val restoredIds = trashed
             .filter { trash ->
                 val activeProject = activeById[trash.project.id]
-                activeProject != null && activeProject.updatedAt > trash.deletedAt
+                // A37: a real time beats a repair; otherwise the newer side stays.
+                activeProject != null && if (activeProject.precedenceRepaired != trash.deletedAtRepaired) {
+                    !activeProject.precedenceRepaired
+                } else {
+                    activeProject.updatedAt > trash.deletedAt
+                }
             }
             .mapTo(mutableSetOf()) { it.project.id }
 

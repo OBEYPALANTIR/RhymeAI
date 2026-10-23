@@ -88,8 +88,8 @@ class VoiceMemoServiceTest {
     @Test
     fun displayNameReturnsFormattedLabelForTimestampFilename() {
         val ts = 1_718_000_000_000L
-        val file = File(tempFolder.root, "$ts.m4a")
-        val label = VoiceMemoService.displayName(file)
+        val file = "$ts.m4a"
+        val label = VoiceMemoService.displayLabel(file)
         // Must be the same as formatMemoLabel — non-empty and not the raw number.
         assertTrue(label.isNotBlank())
         assertFalse(label == ts.toString())
@@ -97,16 +97,16 @@ class VoiceMemoServiceTest {
 
     @Test
     fun displayNameReturnsBasenameForCustomFilename() {
-        val file = File(tempFolder.root, "My Hook Idea.m4a")
-        assertEquals("My Hook Idea", VoiceMemoService.displayName(file))
+        val file = "My Hook Idea.m4a"
+        assertEquals("My Hook Idea", VoiceMemoService.displayLabel(file))
     }
 
     @Test
     fun displayNameHandlesNonTimestampNumericName() {
         // "12345" is all digits but may or may not parse as a valid timestamp —
         // the contract is simply: if toLongOrNull() != null, use formatted label.
-        val file = File(tempFolder.root, "12345.m4a")
-        val label = VoiceMemoService.displayName(file)
+        val file = "12345.m4a"
+        val label = VoiceMemoService.displayLabel(file)
         // Should not crash and should be non-empty.
         assertTrue(label.isNotBlank())
     }
