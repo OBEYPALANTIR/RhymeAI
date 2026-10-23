@@ -3,6 +3,7 @@ package com.rhymeai.app.data.sync
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
 import com.rhymeai.app.data.recording.RecordingFiles
 import com.rhymeai.app.data.recording.RecordingTransitions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -50,6 +51,30 @@ class RecordingIdentityTest {
         assertEquals("0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b", listed.entry.id)
         assertEquals(7_123L, listed.entry.uploadedAt)
         assertEquals(published, listed.file.canonicalFile)
+    }
+
+    @Test
+    fun aPublishCancelledWhilePlaybackStopsLeavesNoRecordAndCanRunAgain() = runBlocking<Unit> {
+        val id = RecordingManifestEntry.newRecordingId()
+        val first = staged("song", "a.m4a", "restored".toByteArray())
+        RecordingTransitions.beforeBytesMove = { throw CancellationException("the screen closed") }
+        try {
+            assertFailsWith<CancellationException> {
+                RecordingTransitions.publish(catalog, filesDir, first, "song", "take.m4a", id, 1_000L, RecordingRecord.RESTORED, skipIfPresent = true)
+            }
+        } finally {
+            RecordingTransitions.beforeBytesMove = null
+        }
+        // Restore and Import delete their staging copy whatever happens.
+        first.delete()
+        assertTrue(catalog.records.isEmpty())
+
+        val again = RecordingTransitions.publish(
+            catalog, filesDir, staged("song", "b.m4a", "restored".toByteArray()), "song", "take.m4a",
+            id, 1_000L, RecordingRecord.RESTORED, skipIfPresent = true
+        )!!
+        assertEquals("restored", again.readText())
+        assertEquals(id, snapshot().single().entry.id)
     }
 
     @Test
