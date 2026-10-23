@@ -92,17 +92,36 @@ final class VoiceMemoService {
     /// (a take folder with its finished marker), shown as "waiting to be saved"
     /// with Retry until each one is published.
     private(set) var pendingTakes: [PendingTake] = []
-    /// Bumped whenever a take is published, so open lists reload.
+    /// Takes that are definitively not saveable (their audio is gone or is not a
+    /// finished recording); their files stay on this device.
+    private(set) var failedTakes: [PendingTake] = []
+    /// Bumped whenever the recordings change (a take published, a deletion
+    /// applied), so open lists reload.
     private(set) var publishedRevision = 0
 
     struct PendingTake: Equatable {
-        /// The take folder's name: the recording id it is published under.
+        /// The take folder's name: the recording id it is published under, fixed
+        /// when the recording started and never replaced.
         let id: String
         let projectId: String
         let folder: URL
         /// The take's audio, if it is still in staging.
         let audio: URL?
+        enum State: Equatable {
+            /// The recorder reported it finished, at this time.
+            case finished(Date)
+            /// A finished marker that cannot be read: it waits, and is never re-dated.
+            case unreadableMarker
+            /// No marker: its container is checked before it is published.
+            case unconfirmed
+            case failed
+        }
+        let state: State
     }
+
+    /// Answers whether a recording may be played: one a winning deletion covers
+    /// may not (A28). Set by the view model.
+    @ObservationIgnored var playbackAllowed: ((URL) -> Bool)?
 
     // MARK: - Private (not tracked by @Observable)
 
@@ -137,20 +156,34 @@ final class VoiceMemoService {
         refreshPendingTakes()
     }
 
-    /// Finished take folders still in staging; unfinished ones are left alone.
+    /// Take folders still in staging, sorted into waiting and failed. A folder
+    /// the recorder is writing is left alone.
     func refreshPendingTakes() {
         let fm = FileManager.default
+        let active = [audioRecorder?.url, finishing?.recorder.url].compactMap { $0?.deletingLastPathComponent().standardizedFileURL.path }
         var takes: [PendingTake] = []
         for project in (try? fm.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [] {
-            for folder in (try? fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [] {
-                guard (try? SyncIdentity.validateRecordingId(folder.lastPathComponent)) != nil,
-                      fm.fileExists(atPath: folder.appendingPathComponent(RecordingFiles.finishedTakeMarker).path) else { continue }
-                let audio = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles))?
-                    .first { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
-                takes.append(PendingTake(id: folder.lastPathComponent, projectId: project.lastPathComponent, folder: folder, audio: audio))
+            for folder in (try? fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+            where !active.contains(folder.standardizedFileURL.path) {
+                let contents = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+                let audio = contents.first { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+                let names = Set(contents.map(\.lastPathComponent))
+                let state: PendingTake.State
+                if names.contains(RecordingFiles.failedTakeMarker) || (try? SyncIdentity.validateRecordingId(folder.lastPathComponent)) == nil {
+                    state = .failed
+                } else if names.contains(RecordingFiles.finishedTakeMarker) {
+                    state = RecordingFiles.readFinishedMarker(in: folder).map(PendingTake.State.finished) ?? .unreadableMarker
+                } else if audio != nil {
+                    state = .unconfirmed
+                } else {
+                    continue
+                }
+                takes.append(PendingTake(id: folder.lastPathComponent, projectId: project.lastPathComponent, folder: folder, audio: audio, state: state))
             }
         }
-        pendingTakes = takes.sorted { $0.id < $1.id }
+        takes.sort { $0.id < $1.id }
+        pendingTakes = takes.filter { $0.state != .failed }
+        failedTakes = takes.filter { $0.state == .failed }
     }
 
     nonisolated static let maximumImportBytes = 100 * 1024 * 1024
@@ -495,6 +528,10 @@ final class VoiceMemoService {
             stopPlayback()
             return
         }
+        guard playbackAllowed?(url) ?? true else {
+            lastError = "This recording was deleted and can't be played."
+            return
+        }
         if isRecording || recordingActivationRevision != nil { stopRecording() }
         stopPlayback()
         pendingPlayURL = url
@@ -588,42 +625,77 @@ final class VoiceMemoService {
         return targetURL
     }
 
-    /// A take the recorder reported finished: marked finished in its folder
-    /// first, so a failure or a crash leaves it recoverable, then published (A27).
+    /// A take the recorder reported finished: its marker (with the finish time)
+    /// is written first, so a failure or a crash leaves it recoverable, then it is
+    /// published (A27/A31). A marker that cannot be written stops here: the take
+    /// waits, unpublished, and the failure is shown.
     func publishRecording(_ staged: URL, projectId: String) {
-        guard let size = (try? staged.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 else { return }
         let folder = staged.deletingLastPathComponent()
-        try? Data().write(to: folder.appendingPathComponent(RecordingFiles.finishedTakeMarker), options: .atomic)
-        publish(PendingTake(id: folder.lastPathComponent, projectId: projectId, folder: folder, audio: staged))
+        let finishedAt = Date(millisecondsSince1970: Date().epochMilliseconds)
+        do {
+            try RecordingFiles.writeFinishedMarker(finishedAt, in: folder)
+        } catch {
+            lastError = "Couldn't finish saving the recording. It is kept on this device; tap Retry to save it."
+            refreshPendingTakes()
+            return
+        }
+        publish(PendingTake(id: folder.lastPathComponent, projectId: projectId, folder: folder, audio: staged, state: .finished(finishedAt)))
         refreshPendingTakes()
     }
 
     /// Publishes every waiting take; the caller brings the library up to date
-    /// first, so a take already published (by id) simply counts as saved.
-    func retryPendingTakes() {
+    /// first, so a take already published (by id) counts as saved. A take without
+    /// a marker is published only when its container is a finished recording.
+    func retryPendingTakes() async {
         refreshPendingTakes()
-        for take in pendingTakes { publish(take) }
+        for take in pendingTakes {
+            switch take.state {
+            case .finished:
+                publish(take)
+            case .unreadableMarker:
+                lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+            case .unconfirmed:
+                guard let audio = take.audio else { continue }
+                switch await RecordingFiles.checkFinishedContainer(audio) {
+                case .complete:
+                    do {
+                        let finishedAt = try RecordingFiles.facts(audio).modified
+                        try RecordingFiles.writeFinishedMarker(finishedAt, in: take.folder)
+                        publish(PendingTake(id: take.id, projectId: take.projectId, folder: take.folder, audio: audio, state: .finished(finishedAt)))
+                    } catch {
+                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    }
+                case .invalid:
+                    markFailed(take)
+                case .uninspectable:
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                }
+            case .failed:
+                break
+            }
+        }
         refreshPendingTakes()
     }
 
     private func publish(_ take: PendingTake) {
+        guard case .finished(let finishedAt) = take.state else { return }
         let staged = take.audio ?? take.folder.appendingPathComponent("missing.m4a")
         do {
             if let publisher {
-                _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded, id: take.id)
+                _ = try publisher.publishFinished(staged, projectId: take.projectId, preferredName: staged.lastPathComponent, origin: .recorded, id: take.id, finishedAt: finishedAt)
             } else {
                 let folder = RecordingFiles.memoFolder(for: take.projectId)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: staged, to: RecordingFiles.restoredURL(originalName: staged.lastPathComponent, folder: folder))
             }
+        } catch RecordingLibraryError.takeMissing {
+            // Neither a row nor its audio: definitively nothing to save.
+            markFailed(take)
+            return
         } catch {
-            // Without its audio, and not published, there is nothing left to save.
-            guard FileManager.default.fileExists(atPath: staged.path) else {
-                forget(take)
-                return
-            }
-            // The audio stays in staging, listed as waiting to be saved.
-            lastError = "Couldn't save the recording: \(error.localizedDescription) It is kept on this device; tap Retry to save it."
+            // Before or after the move, the take keeps its marker and waits; a retry
+            // resolves it by id.
+            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; tap Retry to save it."
             return
         }
         forget(take)
@@ -631,12 +703,23 @@ final class VoiceMemoService {
         onFilesChanged?()
     }
 
-    /// The take is saved (or gone): its marker goes, and its folder once empty.
+    private func markFailed(_ take: PendingTake) {
+        try? Data().write(to: take.folder.appendingPathComponent(RecordingFiles.failedTakeMarker), options: .atomic)
+    }
+
+    /// The take is saved: its marker goes, and its folder once empty.
     private func forget(_ take: PendingTake) {
         try? FileManager.default.removeItem(at: take.folder.appendingPathComponent(RecordingFiles.finishedTakeMarker))
         if (try? FileManager.default.contentsOfDirectory(atPath: take.folder.path))?.isEmpty == true {
             try? FileManager.default.removeItem(at: take.folder)
         }
+    }
+
+    /// The recordings changed (a deletion applied, a restore): lists reload, and a
+    /// recording that may no longer be played stops (A28).
+    func recordingsChanged() {
+        publishedRevision &+= 1
+        if let playing = activePlayURL ?? pendingPlayURL, playbackAllowed?(playing) == false { stopPlayback() }
     }
 
     // MARK: - Callbacks from delegate forwarder

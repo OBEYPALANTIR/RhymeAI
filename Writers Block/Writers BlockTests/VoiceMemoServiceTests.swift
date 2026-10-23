@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftData
 import Testing
@@ -409,58 +410,181 @@ struct VoiceMemoServiceTests {
     }
 }
 
-/// Finished takes whose publication failed stay recoverable (A27).
+/// Finished takes whose publication failed stay recoverable (A27/A31).
 @MainActor
 struct PendingTakeTests {
-    @Test func finishedTakesWaitAcrossRelaunchUnfinishedOnesNeverPublishAndRetrySavesEachOnceById() throws {
+    private struct Store {
+        let scratch: URL
+        let context: ModelContext
+        let container: ModelContainer
+        let library: RecordingLibrary
+        let stagingRoot: URL
+    }
+
+    private func makeStore() throws -> Store {
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("PendingTakes-\(UUID().uuidString)", isDirectory: true)
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, Recording.self])
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: scratch.appendingPathComponent("library.store"), cloudKitDatabase: .none)])
-        let context = container.mainContext
         let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
                                        trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
                                        defaults: UserDefaults(suiteName: "PendingTakes-\(scratch.lastPathComponent)")!)
-        library.context = context
-        let stagingRoot = scratch.appendingPathComponent("recording-in-progress", isDirectory: true)
-        /// A take's audio in its own folder, as the recorder leaves it.
-        func take(_ byte: UInt8, finished: Bool = false) throws -> URL {
-            let url = RecordingFiles.recorderStagingURL(for: "song", takeId: UUID().uuidString.lowercased(), root: stagingRoot)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data([byte, byte]).write(to: url)
-            if finished { try Data().write(to: url.deletingLastPathComponent().appendingPathComponent(RecordingFiles.finishedTakeMarker)) }
-            return url
-        }
+        library.context = container.mainContext
+        return Store(scratch: scratch, context: container.mainContext, container: container, library: library,
+                     stagingRoot: scratch.appendingPathComponent("recording-in-progress", isDirectory: true))
+    }
 
-        library.save = { _ in throw CocoaError(.fileWriteUnknown) }
-        let service = VoiceMemoService(stagingRoot: stagingRoot)
-        service.publisher = library
-        service.publishRecording(try take(1), projectId: "song")
+    /// A take's audio in its own folder, as the recorder leaves it.
+    private func take(_ audio: Data, in store: Store, finishedAt: Date? = nil) throws -> URL {
+        let url = RecordingFiles.recorderStagingURL(for: "song", takeId: UUID().uuidString.lowercased(), root: store.stagingRoot)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try audio.write(to: url)
+        if let finishedAt { try RecordingFiles.writeFinishedMarker(finishedAt, in: url.deletingLastPathComponent()) }
+        return url
+    }
+
+    @Test func finishedTakesWaitAcrossRelaunchAndRetrySavesEachOnceByIdWithItsFinishTime() async throws {
+        let store = try makeStore()
+        store.library.save = { _ in throw CocoaError(.fileWriteUnknown) }
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        service.publishRecording(try take(Data([1, 1]), in: store), projectId: "song")
         #expect(service.pendingTakes.count == 1 && service.lastError != nil)
-        // The app stopped right after another take finished, and during a third.
-        let orphan = try take(2, finished: true)
-        let unfinished = try take(3)
+        // The app stopped right after another take finished at a known time.
+        let orphan = try take(Data([2, 2]), in: store, finishedAt: Date(timeIntervalSince1970: 1_234))
 
-        library.save = { try $0.save() }
-        let relaunched = VoiceMemoService(stagingRoot: stagingRoot)
-        relaunched.publisher = library
+        store.library.save = { try $0.save() }
+        let relaunched = VoiceMemoService(stagingRoot: store.stagingRoot)
+        relaunched.publisher = store.library
         let ids = Set(relaunched.pendingTakes.map(\.id))
         #expect(ids.count == 2 && ids.contains(orphan.deletingLastPathComponent().lastPathComponent))
-        relaunched.retryPendingTakes()
-        #expect(relaunched.pendingTakes.isEmpty)
-        #expect(Set(try context.fetch(FetchDescriptor<Recording>()).map(\.id)) == ids)
-        #expect(FileManager.default.fileExists(atPath: unfinished.path))
+        await relaunched.retryPendingTakes()
+        #expect(relaunched.pendingTakes.isEmpty && relaunched.failedTakes.isEmpty)
+        let rows = try store.context.fetch(FetchDescriptor<Recording>())
+        #expect(Set(rows.map(\.id)) == ids)
+        // The retry reuses the recorded finish time, never the retry time.
+        #expect(rows.first { $0.id == orphan.deletingLastPathComponent().lastPathComponent }?.uploadedAt == Date(timeIntervalSince1970: 1_234))
 
         // A take published before the app stopped (its marker still there) counts as saved.
         let published = try #require(ids.first)
-        let folder = stagingRoot.appendingPathComponent("song/\(published)", isDirectory: true)
+        let folder = store.stagingRoot.appendingPathComponent("song/\(published)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data().write(to: folder.appendingPathComponent(RecordingFiles.finishedTakeMarker))
-        let again = VoiceMemoService(stagingRoot: stagingRoot)
-        again.publisher = library
+        try RecordingFiles.writeFinishedMarker(Date(), in: folder)
+        let again = VoiceMemoService(stagingRoot: store.stagingRoot)
+        again.publisher = store.library
         #expect(again.pendingTakes.map(\.id) == [published])
-        again.retryPendingTakes()
+        await again.retryPendingTakes()
         #expect(again.pendingTakes.isEmpty && again.lastError == nil)
-        #expect(try context.fetch(FetchDescriptor<Recording>()).count == 2)
+        #expect(try store.context.fetch(FetchDescriptor<Recording>()).count == 2)
+    }
+
+    @Test func aFailureAfterTheMoveKeepsTheRowAndTheMarker() throws {
+        let store = try makeStore()
+        var saves = 0
+        // The row and its intent save; clearing the intent after the move fails.
+        store.library.save = { context in
+            saves += 1
+            if saves > 1 { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        }
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        let staged = try take(Data([5, 5]), in: store)
+        service.publishRecording(staged, projectId: "song")
+
+        let id = staged.deletingLastPathComponent().lastPathComponent
+        #expect(service.pendingTakes.map(\.id) == [id] && service.lastError != nil)
+        #expect(try store.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [id])
+        #expect(FileManager.default.fileExists(atPath: store.library.memosRoot.appendingPathComponent("song/\(staged.lastPathComponent)").path))
+    }
+
+    @Test func anUnmarkedTakeIsPublishedOnlyWhenItsContainerIsFinished() async throws {
+        let store = try makeStore()
+        let fixtures = try await AudioFixtures.make(in: store.scratch)
+        let complete = try take(fixtures.complete, in: store)
+        let cutMidData = try take(fixtures.truncatedMidData, in: store)
+        let cutAfterIndex = try take(fixtures.truncatedAfterIndex, in: store)
+        let cutBeforeIndex = try take(fixtures.truncatedBeforeIndex, in: store)
+
+        let service = VoiceMemoService(stagingRoot: store.stagingRoot)
+        service.publisher = store.library
+        #expect(service.pendingTakes.count == 4)
+        await service.retryPendingTakes()
+
+        #expect(try store.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [complete.deletingLastPathComponent().lastPathComponent])
+        #expect(Set(service.failedTakes.map(\.id)) == Set([cutMidData, cutAfterIndex, cutBeforeIndex].map { $0.deletingLastPathComponent().lastPathComponent }))
+        #expect(service.pendingTakes.isEmpty)
+        for kept in [cutMidData, cutAfterIndex, cutBeforeIndex] { #expect(FileManager.default.fileExists(atPath: kept.path)) }
+    }
+
+    @Test func containerCheckReadsEverySample() async throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ContainerCheck-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let fixtures = try await AudioFixtures.make(in: scratch)
+        func check(_ data: Data) async throws -> RecordingFiles.ContainerCheck {
+            let url = scratch.appendingPathComponent("\(UUID().uuidString).m4a")
+            try data.write(to: url)
+            return await RecordingFiles.checkFinishedContainer(url)
+        }
+        #expect(try await check(fixtures.complete) == .complete)
+        #expect(try await check(fixtures.indexFirst) == .complete)
+        #expect(try await check(fixtures.truncatedMidData) == .invalid)
+        #expect(try await check(fixtures.truncatedAfterIndex) == .invalid)
+        #expect(try await check(fixtures.truncatedBeforeIndex) == .invalid)
+        #expect(await RecordingFiles.checkFinishedContainer(scratch.appendingPathComponent("absent.m4a")) == .uninspectable)
+    }
+
+    @Test func aDeletedRecordingIsNotPlayed() {
+        let service = VoiceMemoService(stagingRoot: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        service.playbackAllowed = { _ in false }
+        service.togglePlayback(url: URL(fileURLWithPath: "/tmp/song/take.m4a"))
+        #expect(!service.isPlaying && service.lastError == "This recording was deleted and can't be played.")
+    }
+}
+
+/// Real AAC recordings written by the system encoder, and cut-off copies.
+enum AudioFixtures {
+    struct Set {
+        /// Index (moov) after the audio, as the recorder writes it.
+        let complete: Data
+        /// The same audio with its index first.
+        let indexFirst: Data
+        /// Index-first, cut in the middle of the audio data.
+        let truncatedMidData: Data
+        /// Index-first, cut just after the index, before most of the audio.
+        let truncatedAfterIndex: Data
+        /// Index-last, cut before the index was written.
+        let truncatedBeforeIndex: Data
+    }
+
+    static func make(in folder: URL) async throws -> Set {
+        let recorded = folder.appendingPathComponent("recorded.m4a")
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
+        do {
+            let file = try AVAudioFile(forWriting: recorded, settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+            ])
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100))
+            buffer.frameLength = 44_100
+            for frame in 0..<44_100 { buffer.floatChannelData![0][frame] = Float(sin(Double(frame) * 2 * .pi * 440 / 44_100)) * 0.5 }
+            try file.write(from: buffer)
+        }
+        let indexFirstURL = folder.appendingPathComponent("index-first.m4a")
+        let export = try #require(AVAssetExportSession(asset: AVURLAsset(url: recorded), presetName: AVAssetExportPresetPassthrough))
+        export.shouldOptimizeForNetworkUse = true
+        try await export.export(to: indexFirstURL, as: .m4a)
+        let complete = try Data(contentsOf: recorded)
+        let indexFirst = try Data(contentsOf: indexFirstURL)
+        let mdat = try #require(indexFirst.range(of: Data("mdat".utf8)))
+        let moov = try #require(indexFirst.range(of: Data("moov".utf8)))
+        #expect(moov.lowerBound < mdat.lowerBound)
+        let dataStart = mdat.upperBound
+        return Set(
+            complete: complete,
+            indexFirst: indexFirst,
+            truncatedMidData: indexFirst.prefix(dataStart + (indexFirst.count - dataStart) / 2),
+            truncatedAfterIndex: indexFirst.prefix(dataStart + 16),
+            truncatedBeforeIndex: complete.prefix(complete.count * 3 / 5)
+        )
     }
 }

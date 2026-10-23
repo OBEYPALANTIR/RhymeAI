@@ -435,6 +435,14 @@ struct SongRecordingsView: View {
     @ViewBuilder
     private var pendingTakesRow: some View {
         let waiting = viewModel.voiceMemoService.pendingTakes.filter { $0.projectId == projectId }.count
+        let failed = viewModel.voiceMemoService.failedTakes.filter { $0.projectId == projectId }.count
+        if failed > 0 {
+            Text("\(failed) \(failed == 1 ? "recording" : "recordings") could not be saved; the audio is kept on this device.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("failedRecordings")
+        }
         if waiting > 0 {
             HStack(spacing: RhymeAITokens.Spacing.sm) {
                 Text("\(waiting) \(waiting == 1 ? "recording" : "recordings") waiting to be saved")
