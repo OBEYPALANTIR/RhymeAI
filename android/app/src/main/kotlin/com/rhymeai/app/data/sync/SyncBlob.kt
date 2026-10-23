@@ -391,7 +391,8 @@ object SyncMerger {
             tombstones.songs[project.id]?.let { it.deletedAt > project.updatedAt } == true
         }
         val keptTrash = trashed.filterNot { entry ->
-            tombstones.songs[entry.project.id]?.let { it.deletedAt > maxOf(entry.project.updatedAt, entry.deletedAt) } == true
+            // A38: a Trash entry against a tombstone is its trash time only; its song's own time never overrides one.
+            tombstones.songs[entry.project.id]?.let { it.deletedAt > entry.deletedAt } == true
         }
         val keptRecordings = recordings.filterNot(tombstones::removes)
         // Each recording a song tombstone removes gets its own tombstone, so reviving

@@ -59,7 +59,9 @@ sealed class SyncResult {
         val unmovedLegacySongs: Int = 0,
         val unmovedLegacyRecordings: Int = 0,
         /** Recordings left out because they still await their A36 rename (done at launch). */
-        val unmigratedRecordings: Int = 0
+        val unmigratedRecordings: Int = 0,
+        /** A40: recordings not uploaded because Drive holds other audio under the same id. */
+        val conflictingRecordings: Int = 0
     ) : SyncResult()
 
     /** The user must approve Drive access; launch [pendingIntent], then retry. */
@@ -831,7 +833,8 @@ class DriveSyncService(
         val committed: SyncBlob,
         val skippedLarge: Int,
         val damaged: Int,
-        val notMigrated: Int = 0
+        val notMigrated: Int = 0,
+        val conflicting: Int = 0
     )
 
     /** All manifests named [BackupManifest.FILE_NAME]: the newest is kept, the rest merged in and removed. */
@@ -962,7 +965,8 @@ class DriveSyncService(
                     migratedLegacyBackup = migrated,
                     unmovedLegacySongs = unmovedSongs,
                     unmovedLegacyRecordings = unmovedRecordings,
-                    unmigratedRecordings = outcome.notMigrated
+                    unmigratedRecordings = outcome.notMigrated,
+                    conflictingRecordings = outcome.conflicting
                 )
             }
         }
@@ -1074,13 +1078,22 @@ class DriveSyncService(
             // Only this device's own bytes for the same id are ever uploaded: no other
             // recording, time or name is substituted for a listed entry.
             val uploaded = HashMap<String, String>()
+            // A40: one id, one digest forever. A raw object under this id with another digest
+            // (or none) is never written over; the recording is reported instead.
+            var conflicting = 0
             val presentNames = merged.recordings.filter(::onDrive).mapTo(HashSet()) { BackupManifest.recordingDriveName(it.id) }
             val uploadable = liveFiles.map { it.entry }.filter { it.isTransferable }
             for (entry in RecordingSyncPlanner.planUploads(uploadable, merged.recordings, presentNames)) {
                 val file = liveById.getValue(entry.id).file
                 val name = BackupManifest.recordingDriveName(entry.id)
+                val existing = driveFiles[name].orEmpty()
+                if (existing.any { it.appProperties["sha256"] != entry.sha256 }) {
+                    conflicting++
+                    continue
+                }
                 val bytes = RecordingFileStore.readForUpload(file, entry)
-                val stale = driveFiles[name]?.firstOrNull()
+                // Same digest: an incomplete or damaged copy of these very bytes is replaced.
+                val stale = existing.firstOrNull()
                 uploaded[name] = if (stale != null) {
                     driveClient.updateFile(token, stale.id, BackupManifest.RECORDING_MIME_TYPE, bytes, recordingAppProperties(entry))
                     stale.id
@@ -1152,7 +1165,7 @@ class DriveSyncService(
                 // A Trash-held recording Drive lists but does not hold intact is unpreserved too.
                 localFiles.count { it.inTrash && !it.entry.isTransferable && it.entry.id in listedIds && !onDrive(it.entry) } +
                 merged.recordings.count { !it.isTransferable && it.id !in heldIds }
-            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size)
+            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size, conflicting)
         }
         throw DriveNetworkException(CONFLICT_MESSAGE)
     }

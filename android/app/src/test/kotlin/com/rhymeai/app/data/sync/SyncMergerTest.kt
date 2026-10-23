@@ -224,4 +224,15 @@ class SyncMergerTest {
             }
         }
     }
+
+    @Test
+    fun aTombstoneMeetsATrashEntryByItsTrashTimeOnly() {
+        // Trash time 100 (real), its song's time 300 (a repair), tombstone 200: the tombstone wins.
+        val trashed = TrashedSongProject(SongProject(id = "s", updatedAt = 300L, precedenceRepaired = true), deletedAt = 100L)
+        val merged = SyncMerger.merge(SyncBlob(trashed = listOf(trashed)), SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))))
+        assertTrue(merged.trashed.isEmpty())
+        // Trash time after the tombstone: the Trash entry stays.
+        val later = SyncMerger.merge(SyncBlob(trashed = listOf(trashed.copy(deletedAt = 250L))), SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))))
+        assertEquals(listOf("s"), later.trashed.map { it.project.id })
+    }
 }
