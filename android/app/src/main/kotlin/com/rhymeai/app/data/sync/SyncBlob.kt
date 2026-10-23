@@ -63,7 +63,8 @@ data class SyncDeletion(
     @OptIn(ExperimentalSerializationApi::class)
     @EncodeDefault
     val fileName: String? = null,
-    val deletedAt: Long,
+    /** 0 when the deletion's time is unknown (a writer left it out): such a tombstone is suspended. */
+    val deletedAt: Long = 0L,
     /**
      * The deleted recording's stable id (A21). Null on a song tombstone, and on a
      * name-only recording tombstone carried over from a pre-v4 backup, which still
@@ -83,9 +84,14 @@ data class SyncDeletion(
         SyncIdentity.validateProjectId(projectId)
         fileName?.let(SyncIdentity::validateDisplayName)
         recordingId?.let(SyncIdentity::validateRecordingId)
-        // A33: a deletion time must be a real time; zero or negative never wins anything.
-        require(deletedAt > 0L) { "Invalid deletion time" }
+        // A33: a deletion time is a real time, or unknown (0). An unknown one never wins anything
+        // and suspends only its own identity; a negative one is malformed.
+        require(deletedAt >= 0L) { "Invalid deletion time" }
     }
+
+    /** False for a tombstone whose time is unknown: it removes nothing, and is kept until a valid one replaces it. */
+    val timeKnown: Boolean
+        get() = deletedAt > 0L
 }
 
 /** The wire shape is explicit: v1 has no deletions key; v2 must have one. */
@@ -443,8 +449,10 @@ object SyncMerger {
             keptTrash.forEach { add(it.project.id) }
         }
         val survivingIds = keptRecordings.mapTo(HashSet()) { it.id }
+        // A tombstone whose time is unknown is always kept: its identity stays suspended until a
+        // valid tombstone for it replaces it (the newest per identity counts).
         val keptDeletions = allDeletions.filterNot { deletion ->
-            when {
+            deletion.timeKnown && when {
                 deletion.isSongTombstone -> deletion.projectId in survivingSongs
                 deletion.recordingId != null -> deletion.recordingId in survivingIds
                 else -> keptRecordings.any { Tombstones.namesLegacy(deletion, it) }
@@ -467,6 +475,14 @@ object SyncMerger {
             .groupBy { it.recordingId!! }.mapValues { (_, d) -> d.maxBy { it.deletedAt } }
         private val byProjectNames = deletions.filter { it.fileName != null && it.recordingId == null }
             .groupBy { it.projectId }
+
+        /**
+         * The newest tombstone naming [entry] (its song's, its id's, or a pre-v4 name's) has an
+         * unknown time: the recording is suspended, hidden and refused for playback, its bytes kept.
+         */
+        fun suspends(entry: RecordingManifestEntry): Boolean =
+            songs[entry.projectId]?.timeKnown == false || byId[entry.id]?.timeKnown == false ||
+                byProjectNames[entry.projectId].orEmpty().any { !it.timeKnown && namesLegacy(it, entry) }
 
         fun removes(entry: RecordingManifestEntry): Boolean {
             val time = entry.precedenceTime
@@ -505,7 +521,7 @@ object SyncMerger {
      * a repair, so a tombstone removes anything whose time is a repair; otherwise it must be newer.
      */
     internal fun deletes(tombstone: SyncDeletion, time: Long, repaired: Boolean): Boolean =
-        supersedes(tombstone.deletedAt, false, time, repaired)
+        tombstone.timeKnown && supersedes(tombstone.deletedAt, false, time, repaired)
 
     private fun mergeTrash(
         local: List<TrashedSongProject>,

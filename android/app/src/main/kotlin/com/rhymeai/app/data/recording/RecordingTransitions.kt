@@ -425,7 +425,7 @@ internal object RecordingTransitions {
         } ?: return@withLock null
         if (record.pendingOp != null) return@withLock null
         val removed = try {
-            SyncMerger.Tombstones(deletions()).removes(record.toEntry())
+            SyncMerger.Tombstones(deletions()).let { it.removes(record.toEntry()) || it.suspends(record.toEntry()) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -735,7 +735,7 @@ internal object RecordingTransitions {
      */
     fun deletedPaths(records: List<RecordingRecord>, deletions: List<SyncDeletion>): Set<String> {
         val tombstones = SyncMerger.Tombstones(deletions)
-        return records.mapNotNullTo(HashSet()) { record -> record.path?.takeIf { tombstones.removes(record.toEntry()) } }
+        return records.mapNotNullTo(HashSet()) { record -> record.path?.takeIf { tombstones.removes(record.toEntry()) || tombstones.suspends(record.toEntry()) } }
     }
 
     /**

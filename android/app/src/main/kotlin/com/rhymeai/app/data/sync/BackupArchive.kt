@@ -230,6 +230,8 @@ object BackupArchive {
         }
         // The apply needs the last reconciliation to still hold (it throws otherwise).
         RecordingTransitions.reconcile(repository, filesDir)
+        // A41: every losing repaired version is kept (and read back) before the apply removes any.
+        repository.setAsideRepairedLosers(gathered, merged, heldHere = null)
         repository.applySyncResult(gathered, base)
         quarantineDeletedRecordings(repository, filesDir)
         return ImportSummary(

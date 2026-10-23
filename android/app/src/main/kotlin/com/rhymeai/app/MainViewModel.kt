@@ -123,6 +123,16 @@ data class RhymeContext(
 )
 
 /** Lets instrumented tests run the real backup flow against a fake Drive. */
+/** Lets a test hold New Song's selection save after the editor opened the new song (null in the app). */
+/** Lets a test fail exactly the next draft save (null in the app). */
+internal object DraftSaveTestHooks {
+    val failNext = java.util.concurrent.atomic.AtomicBoolean(false)
+}
+
+internal object NewSongTestHooks {
+    @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 /** Lets a test hold launch loading after the appearance is known (null in the app). */
 internal object LaunchTestHooks {
     @Volatile var beforeLoading: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -327,11 +337,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var showSongNotebook by mutableStateOf(false)
     var persistenceError by mutableStateOf<String?>(null)
-    private var flushSaving by mutableStateOf(false)
-    /** A New Song still clearing the editor after its save landed (its own window, closed here). */
-    private var newSongClearing by mutableStateOf(false)
-    /** A draft is being saved before navigation, or a New Song is still opening: navigation waits. */
-    val savingBeforeNavigation: Boolean get() = flushSaving || newSongClearing
+    private var queuedNavigation: (() -> Unit)? = null
+
+    /** A draft is being saved before navigation; a navigation asked for meanwhile waits for it. */
+    var savingBeforeNavigation by mutableStateOf(false)
+        private set
     var notebookError by mutableStateOf<String?>(null)
         private set
     var restoringDraft by mutableStateOf(false)
@@ -480,7 +490,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun flushCurrentDraft(onSaved: () -> Unit = {}) {
-        if (restoringDraft || savingBeforeNavigation) return
+        if (restoringDraft) return
+        // A navigation asked for while a draft is being saved runs once that save is done (the
+        // latest one wins); it then saves whatever the editor holds by then, first.
+        if (savingBeforeNavigation) { queuedNavigation = { flushCurrentDraft(onSaved) }; return }
         if (!appearanceLoaded || showStartMenu) { onSaved(); return }
         autoSaveJob?.cancel()
         positionSaveJob?.cancel()
@@ -505,7 +518,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
-        flushSaving = true
+        savingBeforeNavigation = true
         viewModelScope.launch {
             try {
                 persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme)
@@ -516,7 +529,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                 reconcileFailedProjectSave(project, error)
             } finally {
-                flushSaving = false
+                savingBeforeNavigation = false
+                queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
             }
         }
     }
@@ -1821,28 +1835,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun newProject(onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
-            // Until the editor is cleared, no other navigation starts: a song opened in between
-            // would otherwise be cleared by this New Song when it lands.
-            newSongClearing = true
+            // The draft is saved (the flush); the editor opens the new song at once, before the
+            // selection is stored, so nothing typed from here on is ever cleared by this New Song.
+            dismissRewrite()
+            title = ""
+            lyricsFieldValue = TextFieldValue("")
+            theme = ""
+            currentProjectId = null
+            restoreEditorPosition()
+            suggestions = emptyList()
+            showProjectsDialog = false
+            showStartMenu = false
+            resetLyricsHistory()
             viewModelScope.launch {
                 try {
-                    val committed = repo.saveActiveState(null, false, "", "", "")
-                    dismissRewrite()
-                    title = ""
-                    lyricsFieldValue = TextFieldValue("")
-                    theme = ""
-                    currentProjectId = null
-                    projects = committed
-                    restoreEditorPosition()
-                    suggestions = emptyList()
-                    showProjectsDialog = false
-                    showStartMenu = false
-                    resetLyricsHistory()
+                    NewSongTestHooks.beforeSelectionSave?.await()
+                    // Typing (or another song opened) since the editor cleared owns the stored
+                    // selection now; the empty new song's selection is stored only if untouched.
+                    val untouched = currentProjectId == null && title.isEmpty() && lyrics.isEmpty() && theme.isEmpty()
+                    val committed = if (untouched) repo.saveActiveState(null, false, "", "", "") else repo.projectsFlow.first()
+                    // A song started (or opened) meanwhile keeps its place in the list.
+                    projects = projects.filter { it.id in pendingProjectCreationIds && committed.none { saved -> saved.id == it.id } } + committed
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
-                } finally {
-                    newSongClearing = false
                 }
             }
         }
@@ -2041,6 +2057,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else -> "Could not $action. Stored songs were left untouched. Try again."
     }
 
+    /** When the next Trash purge is scheduled (tests observe that nothing unnormalized is scheduled). */
+    @Volatile internal var scheduledTrashPurgeAt: Long? = null
+        private set
+
     private fun scheduleTrashPurge() {
         trashSchedulerJob?.cancel()
         trashSchedulerJob = viewModelScope.launch {
@@ -2054,6 +2074,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val nextMemoExpiry = voiceMemoService.nextTrashedMemoExpiry()?.takeIf { it > now }
             val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry).minOrNull()
                 ?: return@launch
+            scheduledTrashPurgeAt = nextDeleteAfter
             delay((nextDeleteAfter - now).coerceAtLeast(0L))
             trashSchedulerJob = null
             purgeExpiredTrashedProjects()
@@ -2146,6 +2167,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorTheme: String
     ): List<SongProject> {
         if (currentProjectId != project.id) throw CancellationException("Song changed")
+        if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
         val committed = repo.saveActiveState(
             project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme
         )

@@ -621,11 +621,12 @@ class ProjectRepository internal constructor(
     /**
      * A41: every song among [gathered] (any input: this device, Drive, an archive, an older
      * backup) whose repaired time lost to a tombstone in [resolved] is kept in the recovery
-     * store before any input it came from is overwritten. Songs in [heldHere] stay in this
-     * device's lists until the transactional apply removes them, which keeps them then.
-     * Returns how many were added.
+     * store before any input it came from is overwritten. A version whose very content
+     * [heldHere] still holds (same id, same place, same title, lyrics and theme: this device's
+     * lists, which a Back up does not change) needs no copy; any other version of the same
+     * id does. Returns how many were added.
      */
-    internal suspend fun setAsideRepairedLosers(gathered: SyncBlob, resolved: SyncBlob, heldHere: Set<String>): Int = projectSaveMutex.withLock {
+    internal suspend fun setAsideRepairedLosers(gathered: SyncBlob, resolved: SyncBlob, heldHere: SyncBlob?): Int = projectSaveMutex.withLock {
         var kept = KeptLosers(emptyList(), 0)
         dataStore.edit { prefs -> kept = keepRepairedLosers(prefs, gathered, resolved, heldHere) }
         verifyKept(kept.losers)
@@ -645,19 +646,22 @@ class ProjectRepository internal constructor(
         if (losers.any { loser -> stored.none { it.sameAs(loser) } }) throw java.io.IOException("Songs kept aside could not be saved")
     }
 
-    private fun keepRepairedLosers(prefs: MutablePreferences, gathered: SyncBlob, resolved: SyncBlob, heldHere: Set<String> = emptySet()): KeptLosers {
-        val tombstones = SyncMerger.Tombstones(resolved.deletions).songs
-        val keptIds = resolved.projects.mapTo(HashSet()) { it.id } + resolved.trashed.map { it.project.id } + heldHere
+    private fun keepRepairedLosers(prefs: MutablePreferences, gathered: SyncBlob, resolved: SyncBlob, heldHere: SyncBlob? = null): KeptLosers {
+        val tombstones = SyncMerger.Tombstones(resolved.deletions).songs.filterValues { it.timeKnown }
+        val keptIds = resolved.projects.mapTo(HashSet()) { it.id } + resolved.trashed.map { it.project.id }
+        fun sameContent(a: SongProject, b: SongProject) = a.id == b.id && a.title == b.title && a.lyrics == b.lyrics && a.theme == b.theme
+        fun held(song: SongProject, inTrash: Boolean) = heldHere != null &&
+            (if (inTrash) heldHere.trashed.any { sameContent(it.project, song) } else heldHere.projects.any { sameContent(it, song) })
         fun kept(song: SongProject, trash: TrashedSongProject?) = RecoveredSong(
             song, trash != null, tombstones.getValue(song.id).deletedAt, System.currentTimeMillis(),
             gathered.recordings.filter { it.projectId == song.id }.map { it.id },
             trashedAt = trash?.deletedAt, trashedAtRepaired = trash?.deletedAtRepaired == true
         )
         val losers = gathered.projects
-            .filter { it.precedenceRepaired && it.id !in keptIds && it.id in tombstones }
+            .filter { it.precedenceRepaired && it.id !in keptIds && it.id in tombstones && !held(it, false) }
             .map { kept(it, null) } +
             gathered.trashed
-                .filter { it.deletedAtRepaired && it.project.id !in keptIds && it.project.id in tombstones }
+                .filter { it.deletedAtRepaired && it.project.id !in keptIds && it.project.id in tombstones && !held(it.project, true) }
                 .map { kept(it.project, it) }
         if (losers.isEmpty()) return KeptLosers(emptyList(), 0)
         val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
@@ -684,6 +688,8 @@ class ProjectRepository internal constructor(
      */
     suspend fun recordRecordingDeletion(projectId: String, fileName: String, recordingId: String, deletedAt: Long) =
         projectSaveMutex.withLock {
+            // This device always knows when it deletes: it never writes an unknown time.
+            require(deletedAt > 0L) { "Invalid deletion time" }
             dataStore.edit { prefs ->
                 val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(

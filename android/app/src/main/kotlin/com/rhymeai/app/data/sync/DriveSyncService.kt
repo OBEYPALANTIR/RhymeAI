@@ -1101,7 +1101,9 @@ class DriveSyncService(
             var merged = SyncMerger.resolve(gathered).copy(savedByClientId = clientId())
             // A41: a song from any input whose repaired time lost to a tombstone is kept aside on
             // this device before the manifest that held it is overwritten.
-            repository.setAsideRepairedLosers(gathered, merged, heldHere = base.baseIds)
+            // Back up leaves this device's lists as they are, so a version they hold by content needs
+            // no copy; Restore is about to apply the result here, so every losing version is kept now.
+            repository.setAsideRepairedLosers(gathered, merged, heldHere = if (applyLocally) null else local)
             // Evidence that is not uploadable here (Trash, too large, older recordings that
             // could not move) shapes tombstones but is listed only if Drive already lists it.
             // The name Drive acknowledges for each recording, read from Drive's own entry: a tie
