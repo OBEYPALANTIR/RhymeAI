@@ -190,4 +190,24 @@ class BackupManifestTest {
             BackupManifest.decode(edited("projects") { JsonObject(it + ("updatedAt" to JsonPrimitive("soon"))) })
         }
     }
+    @Test
+    fun aDeletionTimeThatIsNegativeOrNotANumberIsRefusedAndAnAbsentOneIsUnknown() {
+        // Only zero or absent is unknown; a negative time or a wrong type refuses the whole manifest.
+        val text = String(BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion("p", deletedAt = 5L))), 1_000L, "x"))
+        fun withDeletedAt(value: kotlinx.serialization.json.JsonElement?): ByteArray {
+            val root = Json.parseToJsonElement(text).jsonObject
+            val body = JsonObject(root - BackupManifest.HASH_KEY).let { b ->
+                JsonObject(b + ("deletions" to kotlinx.serialization.json.JsonArray(b.getValue("deletions").jsonArray.map {
+                    val d = JsonObject(it.jsonObject - "deletedAt")
+                    if (value == null) d else JsonObject(d + ("deletedAt" to value))
+                })))
+            }
+            val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+            return BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to JsonPrimitive(hash)))).toByteArray()
+        }
+        assertFailsWith<DamagedBackupException> { BackupManifest.decode(withDeletedAt(JsonPrimitive(-5L))) }
+        assertFailsWith<DamagedBackupException> { BackupManifest.decode(withDeletedAt(JsonPrimitive("5"))) }
+        assertEquals(0L, BackupManifest.decode(withDeletedAt(null)).deletions.single().deletedAt)
+        assertEquals(0L, BackupManifest.decode(withDeletedAt(JsonPrimitive(0L))).deletions.single().deletedAt)
+    }
 }
