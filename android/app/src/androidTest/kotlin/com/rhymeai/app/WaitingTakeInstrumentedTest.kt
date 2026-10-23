@@ -256,6 +256,9 @@ class WaitingTakeInstrumentedTest {
     }
 
     @Test fun aRetryInspectingATakeWhileMigrationMovesItStillSavesItOnce() = runBlocking<Unit> {
+        // T6.19: the save's inspection enters its locked section first (acknowledged); migration is
+        // then started and may move the take only after the inspection has left; the save then
+        // saves it once, where it is now.
         val a = "0f8e2d4c-6b1a-4e9d-8c7b-5a3f2e1d0c9b"
         TestRecordings.recordFinalizedM4a(context, File(staging, "1700000000000.m4a"))
         // Its finish was never recorded: Retry must inspect it before saving.
@@ -264,26 +267,32 @@ class WaitingTakeInstrumentedTest {
         assertFalse(listed.finished)
         assertEquals("1700000000000.m4a", listed.file.name)
 
-        // Handshake: the save is requested from inside the migration's move (the recording lock
-        // is held there), after the listing captured the old path. It can only inspect the take
-        // once the migration has moved it, and must find and save it where it is now.
         val events = java.util.Collections.synchronizedList(mutableListOf<String>())
-        var saving: kotlinx.coroutines.Deferred<Boolean>? = null
-        val scope = this
-        RecordingTransitions.beforeBytesMove = { ids ->
-            if (a in ids && saving == null) {
-                events += "migration moving; old path present=${listed.file.exists()}"
-                saving = scope.async(Dispatchers.IO) { service.saveListedTake(listed) }
+        val inspecting = java.util.concurrent.CountDownLatch(1)
+        val migrationStarted = java.util.concurrent.CountDownLatch(1)
+        val moved = java.util.concurrent.CountDownLatch(1)
+        service.duringInspectionForTest = {
+            if (events.none { it == "inspection entered" }) {
+                events += "inspection entered"
+                inspecting.countDown()
+                migrationStarted.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                // An unlocked migration would move the take now; a locked one cannot.
+                moved.await(1, java.util.concurrent.TimeUnit.SECONDS)
+                events += "inspection leaving"
             }
         }
-        val migrating = try {
-            service.migrateStaging()
+        RecordingTransitions.beforeBytesMove = { ids -> if (a in ids && events.none { it == "migration moving" }) { events += "migration moving"; moved.countDown() } }
+        try {
+            val saving = async(Dispatchers.IO) { service.saveListedTake(listed) }
+            assertTrue(inspecting.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val migrating = async(Dispatchers.IO) { migrationStarted.countDown(); service.migrateStaging() }
+            assertTrue(migrating.await().isEmpty())
+            assertTrue(saving.await())
+            assertEquals(listOf("inspection entered", "inspection leaving", "migration moving"), events.take(3))
         } finally {
+            service.duringInspectionForTest = null
             RecordingTransitions.beforeBytesMove = null
         }
-        assertEquals(listOf("migration moving; old path present=true"), events)
-        assertTrue(migrating.isEmpty())
-        assertTrue(saving!!.await())
 
         assertEquals(a, catalog.records.single().id)
         assertEquals(listOf("$a.m4a"), service.memosForProject("song").map { it.file.name })
@@ -292,25 +301,37 @@ class WaitingTakeInstrumentedTest {
     }
 
     @Test fun aCancelDuringAStartWaitsForItAndThenCancelsIt() = runBlocking<Unit> {
-        // T4.5: start, stop and cancel share the recorder lock. The cancel arrives while the start
-        // holds it (handshake); without the lock it would see nothing recording and the start would
-        // then leave a recorder running.
-        val entered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
-        service.duringStartForTest = { entered.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        // T4.5: the cancel is called while the start is inside its critical section (both
+        // acknowledged); it may only act once the start has left it, and then cancels the take.
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val startInside = java.util.concurrent.CountDownLatch(1)
+        val cancelCalled = java.util.concurrent.CountDownLatch(1)
+        val cancelInside = java.util.concurrent.CountDownLatch(1)
+        service.duringStartForTest = {
+            events += "start inside"
+            startInside.countDown()
+            // Hold the start until the cancel has been called, and give an unlocked cancel the
+            // chance to act inside the start (a locked one cannot).
+            cancelCalled.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            cancelInside.await(1, java.util.concurrent.TimeUnit.SECONDS)
+            events += "start leaving"
+        }
+        service.cancelCalledForTest = { events += "cancel called"; cancelCalled.countDown() }
+        service.insideCancelForTest = { events += "cancel inside"; cancelInside.countDown() }
         try {
             val start = async(Dispatchers.IO) { service.startRecording("song") }
-            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(startInside.await(10, java.util.concurrent.TimeUnit.SECONDS))
             val cancel = async(Dispatchers.IO) { service.cancelRecording() }
-            release.countDown()
             val take = start.await()
             cancel.await()
+            assertEquals(listOf("start inside", "cancel called", "start leaving", "cancel inside"), events.toList())
             assertFalse(service.isRecording)
             assertFalse(take.exists())
             assertFalse(File(take.parentFile, take.name + ".take").exists())
         } finally {
             service.duringStartForTest = null
-            release.countDown()
+            service.cancelCalledForTest = null
+            service.insideCancelForTest = null
         }
     }
 }

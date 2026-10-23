@@ -202,6 +202,15 @@ class NewFeatureUiTest {
             composeRule.onNodeWithText("Library Selection Test").performClick()
             composeRule.mainClock.advanceTimeByFrame()
             composeRule.onNodeWithContentDescription("Close drawer").assertDoesNotExist()
+            // The song loads from storage (after New Song's own save): wait for it in real time,
+            // one frame at a time, without letting the drawer's dismissal play out first.
+            var frames = 0
+            while (frames < 50 && composeRule.onNodeWithTag("songTitleEditor").fetchSemanticsNode()
+                    .config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.EditableText)?.text != "Library Selection Test") {
+                Thread.sleep(50)
+                composeRule.mainClock.advanceTimeByFrame()
+                frames++
+            }
             composeRule.onNodeWithTag("songTitleEditor").assertTextEquals("Library Selection Test")
         } finally {
             composeRule.mainClock.autoAdvance = true

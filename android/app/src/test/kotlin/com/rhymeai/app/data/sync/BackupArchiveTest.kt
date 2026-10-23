@@ -23,6 +23,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -335,5 +336,60 @@ class BackupArchiveTest {
         assertEquals(1, summary.songsSetAside)
         assertTrue(repo.projectsFlow.first().none { it.id == "r" })
         assertEquals("only copy", repo.recoveredSongs().single().project.lyrics)
+    }
+    @Test
+    fun anImportWhoseKeptSongsDoNotReadBackRemovesNothing() = runBlocking<Unit> {
+        // The store drops the recovery store's write: the read-back stops Import before the apply.
+        val store = PreferenceDataStoreFactory.create(scope = scope) { File(root, "lossy.preferences_pb") }
+        val key = androidx.datastore.preferences.core.stringPreferencesKey("recovered_songs_json")
+        val lossy = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> by store {
+            override suspend fun updateData(
+                transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences
+            ) = store.updateData { current ->
+                transform(current).toMutablePreferences().apply {
+                    val before = current[key]
+                    if (before == null) remove(key) else this[key] = before
+                }.toPreferences()
+            }
+        }
+        val repo = ProjectRepository(lossy, BackupServiceTest.MemoryKeyStore())
+        repo.saveProjects(listOf(SongProject(id = "r", title = "Here", lyrics = "only copy", updatedAt = 300L, precedenceRepaired = true)))
+        val zipFile = File(root, "deletes-r.zip")
+        zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(deletions = listOf(SyncDeletion("r", deletedAt = 200L))), emptyList(), 1_000L, "device") }
+        val filesDir = File(root, "lossy-files").also { it.mkdirs() }
+
+        assertFails { BackupArchive.import(BackupArchive.read(zipFile), repo, filesDir) }
+
+        assertEquals("only copy", repo.projectsFlow.first().single { it.id == "r" }.lyrics)
+        assertTrue(repo.syncDeletions().none { it.projectId == "r" })
+    }
+
+    @Test
+    fun importKeepsArchiveSongsWithoutTimesAsTheResolutionSawThem() = runBlocking<Unit> {
+        // iOS second pass item 3: an archive song and Trash entry written without times read as
+        // unknown, are repaired (both flags), lose to this device's tombstones and are kept with those flags.
+        val zipFile = File(root, "untimed.zip")
+        zipFile.outputStream().use {
+            BackupArchive.write(it, SyncBlob(
+                projects = listOf(SongProject(id = "a", title = "A", lyrics = "only copy of a", updatedAt = 0L)),
+                trashed = listOf(TrashedSongProject(SongProject(id = "t", title = "T", lyrics = "only copy of t", updatedAt = 0L), deletedAt = 0L))
+            ), emptyList(), 1_000L, "device")
+        }
+        val filesDir = File(root, "untimed-files").also { it.mkdirs() }
+        val repo = repository("untimed")
+        repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "a", updatedAt = 10L), deletedAt = 20L),
+            TrashedSongProject(SongProject(id = "t", updatedAt = 10L), deletedAt = 20L)))
+        repo.permanentlyDeleteTrashedProject("a", now = 200L)
+        repo.permanentlyDeleteTrashedProject("t", now = 200L)
+
+        val summary = BackupArchive.import(BackupArchive.read(zipFile), repo, filesDir)
+
+        assertEquals(2, summary.songsSetAside)
+        val kept = repo.recoveredSongs()
+        val a = kept.single { it.project.id == "a" }
+        assertTrue(a.project.precedenceRepaired && !a.wasInTrash)
+        val t = kept.single { it.project.id == "t" }
+        assertTrue(t.wasInTrash && t.trashedAtRepaired && t.project.precedenceRepaired && t.trashedAt!! > 0L)
+        assertTrue(repo.projectsFlow.first().isEmpty() && repo.trashedProjectsFlow.first().isEmpty())
     }
 }

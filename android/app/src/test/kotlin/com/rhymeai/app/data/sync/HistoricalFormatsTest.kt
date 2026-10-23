@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** T3.25–T3.32: older backup formats as their writers stored them, read from literal JSON. */
@@ -100,13 +101,17 @@ class HistoricalFormatsTest {
         }
     }
     @Test
-    fun aTombstoneWithoutAValidTimeIsRefusedNeverGivenOne() {
-        // A33/A41: no deletion time is ever invented; the whole backup is refused instead.
-        assertFailsWith<SerializationException> {
-            legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[{"id":"s1","updatedAt":10}],"deletions":[{"projectId":"s1"}]}""")
-        }
+    fun aTombstoneWithoutATimeIsReadAsUnknownNeverGivenOneAndANegativeOneIsRefused() {
+        // A33/A41: no deletion time is ever invented; an absent one is unknown (suspended).
+        val blob = legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[{"id":"s1","updatedAt":10,"precedenceRepaired":true}],"deletions":[{"projectId":"s1"}]}""")
+        assertEquals(0L, blob.deletions.single().deletedAt)
+        assertFalse(blob.deletions.single().timeKnown)
+        // The suspended tombstone removes nothing, not even a repaired time, and is kept by resolution.
+        val resolved = SyncMerger.resolve(SyncMerger.gather(blob))
+        assertEquals(listOf("s1"), resolved.projects.map { it.id })
+        assertEquals(1, resolved.deletions.size)
         assertFailsWith<IllegalArgumentException> {
-            legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[],"deletions":[{"projectId":"s1","deletedAt":0}]}""")
+            legacyJson.decodeFromString<SyncBlob>("""{"version":2,"projects":[],"deletions":[{"projectId":"s1","deletedAt":-1}]}""")
         }
     }
 }
