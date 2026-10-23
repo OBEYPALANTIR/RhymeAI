@@ -61,9 +61,10 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
 - **Back up now** and the automatic backup (30 seconds after the last change to
   songs, trash, tombstones or recordings, and when leaving the app) merge this
   device into Drive and change no songs or recordings here, and move no file (their
-  only local writes are finishing or undoing an interrupted recording move and
-  stamping a recording seen for the first time with its file time; a recording
-  still awaiting its new file name is left out and counted). The manifest is re-checked
+  local writes are metadata only: finishing or undoing an interrupted recording
+  move, stamping a recording seen for the first time with its file time, precedence
+  repairs, and each recording's display name as written; a recording still
+  awaiting its new file name is left out and counted). The manifest is re-checked
   just before each write and read back after it; if another device wrote in
   between, the backup merges again, keeping what earlier attempts saw (up to
   three times, then "Backup conflict, will retry").

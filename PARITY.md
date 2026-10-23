@@ -35,7 +35,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 ## Trash and persistence checks
 
 - Android sync merge: Unit-verified that active project changes merge by `updatedAt`, trash entries merge by `deletedAt`, newer trash removes stale active copies, and newer restored active projects are not deleted by stale trash entries.
-- Recording deletions through Drive sync: both platforms write a `fileName` tombstone when a trashed recording is permanently deleted or expires from Trash (iOS `EditorViewModel.upsertPermanentDeletion`, Android `ProjectRepository.recordRecordingDeletion` via `VoiceMemoService.recordingDeletionRecorder`), written before the file is removed. Android also skips restoring a remote recording that sits in its local Trash (`RecordingSyncPlanner.planRestores(locallyTrashed)`). Known difference: iOS deletes local files named by incoming `fileName` tombstones (`deleteLocalRecordingsCoveredByDeletions`); Android v4 moves a recording whose winning tombstone arrives through Restore or Import to `voice-memos-quarantine/` (A28) and never deletes it.
+- Recording deletions through Drive sync: both platforms write an id tombstone (`recordingId`, with the display name as `fileName` for display) when a trashed recording is permanently deleted or expires from Trash (iOS `EditorViewModel.upsertPermanentDeletion`, Android `ProjectRepository.recordRecordingDeletion` via `VoiceMemoService.recordingDeletionRecorder`), written before the file is removed. Android also skips restoring a remote recording that sits in its local Trash (`RecordingSyncPlanner.planRestores(locallyTrashed)`). A recording whose winning id tombstone arrives through Restore or Import moves to quarantine on both platforms (Android `voice-memos-quarantine/`, iOS `recording-quarantine/`; A28) and is never deleted; neither platform has a recovery UI for quarantine yet.
 - iOS trash lifecycle and CloudKit readiness: In-memory SwiftData unit-verified that moving the current project to trash clears editor state, creates a 30-day trash entry, collapses duplicate trash rows with the same ID, restore collapses duplicate active/trash rows with the same ID, and purge removes only expired trash. `scripts/ios-cloudkit-readiness.sh` verifies the private CloudKit container, entitlements, remote-notification background mode, build output, and trash conflict tests before live sync.
 - Import/autosave persistence: Android instrumented-verified that imported projects and debounced autosaves persist projects, current project ID, and editor state through DataStore and restore through a fresh ViewModel. iOS in-memory SwiftData unit-verified that imported projects and debounced autosaves persist the expected project fields and select the imported/saved project for editing.
 
@@ -140,11 +140,14 @@ below is the contract it must meet, not verified behaviour.
   as absence: reconciling an interrupted move, or dropping a record whose file is
   gone, throws on a file that cannot be examined and commits nothing, and records
   of songs outside a scan are kept unexamined. A backup (and an export) moves no
-  file (A17): its only local writes are record stamping and finishing or undoing
-  an interrupted move (reconciliation). A duplicate copy stays where it is until
-  launch, Restore or Import quarantines it, and a file still awaiting its A36 name
-  is left out of the backup and counted ("N recordings still have their old file
-  names and were left out…"); it never touches restore staging.
+  file (A17). Its local writes are metadata only: record stamping, finishing or
+  undoing an interrupted move (reconciliation), the A32/A37 precedence repairs,
+  and, after a verified manifest write, each held recording's display name as
+  written (clearing a rename that was written). A duplicate copy stays where it
+  is until launch, Restore or Import quarantines it, and a file still awaiting
+  its A36 name is left out and counted ("N recordings still have their old file
+  names and were left out…"; Export: "N recordings with an old file name left
+  out"); it never touches restore staging.
   File times are otherwise never used as precedence.
 - Local visibility (A28): after Restore or Import commits, a recording whose
   winning tombstone is now known here moves to quarantine and loses its record.
@@ -207,6 +210,16 @@ below is the contract it must meet, not verified behaviour.
   (`first_seen_precedence_json`) and then written into the manifest; it never
   changes afterwards. An older tombstone therefore cannot delete a recording or
   song only because its time was unknown.
+- Repair flags per time (A38): a song and a recording carry `precedenceRepaired`
+  for their own time; a Trash entry carries two, `precedenceRepaired` for its
+  song's `updatedAt` and `trashedAtRepaired` for its `trashedAt` (Android keeps
+  them on `TrashedSongProject.project` and `TrashedSongProject.deletedAtRepaired`).
+  Each comparison uses the flag of the time it compares (active versus Trash:
+  the song's `updatedAt` against the Trash entry's `trashedAt`, each with its own
+  flag). Keys are written only when true. In a correctly hashed manifest an
+  absent `updatedAt`, `trashedAt` or `uploadedAt` reads as unknown (0) and is
+  repaired; a value of the wrong type is refused. A tombstone's `deletedAt`
+  stays required and positive (A33).
 - Repairs converge (A37): a time established that way is a repair and is marked
   (`precedenceRepaired`, `trashedAtRepaired`; Android keeps the flag on
   `SongProject`, `TrashedSongProject`, the manifest entry and the recording
@@ -238,7 +251,12 @@ below is the contract it must meet, not verified behaviour.
   display name; nothing collides, nothing is allocated and no suffix is
   generated. Export is the only place a display name becomes a file name. The
   only moves are staging to live, live to and from Trash, live or Trash to
-  quarantine, and the migration; each keeps its journaled intent and digest check.
+  quarantine, and the migration. Each journals its expected id and digest before
+  it moves (record intents for live and Trash, `<target>.migrate` with SHA-256 and
+  length for staging), verifies against it, and moves with a no-replace move:
+  the target is claimed with an exclusive create first (a rename would replace
+  it, and hard links are refused in app storage), so a file that appears at the
+  target is never replaced; reconciliation removes a claim a crash left empty.
   The name a backup writes for a recording it holds (live or in Trash) is its own
   when it was renamed here since its last write or Drive does not list it yet,
   otherwise the name in Drive's own entry (never one chosen by a precedence tie);
@@ -389,8 +407,9 @@ below is the contract it must meet, not verified behaviour.
   Duplicate manifests are merged, the newest is kept, and the others are deleted
   only after the merged one verifies.
 - Automatic backup: one 30 s debounce after any change to songs, trash,
-  tombstones or recordings (saved, imported, renamed, deleted, trashed or
-  restored, including recordings added by Import) while connected, plus the
+  tombstones or recordings (recorded, saved, imported, renamed, deleted, trashed
+  or restored, including recordings added by Import; a newly recorded memo starts
+  the countdown on both platforms, A10) while connected, plus the
   background trigger when leaving the app (at most every 15 minutes unless a
   backup is pending); runs never overlap and a change during a run queues one
   more; after failures it retries at 1, 2, 4, 8 … minutes capped at one hour and
@@ -433,9 +452,18 @@ below is the contract it must meet, not verified behaviour.
   printable ASCII characters).
 - Export all songs / Import from file: one zip `WritersBlock-backup-<date>.zip`
   with `manifest.json` (v4), `songs/<title or id>.txt`, `songs/<id>.json` and
-  `recordings/<projectId>/<displayName>` (recordings sharing a display name in
-  one song get " 2", " 3" by precedence time, then id, within the 240-byte
-  limit; the reader applies the same rule, and the names never feed back),
+  `recordings/<projectId>/<archive name>` by the one A39 allocator: within a song,
+  recordings are visited by precedence time, then id (byte-wise); each takes its
+  display name with "/", "\\" and leading dots turned into "_", or when that is
+  taken "<stem> 2<ext>", "<stem> 3<ext>", … (first free counter); "taken"
+  compares NFC, case-folded names; nothing is reserved ahead of its turn; the
+  stem is cut so the whole name fits 240 UTF-8 bytes. Pinned by
+  `shared/fixtures/archive-names-v1.json` (`scripts/generate-archive-names-fixture.py`,
+  stdlib, `--check`); iOS keeps a byte-identical copy at
+  `Writers Block/Writers BlockTests/archive-names-v1.json`, and Android
+  `BackupArchiveTest` fails if it drifts (it skips while the copy is absent).
+  Import finds each recording's audio by id through the manifest and this same
+  allocation, never by name alone, and the names never feed back,
   through the system save sheet; import
   takes that zip or a bare v4 `manifest.json`, rejects any archive with a `..`,
   absolute, drive-letter or backslash path or an entry outside those three
@@ -447,13 +475,23 @@ below is the contract it must meet, not verified behaviour.
   `CertPinningInstrumentedTest` also shows the set refuses a chain outside it
   with a pin-verification failure, while the same chain validates against the
   system CAs without pins.
-  Play Services fetches the Drive token outside the app.
+  Play Services fetches the Drive token outside the app. iOS pins the same Drive
+  hosts with ATS `NSPinnedDomains` plus an in-app SPKI check on the session.
 - iOS only (pending the companion PR): iCloud status shows a reason (no iCloud
   account with Open Settings, restricted, local-only fallback, temporarily
   unavailable, on), and recordings sync through CloudKit as a SwiftData
-  `Recording` model with external audio storage, from which the Drive
-  recordings list is built. Android has no CloudKit equivalent; its songs and
-  recordings are also in Android Auto Backup.
+  `Recording` model with external audio storage (`displayName`,
+  `displayNameChanged`, `precedenceRepaired`), from which the Drive recordings
+  list is built; a recording removed on another device moves to the recordings
+  Trash under its id. Recording id tombstones use the separate
+  `SyncRecordingDeletion` record type so older builds never see them. Existing
+  Drive users stay connected after updating. The iOS recorder stages each take in
+  a folder named by its id with a finished marker, checks the container with
+  AVAssetReader before saving, and shows "N recordings waiting to be saved" with
+  Retry. Recordings over 16 MiB stay local, are listed in
+  `oversized-recordings.json` and counted in Settings. iOS Trash files named
+  `<ms>__name` are migrated to their ids at launch. Android has no CloudKit
+  equivalent; its songs and recordings are also in Android Auto Backup.
 - Not yet verified: a live Drive round trip on either platform, the iOS side,
   and a cross-platform restore.
 - Drive HTTP error mapping: 401 re-auth, 403/429 retry-later, 5xx server-error,
