@@ -315,7 +315,12 @@ final class EditorViewModel: ObservableObject {
     @Published var title: String = ""
     @Published var lyrics: String = "" {
         didSet {
-            if lyrics != oldValue { clearInsertionFeedback() }
+            if lyrics != oldValue {
+                clearInsertionFeedback()
+                // A request answers the lyrics and cursor it was built from
+                // (Android cancels on text and selection changes too).
+                cancelSuggestions()
+            }
             scheduleDerivedStateRefresh()
         }
     }
@@ -332,6 +337,7 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var cursorPosition: Int = 0 {
         didSet {
+            if cursorPosition != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
@@ -369,18 +375,30 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Rhyme Settings
 
-    @Published var rhymeType: RhymeType = .perfect
+    // Rhyme options shape the request, so changing one mid-stream drops it,
+    // as the Android setters do; lines already shown stay.
+    @Published var rhymeType: RhymeType = .perfect {
+        didSet {
+            if rhymeType != oldValue { cancelSuggestions() }
+        }
+    }
     @Published var rhymeScheme: RhymeScheme = .aabb {
         didSet {
+            if rhymeScheme != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
     @Published var customRhymeScheme: String = "" {
         didSet {
+            if customRhymeScheme != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
-    @Published var rhymeComplexity: RhymeComplexity = .moderate
+    @Published var rhymeComplexity: RhymeComplexity = .moderate {
+        didSet {
+            if rhymeComplexity != oldValue { cancelSuggestions() }
+        }
+    }
     // These six are persisted to UserDefaults so the user's editor preferences
     // survive app restarts. Keys use an "editor." prefix to namespace them away
     // from provider/model keys. Whole Song Context defaults on (Android parity).
