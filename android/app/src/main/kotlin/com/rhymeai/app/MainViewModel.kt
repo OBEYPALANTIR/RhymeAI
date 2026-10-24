@@ -56,6 +56,7 @@ import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.LocalModelOperationGate
 import com.rhymeai.app.service.SyntheticGenerationCapture
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
@@ -1140,7 +1141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (range.min < 0 || range.max > text.length || range.min >= range.max) return null
             val word = text.substring(range.min, range.max)
             if (word.length < 2) return null
-            if (word.any { !it.isLetter() && it != '\'' }) return null
+            if (word.any { !it.isLetter() && it !in LyricTokenizer.APOSTROPHES }) return null
             return word to range
         }
 

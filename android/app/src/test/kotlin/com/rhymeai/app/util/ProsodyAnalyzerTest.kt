@@ -78,6 +78,23 @@ class ProsodyAnalyzerTest {
     }
 
     @Test
+    fun curlyApostrophesReadAsStraightOnes() {
+        val curly = PronunciationDictionary.fromLines(sequenceOf("we're\tW IH1 R", "don't\tD OW1 N T"))
+
+        // U+2019 (typographic) and U+02BC (modifier letter) apostrophes are what
+        // keyboards and pasted text carry; the dictionary only knows ASCII.
+        assertEquals("we're", ProsodyAnalyzer.normalizeWord("we\u2019re"))
+        assertEquals("don't", ProsodyAnalyzer.normalizeWord("Don\u02BCt"))
+
+        val prosody = ProsodyAnalyzer.analyzeLine("We\u2019re done, don\u02BCt stop", curly)
+
+        assertEquals(listOf("we're", "done", "don't", "stop"), prosody.words.map { it.normalized })
+        assertEquals(1, prosody.words.first().syllableCount)
+        assertFalse(prosody.words.first().isFallback)
+        assertEquals("don't", RhymeConstraint.lineEndWord("we\u2019re done, don\u2019t"))
+    }
+
+    @Test
     fun rhymeKeysUseCmuPhones() {
         val roadKeys = ProsodyAnalyzer.rhymeKeys("road", dictionary = dictionary)
         val glowedKeys = ProsodyAnalyzer.rhymeKeys("glowed", dictionary = dictionary)
