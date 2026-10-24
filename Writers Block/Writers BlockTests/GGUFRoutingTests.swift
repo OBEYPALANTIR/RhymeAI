@@ -344,36 +344,36 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFModelStorage.receivedBytes(inResumeData: swiftRoot) == 7)
     }
 
-    /// Completion selects the download unless a model or engine was chosen while it
-    /// ran. The record sits in defaults, so a new manager after a relaunch reads it, an
-    /// internal restart (`start` after a failed verification) keeps it, and a resume from
-    /// Pause keeps it; completion, failure and Stop close it.
-    @Test func downloadChoiceWatchKeepsAChoiceMadeWhileTheDownloadRan() {
+    /// Each artifact's record: opened once per download, marked by any choice while it
+    /// is open (a paused download is still pending), kept across an internal restart or a
+    /// resume, and closed by completion, failure or Stop without touching another artifact's.
+    @Test func downloadChoiceRecordsAreKeptPerArtifact() {
         let suite = "gguf-choice-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
 
         // No record (a download that began before this rule existed) still selects.
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
 
-        // Nothing chosen while it ran.
-        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
 
-        // A choice while it ran, even one switched away and back, is kept.
-        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
+        // A choice while E2B is pending (paused or running) marks E2B only; E4B, started
+        // later, consumes its own record.
+        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
         GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        // An internal restart or a resume reopens without forgetting the choice.
-        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+        GGUFDownloadManager.openDownloadChoiceWatch(for: e4b, defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+        // A resume or an internal restart of E2B reopens without forgetting the choice.
+        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
 
-        // Closing clears the record, so the next download starts clean.
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
-        // A choice with no download running is not a change during one.
+        // Closing clears the record; a choice with nothing pending is not noted.
         GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
     }
 
     @Test func preferredModelUsesCatalogOrder() {
@@ -881,5 +881,43 @@ struct GGUFSelectionCaptureTests {
         #expect(captured.selection.fileName == a.fileName)
         #expect(captured.selection == GGUFModelSelection.snapshot(defaults: defaults))
         #expect(captured.file == (try GGUFModelFileIdentity.read(at: file.path)))
+    }
+}
+
+/// Completion through the manager: a choice made while the download was pending is
+/// kept, including one switched away and back. The engine choice is global state, so
+/// the suite restores it.
+@MainActor
+@Suite(.serialized)
+struct GGUFDownloadCompletionTests {
+    @Test func completionKeepsAnEngineChosenWhileTheDownloadRan() {
+        let suite = "gguf-completion-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let savedEngine = GGUFEngineChoice.current
+        defer { savedEngine.save() }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
+
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
+        #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
+
+        manager.beginDownloadForTest(e2b)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .appleIntelligence)
+        #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+
+        // Switching away and back is still a choice made while it ran.
+        manager.beginDownloadForTest(e2b)
+        manager.selectEngine(.gemma)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .appleIntelligence)
+
+        // The record is consumed, so the next download starts clean.
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
     }
 }
