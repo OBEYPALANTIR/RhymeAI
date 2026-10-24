@@ -2375,9 +2375,12 @@ final class EditorViewModel: ObservableObject {
     func keepAlternate(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard flushCurrentDraft() else { return }
+        // The notebook sheet shows only companionError, so a failed song save
+        // must be reported here or the sheet clears the unsaved line.
+        let notKept = "Could not keep this line because the song did not save. Try again."
+        guard flushCurrentDraft() else { companionError = notKept; return }
         if currentProjectId == nil, modelContext != nil { _ = ensureProjectForRecording() }
-        guard let id = currentProjectId else { return }
+        guard let id = currentProjectId else { companionError = notKept; return }
         var next = companion
         next.keep(trimmed)
         persistCompanion(next, id: id)
