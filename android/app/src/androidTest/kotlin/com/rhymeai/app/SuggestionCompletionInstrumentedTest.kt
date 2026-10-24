@@ -66,6 +66,21 @@ class SuggestionCompletionInstrumentedTest {
         assertEquals(0, viewModel.suggestionRunsCompleted)
     }
 
+    @Test
+    fun firstAutosaveOfANewSongKeepsTheRunningRequest() {
+        onMain { viewModel.newProject() }
+        waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() }
+        // Typing schedules the 450 ms autosave that gives the draft its ID; the
+        // request outlives it.
+        onMain { viewModel.onLyricsChanged(TextFieldValue("A line to answer\n")) }
+        run(ScriptedSuggestionStream(holdMillis = 1_500, intervalMillis = 0, count = 2))
+        waitUntil { viewModel.currentProjectId != null }
+        waitUntil { !viewModel.isLoading }
+        assertEquals(null, viewModel.errorMessage)
+        assertEquals(2, viewModel.suggestions.size)
+        assertEquals(1, viewModel.suggestionRunsCompleted)
+    }
+
     private fun run(script: ScriptedSuggestionStream) = onMain {
         viewModel.enableScriptedSuggestionsForTesting(script)
         viewModel.getSuggestions()
