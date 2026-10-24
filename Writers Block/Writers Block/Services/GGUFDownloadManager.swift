@@ -284,8 +284,9 @@ enum GGUFModelStorage {
         return freedBytes
     }
 
-    /// Reclaims stale artifacts first, then requires room for the full download plus a
-    /// reserve, so a device that only has room once the previous version is gone can upgrade.
+    /// Reclaims stale artifacts first, then requires room for the rest of the download
+    /// plus a reserve, so a device that only has room once the previous version is gone
+    /// can upgrade and a paused download can resume into the space it already holds.
     nonisolated static func prepareSpace(
         for option: GGUFDownloadOption,
         in directory: URL,
@@ -294,13 +295,24 @@ enum GGUFModelStorage {
     ) throws {
         try removeStaleArtifacts(for: option, in: directory, defaults: defaults)
         guard let available = try availableCapacity(directory) else { return }
-        let required = option.expectedBytes + downloadReserveBytes
+        let required = option.expectedBytes - resumedBytes(for: option, in: directory) + downloadReserveBytes
         guard available >= required else {
             throw GGUFDownloadError.insufficientSpace(required: required, available: available)
         }
     }
 
     nonisolated static let downloadReserveBytes: Int64 = 512 * 1024 * 1024
+
+    /// Bytes a saved resume blob lets URLSession skip; its partial file already
+    /// occupies them on the volume. Zero when there is no readable blob.
+    nonisolated static func resumedBytes(for option: GGUFDownloadOption, in directory: URL) -> Int64 {
+        guard let data = try? Data(contentsOf: resumeDataURL(for: option, in: directory)),
+              let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return 0 }
+        unarchiver.requiresSecureCoding = false
+        let info = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [String: Any]
+        let received = (info?["NSURLSessionResumeBytesReceived"] as? NSNumber)?.int64Value ?? 0
+        return min(max(0, received), option.expectedBytes)
+    }
 }
 
 @MainActor

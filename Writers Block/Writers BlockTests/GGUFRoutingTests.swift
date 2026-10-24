@@ -292,6 +292,32 @@ struct GGUFDownloadCatalogTests {
         }
     }
 
+    /// A paused download already holds its received bytes on the volume, so
+    /// resuming only needs room for the remainder plus the reserve.
+    @Test func resumeSpaceCheckCreditsTheBytesAlreadyDownloaded() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let received: Int64 = 2_000_000_000
+        let resumeData = try NSKeyedArchiver.archivedData(
+            withRootObject: ["NSURLSessionResumeBytesReceived": NSNumber(value: received)],
+            requiringSecureCoding: false
+        )
+        try resumeData.write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        let remaining = e2b.expectedBytes - received + GGUFModelStorage.downloadReserveBytes
+
+        try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining - 1 }
+        }
+
+        // Without resume data the whole file is needed again.
+        try FileManager.default.removeItem(at: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
+        }
+    }
+
     @Test func preferredModelUsesCatalogOrder() {
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
