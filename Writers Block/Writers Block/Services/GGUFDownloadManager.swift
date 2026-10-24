@@ -348,16 +348,17 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
-    private let defaults: UserDefaults
-    /// A choice made before startup restoration has given surviving downloads their records.
-    private var choseDuringRestoration = false
+    /// Bumped by every explicit model or engine choice. A download selects itself on
+    /// completion only while the revision it started under is still current (Android
+    /// `modelChoiceRevision`); a completion with no live snapshot, such as one restored
+    /// after a relaunch, installs the file without selecting it.
+    private var modelChoiceRevision = 0
+    private var choiceRevisionAtDownloadStart: Int?
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
-    /// Tests pass an ephemeral configuration and their own defaults; the app uses the
-    /// background session and standard defaults.
-    init(configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration(), defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    /// Tests pass an ephemeral configuration; the app uses the background session.
+    init(configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration()) {
         super.init()
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
@@ -366,23 +367,13 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         session.getAllTasks { [weak self] tasks in
             Task { @MainActor in
                 guard let self else { return }
-                let catalogTasks = tasks.compactMap { $0 as? URLSessionDownloadTask }
-                    .filter { GGUFDownloadCatalog.option(id: $0.taskDescription) != nil }
-                let restored = catalogTasks.first { $0.state != .completed && $0.state != .canceling }
-                if let task = restored, let option = GGUFDownloadCatalog.option(id: task.taskDescription) {
+                if let task = tasks.compactMap({ $0 as? URLSessionDownloadTask }).first(where: {
+                    GGUFDownloadCatalog.option(id: $0.taskDescription) != nil &&
+                    $0.state != .completed && $0.state != .canceling
+                }), let option = GGUFDownloadCatalog.option(id: task.taskDescription) {
                     self.activeTask = task
                     self.beginDownload(option: option, receivedBytes: max(0, task.countOfBytesReceived))
                     task.resume()
-                }
-                // A completed task whose `finish` is still queued keeps its record too.
-                Self.reconcileDownloadChoiceRecords(
-                    restoredOptionIDs: Set(catalogTasks.compactMap(\.taskDescription)),
-                    in: try? GGUFModelStorage.modelsDirectory(create: false),
-                    defaults: self.defaults
-                )
-                if self.choseDuringRestoration {
-                    Self.noteChoiceDuringDownload(defaults: self.defaults)
-                    self.choseDuringRestoration = false
                 }
                 self.isRestoringDownloads = false
             }
@@ -417,7 +408,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
-        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
+        choiceRevisionAtDownloadStart = modelChoiceRevision
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -437,7 +428,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                         }.value
                         finish(option: option)
                     } catch {
-                        _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
                         isVerifying = false
                         activeDownloadID = nil
                         statusMessage = nil
@@ -464,10 +454,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             beginDownload(option: option, receivedBytes: 0)
             task.resume()
         } catch {
-            // A start that never began owes no record, unless a paused download is waiting.
-            let resumable = (try? GGUFModelStorage.modelsDirectory(create: false))
-                .map { FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: $0).path) } ?? false
-            if !resumable { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
         }
     }
@@ -492,7 +478,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                     start(option)
                 }
             } catch {
-                _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
                 isVerifying = false
                 activeDownloadID = nil
                 statusMessage = nil
@@ -516,7 +501,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             } ?? false
             Task { @MainActor in
                 guard let self else { return }
-                if !saved { _ = Self.closeDownloadChoiceWatch(for: option, defaults: self.defaults) }
+                self.choiceRevisionAtDownloadStart = nil  // a resume takes a fresh snapshot
                 self.activeTask = nil
                 self.activeDownloadID = nil
                 self.isPausing = false
@@ -529,71 +514,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     // MARK: - Choice made while a download runs
     //
-    // Completion selects a download only when no model or engine was chosen while it
-    // was pending (the newer choice wins, as on Android). Each catalog artifact has its
-    // own record in defaults, so a download the system finishes after a relaunch, an
-    // internal restart after a failed verification and a resume from Pause all keep it;
-    // `start` opens it only when none is open, every explicit choice marks every open
-    // record (a paused download is still pending), and completion, failure and Stop
-    // close the artifact's record.
-
-    /// Opens the artifact's record unless one is open; true when this call opened it.
-    @discardableResult
-    nonisolated static func openDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.object(forKey: downloadChoiceChangedKey(option)) == nil else { return false }
-        defaults.set(false, forKey: downloadChoiceChangedKey(option))
-        return true
-    }
-
-    nonisolated static func noteChoiceDuringDownload(defaults: UserDefaults = .standard) {
-        for option in GGUFDownloadCatalog.options where defaults.object(forKey: downloadChoiceChangedKey(option)) != nil {
-            defaults.set(true, forKey: downloadChoiceChangedKey(option))
-        }
-    }
-
-    /// After a relaunch, every download that survived it (a task the session still knows,
-    /// a resume blob or a staging file) has a record, opened now if an earlier build left
-    /// none, and the record of one that did not survive (a force-quit cancels background
-    /// transfers) goes.
-    nonisolated static func reconcileDownloadChoiceRecords(
-        restoredOptionIDs: Set<String>,
-        in directory: URL?,
-        defaults: UserDefaults = .standard
-    ) {
-        for option in GGUFDownloadCatalog.options {
-            let recoverable = directory.map { directory in
-                FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: directory).path) ||
-                    FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(option.fileName).download").path)
-            } ?? false
-            if restoredOptionIDs.contains(option.id) || recoverable {
-                openDownloadChoiceWatch(for: option, defaults: defaults)
-            } else {
-                _ = closeDownloadChoiceWatch(for: option, defaults: defaults)
-            }
-        }
-    }
-
-    /// Closes the artifact's record; true when the finished download should be selected.
-    nonisolated static func closeDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) -> Bool {
-        defer { defaults.removeObject(forKey: downloadChoiceChangedKey(option)) }
-        return !defaults.bool(forKey: downloadChoiceChangedKey(option))
-    }
-
-    /// Keyed like the resume file, so a new artifact version never inherits a record.
-    nonisolated private static func downloadChoiceChangedKey(_ option: GGUFDownloadOption) -> String {
-        "ggufChoiceChangedDuringDownload.\(option.id).\(option.sha256.prefix(16))"
-    }
-
-    /// An explicit choice while a download is pending; one made before startup
-    /// restoration has opened the surviving downloads' records is applied after it.
-    private func noteChoice() {
-        if isRestoringDownloads { choseDuringRestoration = true }
-        Self.noteChoiceDuringDownload(defaults: defaults)
-    }
-
     /// An explicit choice; completion's own selection goes through `selectInstalled`.
     func select(_ option: GGUFDownloadOption) {
-        noteChoice()
+        modelChoiceRevision += 1
         selectInstalled(option)
     }
 
@@ -612,7 +535,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let url = try GGUFModelStorage.modelsDirectory(create: false).appendingPathComponent(model.fileName)
             try GGUFModelCatalog.validateCustomFile(at: url)
-            noteChoice()
+            modelChoiceRevision += 1
             GGUFModelSelection.save(fileName: model.fileName)
             GGUFEngineChoice.gemma.save()
             selectedModelFileName = model.fileName
@@ -668,16 +591,16 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func selectEngine(_ choice: GGUFEngineChoice) {
-        noteChoice()
+        modelChoiceRevision += 1
         choice.save()
         engineChoice = choice
         if choice == .appleIntelligence { Task { await AIService.unloadGGUFRunner() } }
     }
 
     /// The steps of `start` before its network task, and `finish`, for tests of the
-    /// choice record; nothing is downloaded or installed.
+    /// completion rule; nothing is downloaded or installed.
     func beginDownloadForTest(_ option: GGUFDownloadOption) {
-        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
+        choiceRevisionAtDownloadStart = modelChoiceRevision
         beginDownload(option: option, receivedBytes: 0)
     }
 
@@ -743,9 +666,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
-        // A choice made while restoration is still pending counts even before the
-        // records exist (a background completion can arrive ahead of task discovery).
-        let selects = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) && !choseDuringRestoration
+        let selects = choiceRevisionAtDownloadStart == modelChoiceRevision
+        choiceRevisionAtDownloadStart = nil
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."
@@ -758,7 +680,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
         guard activeTask?.taskIdentifier == taskIdentifier, !isPausing else { return }
-        if let option { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
+        choiceRevisionAtDownloadStart = nil
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false

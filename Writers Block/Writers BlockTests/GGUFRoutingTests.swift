@@ -344,91 +344,6 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFModelStorage.receivedBytes(inResumeData: swiftRoot) == 7)
     }
 
-    /// Each artifact's record: opened once per download, marked by any choice while it
-    /// is open (a paused download is still pending), kept across an internal restart or a
-    /// resume, and closed by completion, failure or Stop without touching another artifact's.
-    @Test func downloadChoiceRecordsAreKeptPerArtifact() {
-        let suite = "gguf-choice-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let e2b = GGUFDownloadCatalog.options[0]
-        let e4b = GGUFDownloadCatalog.options[1]
-
-        // No record (a download that began before this rule existed) still selects.
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-
-        // Only a first open creates the record; a start that fails before its task
-        // closes only a record it created, so a paused download keeps its own.
-        #expect(GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(!GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-
-        // A choice while E2B is pending (paused or running) marks E2B only; E4B, started
-        // later, consumes its own record.
-        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
-        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        GGUFDownloadManager.openDownloadChoiceWatch(for: e4b, defaults: defaults)
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-        // A resume or an internal restart of E2B reopens without forgetting the choice.
-        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-
-        // Closing clears the record; a choice with nothing pending is not noted.
-        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-    }
-
-    /// A relaunch keeps the record of a restored, paused or recoverable download and
-    /// drops the record of one a force-quit cancelled.
-    @Test func relaunchDropsChoiceRecordsOfDownloadsThatDidNotSurvive() throws {
-        let suite = "gguf-choice-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let directory = try makeModelsDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let e2b = GGUFDownloadCatalog.options[0]
-        let e4b = GGUFDownloadCatalog.options[1]
-        func openMarked(_ option: GGUFDownloadOption) {
-            GGUFDownloadManager.openDownloadChoiceWatch(for: option, defaults: defaults)
-            GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        }
-
-        // Nothing survived: both records go, so a fresh download selects itself.
-        openMarked(e2b); openMarked(e4b)
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-
-        // A task the session still knows (running, or completed with its install still
-        // queued) keeps its record; a paused one (resume blob) and a recoverable one
-        // (staging file) keep theirs too.
-        openMarked(e2b); openMarked(e4b)
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [e2b.id], in: directory, defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-
-        openMarked(e2b); openMarked(e4b)
-        try Data("resume".utf8).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
-        try Data("GGUF".utf8).write(to: directory.appendingPathComponent("\(e4b.fileName).download"))
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-
-        // A surviving download from a build without records gets one now, so a choice
-        // made after the relaunch still counts when it completes.
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
-        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-        try FileManager.default.removeItem(at: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
-        try FileManager.default.removeItem(at: directory.appendingPathComponent("\(e4b.fileName).download"))
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [e2b.id], in: directory, defaults: defaults)
-        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
-    }
-
     @Test func preferredModelUsesCatalogOrder() {
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
@@ -938,18 +853,15 @@ struct GGUFSelectionCaptureTests {
 }
 
 /// Completion through the manager, with both catalog artifacts installed and verified so
-/// `select` can run: a model or engine chosen while a download was pending is kept,
-/// including one switched away and back, and completion's own selection of another
-/// download is not a choice. The models directory, markers and selection are app-wide
-/// state, so the suite restores them.
+/// `select` can run: the download selects itself only while the choice revision it
+/// started under is still current; a completion with no live snapshot (a manager that
+/// restored after a relaunch) installs without selecting. The models directory, markers
+/// and selection are app-wide state, so the suite restores them.
 @MainActor
 @Suite(.serialized)
 struct GGUFDownloadCompletionTests {
-    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
-        let e2b = GGUFDownloadCatalog.options[0]
-        let e4b = GGUFDownloadCatalog.options[1]
-        let directory = try GGUFModelStorage.modelsDirectory(create: true)
-        for option in [e2b, e4b] {
+    private static func installCatalogStandIns(_ options: [GGUFDownloadOption], in directory: URL) throws {
+        for option in options {
             let installed = directory.appendingPathComponent(option.fileName)
             try #require(!FileManager.default.fileExists(atPath: installed.path), "a real install is never touched")
             #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
@@ -958,26 +870,38 @@ struct GGUFDownloadCompletionTests {
             try handle.close()
             GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: installed)
         }
-        let savedFile = GGUFModelSelection.currentFileName
-        let savedEngine = GGUFEngineChoice.current
-        defer {
-            for option in [e2b, e4b] {
-                try? FileManager.default.removeItem(at: directory.appendingPathComponent(option.fileName))
-                GGUFVerifiedArtifactStore.remove(fileName: option.fileName)
-            }
-            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
-            savedEngine.save()
+    }
+
+    private static func removeCatalogStandIns(_ options: [GGUFDownloadOption], in directory: URL) {
+        for option in options {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(option.fileName))
+            GGUFVerifiedArtifactStore.remove(fileName: option.fileName)
         }
-        let suite = "gguf-completion-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
-        // Choices made while restoration is pending are judged by the restoration tests.
+    }
+
+    private static func restoredManager() async throws -> GGUFDownloadManager {
+        let manager = GGUFDownloadManager(configuration: .ephemeral)
         for _ in 0..<250 where manager.isRestoringDownloads {
             try await Task.sleep(for: .milliseconds(20))
         }
         try #require(!manager.isRestoringDownloads)
         manager.refreshInstalledModels()
+        return manager
+    }
+
+    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let directory = try GGUFModelStorage.modelsDirectory(create: true)
+        try Self.installCatalogStandIns([e2b, e4b], in: directory)
+        let savedFile = GGUFModelSelection.currentFileName
+        let savedEngine = GGUFEngineChoice.current
+        defer {
+            Self.removeCatalogStandIns([e2b, e4b], in: directory)
+            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
+            savedEngine.save()
+        }
+        let manager = try await Self.restoredManager()
         try #require(manager.installedModelFiles.isSuperset(of: [e2b.fileName, e4b.fileName]))
 
         // Nothing chosen while it ran: the download is selected and persisted.
@@ -1013,58 +937,35 @@ struct GGUFDownloadCompletionTests {
         #expect(!manager.finishForTest(e2b))
         #expect(manager.selectedModelFileName == e4b.fileName)
 
-        // Another download finishing (paused E2B, E4B downloaded meanwhile) is not a
-        // choice: the resumed E2B is still selected when it completes.
+        // The snapshot is consumed, so the next download starts clean.
         manager.beginDownloadForTest(e2b)
-        manager.beginDownloadForTest(e4b)
-        #expect(manager.finishForTest(e4b))
-        #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(manager.finishForTest(e2b))
         #expect(manager.selectedModelFileName == e2b.fileName)
-        #expect(GGUFModelSelection.currentFileName == e2b.fileName)
     }
 
-    /// A paused download inherited from a build without records gets one during startup
-    /// restoration; an engine chosen before that finishes still marks it.
-    @Test func aChoiceDuringStartupRestorationMarksAnInheritedPausedDownload() async throws {
+    /// A download the system finished for a manager that did not start it (restored
+    /// after a relaunch) has no snapshot: it is installed, not selected.
+    @Test func completionWithoutALiveSnapshotInstallsWithoutSelecting() async throws {
         let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
         let directory = try GGUFModelStorage.modelsDirectory(create: true)
-        let resumeURL = GGUFModelStorage.resumeDataURL(for: e2b, in: directory)
-        try #require(!FileManager.default.fileExists(atPath: resumeURL.path), "a real paused download is never touched")
-        try Data("resume".utf8).write(to: resumeURL)
-        defer { try? FileManager.default.removeItem(at: resumeURL) }
+        try Self.installCatalogStandIns([e2b, e4b], in: directory)
+        let savedFile = GGUFModelSelection.currentFileName
         let savedEngine = GGUFEngineChoice.current
-        defer { savedEngine.save() }
-        let suite = "gguf-restoration-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
-        try #require(manager.isRestoringDownloads)
-        manager.selectEngine(.appleIntelligence)
-        for _ in 0..<250 where manager.isRestoringDownloads {
-            try await Task.sleep(for: .milliseconds(20))
+        defer {
+            Self.removeCatalogStandIns([e2b, e4b], in: directory)
+            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
+            savedEngine.save()
         }
-        try #require(!manager.isRestoringDownloads)
-
-        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
-    }
-
-    /// A completion delivered before task discovery finishes still honours an engine
-    /// chosen during restoration, although no record exists yet.
-    @Test func aCompletionBeforeRestorationFinishesHonoursTheChoiceMadeMeanwhile() throws {
-        let e2b = GGUFDownloadCatalog.options[0]
-        let savedEngine = GGUFEngineChoice.current
-        defer { savedEngine.save() }
-        let suite = "gguf-restoration-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
-        try #require(manager.isRestoringDownloads)
+        let manager = try await Self.restoredManager()
+        manager.select(e4b)
         manager.selectEngine(.appleIntelligence)
+
         #expect(!manager.finishForTest(e2b))
+        #expect(manager.installedModelFiles.contains(e2b.fileName))
+        #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(manager.engineChoice == .appleIntelligence)
+        #expect(GGUFModelSelection.currentFileName == e4b.fileName)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
     }
 }
