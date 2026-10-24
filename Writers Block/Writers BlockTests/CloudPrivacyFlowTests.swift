@@ -516,6 +516,40 @@ struct CloudPrivacyFlowTests {
         }
     }
 
+    /// Known difference from Android (PARITY.md): only the published insertion point
+    /// cancels; a selection that grows from the same start leaves the request running.
+    @Test func growingASelectionFromTheSameStartKeepsTheRequest() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+        defer { StagedStreamURLProtocol.release(.finish) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StagedStreamURLProtocol.self]
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: URLSession(configuration: configuration)),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = 0
+        viewModel.selectedRange = NSRange(location: 0, length: 0)
+
+        viewModel.getSuggestions()
+        let requestID = try #require(viewModel.suggestionsRequestIDForTest())
+        #expect(await Self.waitUntil { viewModel.suggestions.count == 1 })
+
+        viewModel.selectedRange = NSRange(location: 0, length: 7)
+        #expect(viewModel.isLoading)
+
+        StagedStreamURLProtocol.release(.finish)
+        #expect(await Self.waitUntil { !viewModel.isLoading })
+        #expect(viewModel.completedSuggestionsRequestID == requestID)
+    }
+
     private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PrivacyURLProtocol.self]
