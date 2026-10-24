@@ -299,11 +299,7 @@ struct GGUFDownloadCatalogTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let e2b = GGUFDownloadCatalog.options[0]
         let received: Int64 = 2_000_000_000
-        let resumeData = try NSKeyedArchiver.archivedData(
-            withRootObject: ["NSURLSessionResumeBytesReceived": NSNumber(value: received)],
-            requiringSecureCoding: false
-        )
-        try resumeData.write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        try Self.resumeData(received: received).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
         let remaining = e2b.expectedBytes - received + GGUFModelStorage.downloadReserveBytes
 
         try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
@@ -316,6 +312,55 @@ struct GGUFDownloadCatalogTests {
         #expect(throws: (any Error).self) {
             try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
         }
+    }
+
+    /// URLSession resume data in the shape current systems write: a keyed archive
+    /// whose root dictionary sits under the literal key "NSKeyedArchiveRootObjectKey".
+    private static func resumeData(received: Int64) -> Data {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: false)
+        let info: NSDictionary = [
+            "NSURLSessionResumeInfoVersion": 2,
+            "NSURLSessionResumeBytesReceived": NSNumber(value: received),
+            "NSURLSessionResumeInfoTempFileName": "CFNetworkDownload_test.tmp",
+        ]
+        archiver.encode(info, forKey: "NSKeyedArchiveRootObjectKey")
+        return archiver.encodedData
+    }
+
+    @Test func receivedBytesAreReadFromKeyedArchiveAndPlainPlistResumeData() throws {
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: Self.resumeData(received: 3_193_413)) == 3_193_413)
+        let plain = try PropertyListSerialization.data(
+            fromPropertyList: ["NSURLSessionResumeBytesReceived": NSNumber(value: 42)],
+            format: .binary,
+            options: 0
+        )
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: plain) == 42)
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: Data("not a plist".utf8)) == 0)
+        // An archive under Swift's own root key ("root") is not what URLSession writes.
+        let swiftRoot = try NSKeyedArchiver.archivedData(
+            withRootObject: ["NSURLSessionResumeBytesReceived": NSNumber(value: 7)],
+            requiringSecureCoding: false
+        )
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: swiftRoot) == 7)
+    }
+
+    /// The choice recorded at download start survives a relaunch (a new manager
+    /// reads the same defaults) and is cleared when completion consumes it.
+    @Test func selectionAtDownloadStartRoundTripsThroughDefaults() throws {
+        let suite = "gguf-selection-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let e2b = GGUFDownloadCatalog.options[0].fileName
+
+        #expect(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults) == nil)
+        GGUFDownloadManager.recordSelectionAtDownloadStart((e2b, .gemma), defaults: defaults)
+        let gemma = try #require(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults))
+        #expect(gemma.0 == e2b && gemma.1 == .gemma)
+        GGUFDownloadManager.recordSelectionAtDownloadStart((nil, .appleIntelligence), defaults: defaults)
+        let apple = try #require(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults))
+        #expect(apple.0 == nil && apple.1 == .appleIntelligence)
+        GGUFDownloadManager.recordSelectionAtDownloadStart(nil, defaults: defaults)
+        #expect(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults) == nil)
     }
 
     /// Finishing a download selects it only while the choice made when the
