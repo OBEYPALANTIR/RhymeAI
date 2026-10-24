@@ -413,6 +413,19 @@ struct GGUFDownloadCatalogTests {
         GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+
+        // A surviving download from a build without records gets one now, so a choice
+        // made after the relaunch still counts when it completes.
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+        try FileManager.default.removeItem(at: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("\(e4b.fileName).download"))
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: e2b.id, in: directory, defaults: defaults)
+        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
     }
 
     @Test func preferredModelUsesCatalogOrder() {
