@@ -357,7 +357,10 @@ struct GGUFDownloadCatalogTests {
         // No record (a download that began before this rule existed) still selects.
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
 
-        GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults)
+        // Only a first open creates the record; a start that fails before its task
+        // closes only a record it created, so a paused download keeps its own.
+        #expect(GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(!GGUFDownloadManager.openDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
 
         // A choice while E2B is pending (paused or running) marks E2B only; E4B, started
@@ -884,25 +887,47 @@ struct GGUFSelectionCaptureTests {
     }
 }
 
-/// Completion through the manager: a choice made while the download was pending is
-/// kept, including one switched away and back. The engine choice is global state, so
-/// the suite restores it.
+/// Completion through the manager, with the artifact installed and verified so `select`
+/// can run: a choice made while the download was pending is kept, including one switched
+/// away and back. The models directory, markers and selection are app-wide state, so the
+/// suite restores them.
 @MainActor
 @Suite(.serialized)
 struct GGUFDownloadCompletionTests {
-    @Test func completionKeepsAnEngineChosenWhileTheDownloadRan() {
+    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let directory = try GGUFModelStorage.modelsDirectory(create: true)
+        let installed = directory.appendingPathComponent(e2b.fileName)
+        try #require(!FileManager.default.fileExists(atPath: installed.path), "a real install is never touched")
+        #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: installed)
+        try handle.truncate(atOffset: UInt64(e2b.expectedBytes))
+        try handle.close()
+        GGUFVerifiedArtifactStore.record(sha256: e2b.sha256, at: installed)
+        let savedFile = GGUFModelSelection.currentFileName
+        let savedEngine = GGUFEngineChoice.current
+        defer {
+            try? FileManager.default.removeItem(at: installed)
+            GGUFVerifiedArtifactStore.remove(fileName: e2b.fileName)
+            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
+            savedEngine.save()
+        }
         let suite = "gguf-completion-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let savedEngine = GGUFEngineChoice.current
-        defer { savedEngine.save() }
-        let e2b = GGUFDownloadCatalog.options[0]
         let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
+        manager.refreshInstalledModels()
+        try #require(manager.installedModelFiles.contains(e2b.fileName))
 
+        // Nothing chosen while it ran: the download is selected.
+        manager.selectEngine(.appleIntelligence)
         manager.beginDownloadForTest(e2b)
         #expect(manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .gemma)
+        #expect(manager.selectedModelFileName == e2b.fileName)
         #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
 
+        // An engine chosen while it ran stays.
         manager.beginDownloadForTest(e2b)
         manager.selectEngine(.appleIntelligence)
         #expect(!manager.finishForTest(e2b))
@@ -919,5 +944,6 @@ struct GGUFDownloadCompletionTests {
         // The record is consumed, so the next download starts clean.
         manager.beginDownloadForTest(e2b)
         #expect(manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .gemma)
     }
 }
