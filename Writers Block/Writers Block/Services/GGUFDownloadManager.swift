@@ -546,20 +546,24 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
     }
 
-    /// After a relaunch, drops the record of any download that did not survive it: no
-    /// restored task, no resume blob and no staging file (a force-quit cancels background
-    /// transfers). A paused or recoverable download keeps its record.
+    /// After a relaunch, every download that survived it (a restored task, a resume blob
+    /// or a staging file) has a record, opened now if an earlier build left none, and the
+    /// record of one that did not survive (a force-quit cancels background transfers) goes.
     nonisolated static func reconcileDownloadChoiceRecords(
         restoredOptionID: String?,
         in directory: URL?,
         defaults: UserDefaults = .standard
     ) {
-        for option in GGUFDownloadCatalog.options where option.id != restoredOptionID {
+        for option in GGUFDownloadCatalog.options {
             let recoverable = directory.map { directory in
                 FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: directory).path) ||
                     FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(option.fileName).download").path)
             } ?? false
-            if !recoverable { _ = closeDownloadChoiceWatch(for: option, defaults: defaults) }
+            if option.id == restoredOptionID || recoverable {
+                openDownloadChoiceWatch(for: option, defaults: defaults)
+            } else {
+                _ = closeDownloadChoiceWatch(for: option, defaults: defaults)
+            }
         }
     }
 
