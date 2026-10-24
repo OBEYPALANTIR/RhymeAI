@@ -931,13 +931,15 @@ enum GGUFEngineChoice: String, CaseIterable {
         }
     }
 
-    static var current: GGUFEngineChoice {
-        let raw = UserDefaults.standard.string(forKey: "ggufEngineChoice") ?? ""
+    static var current: GGUFEngineChoice { current(defaults: .standard) }
+
+    static func current(defaults: UserDefaults) -> GGUFEngineChoice {
+        let raw = defaults.string(forKey: "ggufEngineChoice") ?? ""
         return GGUFEngineChoice(rawValue: raw) ?? .appleIntelligence
     }
 
-    func save() {
-        UserDefaults.standard.set(rawValue, forKey: "ggufEngineChoice")
-        SynonymLocalRevision.advance()
+    func save(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: "ggufEngineChoice")
+        SynonymLocalRevision.advance(defaults: defaults)
     }
 }
