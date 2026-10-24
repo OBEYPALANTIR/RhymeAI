@@ -743,7 +743,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
-        let selects = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
+        // A choice made while restoration is still pending counts even before the
+        // records exist (a background completion can arrive ahead of task discovery).
+        let selects = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) && !choseDuringRestoration
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."

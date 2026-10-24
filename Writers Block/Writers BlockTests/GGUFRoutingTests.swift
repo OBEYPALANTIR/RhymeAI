@@ -944,7 +944,7 @@ struct GGUFSelectionCaptureTests {
 @MainActor
 @Suite(.serialized)
 struct GGUFDownloadCompletionTests {
-    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() throws {
+    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
         let e2b = GGUFDownloadCatalog.options[0]
         let e4b = GGUFDownloadCatalog.options[1]
         let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -971,6 +971,11 @@ struct GGUFDownloadCompletionTests {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
+        // Choices made while restoration is pending are judged by the restoration tests.
+        for _ in 0..<250 where manager.isRestoringDownloads {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(!manager.isRestoringDownloads)
         manager.refreshInstalledModels()
         try #require(manager.installedModelFiles.isSuperset(of: [e2b.fileName, e4b.fileName]))
 
@@ -1042,5 +1047,23 @@ struct GGUFDownloadCompletionTests {
         try #require(!manager.isRestoringDownloads)
 
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+    }
+
+    /// A completion delivered before task discovery finishes still honours an engine
+    /// chosen during restoration, although no record exists yet.
+    @Test func aCompletionBeforeRestorationFinishesHonoursTheChoiceMadeMeanwhile() throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let savedEngine = GGUFEngineChoice.current
+        defer { savedEngine.save() }
+        let suite = "gguf-restoration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
+        try #require(manager.isRestoringDownloads)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .appleIntelligence)
+        #expect(manager.statusMessage == "\(e2b.title) downloaded.")
     }
 }
