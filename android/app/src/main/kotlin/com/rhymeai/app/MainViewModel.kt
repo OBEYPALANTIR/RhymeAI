@@ -2514,6 +2514,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveProvider(provider: AIProvider) {
+        modelChoiceRevision++
         selectedProvider = provider
         // Auto-select first model for this provider
         val models = AIModel.modelsForProvider(provider)
@@ -2538,6 +2539,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveModel(model: AIModel) {
+        modelChoiceRevision++
         selectedModel = model
         viewModelScope.launch {
             repo.saveModelId(model.id)
@@ -2608,10 +2610,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The provider, model and saved local model the user has picked. */
-    internal data class ModelChoice(val provider: AIProvider, val model: AIModel, val localModelId: String?)
-
-    internal fun modelChoice() = ModelChoice(selectedProvider, selectedModel, selectedLocalModelId)
+    /**
+     * Counts the user's provider and model selections, bumped as soon as one is asked for
+     * (before any validation lands), so a finished download knows whether a newer choice came
+     * in while it ran.
+     */
+    internal var modelChoiceRevision = 0L
+        private set
 
     /** Adds the model to the saved list; with [select] it also becomes the active local model and provider. */
     fun registerAndSelectLocalModel(
@@ -2648,6 +2653,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSavedLocalModel(modelId: String) {
         val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        modelChoiceRevision++
         val ticket = beginLocalModelChange()
         val generation = localModelValidationGeneration
         val file = java.io.File(getApplication<Application>().filesDir, model.fileName)
@@ -2738,14 +2744,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     /**
-     * Installs a finished download. [choiceAtStart] is the selection when the download
-     * began; the model only takes over the selection when the user has not since moved
-     * to another provider or saved local model (a Local provider still waiting for a
-     * model counts as waiting for this one). Null means the user asked to use it now.
+     * Installs a finished download. [choiceRevisionAtStart] is [modelChoiceRevision] when
+     * the download began; the model only takes over the selection when the user has not
+     * asked for another provider or model since. Null means the user asked to use it now.
      */
     internal suspend fun useDownloadedGemma(
         model: com.rhymeai.app.ui.components.GemmaDownload,
-        choiceAtStart: ModelChoice? = null
+        choiceRevisionAtStart: Long? = null
     ): Boolean {
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
         val validationError = withContext(Dispatchers.IO) {
@@ -2757,14 +2762,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
         verifiedGemmaFileNames += model.fileName
-        val choice = modelChoice()
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
             displayName = model.label,
             isCustom = false,
             verifiedCatalogSha256 = model.sha256,
-            select = choiceAtStart == null || choice == choiceAtStart ||
-                (choice.provider == AIProvider.LOCAL && choice.localModelId == null)
+            select = choiceRevisionAtStart == null || choiceRevisionAtStart == modelChoiceRevision
         )
         return true
     }
@@ -2776,7 +2779,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaDownloadVerifying = false
         gemmaDownloadError = null
         gemmaLastDownloadAttempt = model
-        val choiceAtStart = modelChoice()
+        val choiceRevisionAtStart = modelChoiceRevision
         val app = getApplication<android.app.Application>()
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -2788,7 +2791,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
                         gemmaDownloadVerifying = false
-                        useDownloadedGemma(model, choiceAtStart)
+                        useDownloadedGemma(model, choiceRevisionAtStart)
                     }
                     return@launch
                 }
@@ -2815,7 +2818,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadProgress = null
                     gemmaDownloadVerifying = false
                     gemmaDownloadRevision++
-                    useDownloadedGemma(model, choiceAtStart)
+                    useDownloadedGemma(model, choiceRevisionAtStart)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)

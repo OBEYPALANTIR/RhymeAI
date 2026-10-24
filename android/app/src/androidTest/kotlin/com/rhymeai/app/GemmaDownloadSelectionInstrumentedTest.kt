@@ -5,6 +5,7 @@ import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.service.AIProvider
+import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.GemmaDownload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -56,10 +57,10 @@ class GemmaDownloadSelectionInstrumentedTest {
 
     @Test
     fun completionKeepsAProviderChosenDuringTheDownload() {
-        val choiceAtStart = viewModel.modelChoice()
+        val revisionAtStart = viewModel.modelChoiceRevision
         onMain { viewModel.saveProvider(AIProvider.GEMINI) }
 
-        val installed = runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, choiceAtStart) }
+        val installed = runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, revisionAtStart) }
 
         assertTrue(installed)
         assertEquals(AIProvider.GEMINI, viewModel.selectedProvider)
@@ -68,10 +69,30 @@ class GemmaDownloadSelectionInstrumentedTest {
     }
 
     @Test
-    fun completionSelectsTheModelWhenNothingChanged() {
-        val choiceAtStart = viewModel.modelChoice()
+    fun completionYieldsToASavedModelStillBeingValidated() {
+        // A catalog file name makes selectSavedLocalModel validate asynchronously, so the
+        // selected ID has not moved yet when the download finishes.
+        val pending = File(app.filesDir, GEMMA_DOWNLOADS.first().fileName)
+        pending.writeBytes(file.readBytes())
+        try {
+            onMain { viewModel.registerAndSelectLocalModel(pending.absolutePath, "Pending", isCustom = false, select = false) }
+            val revisionAtStart = viewModel.modelChoiceRevision
+            onMain { viewModel.selectSavedLocalModel(pending.name) }
 
-        runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, choiceAtStart) }
+            runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, revisionAtStart) }
+
+            assertNotEquals(file.name, viewModel.selectedLocalModelId)
+            assertTrue(viewModel.savedLocalModels.any { it.fileName == file.name })
+        } finally {
+            pending.delete()
+        }
+    }
+
+    @Test
+    fun completionSelectsTheModelWhenNothingChanged() {
+        val revisionAtStart = viewModel.modelChoiceRevision
+
+        runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, revisionAtStart) }
 
         assertEquals(AIProvider.LOCAL, viewModel.selectedProvider)
         assertEquals(file.name, viewModel.selectedLocalModelId)
