@@ -337,6 +337,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
+    /// The model and engine chosen when the active download began; completion
+    /// selects the download only while that choice still stands.
+    private var selectionAtDownloadStart: (String?, GGUFEngineChoice)?
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
@@ -493,6 +496,15 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
     }
 
+    /// A finished download is selected only while the model and engine chosen
+    /// when it began are still chosen; a choice made meanwhile is kept.
+    nonisolated static func selectsOnCompletion(
+        startedWith start: (String?, GGUFEngineChoice)?,
+        current: (String?, GGUFEngineChoice)
+    ) -> Bool {
+        start.map { $0 == current } ?? true
+    }
+
     func select(_ option: GGUFDownloadOption) {
         guard installedModelFiles.contains(option.fileName) else { return }
         GGUFModelSelection.save(fileName: option.fileName)
@@ -569,6 +581,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
+        selectionAtDownloadStart = (selectedModelFileName, engineChoice)
         activeDownloadID = option.id
         progressSampleTime = Date()
         progressSampleBytes = receivedBytes
@@ -623,7 +636,16 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
+        let selects = Self.selectsOnCompletion(
+            startedWith: selectionAtDownloadStart,
+            current: (selectedModelFileName, engineChoice)
+        )
+        selectionAtDownloadStart = nil
         refreshInstalledModels()
+        guard selects else {
+            statusMessage = "\(option.title) downloaded."
+            return
+        }
         select(option)
         statusMessage = "\(option.title) downloaded and selected."
     }

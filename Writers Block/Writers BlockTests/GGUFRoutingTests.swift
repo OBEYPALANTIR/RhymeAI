@@ -318,6 +318,18 @@ struct GGUFDownloadCatalogTests {
         }
     }
 
+    /// Finishing a download selects it only while the choice made when the
+    /// download started still stands; a model or engine picked meanwhile wins.
+    @Test func downloadCompletionKeepsAChoiceMadeWhileItRan() {
+        let e2b = GGUFDownloadCatalog.options[0].fileName
+        let e4b = GGUFDownloadCatalog.options[1].fileName
+        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e2b, .gemma)))
+        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: (nil, .gemma), current: (nil, .gemma)))
+        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: nil, current: (e2b, .appleIntelligence)))
+        #expect(!GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e2b, .appleIntelligence)))
+        #expect(!GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e4b, .gemma)))
+    }
+
     @Test func preferredModelUsesCatalogOrder() {
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
