@@ -366,18 +366,17 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         session.getAllTasks { [weak self] tasks in
             Task { @MainActor in
                 guard let self else { return }
-                let restored = tasks.compactMap({ $0 as? URLSessionDownloadTask }).first(where: {
-                    GGUFDownloadCatalog.option(id: $0.taskDescription) != nil &&
-                    $0.state != .completed && $0.state != .canceling
-                })
-                let option = restored.flatMap { GGUFDownloadCatalog.option(id: $0.taskDescription) }
-                if let task = restored, let option {
+                let catalogTasks = tasks.compactMap { $0 as? URLSessionDownloadTask }
+                    .filter { GGUFDownloadCatalog.option(id: $0.taskDescription) != nil }
+                let restored = catalogTasks.first { $0.state != .completed && $0.state != .canceling }
+                if let task = restored, let option = GGUFDownloadCatalog.option(id: task.taskDescription) {
                     self.activeTask = task
                     self.beginDownload(option: option, receivedBytes: max(0, task.countOfBytesReceived))
                     task.resume()
                 }
+                // A completed task whose `finish` is still queued keeps its record too.
                 Self.reconcileDownloadChoiceRecords(
-                    restoredOptionID: option?.id,
+                    restoredOptionIDs: Set(catalogTasks.compactMap(\.taskDescription)),
                     in: try? GGUFModelStorage.modelsDirectory(create: false),
                     defaults: self.defaults
                 )
@@ -552,11 +551,12 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
     }
 
-    /// After a relaunch, every download that survived it (a restored task, a resume blob
-    /// or a staging file) has a record, opened now if an earlier build left none, and the
-    /// record of one that did not survive (a force-quit cancels background transfers) goes.
+    /// After a relaunch, every download that survived it (a task the session still knows,
+    /// a resume blob or a staging file) has a record, opened now if an earlier build left
+    /// none, and the record of one that did not survive (a force-quit cancels background
+    /// transfers) goes.
     nonisolated static func reconcileDownloadChoiceRecords(
-        restoredOptionID: String?,
+        restoredOptionIDs: Set<String>,
         in directory: URL?,
         defaults: UserDefaults = .standard
     ) {
@@ -565,7 +565,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: directory).path) ||
                     FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(option.fileName).download").path)
             } ?? false
-            if option.id == restoredOptionID || recoverable {
+            if restoredOptionIDs.contains(option.id) || recoverable {
                 openDownloadChoiceWatch(for: option, defaults: defaults)
             } else {
                 _ = closeDownloadChoiceWatch(for: option, defaults: defaults)

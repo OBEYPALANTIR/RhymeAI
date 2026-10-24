@@ -396,33 +396,34 @@ struct GGUFDownloadCatalogTests {
 
         // Nothing survived: both records go, so a fresh download selects itself.
         openMarked(e2b); openMarked(e4b)
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
 
-        // A restored task keeps its record; a paused one (resume blob) and a recoverable
-        // one (staging file) keep theirs too.
+        // A task the session still knows (running, or completed with its install still
+        // queued) keeps its record; a paused one (resume blob) and a recoverable one
+        // (staging file) keep theirs too.
         openMarked(e2b); openMarked(e4b)
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: e2b.id, in: directory, defaults: defaults)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [e2b.id], in: directory, defaults: defaults)
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
 
         openMarked(e2b); openMarked(e4b)
         try Data("resume".utf8).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
         try Data("GGUF".utf8).write(to: directory.appendingPathComponent("\(e4b.fileName).download"))
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
 
         // A surviving download from a build without records gets one now, so a choice
         // made after the relaunch still counts when it completes.
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [], in: directory, defaults: defaults)
         GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
         try FileManager.default.removeItem(at: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
         try FileManager.default.removeItem(at: directory.appendingPathComponent("\(e4b.fileName).download"))
-        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: e2b.id, in: directory, defaults: defaults)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionIDs: [e2b.id], in: directory, defaults: defaults)
         GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
         #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
