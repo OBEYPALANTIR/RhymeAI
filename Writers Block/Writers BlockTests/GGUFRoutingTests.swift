@@ -1017,4 +1017,30 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.selectedModelFileName == e2b.fileName)
         #expect(GGUFModelSelection.currentFileName == e2b.fileName)
     }
+
+    /// A paused download inherited from a build without records gets one during startup
+    /// restoration; an engine chosen before that finishes still marks it.
+    @Test func aChoiceDuringStartupRestorationMarksAnInheritedPausedDownload() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let directory = try GGUFModelStorage.modelsDirectory(create: true)
+        let resumeURL = GGUFModelStorage.resumeDataURL(for: e2b, in: directory)
+        try #require(!FileManager.default.fileExists(atPath: resumeURL.path), "a real paused download is never touched")
+        try Data("resume".utf8).write(to: resumeURL)
+        defer { try? FileManager.default.removeItem(at: resumeURL) }
+        let savedEngine = GGUFEngineChoice.current
+        defer { savedEngine.save() }
+        let suite = "gguf-restoration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
+        try #require(manager.isRestoringDownloads)
+        manager.selectEngine(.appleIntelligence)
+        for _ in 0..<250 where manager.isRestoringDownloads {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(!manager.isRestoringDownloads)
+
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+    }
 }
