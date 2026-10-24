@@ -138,6 +138,11 @@ internal object NewSongTestHooks {
     @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
+/** Lets a test hold a saved model's validation before it runs (null in the app). */
+internal object LocalModelTestHooks {
+    @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 /** Lets a test hold launch loading after the appearance is known (null in the app). */
 internal object LaunchTestHooks {
     @Volatile var beforeLoading: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -2492,6 +2497,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: AIModel,
         keys: Map<AIProvider, String>
     ): Result<Unit> {
+        modelChoiceRevision++
         cancelEditorAIWork()
         return try {
             withContext(Dispatchers.IO) {
@@ -2670,6 +2676,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             localModelValidationJob = viewModelScope.launch {
                 var startedLoad = false
                 try {
+                    LocalModelTestHooks.beforeSavedModelValidation?.await()
                     val validationError = withContext(Dispatchers.IO) {
                         if (catalogModel == null) {
                             "Saved downloaded model is not in the trusted catalog."
