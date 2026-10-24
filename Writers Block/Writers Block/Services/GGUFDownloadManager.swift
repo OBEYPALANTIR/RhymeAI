@@ -348,12 +348,15 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
+    private let defaults: UserDefaults
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
-    override init() {
+    /// Tests pass an ephemeral configuration and their own defaults; the app uses the
+    /// background session and standard defaults.
+    init(configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration(), defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         super.init()
-        let configuration = Self.downloadConfiguration()
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
@@ -402,7 +405,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
-        Self.openDownloadChoiceWatch()
+        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -422,6 +425,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                         }.value
                         finish(option: option)
                     } catch {
+                        _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
                         isVerifying = false
                         activeDownloadID = nil
                         statusMessage = nil
@@ -472,6 +476,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                     start(option)
                 }
             } catch {
+                _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
                 isVerifying = false
                 activeDownloadID = nil
                 statusMessage = nil
@@ -495,7 +500,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             } ?? false
             Task { @MainActor in
                 guard let self else { return }
-                if !saved { _ = Self.closeDownloadChoiceWatch() }
+                if !saved { _ = Self.closeDownloadChoiceWatch(for: option, defaults: self.defaults) }
                 self.activeTask = nil
                 self.activeDownloadID = nil
                 self.isPausing = false
@@ -509,34 +514,38 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     // MARK: - Choice made while a download runs
     //
     // Completion selects a download only when no model or engine was chosen while it
-    // ran (the newer choice wins, as on Android). The record lives in defaults so a
-    // download the system finishes after a relaunch, an internal restart after a failed
-    // verification and a resume from Pause all keep it; `start` opens it only when none
-    // is open, and completion, failure and Stop close it.
+    // was pending (the newer choice wins, as on Android). Each catalog artifact has its
+    // own record in defaults, so a download the system finishes after a relaunch, an
+    // internal restart after a failed verification and a resume from Pause all keep it;
+    // `start` opens it only when none is open, every explicit choice marks every open
+    // record (a paused download is still pending), and completion, failure and Stop
+    // close the artifact's record.
 
-    nonisolated static func openDownloadChoiceWatch(defaults: UserDefaults = .standard) {
-        if defaults.object(forKey: downloadChoiceChangedKey) == nil {
-            defaults.set(false, forKey: downloadChoiceChangedKey)
+    nonisolated static func openDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: downloadChoiceChangedKey(option)) == nil {
+            defaults.set(false, forKey: downloadChoiceChangedKey(option))
         }
     }
 
     nonisolated static func noteChoiceDuringDownload(defaults: UserDefaults = .standard) {
-        if defaults.object(forKey: downloadChoiceChangedKey) != nil {
-            defaults.set(true, forKey: downloadChoiceChangedKey)
+        for option in GGUFDownloadCatalog.options where defaults.object(forKey: downloadChoiceChangedKey(option)) != nil {
+            defaults.set(true, forKey: downloadChoiceChangedKey(option))
         }
     }
 
-    /// Closes the watch; true when the finished download should be selected.
-    nonisolated static func closeDownloadChoiceWatch(defaults: UserDefaults = .standard) -> Bool {
-        defer { defaults.removeObject(forKey: downloadChoiceChangedKey) }
-        return !defaults.bool(forKey: downloadChoiceChangedKey)
+    /// Closes the artifact's record; true when the finished download should be selected.
+    nonisolated static func closeDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) -> Bool {
+        defer { defaults.removeObject(forKey: downloadChoiceChangedKey(option)) }
+        return !defaults.bool(forKey: downloadChoiceChangedKey(option))
     }
 
-    nonisolated private static let downloadChoiceChangedKey = "ggufChoiceChangedDuringDownload"
+    nonisolated private static func downloadChoiceChangedKey(_ option: GGUFDownloadOption) -> String {
+        "ggufChoiceChangedDuringDownload.\(option.id)"
+    }
 
     func select(_ option: GGUFDownloadOption) {
         guard installedModelFiles.contains(option.fileName) else { return }
-        if activeDownloadID != nil { Self.noteChoiceDuringDownload() }
+        Self.noteChoiceDuringDownload(defaults: defaults)
         GGUFModelSelection.save(fileName: option.fileName)
         GGUFEngineChoice.gemma.save()
         selectedModelFileName = option.fileName
@@ -550,6 +559,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let url = try GGUFModelStorage.modelsDirectory(create: false).appendingPathComponent(model.fileName)
             try GGUFModelCatalog.validateCustomFile(at: url)
+            Self.noteChoiceDuringDownload(defaults: defaults)
             GGUFModelSelection.save(fileName: model.fileName)
             GGUFEngineChoice.gemma.save()
             selectedModelFileName = model.fileName
@@ -605,10 +615,22 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func selectEngine(_ choice: GGUFEngineChoice) {
-        if activeDownloadID != nil { Self.noteChoiceDuringDownload() }
+        Self.noteChoiceDuringDownload(defaults: defaults)
         choice.save()
         engineChoice = choice
         if choice == .appleIntelligence { Task { await AIService.unloadGGUFRunner() } }
+    }
+
+    /// The steps of `start` before its network task, and `finish`, for tests of the
+    /// choice record; nothing is downloaded or installed.
+    func beginDownloadForTest(_ option: GGUFDownloadOption) {
+        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
+        beginDownload(option: option, receivedBytes: 0)
+    }
+
+    @discardableResult
+    func finishForTest(_ option: GGUFDownloadOption) -> Bool {
+        finish(option: option)
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
@@ -668,7 +690,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
-        let selects = Self.closeDownloadChoiceWatch()
+        let selects = Self.closeDownloadChoiceWatch(for: option, defaults: defaults)
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."
@@ -681,7 +703,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
         guard activeTask?.taskIdentifier == taskIdentifier, !isPausing else { return }
-        _ = Self.closeDownloadChoiceWatch()
+        if let option { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false
