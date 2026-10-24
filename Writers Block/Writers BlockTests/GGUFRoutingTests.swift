@@ -379,6 +379,42 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
     }
 
+    /// A relaunch keeps the record of a restored, paused or recoverable download and
+    /// drops the record of one a force-quit cancelled.
+    @Test func relaunchDropsChoiceRecordsOfDownloadsThatDidNotSurvive() throws {
+        let suite = "gguf-choice-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        func openMarked(_ option: GGUFDownloadOption) {
+            GGUFDownloadManager.openDownloadChoiceWatch(for: option, defaults: defaults)
+            GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        }
+
+        // Nothing survived: both records go, so a fresh download selects itself.
+        openMarked(e2b); openMarked(e4b)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+
+        // A restored task keeps its record; a paused one (resume blob) and a recoverable
+        // one (staging file) keep theirs too.
+        openMarked(e2b); openMarked(e4b)
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: e2b.id, in: directory, defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+
+        openMarked(e2b); openMarked(e4b)
+        try Data("resume".utf8).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        try Data("GGUF".utf8).write(to: directory.appendingPathComponent("\(e4b.fileName).download"))
+        GGUFDownloadManager.reconcileDownloadChoiceRecords(restoredOptionID: nil, in: directory, defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e2b, defaults: defaults))
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(for: e4b, defaults: defaults))
+    }
+
     @Test func preferredModelUsesCatalogOrder() {
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(

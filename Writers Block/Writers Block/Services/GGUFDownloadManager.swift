@@ -364,14 +364,21 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         session.getAllTasks { [weak self] tasks in
             Task { @MainActor in
                 guard let self else { return }
-                if let task = tasks.compactMap({ $0 as? URLSessionDownloadTask }).first(where: {
+                let restored = tasks.compactMap({ $0 as? URLSessionDownloadTask }).first(where: {
                     GGUFDownloadCatalog.option(id: $0.taskDescription) != nil &&
                     $0.state != .completed && $0.state != .canceling
-                }), let option = GGUFDownloadCatalog.option(id: task.taskDescription) {
+                })
+                let option = restored.flatMap { GGUFDownloadCatalog.option(id: $0.taskDescription) }
+                if let task = restored, let option {
                     self.activeTask = task
                     self.beginDownload(option: option, receivedBytes: max(0, task.countOfBytesReceived))
                     task.resume()
                 }
+                Self.reconcileDownloadChoiceRecords(
+                    restoredOptionID: option?.id,
+                    in: try? GGUFModelStorage.modelsDirectory(create: false),
+                    defaults: self.defaults
+                )
                 self.isRestoringDownloads = false
             }
         }
@@ -536,6 +543,23 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     nonisolated static func noteChoiceDuringDownload(defaults: UserDefaults = .standard) {
         for option in GGUFDownloadCatalog.options where defaults.object(forKey: downloadChoiceChangedKey(option)) != nil {
             defaults.set(true, forKey: downloadChoiceChangedKey(option))
+        }
+    }
+
+    /// After a relaunch, drops the record of any download that did not survive it: no
+    /// restored task, no resume blob and no staging file (a force-quit cancels background
+    /// transfers). A paused or recoverable download keeps its record.
+    nonisolated static func reconcileDownloadChoiceRecords(
+        restoredOptionID: String?,
+        in directory: URL?,
+        defaults: UserDefaults = .standard
+    ) {
+        for option in GGUFDownloadCatalog.options where option.id != restoredOptionID {
+            let recoverable = directory.map { directory in
+                FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: directory).path) ||
+                    FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(option.fileName).download").path)
+            } ?? false
+            if !recoverable { _ = closeDownloadChoiceWatch(for: option, defaults: defaults) }
         }
     }
 
