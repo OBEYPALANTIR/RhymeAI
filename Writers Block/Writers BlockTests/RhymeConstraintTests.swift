@@ -39,6 +39,9 @@ struct RhymeConstraintTests {
         #expect(RhymeConstraint.lineEndWord("I wait through day—night") == "night")
         #expect(RhymeConstraint.lineEndWord("I wait through day-night") == "night")
         #expect(RhymeConstraint.lineEndWord("we know we’re") == "we're")
+        // A closing quote made of apostrophes is not a word.
+        #expect(RhymeConstraint.lineEndWord("carry me home '") == "home")
+        #expect(RhymeConstraint.lineEndWord("'carry me home’") == "home")
         #expect(RhymeConstraint.lineEndWord("") == "")
     }
 
