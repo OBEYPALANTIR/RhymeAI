@@ -405,7 +405,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
-        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
+        let openedChoiceRecord = Self.openDownloadChoiceWatch(for: option, defaults: defaults)
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -452,6 +452,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             beginDownload(option: option, receivedBytes: 0)
             task.resume()
         } catch {
+            // A start that never began owes no record; a paused download keeps its own.
+            if openedChoiceRecord { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
         }
     }
@@ -521,10 +523,12 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     // record (a paused download is still pending), and completion, failure and Stop
     // close the artifact's record.
 
-    nonisolated static func openDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) {
-        if defaults.object(forKey: downloadChoiceChangedKey(option)) == nil {
-            defaults.set(false, forKey: downloadChoiceChangedKey(option))
-        }
+    /// Opens the artifact's record unless one is open; true when this call opened it.
+    @discardableResult
+    nonisolated static func openDownloadChoiceWatch(for option: GGUFDownloadOption, defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: downloadChoiceChangedKey(option)) == nil else { return false }
+        defaults.set(false, forKey: downloadChoiceChangedKey(option))
+        return true
     }
 
     nonisolated static func noteChoiceDuringDownload(defaults: UserDefaults = .standard) {
@@ -539,8 +543,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         return !defaults.bool(forKey: downloadChoiceChangedKey(option))
     }
 
+    /// Keyed like the resume file, so a new artifact version never inherits a record.
     nonisolated private static func downloadChoiceChangedKey(_ option: GGUFDownloadOption) -> String {
-        "ggufChoiceChangedDuringDownload.\(option.id)"
+        "ggufChoiceChangedDuringDownload.\(option.id).\(option.sha256.prefix(16))"
     }
 
     func select(_ option: GGUFDownloadOption) {
