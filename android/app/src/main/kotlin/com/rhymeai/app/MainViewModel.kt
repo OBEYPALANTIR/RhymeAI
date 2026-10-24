@@ -138,9 +138,10 @@ internal object NewSongTestHooks {
     @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
-/** Lets a test hold a saved model's validation before it runs (null in the app). */
+/** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
 /** Lets a test hold launch loading after the appearance is known (null in the app). */
@@ -2760,7 +2761,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: com.rhymeai.app.ui.components.GemmaDownload,
         choiceRevisionAtStart: Long? = null
     ): Boolean {
-        if (choiceRevisionAtStart == null) modelChoiceRevision++
+        if (choiceRevisionAtStart == null) {
+            modelChoiceRevision++
+            LocalModelTestHooks.beforeUseValidation?.await()
+        }
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
         val validationError = withContext(Dispatchers.IO) {
             com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile)
