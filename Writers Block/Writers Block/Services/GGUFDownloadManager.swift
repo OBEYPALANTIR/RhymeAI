@@ -349,6 +349,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
     private let defaults: UserDefaults
+    /// A choice made before startup restoration has given surviving downloads their records.
+    private var choseDuringRestoration = false
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
@@ -379,6 +381,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                     in: try? GGUFModelStorage.modelsDirectory(create: false),
                     defaults: self.defaults
                 )
+                if self.choseDuringRestoration {
+                    Self.noteChoiceDuringDownload(defaults: self.defaults)
+                    self.choseDuringRestoration = false
+                }
                 self.isRestoringDownloads = false
             }
         }
@@ -578,9 +584,16 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         "ggufChoiceChangedDuringDownload.\(option.id).\(option.sha256.prefix(16))"
     }
 
+    /// An explicit choice while a download is pending; one made before startup
+    /// restoration has opened the surviving downloads' records is applied after it.
+    private func noteChoice() {
+        if isRestoringDownloads { choseDuringRestoration = true }
+        Self.noteChoiceDuringDownload(defaults: defaults)
+    }
+
     /// An explicit choice; completion's own selection goes through `selectInstalled`.
     func select(_ option: GGUFDownloadOption) {
-        Self.noteChoiceDuringDownload(defaults: defaults)
+        noteChoice()
         selectInstalled(option)
     }
 
@@ -599,7 +612,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let url = try GGUFModelStorage.modelsDirectory(create: false).appendingPathComponent(model.fileName)
             try GGUFModelCatalog.validateCustomFile(at: url)
-            Self.noteChoiceDuringDownload(defaults: defaults)
+            noteChoice()
             GGUFModelSelection.save(fileName: model.fileName)
             GGUFEngineChoice.gemma.save()
             selectedModelFileName = model.fileName
@@ -655,7 +668,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func selectEngine(_ choice: GGUFEngineChoice) {
-        Self.noteChoiceDuringDownload(defaults: defaults)
+        noteChoice()
         choice.save()
         engineChoice = choice
         if choice == .appleIntelligence { Task { await AIService.unloadGGUFRunner() } }
