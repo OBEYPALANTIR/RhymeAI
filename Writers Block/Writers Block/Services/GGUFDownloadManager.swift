@@ -405,7 +405,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
-        let openedChoiceRecord = Self.openDownloadChoiceWatch(for: option, defaults: defaults)
+        Self.openDownloadChoiceWatch(for: option, defaults: defaults)
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -452,8 +452,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             beginDownload(option: option, receivedBytes: 0)
             task.resume()
         } catch {
-            // A start that never began owes no record; a paused download keeps its own.
-            if openedChoiceRecord { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
+            // A start that never began owes no record, unless a paused download is waiting.
+            let resumable = (try? GGUFModelStorage.modelsDirectory(create: false))
+                .map { FileManager.default.fileExists(atPath: GGUFModelStorage.resumeDataURL(for: option, in: $0).path) } ?? false
+            if !resumable { _ = Self.closeDownloadChoiceWatch(for: option, defaults: defaults) }
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
         }
     }
@@ -548,9 +550,14 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         "ggufChoiceChangedDuringDownload.\(option.id).\(option.sha256.prefix(16))"
     }
 
+    /// An explicit choice; completion's own selection goes through `selectInstalled`.
     func select(_ option: GGUFDownloadOption) {
-        guard installedModelFiles.contains(option.fileName) else { return }
         Self.noteChoiceDuringDownload(defaults: defaults)
+        selectInstalled(option)
+    }
+
+    private func selectInstalled(_ option: GGUFDownloadOption) {
+        guard installedModelFiles.contains(option.fileName) else { return }
         GGUFModelSelection.save(fileName: option.fileName)
         GGUFEngineChoice.gemma.save()
         selectedModelFileName = option.fileName
@@ -701,7 +708,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) downloaded."
             return false
         }
-        select(option)
+        selectInstalled(option)
         statusMessage = "\(option.title) downloaded and selected."
         return true
     }
