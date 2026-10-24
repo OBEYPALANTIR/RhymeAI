@@ -576,7 +576,9 @@ object ProsodyAnalyzer {
 
     fun normalizeWord(word: String): String {
         return word.lowercase()
-            .filter { it in 'a'..'z' || it == '\'' }
+            .filter { it in 'a'..'z' || it in LyricTokenizer.APOSTROPHES }
+            .map { if (it in LyricTokenizer.APOSTROPHES) '\'' else it }
+            .joinToString("")
             .trim('\'')
     }
 

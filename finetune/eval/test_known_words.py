@@ -17,6 +17,12 @@ from eval import scoring  # noqa: E402
 
 
 class KnownWordTests(unittest.TestCase):
+    def test_curly_apostrophes_normalize_like_the_apps(self):
+        # LyricTokenizer / ProsodyAnalyzer.normalizeWord treat U+2019 and U+02BC as "'".
+        self.assertEqual(scoring.normalize_word("We\u2019re"), "we're")
+        self.assertEqual(scoring.normalize_word("don\u02BCt"), "don't")
+        self.assertEqual(scoring.WORD_PATTERN.findall("we\u2019re done"), ["we\u2019re", "done"])
+
     def test_is_known_single_word_mirrors_app_rule(self):
         self.assertTrue(scoring.is_known_single_word("shine"))
         self.assertTrue(scoring.is_known_single_word("Glow"))  # key is the lowercase spelling
