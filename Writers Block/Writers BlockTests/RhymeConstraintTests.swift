@@ -38,6 +38,7 @@ struct RhymeConstraintTests {
         // An unspaced dash or hyphen still ends on the last lexical word (Android `wordPattern`).
         #expect(RhymeConstraint.lineEndWord("I wait through day—night") == "night")
         #expect(RhymeConstraint.lineEndWord("I wait through day-night") == "night")
+        #expect(RhymeConstraint.lineEndWord("we know we’re") == "we're")
         #expect(RhymeConstraint.lineEndWord("") == "")
     }
 
