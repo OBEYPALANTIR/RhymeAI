@@ -10,9 +10,12 @@ import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.GemmaDownload
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -112,17 +115,28 @@ class GemmaDownloadSelectionInstrumentedTest {
         val other = File(app.filesDir, "selection-qa-other.gguf")
         other.writeBytes(file.readBytes())
         val otherDownload = download.copy(label = "Other QA", fileName = other.name)
+        val gate = CompletableDeferred<Unit>()
+        LocalModelTestHooks.beforeUseValidation = gate
         try {
             val revisionAtStart = viewModel.modelChoiceRevision
-            // The installed-model "Use" button: an explicit choice, so it counts.
-            runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(otherDownload) }
-            assertEquals(other.name, viewModel.selectedLocalModelId)
+            // The installed-model "Use" button: an explicit choice that must count before
+            // its validation runs, so the hook holds it there while the older download lands.
+            val use = MainScope().launch { viewModel.useDownloadedGemma(otherDownload) }
+            waitUntil("Use should count as a choice before its validation") { viewModel.modelChoiceRevision > revisionAtStart }
+            LocalModelTestHooks.beforeUseValidation = null
 
             runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, revisionAtStart) }
 
-            assertEquals(other.name, viewModel.selectedLocalModelId)
+            assertNotEquals(file.name, viewModel.selectedLocalModelId)
+            assertFalse("the older download must not start loading", viewModel.localModelLoading)
             assertTrue(viewModel.savedLocalModels.any { it.fileName == file.name })
+
+            gate.complete(Unit)
+            runBlocking { use.join() }
+            assertEquals(other.name, viewModel.selectedLocalModelId)
         } finally {
+            LocalModelTestHooks.beforeUseValidation = null
+            gate.complete(Unit)
             other.delete()
         }
     }
@@ -142,13 +156,13 @@ class GemmaDownloadSelectionInstrumentedTest {
         instrumentation.waitForIdleSync()
     }
 
-    private fun waitUntil(timeoutMillis: Long = 5_000, condition: () -> Boolean) {
+    private fun waitUntil(message: String = "Condition", timeoutMillis: Long = 5_000, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + timeoutMillis
         while (SystemClock.uptimeMillis() < deadline) {
             instrumentation.waitForIdleSync()
             if (condition()) return
             SystemClock.sleep(50)
         }
-        fail("Condition was not met within ${timeoutMillis}ms")
+        fail("$message was not met within ${timeoutMillis}ms")
     }
 }
