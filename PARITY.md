@@ -67,6 +67,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - Android and iOS unit-verified that section headers do not consume rhyme-scheme positions, latest previous lyric lines with the same scheme letter become the rhyme target, current section detection reaches prompt shaping, and empty lyrics use the first active scheme letter. Android pure seam additionally verifies cursor clamping and empty-scheme fallback to `A`.
 - Rhyme-scheme display row accounting follows Android `RhymeSchemeDisplay.kt` (`rhymeSchemeRows` at #55 candidate `5d401dff`): section headers and non-current blank/whitespace rows show no letter and consume no scheme position; the current blank shows `currentLetter` without consuming one; lyric rows advance and wrap through the scheme. iOS source/host verification is tracked in the G6 handoff; simulator/UI parity remains unverified.
+- `RhymeConstraint.lineEndWord` takes the last lexical word on both platforms (Android `wordPattern`, iOS `LyricRegex.word`), so an unspaced dash or hyphen (`day—night`, `day-night`) still ends on `night` instead of a word the dictionary cannot know. iOS unit-verified in `RhymeConstraintTests.lineEndWordStripsPunctuationAndQuotes`.
 
 ## Cloud backup parity checks
 
