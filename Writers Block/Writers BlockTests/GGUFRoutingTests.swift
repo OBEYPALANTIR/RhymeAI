@@ -887,28 +887,34 @@ struct GGUFSelectionCaptureTests {
     }
 }
 
-/// Completion through the manager, with the artifact installed and verified so `select`
-/// can run: a choice made while the download was pending is kept, including one switched
-/// away and back. The models directory, markers and selection are app-wide state, so the
-/// suite restores them.
+/// Completion through the manager, with both catalog artifacts installed and verified so
+/// `select` can run: a model or engine chosen while a download was pending is kept,
+/// including one switched away and back, and completion's own selection of another
+/// download is not a choice. The models directory, markers and selection are app-wide
+/// state, so the suite restores them.
 @MainActor
 @Suite(.serialized)
 struct GGUFDownloadCompletionTests {
     @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() throws {
         let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
         let directory = try GGUFModelStorage.modelsDirectory(create: true)
-        let installed = directory.appendingPathComponent(e2b.fileName)
-        try #require(!FileManager.default.fileExists(atPath: installed.path), "a real install is never touched")
-        #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
-        let handle = try FileHandle(forWritingTo: installed)
-        try handle.truncate(atOffset: UInt64(e2b.expectedBytes))
-        try handle.close()
-        GGUFVerifiedArtifactStore.record(sha256: e2b.sha256, at: installed)
+        for option in [e2b, e4b] {
+            let installed = directory.appendingPathComponent(option.fileName)
+            try #require(!FileManager.default.fileExists(atPath: installed.path), "a real install is never touched")
+            #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
+            let handle = try FileHandle(forWritingTo: installed)
+            try handle.truncate(atOffset: UInt64(option.expectedBytes))
+            try handle.close()
+            GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: installed)
+        }
         let savedFile = GGUFModelSelection.currentFileName
         let savedEngine = GGUFEngineChoice.current
         defer {
-            try? FileManager.default.removeItem(at: installed)
-            GGUFVerifiedArtifactStore.remove(fileName: e2b.fileName)
+            for option in [e2b, e4b] {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(option.fileName))
+                GGUFVerifiedArtifactStore.remove(fileName: option.fileName)
+            }
             if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
             savedEngine.save()
         }
@@ -917,14 +923,17 @@ struct GGUFDownloadCompletionTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = GGUFDownloadManager(configuration: .ephemeral, defaults: defaults)
         manager.refreshInstalledModels()
-        try #require(manager.installedModelFiles.contains(e2b.fileName))
+        try #require(manager.installedModelFiles.isSuperset(of: [e2b.fileName, e4b.fileName]))
 
-        // Nothing chosen while it ran: the download is selected.
+        // Nothing chosen while it ran: the download is selected and persisted.
         manager.selectEngine(.appleIntelligence)
+        manager.select(e4b)
         manager.beginDownloadForTest(e2b)
         #expect(manager.finishForTest(e2b))
         #expect(manager.engineChoice == .gemma)
         #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName == e2b.fileName)
+        #expect(GGUFEngineChoice.current == .gemma)
         #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
 
         // An engine chosen while it ran stays.
@@ -932,18 +941,31 @@ struct GGUFDownloadCompletionTests {
         manager.selectEngine(.appleIntelligence)
         #expect(!manager.finishForTest(e2b))
         #expect(manager.engineChoice == .appleIntelligence)
+        #expect(GGUFEngineChoice.current == .appleIntelligence)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+
+        // Another model chosen while it ran stays, in memory and on disk.
+        manager.beginDownloadForTest(e2b)
+        manager.select(e4b)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName == e4b.fileName)
 
         // Switching away and back is still a choice made while it ran.
         manager.beginDownloadForTest(e2b)
-        manager.selectEngine(.gemma)
-        manager.selectEngine(.appleIntelligence)
+        manager.select(e2b)
+        manager.select(e4b)
         #expect(!manager.finishForTest(e2b))
-        #expect(manager.engineChoice == .appleIntelligence)
+        #expect(manager.selectedModelFileName == e4b.fileName)
 
-        // The record is consumed, so the next download starts clean.
+        // Another download finishing (paused E2B, E4B downloaded meanwhile) is not a
+        // choice: the resumed E2B is still selected when it completes.
         manager.beginDownloadForTest(e2b)
+        manager.beginDownloadForTest(e4b)
+        #expect(manager.finishForTest(e4b))
+        #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(manager.finishForTest(e2b))
-        #expect(manager.engineChoice == .gemma)
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName == e2b.fileName)
     }
 }
