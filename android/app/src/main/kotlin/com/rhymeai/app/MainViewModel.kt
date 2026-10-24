@@ -2608,11 +2608,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** The provider, model and saved local model the user has picked. */
+    internal data class ModelChoice(val provider: AIProvider, val model: AIModel, val localModelId: String?)
+
+    internal fun modelChoice() = ModelChoice(selectedProvider, selectedModel, selectedLocalModelId)
+
+    /** Adds the model to the saved list; with [select] it also becomes the active local model and provider. */
     fun registerAndSelectLocalModel(
         path: String,
         displayName: String,
         isCustom: Boolean,
-        verifiedCatalogSha256: String? = null
+        verifiedCatalogSha256: String? = null,
+        select: Boolean = true
     ) {
         val file = java.io.File(path)
         val model = SavedLocalModel(
@@ -2628,11 +2635,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
             .sortedBy { it.displayName.lowercase() }
-        selectedLocalModelId = model.id
         viewModelScope.launch {
             repo.saveLocalModels(savedLocalModels)
-            repo.saveSelectedLocalModelId(model.id)
+            if (select) repo.saveSelectedLocalModelId(model.id)
         }
+        if (!select) return
+        selectedLocalModelId = model.id
         saveProvider(AIProvider.LOCAL)
         saveModel(AIModel.LOCAL_MODEL)
         loadLocalModel(file.absolutePath)
@@ -2729,7 +2737,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var verifiedGemmaFileNames by mutableStateOf<Set<String>>(emptySet())
         private set
 
-    internal suspend fun useDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload): Boolean {
+    /**
+     * Installs a finished download. [choiceAtStart] is the selection when the download
+     * began; the model only takes over the selection when the user has not since moved
+     * to another provider or saved local model (a Local provider still waiting for a
+     * model counts as waiting for this one). Null means the user asked to use it now.
+     */
+    internal suspend fun useDownloadedGemma(
+        model: com.rhymeai.app.ui.components.GemmaDownload,
+        choiceAtStart: ModelChoice? = null
+    ): Boolean {
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
         val validationError = withContext(Dispatchers.IO) {
             com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile)
@@ -2740,11 +2757,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
         verifiedGemmaFileNames += model.fileName
+        val choice = modelChoice()
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
             displayName = model.label,
             isCustom = false,
-            verifiedCatalogSha256 = model.sha256
+            verifiedCatalogSha256 = model.sha256,
+            select = choiceAtStart == null || choice == choiceAtStart ||
+                (choice.provider == AIProvider.LOCAL && choice.localModelId == null)
         )
         return true
     }
@@ -2756,6 +2776,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaDownloadVerifying = false
         gemmaDownloadError = null
         gemmaLastDownloadAttempt = model
+        val choiceAtStart = modelChoice()
         val app = getApplication<android.app.Application>()
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -2767,7 +2788,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
                         gemmaDownloadVerifying = false
-                        useDownloadedGemma(model)
+                        useDownloadedGemma(model, choiceAtStart)
                     }
                     return@launch
                 }
@@ -2794,7 +2815,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadProgress = null
                     gemmaDownloadVerifying = false
                     gemmaDownloadRevision++
-                    useDownloadedGemma(model)
+                    useDownloadedGemma(model, choiceAtStart)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)
