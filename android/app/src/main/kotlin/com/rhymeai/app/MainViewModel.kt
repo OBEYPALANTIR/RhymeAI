@@ -2753,12 +2753,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Installs a finished download. [choiceRevisionAtStart] is [modelChoiceRevision] when
      * the download began; the model only takes over the selection when the user has not
-     * asked for another provider or model since. Null means the user asked to use it now.
+     * asked for another provider or model since. Null means the user asked to use it now,
+     * which is itself a choice that a download finishing later must not override.
      */
     internal suspend fun useDownloadedGemma(
         model: com.rhymeai.app.ui.components.GemmaDownload,
         choiceRevisionAtStart: Long? = null
     ): Boolean {
+        if (choiceRevisionAtStart == null) modelChoiceRevision++
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
         val validationError = withContext(Dispatchers.IO) {
             com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile)

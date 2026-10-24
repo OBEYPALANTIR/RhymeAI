@@ -108,6 +108,26 @@ class GemmaDownloadSelectionInstrumentedTest {
     }
 
     @Test
+    fun completionYieldsToAnInstalledModelTheUserChoseWithUse() {
+        val other = File(app.filesDir, "selection-qa-other.gguf")
+        other.writeBytes(file.readBytes())
+        val otherDownload = download.copy(label = "Other QA", fileName = other.name)
+        try {
+            val revisionAtStart = viewModel.modelChoiceRevision
+            // The installed-model "Use" button: an explicit choice, so it counts.
+            runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(otherDownload) }
+            assertEquals(other.name, viewModel.selectedLocalModelId)
+
+            runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download, revisionAtStart) }
+
+            assertEquals(other.name, viewModel.selectedLocalModelId)
+            assertTrue(viewModel.savedLocalModels.any { it.fileName == file.name })
+        } finally {
+            other.delete()
+        }
+    }
+
+    @Test
     fun completionSelectsTheModelWhenNothingChanged() {
         val revisionAtStart = viewModel.modelChoiceRevision
 
