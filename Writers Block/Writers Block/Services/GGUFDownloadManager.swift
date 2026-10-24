@@ -402,9 +402,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
-        // Completion selects this download only while the choice made now still stands;
-        // a download the system finishes after a relaunch is judged against the same record.
-        Self.recordSelectionAtDownloadStart((selectedModelFileName, engineChoice))
+        Self.openDownloadChoiceWatch()
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -497,6 +495,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             } ?? false
             Task { @MainActor in
                 guard let self else { return }
+                if !saved { _ = Self.closeDownloadChoiceWatch() }
                 self.activeTask = nil
                 self.activeDownloadID = nil
                 self.isPausing = false
@@ -507,37 +506,37 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
     }
 
-    /// A finished download is selected only while the model and engine chosen
-    /// when it began are still chosen; a choice made meanwhile is kept.
-    nonisolated static func selectsOnCompletion(
-        startedWith start: (String?, GGUFEngineChoice)?,
-        current: (String?, GGUFEngineChoice)
-    ) -> Bool {
-        start.map { $0 == current } ?? true
+    // MARK: - Choice made while a download runs
+    //
+    // Completion selects a download only when no model or engine was chosen while it
+    // ran (the newer choice wins, as on Android). The record lives in defaults so a
+    // download the system finishes after a relaunch, an internal restart after a failed
+    // verification and a resume from Pause all keep it; `start` opens it only when none
+    // is open, and completion, failure and Stop close it.
+
+    nonisolated static func openDownloadChoiceWatch(defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: downloadChoiceChangedKey) == nil {
+            defaults.set(false, forKey: downloadChoiceChangedKey)
+        }
     }
 
-    /// The choice recorded when a download started, kept in defaults so a download the
-    /// system finishes after a relaunch is still judged against it. Nil when none is recorded.
-    nonisolated static func selectionAtDownloadStart(defaults: UserDefaults = .standard) -> (String?, GGUFEngineChoice)? {
-        guard let raw = defaults.string(forKey: selectionAtDownloadStartKey),
-              let separator = raw.firstIndex(of: "|"),
-              let engine = GGUFEngineChoice(rawValue: String(raw[..<separator])) else { return nil }
-        let fileName = String(raw[raw.index(after: separator)...])
-        return (fileName.isEmpty ? nil : fileName, engine)
+    nonisolated static func noteChoiceDuringDownload(defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: downloadChoiceChangedKey) != nil {
+            defaults.set(true, forKey: downloadChoiceChangedKey)
+        }
     }
 
-    nonisolated static func recordSelectionAtDownloadStart(
-        _ selection: (String?, GGUFEngineChoice)?,
-        defaults: UserDefaults = .standard
-    ) {
-        guard let selection else { return defaults.removeObject(forKey: selectionAtDownloadStartKey) }
-        defaults.set("\(selection.1.rawValue)|\(selection.0 ?? "")", forKey: selectionAtDownloadStartKey)
+    /// Closes the watch; true when the finished download should be selected.
+    nonisolated static func closeDownloadChoiceWatch(defaults: UserDefaults = .standard) -> Bool {
+        defer { defaults.removeObject(forKey: downloadChoiceChangedKey) }
+        return !defaults.bool(forKey: downloadChoiceChangedKey)
     }
 
-    nonisolated private static let selectionAtDownloadStartKey = "ggufSelectionAtDownloadStart"
+    nonisolated private static let downloadChoiceChangedKey = "ggufChoiceChangedDuringDownload"
 
     func select(_ option: GGUFDownloadOption) {
         guard installedModelFiles.contains(option.fileName) else { return }
+        if activeDownloadID != nil { Self.noteChoiceDuringDownload() }
         GGUFModelSelection.save(fileName: option.fileName)
         GGUFEngineChoice.gemma.save()
         selectedModelFileName = option.fileName
@@ -606,6 +605,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func selectEngine(_ choice: GGUFEngineChoice) {
+        if activeDownloadID != nil { Self.noteChoiceDuringDownload() }
         choice.save()
         engineChoice = choice
         if choice == .appleIntelligence { Task { await AIService.unloadGGUFRunner() } }
@@ -668,11 +668,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
-        let selects = Self.selectsOnCompletion(
-            startedWith: Self.selectionAtDownloadStart(),
-            current: (selectedModelFileName, engineChoice)
-        )
-        Self.recordSelectionAtDownloadStart(nil)
+        let selects = Self.closeDownloadChoiceWatch()
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."
@@ -685,6 +681,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
         guard activeTask?.taskIdentifier == taskIdentifier, !isPausing else { return }
+        _ = Self.closeDownloadChoiceWatch()
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false

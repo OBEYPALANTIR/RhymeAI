@@ -344,35 +344,36 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFModelStorage.receivedBytes(inResumeData: swiftRoot) == 7)
     }
 
-    /// The choice recorded at download start survives a relaunch (a new manager
-    /// reads the same defaults) and is cleared when completion consumes it.
-    @Test func selectionAtDownloadStartRoundTripsThroughDefaults() throws {
-        let suite = "gguf-selection-\(UUID().uuidString)"
+    /// Completion selects the download unless a model or engine was chosen while it
+    /// ran. The record sits in defaults, so a new manager after a relaunch reads it, an
+    /// internal restart (`start` after a failed verification) keeps it, and a resume from
+    /// Pause keeps it; completion, failure and Stop close it.
+    @Test func downloadChoiceWatchKeepsAChoiceMadeWhileTheDownloadRan() {
+        let suite = "gguf-choice-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let e2b = GGUFDownloadCatalog.options[0].fileName
 
-        #expect(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults) == nil)
-        GGUFDownloadManager.recordSelectionAtDownloadStart((e2b, .gemma), defaults: defaults)
-        let gemma = try #require(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults))
-        #expect(gemma.0 == e2b && gemma.1 == .gemma)
-        GGUFDownloadManager.recordSelectionAtDownloadStart((nil, .appleIntelligence), defaults: defaults)
-        let apple = try #require(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults))
-        #expect(apple.0 == nil && apple.1 == .appleIntelligence)
-        GGUFDownloadManager.recordSelectionAtDownloadStart(nil, defaults: defaults)
-        #expect(GGUFDownloadManager.selectionAtDownloadStart(defaults: defaults) == nil)
-    }
+        // No record (a download that began before this rule existed) still selects.
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
 
-    /// Finishing a download selects it only while the choice made when the
-    /// download started still stands; a model or engine picked meanwhile wins.
-    @Test func downloadCompletionKeepsAChoiceMadeWhileItRan() {
-        let e2b = GGUFDownloadCatalog.options[0].fileName
-        let e4b = GGUFDownloadCatalog.options[1].fileName
-        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e2b, .gemma)))
-        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: (nil, .gemma), current: (nil, .gemma)))
-        #expect(GGUFDownloadManager.selectsOnCompletion(startedWith: nil, current: (e2b, .appleIntelligence)))
-        #expect(!GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e2b, .appleIntelligence)))
-        #expect(!GGUFDownloadManager.selectsOnCompletion(startedWith: (e2b, .gemma), current: (e4b, .gemma)))
+        // Nothing chosen while it ran.
+        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+
+        // A choice while it ran, even one switched away and back, is kept.
+        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
+        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        // An internal restart or a resume reopens without forgetting the choice.
+        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
+        #expect(!GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+
+        // Closing clears the record, so the next download starts clean.
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
+        // A choice with no download running is not a change during one.
+        GGUFDownloadManager.noteChoiceDuringDownload(defaults: defaults)
+        GGUFDownloadManager.openDownloadChoiceWatch(defaults: defaults)
+        #expect(GGUFDownloadManager.closeDownloadChoiceWatch(defaults: defaults))
     }
 
     @Test func preferredModelUsesCatalogOrder() {
