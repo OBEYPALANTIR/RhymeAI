@@ -101,10 +101,12 @@ object LyricsExporter {
             y += 8f
             if (project.theme.isNotBlank()) {
                 y += lineHeight
-                var themeY = y
-                for (row in wrapLine("Theme: ${project.theme}", maxLineWidth, themePaint::measureText)) {
-                    canvas.drawText(row, marginX, themeY, themePaint)
-                    themeY += lineHeight - 4f
+                val rows = wrapLine("Theme: ${project.theme}", maxLineWidth, themePaint::measureText)
+                rows.forEachIndexed { index, row ->
+                    if (y > pageHeight - marginY) startNewPage()
+                    canvas.drawText(row, marginX, y, themePaint)
+                    // Every wrapped row moves the shared cursor so the lyrics start below the theme.
+                    if (index < rows.lastIndex) y += lineHeight - 4f
                 }
                 y += lineHeight
             }
