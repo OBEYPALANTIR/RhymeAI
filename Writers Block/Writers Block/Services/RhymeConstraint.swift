@@ -12,12 +12,15 @@ nonisolated enum RhymeConstraint {
 
     /// Last lexical word of a line, lowercased, as Android `wordPattern` finds
     /// it, so punctuation attached to the word ("day—night", "line—") is not
-    /// part of it.
+    /// part of it. A match that is only apostrophes (a closing quote) is skipped.
     static func lineEndWord(_ line: String) -> String {
         let nsLine = line as NSString
         let range = NSRange(location: 0, length: nsLine.length)
-        guard let last = LyricRegex.word.matches(in: line, range: range).last else { return "" }
-        return ProsodyAnalyzer.normalizeWord(nsLine.substring(with: last.range))
+        for match in LyricRegex.word.matches(in: line, range: range).reversed() {
+            let normalized = ProsodyAnalyzer.normalizeWord(nsLine.substring(with: match.range))
+            if !normalized.isEmpty { return normalized }
+        }
+        return ""
     }
 
     /// Allowed ending words for a target word, best rhymes first. Empty when
