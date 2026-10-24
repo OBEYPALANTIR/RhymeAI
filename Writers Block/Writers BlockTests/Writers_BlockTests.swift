@@ -246,6 +246,20 @@ struct Writers_BlockTests {
         #expect(prosody.stressPattern == [1, 1, 1, 1])
     }
 
+    /// Typed and pasted contractions carry U+2019 (and sometimes U+02BC); they
+    /// are the same dictionary word as the straight-apostrophe spelling.
+    @Test func prosodyAnalyzerTreatsCurlyApostrophesAsStraightOnes() {
+        #expect(ProsodyAnalyzer.normalizeWord("we\u{2019}re") == "we're")
+        #expect(ProsodyAnalyzer.normalizeWord("we\u{02BC}re") == "we're")
+
+        for spelling in ["we're", "we\u{2019}re", "we\u{02BC}re"] {
+            let prosody = ProsodyAnalyzer.analyzeLine("\(spelling) glowed", dictionary: Self.fixtureDictionary)
+            #expect(prosody.words.map(\.normalized) == ["we're", "glowed"], "\(spelling)")
+            #expect(prosody.syllableCount == 2, "\(spelling)")
+            #expect(prosody.words.allSatisfy { !$0.isFallback }, "\(spelling)")
+        }
+    }
+
     @Test func prosodyAnalyzerUsesCmuPhonesForRhymeKeys() {
         let roadKeys = ProsodyAnalyzer.rhymeKeys(for: "road", dictionary: Self.fixtureDictionary)
         let glowedKeys = ProsodyAnalyzer.rhymeKeys(for: "glowed", dictionary: Self.fixtureDictionary)
@@ -943,6 +957,7 @@ struct Writers_BlockTests {
         "yellow\tY EH1 L OW0",
         "music\tM Y UW1 Z IH0 K",
         "road\tR OW1 D",
+        "we're\tW IH1 R",
         "glowed\tG L OW1 D",
         "radio\tR EY1 D IY0 OW2",
         "orange\tAO1 R AH0 N JH|AO1 R IH0 N JH"

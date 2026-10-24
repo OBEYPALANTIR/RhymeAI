@@ -762,7 +762,10 @@ nonisolated enum ProsodyAnalyzer {
     }
 
     static func normalizeWord(_ word: String) -> String {
-        let scalars = word.lowercased().unicodeScalars.filter { scalar in
+        let scalars = word.lowercased().unicodeScalars.lazy.map { scalar in
+            // Curly and modifier apostrophes are the dictionary's straight one.
+            scalar.value == 0x2019 || scalar.value == 0x02BC ? Unicode.Scalar(39) : scalar
+        }.filter { scalar in
             (97...122).contains(Int(scalar.value)) || scalar.value == 39
         }
         return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: CharacterSet(charactersIn: "'"))
