@@ -548,7 +548,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            viewModel.clearPendingRewriteSelection()
+            // The Song Notebook offers "Keep selected lyrics", so it keeps the selection it opened over.
+            if (!viewModel.showSongNotebook) viewModel.clearPendingRewriteSelection()
             if (modalOpen) {
                 focusManager.clearFocus(force = true)
             }
