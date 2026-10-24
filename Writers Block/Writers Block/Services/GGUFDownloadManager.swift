@@ -306,12 +306,23 @@ enum GGUFModelStorage {
     /// Bytes a saved resume blob lets URLSession skip; its partial file already
     /// occupies them on the volume. Zero when there is no readable blob.
     nonisolated static func resumedBytes(for option: GGUFDownloadOption, in directory: URL) -> Int64 {
-        guard let data = try? Data(contentsOf: resumeDataURL(for: option, in: directory)),
-              let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return 0 }
-        unarchiver.requiresSecureCoding = false
-        let info = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [String: Any]
-        let received = (info?["NSURLSessionResumeBytesReceived"] as? NSNumber)?.int64Value ?? 0
-        return min(max(0, received), option.expectedBytes)
+        guard let data = try? Data(contentsOf: resumeDataURL(for: option, in: directory)) else { return 0 }
+        return min(max(0, receivedBytes(inResumeData: data)), option.expectedBytes)
+    }
+
+    /// `NSURLSessionResumeBytesReceived` from URLSession resume data. Current systems write a
+    /// keyed archive whose root dictionary sits under the literal key
+    /// "NSKeyedArchiveRootObjectKey" (checked against a real blob on macOS 27); older ones wrote
+    /// the dictionary as a plain property list. Anything else reads as 0.
+    nonisolated static func receivedBytes(inResumeData data: Data) -> Int64 {
+        var info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        if info?["$archiver"] != nil, let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
+            unarchiver.requiresSecureCoding = false
+            info = ["NSKeyedArchiveRootObjectKey", NSKeyedArchiveRootObjectKey].lazy
+                .compactMap { unarchiver.decodeObject(forKey: $0) as? [String: Any] }
+                .first
+        }
+        return (info?["NSURLSessionResumeBytesReceived"] as? NSNumber)?.int64Value ?? 0
     }
 }
 
@@ -337,9 +348,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private var session: URLSession!
     private var activeTask: URLSessionDownloadTask?
-    /// The model and engine chosen when the active download began; completion
-    /// selects the download only while that choice still stands.
-    private var selectionAtDownloadStart: (String?, GGUFEngineChoice)?
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
@@ -394,6 +402,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             statusMessage = "\(option.title) is ready to use."
             return
         }
+        // Completion selects this download only while the choice made now still stands;
+        // a download the system finishes after a relaunch is judged against the same record.
+        Self.recordSelectionAtDownloadStart((selectedModelFileName, engineChoice))
 
         do {
             let directory = try GGUFModelStorage.modelsDirectory(create: true)
@@ -454,8 +465,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                     try GGUFModelStorage.verifyOrReclaimInstalled(option, in: directory)
                 }.value
                 if verified {
-                    finish(option: option)
-                    statusMessage = "\(option.title) verified and selected."
+                    let selected = finish(option: option)
+                    statusMessage = "\(option.title) verified\(selected ? " and selected" : "")."
                 } else {
                     isVerifying = false
                     activeDownloadID = nil
@@ -504,6 +515,26 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     ) -> Bool {
         start.map { $0 == current } ?? true
     }
+
+    /// The choice recorded when a download started, kept in defaults so a download the
+    /// system finishes after a relaunch is still judged against it. Nil when none is recorded.
+    nonisolated static func selectionAtDownloadStart(defaults: UserDefaults = .standard) -> (String?, GGUFEngineChoice)? {
+        guard let raw = defaults.string(forKey: selectionAtDownloadStartKey),
+              let separator = raw.firstIndex(of: "|"),
+              let engine = GGUFEngineChoice(rawValue: String(raw[..<separator])) else { return nil }
+        let fileName = String(raw[raw.index(after: separator)...])
+        return (fileName.isEmpty ? nil : fileName, engine)
+    }
+
+    nonisolated static func recordSelectionAtDownloadStart(
+        _ selection: (String?, GGUFEngineChoice)?,
+        defaults: UserDefaults = .standard
+    ) {
+        guard let selection else { return defaults.removeObject(forKey: selectionAtDownloadStartKey) }
+        defaults.set("\(selection.1.rawValue)|\(selection.0 ?? "")", forKey: selectionAtDownloadStartKey)
+    }
+
+    nonisolated private static let selectionAtDownloadStartKey = "ggufSelectionAtDownloadStart"
 
     func select(_ option: GGUFDownloadOption) {
         guard installedModelFiles.contains(option.fileName) else { return }
@@ -581,7 +612,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
-        selectionAtDownloadStart = (selectedModelFileName, engineChoice)
         activeDownloadID = option.id
         progressSampleTime = Date()
         progressSampleBytes = receivedBytes
@@ -630,24 +660,27 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         statusMessage = "Downloading \(option.title)… \(Int(progress * 100))% · \(transfer)\(rate)"
     }
 
-    private func finish(option: GGUFDownloadOption) {
+    /// Installs the finished download; returns whether it was also selected.
+    @discardableResult
+    private func finish(option: GGUFDownloadOption) -> Bool {
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false
         progress = 1
         receivedBytes = option.expectedBytes
         let selects = Self.selectsOnCompletion(
-            startedWith: selectionAtDownloadStart,
+            startedWith: Self.selectionAtDownloadStart(),
             current: (selectedModelFileName, engineChoice)
         )
-        selectionAtDownloadStart = nil
+        Self.recordSelectionAtDownloadStart(nil)
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."
-            return
+            return false
         }
         select(option)
         statusMessage = "\(option.title) downloaded and selected."
+        return true
     }
 
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
