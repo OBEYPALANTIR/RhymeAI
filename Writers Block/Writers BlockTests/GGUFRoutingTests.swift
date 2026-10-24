@@ -852,57 +852,61 @@ struct GGUFSelectionCaptureTests {
     }
 }
 
-/// Completion through the manager, with both catalog artifacts installed and verified so
-/// `select` can run: the download selects itself only while the choice revision it
-/// started under is still current; a completion with no live snapshot (a manager that
-/// restored after a relaunch) installs without selecting. The models directory, markers
-/// and selection are app-wide state, so the suite restores them.
+/// Completion through the manager, each test on its own temporary models root and
+/// defaults, with both catalog artifacts installed and verified there so `select` can
+/// run: the download selects itself only while the choice revision it started under is
+/// still current; a completion with no live snapshot (a manager that restored after a
+/// relaunch) installs without selecting.
 @MainActor
-@Suite(.serialized)
 struct GGUFDownloadCompletionTests {
-    private static func installCatalogStandIns(_ options: [GGUFDownloadOption], in directory: URL) throws {
-        for option in options {
-            let installed = directory.appendingPathComponent(option.fileName)
-            try #require(!FileManager.default.fileExists(atPath: installed.path), "a real install is never touched")
-            #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
-            let handle = try FileHandle(forWritingTo: installed)
-            try handle.truncate(atOffset: UInt64(option.expectedBytes))
-            try handle.close()
-            GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: installed)
-        }
-    }
+    private struct Sandbox {
+        let root: URL
+        let defaults: UserDefaults
+        let suite: String
 
-    private static func removeCatalogStandIns(_ options: [GGUFDownloadOption], in directory: URL) {
-        for option in options {
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(option.fileName))
-            GGUFVerifiedArtifactStore.remove(fileName: option.fileName)
+        init() throws {
+            suite = "gguf-completion-\(UUID().uuidString)"
+            defaults = try #require(UserDefaults(suiteName: suite))
+            root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         }
-    }
 
-    private static func restoredManager() async throws -> GGUFDownloadManager {
-        let manager = GGUFDownloadManager(configuration: .ephemeral)
-        for _ in 0..<250 where manager.isRestoringDownloads {
-            try await Task.sleep(for: .milliseconds(20))
+        func install(_ options: [GGUFDownloadOption]) throws {
+            for option in options {
+                let installed = root.appendingPathComponent(option.fileName)
+                #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
+                let handle = try FileHandle(forWritingTo: installed)
+                try handle.truncate(atOffset: UInt64(option.expectedBytes))
+                try handle.close()
+                GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: installed, defaults: defaults)
+            }
         }
-        try #require(!manager.isRestoringDownloads)
-        manager.refreshInstalledModels()
-        return manager
+
+        @MainActor
+        func restoredManager() async throws -> GGUFDownloadManager {
+            let manager = GGUFDownloadManager(configuration: .ephemeral, modelsRoot: root, defaults: defaults)
+            for _ in 0..<250 where manager.isRestoringDownloads {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(!manager.isRestoringDownloads)
+            manager.refreshInstalledModels()
+            return manager
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
     }
 
     @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
         let e2b = GGUFDownloadCatalog.options[0]
         let e4b = GGUFDownloadCatalog.options[1]
-        let directory = try GGUFModelStorage.modelsDirectory(create: true)
-        try Self.installCatalogStandIns([e2b, e4b], in: directory)
-        let savedFile = GGUFModelSelection.currentFileName
-        let savedEngine = GGUFEngineChoice.current
-        defer {
-            Self.removeCatalogStandIns([e2b, e4b], in: directory)
-            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
-            savedEngine.save()
-        }
-        let manager = try await Self.restoredManager()
-        try #require(manager.installedModelFiles.isSuperset(of: [e2b.fileName, e4b.fileName]))
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
+        try #require(manager.installedModelFiles == [e2b.fileName, e4b.fileName])
 
         // Nothing chosen while it ran: the download is selected and persisted.
         manager.selectEngine(.appleIntelligence)
@@ -911,8 +915,8 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.finishForTest(e2b))
         #expect(manager.engineChoice == .gemma)
         #expect(manager.selectedModelFileName == e2b.fileName)
-        #expect(GGUFModelSelection.currentFileName == e2b.fileName)
-        #expect(GGUFEngineChoice.current == .gemma)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        #expect(GGUFEngineChoice.current(defaults: sandbox.defaults) == .gemma)
         #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
 
         // An engine chosen while it ran stays.
@@ -920,7 +924,7 @@ struct GGUFDownloadCompletionTests {
         manager.selectEngine(.appleIntelligence)
         #expect(!manager.finishForTest(e2b))
         #expect(manager.engineChoice == .appleIntelligence)
-        #expect(GGUFEngineChoice.current == .appleIntelligence)
+        #expect(GGUFEngineChoice.current(defaults: sandbox.defaults) == .appleIntelligence)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
 
         // Another model chosen while it ran stays, in memory and on disk.
@@ -928,7 +932,7 @@ struct GGUFDownloadCompletionTests {
         manager.select(e4b)
         #expect(!manager.finishForTest(e2b))
         #expect(manager.selectedModelFileName == e4b.fileName)
-        #expect(GGUFModelSelection.currentFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
 
         // Switching away and back is still a choice made while it ran.
         manager.beginDownloadForTest(e2b)
@@ -948,16 +952,10 @@ struct GGUFDownloadCompletionTests {
     @Test func completionWithoutALiveSnapshotInstallsWithoutSelecting() async throws {
         let e2b = GGUFDownloadCatalog.options[0]
         let e4b = GGUFDownloadCatalog.options[1]
-        let directory = try GGUFModelStorage.modelsDirectory(create: true)
-        try Self.installCatalogStandIns([e2b, e4b], in: directory)
-        let savedFile = GGUFModelSelection.currentFileName
-        let savedEngine = GGUFEngineChoice.current
-        defer {
-            Self.removeCatalogStandIns([e2b, e4b], in: directory)
-            if let savedFile { GGUFModelSelection.save(fileName: savedFile) } else { GGUFModelSelection.clear() }
-            savedEngine.save()
-        }
-        let manager = try await Self.restoredManager()
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
         manager.select(e4b)
         manager.selectEngine(.appleIntelligence)
 
@@ -965,7 +963,7 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.installedModelFiles.contains(e2b.fileName))
         #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(manager.engineChoice == .appleIntelligence)
-        #expect(GGUFModelSelection.currentFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
     }
 }

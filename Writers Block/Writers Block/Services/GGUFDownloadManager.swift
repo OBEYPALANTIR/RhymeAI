@@ -354,12 +354,25 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// after a relaunch, installs the file without selecting it.
     private var modelChoiceRevision = 0
     private var choiceRevisionAtDownloadStart: Int?
+    /// Tests give each manager its own models directory and defaults; nil means the
+    /// app's `GGUFModelStorage.modelsDirectory`.
+    private let modelsRoot: URL?
+    private let defaults: UserDefaults
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
-    /// Tests pass an ephemeral configuration; the app uses the background session.
-    init(configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration()) {
+    /// Tests pass an ephemeral configuration, a temporary models root and their own
+    /// defaults; the app uses the background session, the real directory and `.standard`.
+    init(
+        configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration(),
+        modelsRoot: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        self.modelsRoot = modelsRoot
+        self.defaults = defaults
         super.init()
+        selectedModelFileName = GGUFModelSelection.currentFileName(defaults: defaults)
+        engineChoice = GGUFEngineChoice.current(defaults: defaults)
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
@@ -391,9 +404,20 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         return configuration
     }
 
+    nonisolated private func modelsDirectory(create: Bool) throws -> URL {
+        guard let modelsRoot else { return try GGUFModelStorage.modelsDirectory(create: create) }
+        if create { try FileManager.default.createDirectory(at: modelsRoot, withIntermediateDirectories: true) }
+        return modelsRoot
+    }
+
     func refreshInstalledModels() {
-        installedModelFiles = Set(GGUFModelStorage.installedModelFileNames())
-        if let preferred = GGUFModelSelection.preferredFileName(in: Array(installedModelFiles)) {
+        let directory = try? modelsDirectory(create: false)
+        installedModelFiles = Set(directory.map { GGUFModelStorage.installedModelFileNames(in: $0, defaults: defaults) } ?? [])
+        if let preferred = GGUFModelSelection.preferredFileName(
+            in: Array(installedModelFiles),
+            selectedFileName: GGUFModelSelection.currentFileName(defaults: defaults),
+            defaults: defaults
+        ) {
             selectedModelFileName = preferred
         } else {
             selectedModelFileName = nil
@@ -411,7 +435,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         choiceRevisionAtDownloadStart = modelChoiceRevision
 
         do {
-            let directory = try GGUFModelStorage.modelsDirectory(create: true)
+            let directory = try modelsDirectory(create: true)
             if GGUFModelStorage.needsInstalledVerification(for: option, in: directory) {
                 verifyInstalled(option, in: directory)
                 return
@@ -489,7 +513,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func pauseDownload() {
         guard !isPausing, !isVerifying, let task = activeTask,
               let option = GGUFDownloadCatalog.option(id: task.taskDescription),
-              let directory = try? GGUFModelStorage.modelsDirectory(create: true) else {
+              let directory = try? modelsDirectory(create: true) else {
             return
         }
         isPausing = true
@@ -522,8 +546,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     private func selectInstalled(_ option: GGUFDownloadOption) {
         guard installedModelFiles.contains(option.fileName) else { return }
-        GGUFModelSelection.save(fileName: option.fileName)
-        GGUFEngineChoice.gemma.save()
+        GGUFModelSelection.save(fileName: option.fileName, defaults: defaults)
+        GGUFEngineChoice.gemma.save(defaults: defaults)
         selectedModelFileName = option.fileName
         engineChoice = .gemma
         statusMessage = "\(option.title) selected."
@@ -533,11 +557,11 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func selectCustom(_ model: GGUFCustomModel) -> Bool {
         guard activeDownloadID == nil, !isRestoringDownloads, !isVerifying else { return false }
         do {
-            let url = try GGUFModelStorage.modelsDirectory(create: false).appendingPathComponent(model.fileName)
+            let url = try modelsDirectory(create: false).appendingPathComponent(model.fileName)
             try GGUFModelCatalog.validateCustomFile(at: url)
             modelChoiceRevision += 1
-            GGUFModelSelection.save(fileName: model.fileName)
-            GGUFEngineChoice.gemma.save()
+            GGUFModelSelection.save(fileName: model.fileName, defaults: defaults)
+            GGUFEngineChoice.gemma.save(defaults: defaults)
             selectedModelFileName = model.fileName
             engineChoice = .gemma
             statusMessage = "\(model.displayName) selected."
@@ -560,7 +584,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
                 try Task.checkCancellation()
                 try GGUFModelCatalog.validateCustomFile(at: sourceURL)
-                let directory = try GGUFModelStorage.modelsDirectory(create: true)
+                let directory = try self.modelsDirectory(create: true)
                 let fileName = "custom-\(UUID().uuidString).gguf"
                 let destination = directory.appendingPathComponent(fileName)
                 let staging = directory.appendingPathComponent("\(fileName).import")
@@ -592,7 +616,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     func selectEngine(_ choice: GGUFEngineChoice) {
         modelChoiceRevision += 1
-        choice.save()
+        choice.save(defaults: defaults)
         engineChoice = choice
         if choice == .appleIntelligence { Task { await AIService.unloadGGUFRunner() } }
     }
@@ -732,7 +756,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
                !(200...299).contains(response.statusCode) {
                 throw GGUFDownloadError.httpStatus(response.statusCode)
             }
-            let directory = try GGUFModelStorage.modelsDirectory(create: true)
+            let directory = try modelsDirectory(create: true)
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
             try? FileManager.default.removeItem(at: stagingURL)
             try FileManager.default.moveItem(at: location, to: stagingURL)
@@ -756,7 +780,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         let option = GGUFDownloadCatalog.option(id: task.taskDescription)
         if let option,
            let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
-           let directory = try? GGUFModelStorage.modelsDirectory(create: true) {
+           let directory = try? modelsDirectory(create: true) {
             try? resumeData.write(
                 to: GGUFModelStorage.resumeDataURL(for: option, in: directory),
                 options: .atomic
