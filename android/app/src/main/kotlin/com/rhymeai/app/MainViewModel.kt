@@ -594,7 +594,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inspectorWord, inspectorRange
     )
 
-    internal fun isCurrentAIContext(context: EditorAIContext) = context == editorAIContext()
+    internal fun isCurrentAIContext(context: EditorAIContext): Boolean {
+        val current = editorAIContext()
+        // The first autosave gives an unsaved draft its ID without changing what the
+        // request was built from; navigation to another song bumps the revisions instead.
+        return context == current || (context.projectId == null && context == current.copy(projectId = null))
+    }
 
     fun hasCloudAISharingConsent(provider: AIProvider, scope: CloudAISharingScope): Boolean =
         provider == AIProvider.LOCAL || "${provider.name}.${scope.name}" in cloudAIConsents
