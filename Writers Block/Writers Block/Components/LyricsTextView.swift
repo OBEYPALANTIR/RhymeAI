@@ -12,6 +12,17 @@ struct LyricsRewriteHighlight: Equatable {
 /// text storage, and the stock copy and cut would put it on the pasteboard as
 /// rich text.
 final class LyricsUITextView: UITextView {
+    /// Set when this view replaces a focused one (the writing column is
+    /// re-created per song open); it takes the focus as soon as it is on screen.
+    var resumesEditingOnAttach = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, resumesEditingOnAttach else { return }
+        resumesEditingOnAttach = false
+        becomeFirstResponder()
+    }
+
     override func copy(_ sender: Any?) {
         let copied = selectedTextRange.flatMap(text(in:))
         super.copy(sender)
@@ -41,10 +52,14 @@ struct LyricsTextView: UIViewRepresentable {
     var syllableColoringEnabled: Bool = false
     var isEditable: Bool = true
     var placeholder: String = "Start writing your lyrics here..."
+    /// The writing column is re-created for each song open (its cross-fade);
+    /// a focused editor stays focused across it, as the one text view did before.
+    var resumesEditingOnCreate: Bool = false
 
     func makeUIView(context: Context) -> UITextView {
         let textView = LyricsUITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
+        textView.resumesEditingOnAttach = resumesEditingOnCreate
         Self.configureTypography(textView)
         textView.backgroundColor = .clear
         applyAppearance(to: textView)

@@ -129,7 +129,10 @@ struct EditorView: View {
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
-    @FocusState private var titleFieldIsFocused: Bool
+    /// The song open whose title field holds focus. Keyed by the open token
+    /// because SwiftUI does not learn that the lyrics text view took the focus:
+    /// a stale value never matches the next open's re-created title field.
+    @FocusState private var titleFocusedOpen: EditorViewModel.EditorOpen?
     /// The New Song open whose title focus has already been granted, so a
     /// re-created editor does not raise the keyboard again.
     @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
@@ -834,7 +837,7 @@ struct EditorView: View {
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
-                    .focused($titleFieldIsFocused)
+                    .focused($titleFocusedOpen, equals: viewModel.editorOpen)
                     .onChange(of: viewModel.title) {
                         viewModel.triggerAutoSave()
                     }
@@ -865,8 +868,14 @@ struct EditorView: View {
             guard open.isNewSong, focusedNewSongOpen != open else { return }
             focusedNewSongOpen = open
             try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
-            guard !Task.isCancelled else { return }
-            titleFieldIsFocused = true
+            // The field may still be arriving with the welcome-to-editor fade;
+            // ask again until the focus system reports it, within the state tier.
+            for _ in 0..<4 {
+                guard !Task.isCancelled else { return }
+                titleFocusedOpen = open
+                try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+                if titleFocusedOpen == open { return }
+            }
         }
         .scrollPosition($writingScrollPosition)
         .onScrollGeometryChange(for: Double.self) { geometry in
@@ -938,7 +947,8 @@ struct EditorView: View {
             bottomOverlayHeight: selectionAvoidanceInset,
             rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
             syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
-            isEditable: !viewModel.hasActiveRewrite
+            isEditable: !viewModel.hasActiveRewrite,
+            resumesEditingOnCreate: lyricsEditorIsFocused
         )
         .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
         .padding(.horizontal, editorSidePadding)
