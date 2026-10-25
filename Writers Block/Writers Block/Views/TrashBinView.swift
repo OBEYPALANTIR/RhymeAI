@@ -80,23 +80,22 @@ struct TrashBinView: View {
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.sm)
 
-                    // When the last restore or delete empties a list, its empty
-                    // state fades in on the state tier; a tab switch stays instant.
+                    // The list stays mounted so its last row can leave on the
+                    // dismiss tier; the empty state fades in over it on the
+                    // state tier. A tab switch stays instant.
                     if activeTab == .projects {
-                        Group {
+                        ZStack {
+                            trashList
                             if trashedProjects.isEmpty {
                                 emptyState.transition(.opacity)
-                            } else {
-                                trashList
                             }
                         }
                         .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedProjects.isEmpty)
                     } else {
-                        Group {
+                        ZStack {
+                            recordingsTrashList
                             if trashedMemos.isEmpty {
                                 recordingsEmptyState.transition(.opacity)
-                            } else {
-                                recordingsTrashList
                             }
                         }
                         .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedMemos.isEmpty)
@@ -173,7 +172,9 @@ struct TrashBinView: View {
     private var trashList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                selectionHeader
+                if !trashedProjects.isEmpty {
+                    selectionHeader.transition(.opacity)
+                }
 
                 ForEach(trashedProjects, id: \.id) { project in
                     trashRow(project)
@@ -295,7 +296,9 @@ struct TrashBinView: View {
     private var recordingsTrashList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                selectionHeader
+                if !trashedMemos.isEmpty {
+                    selectionHeader.transition(.opacity)
+                }
 
                 ForEach(trashedMemos) { memo in
                     trashRecordingRow(memo)

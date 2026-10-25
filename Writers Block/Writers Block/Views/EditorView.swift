@@ -866,15 +866,18 @@ struct EditorView: View {
         .task(id: viewModel.editorOpen) {
             let open = viewModel.editorOpen
             guard open.isNewSong, focusedNewSongOpen != open else { return }
-            focusedNewSongOpen = open
             try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
             // The field may still be arriving with the welcome-to-editor fade;
-            // ask again until the focus system reports it, within the state tier.
+            // ask again until the focus system reports it. A cancelled attempt
+            // (the layout branch replacing this view) stays retryable.
             for _ in 0..<4 {
                 guard !Task.isCancelled else { return }
                 titleFocusedOpen = open
                 try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
-                if titleFocusedOpen == open { return }
+                if titleFocusedOpen == open {
+                    focusedNewSongOpen = open
+                    return
+                }
             }
         }
         .scrollPosition($writingScrollPosition)
