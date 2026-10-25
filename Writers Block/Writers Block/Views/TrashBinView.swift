@@ -80,18 +80,26 @@ struct TrashBinView: View {
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.sm)
 
+                    // When the last restore or delete empties a list, its empty
+                    // state fades in on the state tier; a tab switch stays instant.
                     if activeTab == .projects {
-                        if trashedProjects.isEmpty {
-                            emptyState
-                        } else {
-                            trashList
+                        Group {
+                            if trashedProjects.isEmpty {
+                                emptyState.transition(.opacity)
+                            } else {
+                                trashList
+                            }
                         }
+                        .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedProjects.isEmpty)
                     } else {
-                        if trashedMemos.isEmpty {
-                            recordingsEmptyState
-                        } else {
-                            recordingsTrashList
+                        Group {
+                            if trashedMemos.isEmpty {
+                                recordingsEmptyState.transition(.opacity)
+                            } else {
+                                recordingsTrashList
+                            }
                         }
+                        .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedMemos.isEmpty)
                     }
                 }
                 .frame(maxWidth: contentMaxWidth)
@@ -249,7 +257,12 @@ struct TrashBinView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Songs in Trash", systemImage: "trash")
+            Label {
+                Text("No Songs in Trash")
+            } icon: {
+                // Secondary ink at 100%, not the system grey.
+                Image(systemName: "trash").foregroundStyle(appearance.palette.secondaryInk)
+            }
         } description: {
             Text("Deleted songs stay here for 30 days.")
         }
@@ -262,7 +275,11 @@ struct TrashBinView: View {
 
     private var recordingsEmptyState: some View {
         ContentUnavailableView {
-            Label("No Recordings in Trash", systemImage: "mic.slash")
+            Label {
+                Text("No Recordings in Trash")
+            } icon: {
+                Image(systemName: "mic.slash").foregroundStyle(appearance.palette.secondaryInk)
+            }
         } description: {
             Text("Deleted recordings stay here for 30 days.")
         }
