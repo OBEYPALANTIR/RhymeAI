@@ -258,6 +258,41 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertEqual(lyrics.value as? String, "", "Create New Song tapped right after opening must open an empty draft")
     }
 
+    /// New Song lands with the caret in the title, so the first keystroke names
+    /// the song; opening a saved song keeps its restored cursor instead.
+    @MainActor
+    func testNewSongFocusesTheTitleFieldAndOpeningASongDoesNot() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        let newSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSong.waitForExistence(timeout: 5))
+        newSong.tap()
+        let title = app.textFields["songTitleEditor"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: title
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [focused], timeout: 3), .completed, "New Song must move focus to the title field")
+        app.typeText("Paper Moon")
+        XCTAssertEqual(title.value as? String, "Paper Moon")
+        attachScreenshot(app, name: "new-song-title-focused")
+
+        app.buttons["Open songs drawer"].tap()
+        let createNewSong = app.buttons["Create New Song"]
+        XCTAssertNotNil(waitForStableFrame(of: createNewSong, matching: { _ in createNewSong.isHittable }))
+        createNewSong.tap()
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !createNewSong.exists }))
+        XCTAssertEqual(XCTWaiter().wait(for: [focused], timeout: 3), .completed, "Create New Song from the drawer must focus the title too")
+        app.typeText("x")
+        app.buttons["Open songs drawer"].tap()
+        let savedSong = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Paper Moon")).firstMatch
+        XCTAssertNotNil(waitForStableFrame(of: savedSong, matching: { _ in savedSong.isHittable }))
+        savedSong.tap()
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !savedSong.exists }))
+        XCTAssertEqual(title.value as? String, "Paper Moon")
+        XCTAssertFalse(title.value(forKey: "hasKeyboardFocus") as? Bool ?? false, "Opening a saved song keeps its restored cursor, not the title")
+    }
+
     @MainActor
     func testSongNotebookKeepsAndInsertsAlternateWithoutReplacingDraft() throws {
         let app = isolatedUITestApp()
