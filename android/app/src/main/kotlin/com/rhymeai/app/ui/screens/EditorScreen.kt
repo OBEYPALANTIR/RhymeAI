@@ -354,7 +354,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         else viewModel.dismissSuggestionInsertion(insertion.id)
     }
     val insertionHighlightAlpha = remember { Animatable(0f) }
-    LaunchedEffect(insertion?.id, showBottomSheet, pendingAssistantSheet) {
+    // Keyed on the live animations flag too: toggled mid-hold, the hold restarts and ends the right way.
+    LaunchedEffect(insertion?.id, showBottomSheet, pendingAssistantSheet, animationsEnabled) {
         highlightedInsertionId = null
         insertionHighlightAlpha.snapTo(0f)
         if (insertion == null || showBottomSheet || pendingAssistantSheet) return@LaunchedEffect
@@ -1027,8 +1028,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     BasicTextField(
                         value = viewModel.title,
-                        // Nothing typed while the column leaves for another song can land in either song.
-                        onValueChange = { if (!viewModel.openingSong) viewModel.onTitleChanged(it) },
+                        onValueChange = { viewModel.onTitleChanged(it) },
+                        // The song that is leaving for another one takes no input.
+                        readOnly = viewModel.openingSong,
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1187,12 +1189,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         BasicTextField(
                             value = if (viewModel.hasActiveRewrite) inlineRewriteValue else viewModel.lyricsFieldValue,
                             onValueChange = {
-                                if (!viewModel.hasActiveRewrite && !viewModel.openingSong) {
+                                if (!viewModel.hasActiveRewrite) {
                                     viewModel.onLyricsChanged(it)
                                 }
                             },
                             onTextLayout = { lyricsTextLayout = it },
-                            readOnly = viewModel.hasActiveRewrite,
+                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong,
                             textStyle = lyricsTextStyle.copy(color = colorScheme.onBackground),
                             visualTransformation = analysisTransformation,
                             cursorBrush = SolidColor(colorScheme.primary),
@@ -1208,10 +1210,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                         layout.getPathForRange(range.min, range.max.coerceAtMost(viewModel.lyrics.length))
                                     } else null
                                     onDrawBehind {
-                                        // Animations removed mid-hold: the mark stays solid until its hold clears it.
-                                        val mark = insertionHighlightAlpha.value
-                                        val alpha = if (animationsEnabled || mark == 0f) mark else 1f
-                                        if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f * alpha))
+                                        if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f * insertionHighlightAlpha.value))
                                     }
                                 }
                                 .rewriteLoadingHighlight(

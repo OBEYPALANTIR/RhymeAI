@@ -88,9 +88,15 @@ class SongOpenSettleUiTest {
         compose.runOnUiThread { vm.applyTemplate("Ballad", "", draft) }
         compose.waitUntil(10_000) { vm.title == "Untitled Ballad" }
         compose.mainClock.autoAdvance = false
+        // Let the syllable analysis land before sampling the resting ink.
+        compose.mainClock.advanceTimeBy(600)
+        val restingInk = columnInk()
         compose.runOnUiThread { vm.loadProject(saved) }
         stepUntil("the column to start leaving") { settleAlpha() < 1f }
         val leaving = settleAlpha()
+        compose.mainClock.advanceTimeBy(48)
+        val leavingInk = columnInk()
+        val leavingTitle = vm.title
         stepUntil("the saved song to open") { vm.title == "Untitled Pop Song" }
         compose.mainClock.advanceTimeByFrame()
         val arriving = settleAlpha()
@@ -101,13 +107,18 @@ class SongOpenSettleUiTest {
         val settledInk = columnInk()
         assertTrue("Column must fade out, then in: $leaving / $arriving", leaving < 1f && arriving < 0.5f)
         assertEquals(1f, settleAlpha(), 0.001f)
-        // Rendered pixels, not just the probe: the page is blank as the song lands and the ink grows in.
+        // Rendered pixels, not just the probe: the old song's ink thins while it is still the old song,
+        // the page is blank as the new song lands, and the new ink grows in.
+        assertEquals("Sampled the leaving column while it still showed the old song", "Untitled Ballad", leavingTitle)
+        assertTrue("Old ink must thin, not snap: $restingInk / $leavingInk / $arrivingInk", leavingInk < restingInk && leavingInk > arrivingInk)
         assertTrue("Ink must arrive gradually: $arrivingInk / $duringInk / $settledInk", arrivingInk < duringInk && duringInk < settledInk)
         compose.mainClock.autoAdvance = true
     }
 
     /** Darkness of the writing column's top rows (1 = all ink); the canvas is near white. */
     private fun columnInk(): Double {
+        // The test clock is paused; the renderer still needs a real vsync to present the last frame.
+        Thread.sleep(48)
         val pixels = compose.onNodeWithTag("editorScrollContainer").captureToImage().toPixelMap()
         val rows = minOf(pixels.height, 260)
         var sum = 0.0

@@ -285,6 +285,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while another song is being fetched for an editor that is on screen; the writing column fades out meanwhile. */
     var openingSong by mutableStateOf(false)
         private set
+    /** The latest open request; an older request that wakes after its settle beat must not replace the editor. */
+    private var openRequest = 0
     /** The [openRevision] New Song produced, so the editor puts the caret in the title for that open only. */
     var newSongOpenRevision by mutableIntStateOf(-1)
         private set
@@ -1876,10 +1878,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
             viewModelScope.launch {
+                val request = ++openRequest
                 try {
                     // The drawer leaves with the tap; the blank page follows once the column has faded.
                     showProjectsDialog = false
-                    settleBeforeOpen()
+                    if (!settleBeforeOpen(request)) return@launch
                     // The draft is saved (the flush); the editor opens the new song at once, before the
                     // selection is stored, so nothing typed from here on is ever cleared by this New Song.
                     dismissRewrite()
@@ -1905,7 +1908,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
                 } finally {
-                    openingSong = false
+                    if (openRequest == request) openingSong = false
                 }
             }
         }
@@ -1916,22 +1919,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * it, at the system animator scale; with animations removed there is nothing to wait for.
      * The caller clears [openingSong] in the same frame it bumps [openRevision].
      */
-    private suspend fun settleBeforeOpen() {
-        if (showStartMenu) return
+    private suspend fun settleBeforeOpen(request: Int): Boolean {
+        if (showStartMenu) return true
         openingSong = true
         val animatorScale = android.provider.Settings.Global.getFloat(
             getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
         )
         if (animatorScale > 0f) delay((DesignTokens.Motion.dismissMillis * animatorScale).toLong())
+        // A newer open took over during the beat; it owns the editor and openingSong now.
+        return request == openRequest
     }
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
             viewModelScope.launch {
+                val request = ++openRequest
                 try {
                     showProjectsDialog = false
-                    settleBeforeOpen()
+                    if (!settleBeforeOpen(request)) return@launch
                     val project = repo.selectProject(requestedProject.id)
                     dismissRewrite()
                     title = project.title
@@ -1949,7 +1955,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open the song", error)
                 } finally {
-                    openingSong = false
+                    if (openRequest == request) openingSong = false
                 }
             }
         }
@@ -2171,7 +2177,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         flushCurrentDraft {
             viewModelScope.launch {
                 showProjectsDialog = false
-                try { settleBeforeOpen() } finally { openingSong = false }
+                val request = ++openRequest
+                val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
+                if (!owned) return@launch
                 dismissRewrite()
                 val project = imported.copy(
                     id = java.util.UUID.randomUUID().toString(),
@@ -2281,7 +2289,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         flushCurrentDraft {
             viewModelScope.launch {
                 showTemplatesDialog = false
-                try { settleBeforeOpen() } finally { openingSong = false }
+                val request = ++openRequest
+                val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
+                if (!owned) return@launch
                 dismissRewrite()
                 title = "Untitled $name"
                 theme = templateTheme
@@ -2403,6 +2413,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onTitleChanged(newTitle: String) {
+        // Nothing edits the song that is leaving for another one.
+        if (openingSong) return
         cancelEditorAIWork()
         title = newTitle
         triggerAutoSave()
@@ -2412,7 +2424,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         newValue: TextFieldValue,
         timestampMilliseconds: Long = android.os.SystemClock.uptimeMillis()
     ) {
-        if (hasActiveRewrite) return
+        if (hasActiveRewrite || openingSong) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
         if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
@@ -2455,11 +2467,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun undoLyrics() {
+        if (openingSong) return
         val previous = lyricsHistory.undo(lyricsFieldValue) ?: return
         applyHistoryState(previous)
     }
 
     fun redoLyrics() {
+        if (openingSong) return
         val next = lyricsHistory.redo(lyricsFieldValue) ?: return
         applyHistoryState(next)
     }

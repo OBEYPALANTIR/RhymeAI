@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -18,6 +23,7 @@ import androidx.compose.ui.platform.testTag
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -84,6 +90,9 @@ fun SongRecordingsDialog(
             emptyList()
         }
     }
+    val animationsEnabled = LocalAnimationsEnabled.current
+    var sawRecordings by remember { mutableStateOf(false) }
+    LaunchedEffect(memos?.isNotEmpty()) { if (memos?.isNotEmpty() == true) sawRecordings = true }
     LaunchedEffect(service) { service.deletionChanges.collect { revision++ } }
     // A27: finished takes whose save failed stay listed here until Retry saves them.
     val waitingTakes by produceState(emptyList<VoiceMemoService.WaitingTake>(), projectId, revision, service.isRecording) {
@@ -231,18 +240,32 @@ fun SongRecordingsDialog(
                 val visible = memos.orEmpty().filter { VoiceMemoService.displayLabel(it.displayName).contains(search.trim(), ignoreCase = true) }
                 if (memos == null) item { CircularProgressIndicator() }
                 else if (visible.isEmpty()) item {
-                    Text(when {
-                        listFailed -> "Recordings could not be read. Close and reopen this sheet to try again."
-                        search.isBlank() -> "No recordings yet."
-                        else -> "No recordings match your search."
-                    })
-                    if (!listFailed && search.isBlank()) {
-                        Spacer(Modifier.height(DesignTokens.Spacing.xs))
-                        Text(
-                            "Tap the mic in the editor to record a voice memo.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    // Fades in only when the list emptied under the writer; a sheet that opens empty shows it at once.
+                    val appearance = remember { MutableTransitionState(!sawRecordings).apply { targetState = true } }
+                    AnimatedVisibility(
+                        visibleState = appearance,
+                        enter = fadeIn(tween(if (animationsEnabled) DesignTokens.Motion.standardMillis else 0, easing = DesignTokens.Motion.standardEasing)),
+                        exit = ExitTransition.None
+                    ) {
+                        Column {
+                            Text(
+                                when {
+                                    listFailed -> "Recordings could not be read. Close and reopen this sheet to try again."
+                                    search.isBlank() -> "No recordings yet."
+                                    else -> "No recordings match your search."
+                                },
+                                // titleMedium shares bodyLarge's 16sp/24sp metrics; only the weight changes.
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (!listFailed && search.isBlank()) {
+                                Spacer(Modifier.height(DesignTokens.Spacing.xs))
+                                Text(
+                                    "Tap the mic in the editor to record a voice memo.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
                 if (visible.isNotEmpty()) item {
