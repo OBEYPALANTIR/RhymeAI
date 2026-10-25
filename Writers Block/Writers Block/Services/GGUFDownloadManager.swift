@@ -54,6 +54,15 @@ enum GGUFDownloadCatalog {
         options.first { $0.id == id }
     }
 
+    /// Mirrors Android `RAM_THRESHOLD_E4B_BYTES` and `gemmaModelNeedsMoreMemory`: only E4B
+    /// needs more than the app's minimum, and it thrashes on an 8 GB device.
+    nonisolated static let ramThresholdE4BBytes: UInt64 = 10 * 1024 * 1024 * 1024
+    nonisolated static let needsMoreMemoryMessage = "May be slow on this device — needs more memory"
+
+    nonisolated static func needsMoreMemory(_ option: GGUFDownloadOption, totalRAMBytes: UInt64) -> Bool {
+        option.fileName == options[1].fileName && totalRAMBytes < ramThresholdE4BBytes
+    }
+
     nonisolated private static func requiredURL(_ string: String) -> URL {
         guard let url = URL(string: string) else {
             preconditionFailure("Invalid GGUF download URL: \(string)")
@@ -356,6 +365,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// app's `GGUFModelStorage.modelsDirectory`.
     private let modelsRoot: URL?
     private let defaults: UserDefaults
+    private let totalRAMBytes: UInt64
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
 
@@ -364,10 +374,12 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     init(
         configuration: URLSessionConfiguration = GGUFDownloadManager.downloadConfiguration(),
         modelsRoot: URL? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        totalRAMBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) {
         self.modelsRoot = modelsRoot
         self.defaults = defaults
+        self.totalRAMBytes = totalRAMBytes
         super.init()
         selectedModelFileName = GGUFModelSelection.currentFileName(defaults: defaults)
         engineChoice = GGUFEngineChoice.current(defaults: defaults)
@@ -427,7 +439,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         refreshInstalledModels()
         if installedModelFiles.contains(option.fileName) {
             select(option)
-            statusMessage = "\(option.title) is ready to use."
+            statusMessage = "\(option.title) is ready to use.\(memoryNote(for: option))"
             return
         }
         choiceRevisionAtDownloadStart = modelChoiceRevision
@@ -548,8 +560,14 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         GGUFEngineChoice.gemma.save(defaults: defaults)
         selectedModelFileName = option.fileName
         engineChoice = .gemma
-        statusMessage = "\(option.title) selected."
+        statusMessage = "\(option.title) selected.\(memoryNote(for: option))"
         errorMessage = nil
+    }
+
+    /// Android's warning, word for word; shown with any choice of a model the device is short on memory for.
+    private func memoryNote(for option: GGUFDownloadOption) -> String {
+        GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: totalRAMBytes)
+            ? " \(GGUFDownloadCatalog.needsMoreMemoryMessage)." : ""
     }
 
     func selectCustom(_ model: GGUFCustomModel) -> Bool {
@@ -693,6 +711,12 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         refreshInstalledModels()
         guard selects else {
             statusMessage = "\(option.title) downloaded."
+            return false
+        }
+        // A model the device is short on memory for is kept installed but never taken up on
+        // its own; choosing it stays an explicit decision.
+        if GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: totalRAMBytes) {
+            statusMessage = "\(option.title) downloaded but not selected. \(GGUFDownloadCatalog.needsMoreMemoryMessage)."
             return false
         }
         selectInstalled(option)
