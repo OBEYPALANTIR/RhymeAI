@@ -38,7 +38,10 @@ class TrashRestoreMotionUiTest {
                         onLoadProject = { opened = it },
                         onNewProject = {},
                         onDeleteProject = { _, _ -> },
-                        onRestoreProject = { id -> trashed.value = trashed.value.filterNot { it.project.id == id } },
+                        onRestoreProject = { id, onCommitted ->
+                            trashed.value = trashed.value.filterNot { it.project.id == id }
+                            onCommitted(true)
+                        },
                         onPermanentlyDeleteProject = {},
                         onPurgeExpiredTrash = {},
                         onRecordingPurgeIncomplete = {},

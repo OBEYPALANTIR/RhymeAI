@@ -125,6 +125,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -144,7 +145,7 @@ fun ProjectsDrawer(
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
     onDeleteProject: (String, (Boolean) -> Unit) -> Unit,
-    onRestoreProject: (String) -> Unit,
+    onRestoreProject: (String, (Boolean) -> Unit) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onPurgeExpiredTrash: () -> Unit,
     onRecordingPurgeIncomplete: () -> Unit,
@@ -167,7 +168,8 @@ fun ProjectsDrawer(
     var isTrashBinClosing by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     // The empty state fades in only when the list empties under the writer; a drawer that opens empty shows it at once.
-    val openedWithoutSongs = remember { projects.isEmpty() }
+    var sawSongs by remember { mutableStateOf(projects.isNotEmpty()) }
+    LaunchedEffect(projects.isNotEmpty()) { if (projects.isNotEmpty()) sawSongs = true }
 
     fun openTrashBin() {
         isTrashBinClosing = false
@@ -420,7 +422,7 @@ fun ProjectsDrawer(
                                             icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
                                             text = "No saved songs yet.",
                                             caption = "Create New Song starts a blank page.",
-                                            animateIn = !openedWithoutSongs
+                                            animateIn = sawSongs
                                         )
                                     }
                                 } else if (filteredProjects.isEmpty()) {
@@ -447,7 +449,7 @@ fun ProjectsDrawer(
                                                             duration = SnackbarDuration.Short
                                                         )
                                                         if (result == SnackbarResult.ActionPerformed) {
-                                                            onRestoreProject(project.id)
+                                                            onRestoreProject(project.id) {}
                                                         }
                                                     }
                                                 }
@@ -569,7 +571,7 @@ fun ProjectsDialog(
     onLoadProject: (SongProject) -> Unit,
     onNewProject: () -> Unit,
     onDeleteProject: (String, (Boolean) -> Unit) -> Unit,
-    onRestoreProject: (String) -> Unit,
+    onRestoreProject: (String, (Boolean) -> Unit) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onPurgeExpiredTrash: () -> Unit,
     onRecordingPurgeIncomplete: () -> Unit,
@@ -835,7 +837,8 @@ private fun EmptyDrawerState(
                 }
             }
             Spacer(Modifier.height(DesignTokens.Spacing.md))
-            Text(text, color = colorScheme.onSurfaceVariant)
+            // titleMedium shares bodyLarge's 16sp/24sp metrics; only the weight changes.
+            Text(text, style = MaterialTheme.typography.titleMedium, color = colorScheme.onSurfaceVariant)
             if (caption != null) {
                 Spacer(Modifier.height(DesignTokens.Spacing.xs))
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
@@ -921,7 +924,7 @@ private fun ProjectDrawerRow(
 @Composable
 private fun TrashBinPage(
     trashedProjects: List<TrashedSongProject>,
-    onRestoreProject: (String) -> Unit,
+    onRestoreProject: (String, (Boolean) -> Unit) -> Unit,
     onOpenProject: (SongProject) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onRecordingPurgeIncomplete: () -> Unit,
@@ -933,7 +936,10 @@ private fun TrashBinPage(
     val colorScheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val animationsEnabled = LocalAnimationsEnabled.current
-    val openedWithoutTrashedSongs = remember { trashedProjects.isEmpty() }
+    // Empty states fade in only when a list empties under the writer (see EmptyDrawerState).
+    var sawTrashedSongs by remember { mutableStateOf(trashedProjects.isNotEmpty()) }
+    LaunchedEffect(trashedProjects.isNotEmpty()) { if (trashedProjects.isNotEmpty()) sawTrashedSongs = true }
+    var sawTrashedMemos by remember { mutableStateOf(false) }
     // Rows leave on the dismiss tier and the rows below close the gap on the standard spring.
     fun Modifier.trashRowMotion(scope: LazyItemScope): Modifier = if (animationsEnabled) {
         with(scope) {
@@ -996,6 +1002,7 @@ private fun TrashBinPage(
         }
     }
     if (service != null) LaunchedEffect(service) { service.deletionChanges.collect { trashedMemoVersion++ } }
+    LaunchedEffect(trashedMemos.orEmpty().isNotEmpty()) { if (trashedMemos.orEmpty().isNotEmpty()) sawTrashedMemos = true }
     // T5.12: Trash files this version cannot identify are listed by name and size, never hidden.
     val unreadableTrash by produceState(emptyList<java.io.File>(), service, trashedMemoVersion) {
         value = runCatching { service?.unreadableTrashFiles().orEmpty() }.getOrDefault(emptyList())
@@ -1045,10 +1052,14 @@ private fun TrashBinPage(
 
     fun restoreSelected() {
         if (isProjectsTab) {
-            val restored = sortedTrashedProjects.filter { it.project.id in selectedIds }.map { it.project }
-            restored.forEach { onRestoreProject(it.id) }
+            val requested = sortedTrashedProjects.filter { it.project.id in selectedIds }.map { it.project }
+            // The confirmation names only the songs whose restore committed.
+            val outcomes = requested.map { project ->
+                CompletableDeferred<Boolean>().also { done -> onRestoreProject(project.id) { done.complete(it) } }
+            }
             selectedIds = emptySet()
             scope.launch {
+                val restored = requested.filterIndexed { index, _ -> outcomes[index].await() }
                 val single = restored.singleOrNull()
                 if (single != null) {
                     val result = snackbarHostState.showSnackbar(
@@ -1122,7 +1133,7 @@ private fun TrashBinPage(
                             icon = { Icon(Icons.Default.Delete, contentDescription = null) },
                             text = "No songs in the Trash Bin.",
                             caption = "Deleted songs stay here for 30 days.",
-                            animateIn = !openedWithoutTrashedSongs
+                            animateIn = sawTrashedSongs
                         )
                     } else {
                         LazyColumn(
@@ -1211,7 +1222,8 @@ private fun TrashBinPage(
                                 } else {
                                     "No recordings in the Trash Bin."
                                 },
-                                caption = if (trashedMemosFailed) null else "Deleted recordings stay here for 30 days."
+                                caption = if (trashedMemosFailed) null else "Deleted recordings stay here for 30 days.",
+                                animateIn = sawTrashedMemos
                             )
                         }
                         else -> {
