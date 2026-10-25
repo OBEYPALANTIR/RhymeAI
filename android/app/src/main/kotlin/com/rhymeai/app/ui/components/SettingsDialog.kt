@@ -156,6 +156,7 @@ internal fun SettingsDialog(
     onStartGemmaDownload: (GemmaDownload) -> Unit = {},
     onUseDownloadedGemma: suspend (GemmaDownload) -> Boolean = { false },
     onDeleteDownloadedGemma: (GemmaDownload) -> Unit = {},
+    gemmaDeletingModel: GemmaDownload? = null,
     // True while a suggestion, rewrite or synonym request is running on the local model.
     localModelGenerating: Boolean = false,
     // Backup
@@ -238,6 +239,7 @@ internal fun SettingsDialog(
             confirmButton = {
                 TextButton(onClick = {
                     gemmaToDelete = null
+                    copyError = null // an older import error must not hide a delete failure
                     onDeleteDownloadedGemma(model)
                 }) {
                     Text("Delete", color = colorScheme.error)
@@ -590,7 +592,7 @@ internal fun SettingsDialog(
                                         )
                                         OutlinedButton(
                                             onClick = { onSelectSavedLocalModel(model.id) },
-                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
+                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
                                             modifier = Modifier.fillMaxWidth(),
                                             shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                             colors = ButtonDefaults.outlinedButtonColors(
@@ -715,7 +717,7 @@ internal fun SettingsDialog(
                                                     onStartGemmaDownload(model)
                                                 }
                                             },
-                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
+                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
                                             modifier = Modifier.weight(1f),
                                             shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                             colors = ButtonDefaults.outlinedButtonColors(
@@ -789,7 +791,7 @@ internal fun SettingsDialog(
                                             IconButton(
                                                 onClick = { gemmaToDelete = model },
                                                 enabled = !isDownloadingThis && !localModelLoading &&
-                                                    !copyingFile && !localModelGenerating,
+                                                    !copyingFile && !localModelGenerating && gemmaDeletingModel == null,
                                                 colors = IconButtonDefaults.iconButtonColors(contentColor = colorScheme.error)
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = "Delete ${model.label}")
@@ -802,7 +804,7 @@ internal fun SettingsDialog(
                                 // Load model button
                                 Button(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
-                                    enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
+                                    enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     colors = ButtonDefaults.buttonColors(

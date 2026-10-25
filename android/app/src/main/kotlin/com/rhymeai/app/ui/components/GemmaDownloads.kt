@@ -189,16 +189,15 @@ internal fun gemmaDownloadTempFile(cacheDir: File, model: GemmaDownload): File =
 
 /**
  * Removes the installed file for [model] whatever its contents (a stale version under the
- * same name counts), plus the partial download and its resume state. Throws when a present
- * file could not be removed so the caller can show it.
+ * same name counts), plus the partial download and its resume state. Every artifact is
+ * attempted; the ones still present afterwards are reported in one exception.
  */
 internal fun deleteInstalledGemma(model: GemmaDownload, filesDir: File, cacheDir: File) {
     val tempFile = gemmaDownloadTempFile(cacheDir, model)
     val stateFile = gemmaDownloadStateFile(tempFile)
-    listOf(File(filesDir, model.fileName), tempFile, stateFile, File(stateFile.parentFile, "${stateFile.name}.tmp"))
-        .forEach { file ->
-            if (file.exists() && !file.delete()) throw IOException("Could not delete ${file.name}")
-        }
+    val remaining = listOf(File(filesDir, model.fileName), tempFile, stateFile, File(stateFile.parentFile, "${stateFile.name}.tmp"))
+        .filter { file -> file.exists() && !file.delete() }
+    if (remaining.isNotEmpty()) throw IOException("Could not delete ${remaining.joinToString { it.name }}")
 }
 
 internal suspend fun downloadGemmaToTemp(
