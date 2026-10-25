@@ -473,6 +473,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun restoreDraftVersion(version: DraftVersion, onRestored: () -> Unit = {}) {
+        if (openingSong) return
         val id = currentProjectId ?: return
         if (notebookError != null || restoringDraft) return
         val currentTitle = title
@@ -1684,6 +1685,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyRewrite() {
+        if (openingSong) return
         val preview = rewritePreview ?: return
         val range = rewriteRange ?: return
         val text = lyrics
@@ -1814,6 +1816,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyInspectorReplacement(replacement: String) {
+        if (openingSong) return
         val range = inspectorRange ?: return
         val text = lyrics
         if (range.min < 0 || range.max > text.length) {
@@ -1843,6 +1846,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSuggestion(suggestion: String) {
+        if (openingSong) return
         // Same placement the rhyme context was computed for: a blank cursor line is
         // filled, otherwise the suggestion becomes a new line after the cursor's line.
         val insertion = NextLinePlacement(lyrics, cursorPosition).inserting(suggestion)
@@ -1867,6 +1871,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSection(label: String) {
+        if (openingSong) return
         val insertion = SectionMap.insertHeader(lyrics, cursorPosition, label)
         pendingRewriteRange = null
         applyAtomicLyricsEdit(
@@ -1880,7 +1885,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject(onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
         val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
@@ -1942,7 +1949,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
         val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
@@ -2188,7 +2197,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
         val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
             viewModelScope.launch {
@@ -2301,7 +2312,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
         val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
             viewModelScope.launch {
