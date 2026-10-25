@@ -6,6 +6,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
@@ -182,6 +183,23 @@ internal fun gemmaDownloadStateFile(tempFile: File): File =
 
 internal fun hasGemmaDownloadState(tempFile: File): Boolean =
     gemmaDownloadStateFile(tempFile).isFile
+
+internal fun gemmaDownloadTempFile(cacheDir: File, model: GemmaDownload): File =
+    File(cacheDir, "${model.fileName}.download")
+
+/**
+ * Removes the installed file for [model] whatever its contents (a stale version under the
+ * same name counts), plus the partial download and its resume state. Throws when a present
+ * file could not be removed so the caller can show it.
+ */
+internal fun deleteInstalledGemma(model: GemmaDownload, filesDir: File, cacheDir: File) {
+    val tempFile = gemmaDownloadTempFile(cacheDir, model)
+    val stateFile = gemmaDownloadStateFile(tempFile)
+    listOf(File(filesDir, model.fileName), tempFile, stateFile, File(stateFile.parentFile, "${stateFile.name}.tmp"))
+        .forEach { file ->
+            if (file.exists() && !file.delete()) throw IOException("Could not delete ${file.name}")
+        }
+}
 
 internal suspend fun downloadGemmaToTemp(
     model: GemmaDownload,

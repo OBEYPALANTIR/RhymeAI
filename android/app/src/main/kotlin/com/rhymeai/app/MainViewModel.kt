@@ -2898,7 +2898,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val destFile = java.io.File(app.filesDir, model.fileName)
-            val tempFile = java.io.File(app.cacheDir, "${model.fileName}.download")
+            val tempFile = com.rhymeai.app.ui.components.gemmaDownloadTempFile(app.cacheDir, model)
             try {
                 if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile) == null) {
                     withContext(Dispatchers.Main) {
@@ -2994,6 +2994,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope, ticket, { localModelService.unload() },
             onSuccess = {},
             onFailure = { error -> localModelError = error.message ?: "Failed to unload model" },
+            onFinished = { localModelLoading = false }
+        )
+    }
+
+    /**
+     * Deletes an installed catalog model together with its partial download and resume state.
+     * The selected model is unloaded first on the loader's serial path so the delete never
+     * races a load; its selection is cleared and no other model is picked in its place.
+     */
+    internal fun deleteDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload) {
+        if (gemmaDownloadingModel?.fileName == model.fileName) return
+        val app = getApplication<android.app.Application>()
+        gemmaDownloadError = null
+        val removeFiles: suspend () -> Unit = {
+            withContext(Dispatchers.IO) {
+                com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
+            }
+        }
+        val forget: () -> Unit = {
+            verifiedGemmaFileNames -= model.fileName
+            savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
+            gemmaDownloadRevision++
+            viewModelScope.launch { repo.saveLocalModels(savedLocalModels) }
+        }
+        val fail: (Exception) -> Unit = { error ->
+            gemmaLastDownloadAttempt = null
+            gemmaDownloadError = "Failed to delete ${model.label}: ${error.message}"
+        }
+        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName ||
+            localModelPath == java.io.File(app.filesDir, model.fileName).absolutePath
+        if (!wasSelected) {
+            viewModelScope.launch {
+                try {
+                    removeFiles()
+                    forget()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    fail(error)
+                }
+            }
+            return
+        }
+        val ticket = beginLocalModelChange()
+        localModelPath = null
+        selectedLocalModelId = null
+        viewModelScope.launch { repo.saveSelectedLocalModelId(null) }
+        localModelOperations.launch(
+            viewModelScope, ticket, {
+                localModelService.unload()
+                removeFiles()
+            },
+            onSuccess = forget,
+            onFailure = fail,
             onFinished = { localModelLoading = false }
         )
     }

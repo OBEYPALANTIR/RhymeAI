@@ -309,6 +309,9 @@ class MainActivity : ComponentActivity() {
                             verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },
+                            onDeleteDownloadedGemma = { viewModel.deleteDownloadedGemma(it) },
+                            localModelGenerating = viewModel.isLoading || viewModel.rewriteLoading ||
+                                viewModel.inspectorSynonymsLoading,
                             backup = BackupSectionState(
                                 status = viewModel.backupStatus,
                                 notice = viewModel.backupNotice,
