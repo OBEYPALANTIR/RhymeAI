@@ -8,6 +8,7 @@ import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GemmaDownload
 import com.rhymeai.app.ui.components.gemmaDownloadStateFile
 import com.rhymeai.app.ui.components.gemmaDownloadTempFile
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -44,6 +45,8 @@ class GemmaDeleteInstrumentedTest {
 
     @After
     fun tearDown() {
+        LocalModelTestHooks.beforeRegistrationSelectionWrite?.complete(Unit)
+        LocalModelTestHooks.beforeRegistrationSelectionWrite = null
         listOf(file, other).forEach { it.delete() }
         listOf(download, otherDownload).forEach { model ->
             val temp = gemmaDownloadTempFile(app.cacheDir, model)
@@ -102,6 +105,30 @@ class GemmaDeleteInstrumentedTest {
         assertEquals(file.name, viewModel.selectedLocalModelId)
         assertTrue(file.name in viewModel.verifiedGemmaFileNames)
         assertFalse(other.name in viewModel.verifiedGemmaFileNames)
+    }
+
+    @Test
+    fun aRegistrationStillWritingItsSelectionCannotUndoADeletedModelsClearedSelection() {
+        // Fallback candidate for a relaunch that wrongly finds a missing selection.
+        onMain { viewModel.registerAndSelectLocalModel(other.absolutePath, "Other", isCustom = true, select = false) }
+        val gate = CompletableDeferred<Unit>()
+        LocalModelTestHooks.beforeRegistrationSelectionWrite = gate
+        assertTrue(runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download) })
+        assertEquals(file.name, viewModel.selectedLocalModelId)
+        waitUntil("load attempt to settle") { !viewModel.localModelLoading }
+
+        // The registration's selection write is still pending when the delete persists "none".
+        onMain { viewModel.deleteDownloadedGemma(download) }
+        waitUntil("delete to finish") { viewModel.gemmaDeletingModel == null && !viewModel.localModelLoading }
+        assertNull(viewModel.selectedLocalModelId)
+        gate.complete(Unit)
+        onMain { }
+
+        lateinit var relaunched: MainViewModel
+        onMain { relaunched = MainViewModel(app) }
+        waitUntil("relaunch to finish restoring") { relaunched.aiSettingsLoaded }
+        assertTrue(relaunched.savedLocalModels.any { it.fileName == other.name })
+        assertNull("the delayed registration write must not revive a selection", relaunched.selectedLocalModelId)
     }
 
     private fun fixture(file: File, label: String): GemmaDownload {

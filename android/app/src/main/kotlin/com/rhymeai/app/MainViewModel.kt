@@ -152,6 +152,7 @@ private const val NO_LOCAL_MODEL_SELECTION = ""
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    @Volatile var beforeRegistrationSelectionWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
 /** Lets a test hold launch loading after the appearance is known (null in the app). */
@@ -2756,7 +2757,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .sortedBy { it.displayName.lowercase() }
         viewModelScope.launch {
             persistSavedLocalModels()
-            if (select) repo.saveSelectedLocalModelId(model.id)
+            LocalModelTestHooks.beforeRegistrationSelectionWrite?.await()
+            // A delete may have cleared the selection meanwhile; its explicit none must stay.
+            savedLocalModelsWriteLock.withLock {
+                if (select && selectedLocalModelId == model.id) repo.saveSelectedLocalModelId(model.id)
+            }
         }
         if (!select) return
         selectedLocalModelId = model.id
@@ -2954,6 +2959,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
                     gemmaDownloadVerifying = false
+                    // The attempt may have reclaimed a stale installed file; the rows re-read the disk.
+                    gemmaDownloadRevision++
                     gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
                 }
             }
@@ -3045,10 +3052,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 if (wasSelected) {
                     localModelService.unload()
-                    repo.saveSelectedLocalModelId(NO_LOCAL_MODEL_SELECTION)
-                    // Cleared only once both succeeded, so a failed attempt can be retried whole.
-                    localModelPath = null
-                    selectedLocalModelId = null
+                    savedLocalModelsWriteLock.withLock {
+                        repo.saveSelectedLocalModelId(NO_LOCAL_MODEL_SELECTION)
+                        // Cleared only once both succeeded, so a failed attempt can be retried whole.
+                        localModelPath = null
+                        selectedLocalModelId = null
+                    }
                 }
                 try {
                     withContext(Dispatchers.IO) {
