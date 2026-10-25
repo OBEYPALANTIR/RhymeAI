@@ -228,6 +228,18 @@ struct GGUFDownloadCatalogTests {
         #expect(try GGUFModelCatalog.fileSHA256(at: url) == expected)
     }
 
+    /// Android's `gemmaModelNeedsMoreMemory`: only E4B, and only below 10 GiB of RAM.
+    @Test func onlyE4BNeedsMoreMemoryBelowTenGibibytes() {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let gib: UInt64 = 1 << 30
+        #expect(GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 8 * gib))
+        #expect(GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 10 * gib - 1))
+        #expect(!GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 10 * gib))
+        #expect(!GGUFDownloadCatalog.needsMoreMemory(e2b, totalRAMBytes: 4 * gib))
+        #expect(GGUFDownloadCatalog.needsMoreMemoryMessage == "May be slow on this device — needs more memory")
+    }
+
     private func isolatedDefaults() -> (UserDefaults, String) {
         let suite = "gguf-verified-\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)
@@ -896,8 +908,10 @@ struct GGUFDownloadCompletionTests {
         }
 
         @MainActor
-        func restoredManager() async throws -> GGUFDownloadManager {
-            let manager = GGUFDownloadManager(configuration: .ephemeral, modelsRoot: root, defaults: defaults)
+        func restoredManager(totalRAMBytes: UInt64 = 16 << 30) async throws -> GGUFDownloadManager {
+            let manager = GGUFDownloadManager(
+                configuration: .ephemeral, modelsRoot: root, defaults: defaults, totalRAMBytes: totalRAMBytes
+            )
             for _ in 0..<250 where manager.isRestoringDownloads {
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -910,6 +924,38 @@ struct GGUFDownloadCompletionTests {
             try? FileManager.default.removeItem(at: root)
             defaults.removePersistentDomain(forName: suite)
         }
+    }
+
+    /// On a device short on memory for E4B (an 8 GB iPad), its download is installed but
+    /// never selected on its own; choosing it stays explicit and carries Android's warning.
+    @Test func completionKeepsAModelTheDeviceIsShortOnMemoryForInstalledButUnselected() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager(totalRAMBytes: 8 << 30)
+        manager.select(e2b)
+
+        manager.beginDownloadForTest(e4b)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.installedModelFiles.contains(e4b.fileName))
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        #expect(manager.statusMessage == "\(e4b.title) downloaded but not selected. May be slow on this device — needs more memory.")
+
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(manager.statusMessage == "\(e4b.title) selected. May be slow on this device — needs more memory.")
+
+        // E2B is never gated, and a device with enough memory selects E4B on completion.
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
+        #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
+        let roomy = try await sandbox.restoredManager(totalRAMBytes: 16 << 30)
+        roomy.beginDownloadForTest(e4b)
+        #expect(roomy.finishForTest(e4b))
+        #expect(roomy.statusMessage == "\(e4b.title) downloaded and selected.")
     }
 
     @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
