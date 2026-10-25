@@ -278,6 +278,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var suggestionInsertion by mutableStateOf<SuggestionInsertion?>(null)
         private set
     private var suggestionInsertionRevision = 0L
+    /** Bumped when a different song fills the editor (open, New Song, template, import) so the writing column cross-fades once; a first autosave does not bump it. */
+    var openRevision by mutableIntStateOf(0)
+        private set
+    /** Bumped by New Song so the editor puts the caret in the title once the blank page is up. */
+    var newSongRevision by mutableIntStateOf(0)
+        private set
     var isLoading by mutableStateOf(false)
     /**
      * Counts suggestion requests that ended by themselves with at least one line;
@@ -1877,6 +1883,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             showProjectsDialog = false
             showStartMenu = false
             resetLyricsHistory()
+            openRevision++
+            newSongRevision++
             viewModelScope.launch {
                 try {
                     NewSongTestHooks.beforeSelectionSave?.await()
@@ -1910,6 +1918,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
+                    openRevision++
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open the song", error)
@@ -2145,6 +2154,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             showProjectsDialog = false
             showStartMenu = false
             resetLyricsHistory()
+            openRevision++
             viewModelScope.launch {
                 try {
                     persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
@@ -2243,6 +2253,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             showTemplatesDialog = false
             showStartMenu = false
             resetLyricsHistory()
+            openRevision++
             triggerAutoSave()
 
             onReady()
