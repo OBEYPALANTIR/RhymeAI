@@ -29,6 +29,7 @@ import com.rhymeai.app.data.sync.SyncBlob
 import com.rhymeai.app.ui.components.BackupSection
 import com.rhymeai.app.ui.components.BackupSectionActions
 import com.rhymeai.app.ui.components.BackupSectionState
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import com.rhymeai.app.data.sync.backupStatusLine
 import kotlinx.coroutines.flow.first
@@ -48,19 +49,53 @@ class BackupSectionUiTest {
     private val state = mutableStateOf(BackupSectionState())
     private var disconnects = 0
 
-    private fun show() {
+    private fun show(animations: Boolean = true) {
         compose.setContent {
             RhymeAITheme {
-                val current = state.value
-                BackupSection(
-                    state = current,
-                    actions = BackupSectionActions(onDisconnect = { disconnects++ }),
-                    statusLine = backupStatusLine(current.status, 10 * 60_000L),
-                    subtleColor = androidx.compose.ui.graphics.Color.Gray,
-                    textFieldColors = OutlinedTextFieldDefaults.colors()
-                )
+                androidx.compose.runtime.CompositionLocalProvider(LocalAnimationsEnabled provides animations) {
+                    val current = state.value
+                    BackupSection(
+                        state = current,
+                        actions = BackupSectionActions(onDisconnect = { disconnects++ }),
+                        statusLine = backupStatusLine(current.status, 10 * 60_000L),
+                        subtleColor = androidx.compose.ui.graphics.Color.Gray,
+                        textFieldColors = OutlinedTextFieldDefaults.colors()
+                    )
+                }
             }
         }
+    }
+
+    /** "Backing up…" settles into "just now" with a cross-fade and the success check, instead of a one-frame swap. */
+    @Test fun statusCrossFadesOnTheStateTierAndJustNowWearsTheCheck() {
+        state.value = BackupSectionState(status = BackupStatus.BackingUp)
+        show(animations = true)
+        compose.onNodeWithText("Backing up… · Google Drive").assertIsDisplayed()
+        compose.onNodeWithTag("backup_status_check", useUnmergedTree = true).assertDoesNotExist()
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { state.value = BackupSectionState(status = BackupStatus.Connected(10 * 60_000L - 5_000L)) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Backing up… · Google Drive").assertExists()
+        compose.onNodeWithText("Last backed up just now · Google Drive").assertExists()
+        compose.mainClock.advanceTimeBy(400)
+        compose.onNodeWithText("Backing up… · Google Drive").assertDoesNotExist()
+        compose.onNodeWithText("Last backed up just now · Google Drive").assertIsDisplayed()
+        compose.onNodeWithTag("backup_status_check", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Back up now").assertIsDisplayed()
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test fun reducedMotionSwapsTheStatusInOneFrame() {
+        state.value = BackupSectionState(status = BackupStatus.BackingUp)
+        show(animations = false)
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { state.value = BackupSectionState(status = BackupStatus.Connected(10 * 60_000L - 5_000L)) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Backing up… · Google Drive").assertDoesNotExist()
+        compose.onNodeWithText("Last backed up just now · Google Drive").assertIsDisplayed()
+        compose.onNodeWithTag("backup_status_check", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Back up now").assertIsDisplayed()
+        compose.mainClock.autoAdvance = true
     }
 
     @Test fun rowsFollowTheStatus() {

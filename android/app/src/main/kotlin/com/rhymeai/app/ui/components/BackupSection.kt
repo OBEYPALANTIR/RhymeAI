@@ -3,6 +3,11 @@ package com.rhymeai.app.ui.components
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,10 +19,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -42,6 +50,7 @@ import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 
 const val BACKUP_FOOTER =
     "Songs, trash and recordings are backed up to your Google Drive's private app storage. API keys are never included."
@@ -76,8 +85,11 @@ internal fun BackupSection(
     textFieldColors: TextFieldColors
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val animationsEnabled = LocalAnimationsEnabled.current
     val connected = state.status !is BackupStatus.NotConnected
     val working = state.status is BackupStatus.BackingUp || state.busyLabel != null
+    // shortcut: "just now" is read off the shared status copy (relativeTime, under 60 s); pass nowMillis in if a second reader needs it.
+    val justBackedUp = state.status is BackupStatus.Connected && statusLine.contains("just now")
     var showMigration by remember { mutableStateOf(false) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(BackupArchive.MIME_TYPE)
@@ -100,12 +112,27 @@ internal fun BackupSection(
         modifier = Modifier.fillMaxWidth().padding(top = DesignTokens.Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            statusLine,
-            fontSize = 13.sp,
-            color = if (state.status is BackupStatus.Failed) colorScheme.error else colorScheme.onSurface,
-            modifier = Modifier.testTag("backup_status")
-        )
+        // Status text and glyph cross-fade in place: in on the state tier, out on the dismiss tier.
+        StatusSwap(target = statusLine, animationsEnabled = animationsEnabled, label = "backupStatus") { line ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (justBackedUp && line == statusLine) {
+                    // Success at 80% on the canvas is fine for a glyph; the text stays in ink.
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = colorScheme.tertiary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(14.dp).testTag("backup_status_check")
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    line,
+                    fontSize = 13.sp,
+                    color = if (state.status is BackupStatus.Failed) colorScheme.error else colorScheme.onSurface,
+                    modifier = Modifier.testTag("backup_status")
+                )
+            }
+        }
         if (state.status is BackupStatus.Failed) {
             BackupRow("Retry", "backup_retry", enabled = !working, onClick = actions.onBackUpNow)
         }
@@ -151,24 +178,47 @@ private fun BackupRow(
     onClick: () -> Unit,
     progressLabel: String? = null
 ) {
+    val animationsEnabled = LocalAnimationsEnabled.current
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier.fillMaxWidth().heightIn(min = DesignTokens.Touch.minTarget).testTag(tag),
         shape = RoundedCornerShape(DesignTokens.Radius.lg)
     ) {
-        if (progressLabel != null) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
-                color = MaterialTheme.colorScheme.primary,
-                strokeWidth = 2.dp
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(progressLabel, fontSize = DesignTokens.Typography.caption)
-        } else {
-            Text(label, fontSize = DesignTokens.Typography.caption)
+        // The progress indicator and its label leave on the dismiss tier; the resting label arrives on the state tier.
+        StatusSwap(target = progressLabel, animationsEnabled = animationsEnabled, label = "backupRowLabel") { progress ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (progress != null) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(progress, fontSize = DesignTokens.Typography.caption)
+                } else {
+                    Text(label, fontSize = DesignTokens.Typography.caption)
+                }
+            }
         }
     }
+}
+
+/** Cross-fades [content] when [target] changes (in 260 ms, out 160 ms); with animations removed it swaps in one frame. */
+@Composable
+private fun <T> StatusSwap(target: T, animationsEnabled: Boolean, label: String, content: @Composable (T) -> Unit) {
+    if (!animationsEnabled) {
+        content(target)
+        return
+    }
+    AnimatedContent(
+        targetState = target,
+        transitionSpec = {
+            fadeIn(tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)) togetherWith
+                fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing))
+        },
+        label = label
+    ) { content(it) }
 }
 
 @Composable
