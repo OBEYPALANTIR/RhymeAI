@@ -185,10 +185,13 @@ nonisolated enum GGUFModelSelection {
         }
     }
 
+    /// An explicit choice is honoured as saved; the fallback never picks a catalog model the
+    /// device is short on memory for (`GGUFDownloadCatalog.needsMoreMemory`).
     static func preferredFileName(
         in installedFileNames: [String],
         selectedFileName: String? = currentFileName,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        totalRAMBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> String? {
         let registered = Set(GGUFCustomModelRegistry.models(defaults: defaults).map(\.fileName))
         let catalog = GGUFModelCatalog.models.map(\.fileName)
@@ -197,20 +200,25 @@ nonisolated enum GGUFModelSelection {
                 (catalog.contains($0) || registered.contains($0))
         })
         if let selectedFileName, installed.contains(selectedFileName) { return selectedFileName }
-        if let catalogMatch = catalog.first(where: installed.contains) { return catalogMatch }
+        let fits = GGUFModelCatalog.models
+            .filter { !GGUFDownloadCatalog.needsMoreMemory($0, totalRAMBytes: totalRAMBytes) }
+            .map(\.fileName)
+        if let catalogMatch = fits.first(where: installed.contains) { return catalogMatch }
         return GGUFCustomModelRegistry.models(defaults: defaults)
             .first(where: { installed.contains($0.fileName) })?.fileName
     }
 
     static func resolvedModelURL(
         defaults: UserDefaults = .standard,
-        modelsDirectory: URL? = nil
+        modelsDirectory: URL? = nil,
+        totalRAMBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> URL? {
         guard let directory = modelsDirectory
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         guard let preferred = preferredFileName(
-            in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults
+            in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
+            totalRAMBytes: totalRAMBytes
         ) else { return nil }
         if preferred != currentFileName(defaults: defaults) { save(fileName: preferred, defaults: defaults) }
         return directory.appendingPathComponent(preferred)

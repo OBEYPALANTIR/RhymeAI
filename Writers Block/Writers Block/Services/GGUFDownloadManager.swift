@@ -426,7 +426,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         if let preferred = GGUFModelSelection.preferredFileName(
             in: Array(installedModelFiles),
             selectedFileName: GGUFModelSelection.currentFileName(defaults: defaults),
-            defaults: defaults
+            defaults: defaults,
+            totalRAMBytes: totalRAMBytes
         ) {
             selectedModelFileName = preferred
         } else {
@@ -504,7 +505,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 }.value
                 if verified {
                     let selected = finish(option: option)
-                    statusMessage = "\(option.title) verified\(selected ? " and selected" : "")."
+                    statusMessage = "\(option.title) verified\(selected ? " and selected" : "").\(memoryNote(for: option))"
                 } else {
                     isVerifying = false
                     activeDownloadID = nil
@@ -710,13 +711,13 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         choiceRevisionAtDownloadStart = nil
         refreshInstalledModels()
         guard selects else {
-            statusMessage = "\(option.title) downloaded."
+            statusMessage = "\(option.title) downloaded.\(memoryNote(for: option))"
             return false
         }
         // A model the device is short on memory for is kept installed but never taken up on
         // its own; choosing it stays an explicit decision.
         if GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: totalRAMBytes) {
-            statusMessage = "\(option.title) downloaded but not selected. \(GGUFDownloadCatalog.needsMoreMemoryMessage)."
+            statusMessage = "\(option.title) downloaded but not selected.\(memoryNote(for: option))"
             return false
         }
         selectInstalled(option)
