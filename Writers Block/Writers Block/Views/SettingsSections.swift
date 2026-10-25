@@ -682,11 +682,20 @@ struct SettingsCloudBackupSection: View {
     }
 
     private func providerStatusIconColor(now: Date) -> Color {
-        if isFailed { return appearance.palette.error }
-        if case .connected(let last) = viewModel.backupStatus, Self.isJustBackedUp(last, now: now) {
-            return appearance.palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity)
+        Self.providerStatusIconColor(viewModel.backupStatus, now: now, palette: appearance.palette)
+    }
+
+    /// The status glyph's colour: error while failed, the success colour at
+    /// the save indicator's 80% while "just now", otherwise secondary ink.
+    static func providerStatusIconColor(_ status: BackupStatus, now: Date, palette: AppAppearancePalette) -> Color {
+        switch status {
+        case .failed:
+            return palette.error
+        case .connected(let last) where isJustBackedUp(last, now: now):
+            return palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity)
+        case .connected, .notConnected, .pending, .backingUp:
+            return palette.secondaryInk
         }
-        return appearance.palette.secondaryInk
     }
 
     private func providerStatusText(now: Date) -> String {

@@ -119,7 +119,7 @@ struct LyricsTextView: UIViewRepresentable {
             context.coordinator.updateRewriteHighlight(
                 textView,
                 highlight: activeHighlight,
-                animated: context.transaction.animation != nil && !context.transaction.disablesAnimations
+                animation: Self.highlightClearAnimation(for: context.transaction)
             )
         }
         if context.coordinator.shouldKeepCursorVisible(
@@ -153,6 +153,17 @@ struct LyricsTextView: UIViewRepresentable {
 
     private var renderedText: String {
         displayText ?? text
+    }
+
+    /// The animation a highlight clear may fade on: the transaction's own, or
+    /// none when animations are disabled (Reduce Motion) or absent.
+    static func highlightClearAnimation(for transaction: Transaction) -> Animation? {
+        transaction.disablesAnimations ? nil : transaction.animation
+    }
+
+    /// Only a cleared "Use line" mark fades; the rewrite highlight clears in one frame.
+    static func fadesOnClear(previous: LyricsRewriteHighlight?, next: LyricsRewriteHighlight?) -> Bool {
+        next == nil && previous?.isInsertion == true
     }
 
     private var activeHighlight: LyricsRewriteHighlight? {
@@ -333,7 +344,7 @@ struct LyricsTextView: UIViewRepresentable {
             highlight: LyricsRewriteHighlight?
         ) -> Bool {
             let changed = textChanged || lastRewriteHighlight != highlight
-            clearedInsertionHighlight = highlight == nil && lastRewriteHighlight?.isInsertion == true
+            clearedInsertionHighlight = LyricsTextView.fadesOnClear(previous: lastRewriteHighlight, next: highlight)
             lastRewriteHighlight = highlight
             return changed
         }
@@ -667,10 +678,10 @@ struct LyricsTextView: UIViewRepresentable {
             scheduleKeepCursorVisible()
         }
 
-        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?, animated: Bool = false) {
+        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?, animation: Animation? = nil) {
             guard let rewriteHighlightView else { return }
             guard let highlight, highlight.range.length > 0 else {
-                rewriteHighlightView.clear(fading: animated && clearedInsertionHighlight)
+                rewriteHighlightView.clear(animation: clearedInsertionHighlight ? animation : nil)
                 return
             }
 
@@ -884,14 +895,13 @@ final class RewriteHighlightOverlayView: UIView {
     private(set) var isLoading = false
     private(set) var colors: RewriteHighlightColors?
 
-    /// The "Use line" mark dries into the page on the settle spring (response
-    /// 0.42, damping 0.80) instead of switching off. The rewrite highlight is
-    /// cleared without a fade, as is any clear with animations disabled.
-    static let fadeDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
-    static let fadeDamping: CGFloat = 0.80
+    /// Counts configurations so a fade's completion never erases a highlight
+    /// that replaced it meanwhile.
+    private var generation = 0
 
     func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
         // A new highlight cancels a fade in progress.
+        generation += 1
         layer.removeAllAnimations()
         alpha = 1
         self.rects = rects
@@ -900,21 +910,20 @@ final class RewriteHighlightOverlayView: UIView {
         setNeedsDisplay()
     }
 
-    func clear(fading: Bool) {
-        guard fading, !rects.isEmpty, alpha > 0 else {
+    /// Clears the mark: in one frame, or, with the transaction's animation
+    /// (the "Use line" mark dries on `Motion.settle`), by fading its alpha on
+    /// that very animation and removing the rects when the fade completes.
+    func clear(animation: Animation?) {
+        guard let animation, !rects.isEmpty, alpha > 0 else {
             configure(rects: [], isLoading: false, colors: nil)
             return
         }
-        UIView.animate(
-            withDuration: Self.fadeDuration,
-            delay: 0,
-            usingSpringWithDamping: Self.fadeDamping,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState]
-        ) {
+        generation += 1
+        let fading = generation
+        UIView.animate(animation) {
             self.alpha = 0
-        } completion: { finished in
-            guard finished else { return }
+        } completion: {
+            guard self.generation == fading else { return }
             self.configure(rects: [], isLoading: false, colors: nil)
         }
     }
