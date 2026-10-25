@@ -3,7 +3,7 @@ import XCTest
 /// Runs Xcode's accessibility audit over the iPad surfaces: the editor with
 /// the inline assistant, the songs drawer, Trash, both Settings tabs, the
 /// suggestion cards and the Word Inspector. Every reported issue fails the
-/// test unless `isKnownNoise` names it with a reason.
+/// test unless `knownNoiseReason` (or `judge`) names it with a reason.
 final class AccessibilityAuditUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = true
@@ -39,7 +39,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         let scrollView = app.scrollViews["assistantScrollView"]
         let letters = scrollView.staticTexts.matching(NSPredicate(format: "label == %@", "A")).allElementsBoundByIndex
         XCTAssertGreaterThanOrEqual(letters.count, 2, "The seeded stanza should show two 'A' letters")
-        let run = AuditRun(app: app, unattributableText: 0)
+        let run = AuditRun(app: app, unattributableText: 0...0)
         var identities: [String] = []
         for letter in letters.prefix(2) {
             let identity = try XCTUnwrap(Self.identity(of: letter, in: scrollView))
@@ -87,7 +87,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         let app = launch(["--ui-test-seed-prosody-song"])
         hideInlineAssistant(app)
         openSettings(app)
-        audit(app, "settings-general", unattributableText: [834: 0, 1192: 3])
+        audit(app, "settings-general", unattributableText: [834: 0...0, 1192: 3...3])
     }
 
     @MainActor
@@ -96,7 +96,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         hideInlineAssistant(app)
         openSettings(app)
         app.buttons["Editor"].tap()
-        audit(app, "settings-editor", unattributableText: [834: 0, 1192: 1])
+        audit(app, "settings-editor", unattributableText: [834: 0...0, 1192: 1...1])
     }
 
     @MainActor
@@ -121,7 +121,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         let editor = app.textViews["lyricsEditor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.tap()
-        // "wolf" has 9 perfect and 24 near rhymes; with "night" (60 and 30)
+        // "wolf" has 9 perfect and 30 near rhymes; with "night" (60 and 30)
         // the element-detection pass alone outruns the audit's time budget
         // on the iPad Pro 12.9.
         editor.typeText("wolf")
@@ -132,7 +132,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Word inspector"].waitForExistence(timeout: 5))
         // The rhyme chips load off the main thread; audit the finished sheet.
         XCTAssertTrue(app.buttons["wolfe"].waitForExistence(timeout: 20))
-        audit(app, "word-inspector", unattributableText: [834: 2, 1192: 23])
+        audit(app, "word-inspector", unattributableText: [834: 2...2, 1192: 22...23])
     }
 
     // MARK: - Helpers
@@ -190,10 +190,11 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// detections with no element or frame a modal-sheet surface produces,
     /// measured from runs and keyed by the window width in points, because
     /// the count depends on the layout: 834 is the iPad Pro 11-inch portrait,
-    /// 1192 the iPad Pro 12.9-inch at Display Zoom "More Space". Only that
-    /// many are filtered; one more, such as new unlabelled text inside the
-    /// sheet, fails the test, and an unmeasured width filters none.
-    private func audit(_ app: XCUIApplication, _ surface: String, unattributableText: [CGFloat: Int] = [:]) {
+    /// 1192 the iPad Pro 12.9-inch at Display Zoom "More Space". The count
+    /// must land inside the measured range: one more, such as new unlabelled
+    /// text inside the sheet, fails the test, and so does one fewer, so a
+    /// changed baseline gets re-measured. An unmeasured width allows none.
+    private func audit(_ app: XCUIApplication, _ surface: String, unattributableText: [CGFloat: ClosedRange<Int>] = [:]) {
         // Let presentation animations settle so frames are final.
         Thread.sleep(forTimeInterval: 1)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -202,7 +203,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         add(screenshot)
 
         let width = app.windows.firstMatch.frame.width.rounded()
-        let run = AuditRun(app: app, unattributableText: unattributableText[width] ?? 0)
+        let run = AuditRun(app: app, unattributableText: unattributableText[width] ?? 0...0)
         run.report.append("-- window width \(Int(width))pt; \(run.unattributableText) unattributable text detections expected")
         // One pass per audit type, each with the audit's own time budget: on
         // the iPad Pro 12.9 the Word Inspector's rhyme chips take `.all` past
@@ -217,6 +218,10 @@ final class AccessibilityAuditUITests: XCTestCase {
             }
         }
         run.runPendingPasses(scroll: scrollFullyIntoView)
+        XCTAssertTrue(
+            run.unattributableText.contains(run.unattributableTextSeen),
+            "\(surface): \(run.unattributableTextSeen) unattributable text detections at \(Int(width))pt, \(run.unattributableText) measured"
+        )
         let attachment = XCTAttachment(string: run.report.isEmpty ? "(no issues)" : run.report.joined(separator: "\n"))
         attachment.name = "audit-\(surface)-issues"
         attachment.lifetime = .keepAlways
@@ -237,17 +242,16 @@ final class AccessibilityAuditUITests: XCTestCase {
     @MainActor
     private final class AuditRun {
         let app: XCUIApplication
-        let unattributableText: Int
-        var unattributableTextLeft: Int
+        let unattributableText: ClosedRange<Int>
+        private(set) var unattributableTextSeen = 0
         var report: [String] = []
         private(set) var pending: [ClippedElement] = []
         private var queued: Set<String> = []
         private(set) var audited: Set<String> = []
 
-        init(app: XCUIApplication, unattributableText: Int) {
+        init(app: XCUIApplication, unattributableText: ClosedRange<Int>) {
             self.app = app
             self.unattributableText = unattributableText
-            unattributableTextLeft = unattributableText
         }
 
         func enqueue(_ clipped: ClippedElement) {
@@ -270,9 +274,12 @@ final class AccessibilityAuditUITests: XCTestCase {
                 return AccessibilityAuditUITests.knownNoiseReason(issue, in: app, allowNotHittable: false)
             }
             var reason = AccessibilityAuditUITests.knownNoiseReason(issue, in: app)
-            if reason == nil, issue.element == nil, issue.auditType == .elementDetection, unattributableTextLeft > 0 {
-                unattributableTextLeft -= 1
-                reason = "text detection without an element on this modal-sheet layout (\(unattributableText) measured)"
+            if reason == nil, issue.element == nil, issue.auditType == .elementDetection,
+               issue.compactDescription == "Potentially inaccessible text" {
+                unattributableTextSeen += 1
+                if unattributableTextSeen <= unattributableText.upperBound {
+                    reason = "text detection without an element on this modal-sheet layout (\(unattributableText) measured)"
+                }
             }
             if reason == nil, issue.auditType == .contrast, let element = issue.element,
                let clipped = AccessibilityAuditUITests.clipped(element, in: app) {
