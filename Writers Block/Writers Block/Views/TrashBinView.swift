@@ -141,11 +141,15 @@ struct TrashBinView: View {
 
             Spacer()
 
-            Image(systemName: "square.grid.2x2")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(appearance.palette.secondaryInk)
-                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                .accessibilityHidden(true)
+            // Decorative on the compact layout only: on an iPad Pro 12.9 the
+            // accessibility audit reads the hidden grid glyph as text ("88").
+            if horizontalSizeClass != .regular {
+                Image(systemName: "square.grid.2x2")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
