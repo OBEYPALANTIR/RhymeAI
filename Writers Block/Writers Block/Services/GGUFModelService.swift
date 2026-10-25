@@ -118,6 +118,7 @@ nonisolated enum GGUFModelCatalog {
 
 nonisolated enum GGUFModelSelection {
     private static let key = "selectedGGUFModelFileName"
+    private static let clearedKey = "ggufModelSelectionCleared"
     private static let stateLock = NSRecursiveLock()
 
     // Filename and revision must be observed/mutated together across UI and runner actors.
@@ -174,6 +175,7 @@ nonisolated enum GGUFModelSelection {
             guard GGUFModelCatalog.descriptor(fileName: fileName) != nil
                     || GGUFCustomModelRegistry.contains(fileName: fileName, defaults: defaults) else { return }
             defaults.set(fileName, forKey: key)
+            defaults.removeObject(forKey: clearedKey)
             SynonymLocalRevision.advance(defaults: defaults)
         }
     }
@@ -185,8 +187,19 @@ nonisolated enum GGUFModelSelection {
         }
     }
 
+    /// The user deleted the selected model: nothing is selected, and `preferredFileName`
+    /// stops falling back to another installed model until the next explicit choice.
+    static func clearExplicitly(defaults: UserDefaults = .standard) {
+        withStateLock {
+            defaults.removeObject(forKey: key)
+            defaults.set(true, forKey: clearedKey)
+            SynonymLocalRevision.advance(defaults: defaults)
+        }
+    }
+
     /// An explicit choice is honoured as saved; the fallback never picks a catalog model the
-    /// device is short on memory for (`GGUFDownloadCatalog.needsMoreMemory`).
+    /// device is short on memory for (`GGUFDownloadCatalog.needsMoreMemory`) and is off
+    /// after `clearExplicitly` (the selected model was deleted) until the next `save`.
     static func preferredFileName(
         in installedFileNames: [String],
         selectedFileName: String? = currentFileName,
@@ -200,6 +213,7 @@ nonisolated enum GGUFModelSelection {
                 (catalog.contains($0) || registered.contains($0))
         })
         if let selectedFileName, installed.contains(selectedFileName) { return selectedFileName }
+        if withStateLock({ defaults.bool(forKey: clearedKey) }) { return nil }
         let fits = GGUFModelCatalog.models
             .filter { !GGUFDownloadCatalog.needsMoreMemory($0, totalRAMBytes: totalRAMBytes) }
             .map(\.fileName)

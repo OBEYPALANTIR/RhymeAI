@@ -18,6 +18,9 @@ enum UITestFlags {
     static let seedLongTitleSong = "--ui-test-seed-long-title-song"
     static let accessibilityTextSize = "--ui-test-accessibility-text-size"
     static let seedCustomGGUFModel = "--ui-test-seed-custom-gguf-model"
+    /// Installs the catalog E2B entry as a sparse file of the catalog size with its verified
+    /// marker, selected, so Settings can exercise Delete without a download.
+    static let seedInstalledGGUFModel = "--ui-test-seed-installed-gguf-model"
     /// Suggest Next Line answers from `scriptedSuggestionStream` instead of a
     /// provider, on the on-device route, so the Assistant's real loading and
     /// arrival states can be held and replayed with no key, request or model.
@@ -149,6 +152,19 @@ enum UITestFlags {
         try? header.write(to: modelURL, options: .atomic)
         GGUFCustomModelRegistry.register(model)
     }
+
+    static func seedInstalledGGUFModelIfRequested() {
+        guard isEnabled(seedInstalledGGUFModel),
+              let directory = try? GGUFModelStorage.modelsDirectory(create: true) else { return }
+        let option = GGUFDownloadCatalog.options[0]
+        let url = directory.appendingPathComponent(option.fileName)
+        guard FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)),
+              let handle = try? FileHandle(forWritingTo: url) else { return }
+        try? handle.truncate(atOffset: UInt64(option.expectedBytes))
+        try? handle.close()
+        GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: url)
+        GGUFModelSelection.save(fileName: option.fileName)
+    }
     #else
     static func isEnabled(_ flag: String, in arguments: [String] = []) -> Bool {
         false
@@ -163,6 +179,8 @@ enum UITestFlags {
     }
 
     static func seedCustomGGUFModelIfRequested() {}
+
+    static func seedInstalledGGUFModelIfRequested() {}
     #endif
 }
 

@@ -143,8 +143,10 @@ struct SettingsLocalModelSection: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var customModelImporterPresented = false
     @State private var customImportError: String?
+    @State private var modelToDelete: GGUFDownloadOption?
 
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
+    @ObservedObject private var inferenceStatus = LocalInferenceStatus.shared
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -198,6 +200,20 @@ struct SettingsLocalModelSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("gemmaUnavailableMessage")
             }
+        }
+        .alert(
+            Text("Delete \(modelToDelete?.title ?? "")?"),
+            isPresented: Binding(get: { modelToDelete != nil }, set: { if !$0 { modelToDelete = nil } }),
+            presenting: modelToDelete
+        ) { option in
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                viewModel.cancelEditorAIWork()
+                Task { await ggufDownloadManager.delete(option) }
+            }
+        } message: { option in
+            let bytes = ggufDownloadManager.catalogBytesOnDisk[option.fileName] ?? 0
+            Text("Frees \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) on this device. You can download it again later.")
         }
     }
 
@@ -296,6 +312,7 @@ struct SettingsLocalModelSection: View {
         let isDownloaded = ggufDownloadManager.installedModelFiles.contains(option.fileName)
         let isSelected = ggufDownloadManager.selectedModelFileName == option.fileName
         let isDownloading = ggufDownloadManager.activeDownloadID == option.id
+        let isOnDisk = ggufDownloadManager.catalogBytesOnDisk[option.fileName] != nil
 
         return Button {
             if isDownloading {
@@ -358,6 +375,8 @@ struct SettingsLocalModelSection: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Room for the overlaid Delete control (44pt tall over the 16pt padding).
+            .padding(.bottom, isOnDisk ? RhymeAITokens.Touch.minimum - RhymeAITokens.Spacing.md : 0)
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
@@ -366,6 +385,29 @@ struct SettingsLocalModelSection: View {
                   ggufDownloadManager.isVerifying ||
                   (ggufDownloadManager.activeDownloadID != nil && !isDownloading))
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
+        // A stale same-name file (previous version) is not installed but is still deletable.
+        // Laid over the card instead of beside it, so the title keeps its width on narrow screens.
+        .overlay(alignment: .bottomTrailing) {
+            if isOnDisk {
+                Button {
+                    modelToDelete = option
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(appearance.palette.error)
+                        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.rhymePress)
+                // Off while this entry downloads (cancel that first) or a local model is loading or generating.
+                .disabled(isDownloading || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
+                          inferenceStatus.loadingCount > 0 || viewModel.isLoading || viewModel.rewriteLoading)
+                .accessibilityLabel("Delete \(option.title)")
+                .accessibilityIdentifier("gemmaDelete.\(option.id)")
+                .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            }
+        }
     }
 
     private func downloadActionTitle(isDownloaded: Bool, isSelected: Bool, isDownloading: Bool) -> String {

@@ -169,6 +169,7 @@ struct Writers_BlockApp: App {
             }
             .task {
                 UITestFlags.seedCustomGGUFModelIfRequested()
+                UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
             }
             .task {

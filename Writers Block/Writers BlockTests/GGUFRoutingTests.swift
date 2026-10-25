@@ -370,10 +370,14 @@ struct GGUFDownloadCatalogTests {
     }
 
     @Test func preferredModelUsesCatalogOrder() {
+        // Own defaults: the standard domain may carry a cleared selection from a UI-test delete.
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
             in: [options[1].fileName, options[0].fileName],
-            selectedFileName: nil
+            selectedFileName: nil,
+            defaults: defaults
         )
 
         #expect(preferred == options[0].fileName)
@@ -1072,6 +1076,100 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.engineChoice == .appleIntelligence)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+    }
+
+    /// Delete removes the file, its staging and resume artifacts and the verified marker.
+    /// Deleting the selected model leaves nothing selected: neither the manager's refresh nor
+    /// runtime resolution takes up the other installed model, until the next explicit choice.
+    @Test func deleteRemovesArtifactsAndMarkerAndClearsTheSelectionWithoutFallback() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        let legacyResume = sandbox.root.appendingPathComponent("\(e2b.fileName).resume")
+        for url in [staging, resume, legacyResume] { try Data("partial".utf8).write(to: url) }
+        let manager = try await sandbox.restoredManager()
+        manager.select(e2b)
+        try #require(manager.catalogBytesOnDisk[e2b.fileName] == e2b.expectedBytes)
+
+        await manager.delete(e2b)
+
+        for url in [sandbox.root.appendingPathComponent(e2b.fileName), staging, resume, legacyResume] {
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: sandbox.defaults) == nil)
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.statusMessage == "\(e2b.title) deleted.")
+        #expect(manager.errorMessage == nil)
+
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        manager.refreshInstalledModels()
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root) == nil)
+        #expect(try await sandbox.restoredManager().selectedModelFileName == nil)
+
+        // The next explicit choice turns the fallback back on.
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root)?.lastPathComponent == e4b.fileName)
+    }
+
+    /// A same-name file of the wrong size (a previous version) is not installed, but Delete
+    /// still offers and removes it; another model's selection is untouched.
+    @Test func staleSameNameFileIsDeletableAndKeepsAnotherSelection() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let stale = sandbox.root.appendingPathComponent(e2b.fileName)
+        #expect(FileManager.default.createFile(atPath: stale.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: stale)
+        try handle.truncate(atOffset: 3_427_878_784)
+        try handle.close()
+        let manager = try await sandbox.restoredManager()
+        manager.select(e4b)
+        #expect(!manager.installedModelFiles.contains(e2b.fileName))
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == 3_427_878_784)
+
+        await manager.delete(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
+        #expect(manager.errorMessage == nil)
+    }
+
+    @Test func deleteFailureIsReportedAndKeepsTheModel() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sandbox.root.path)
+            sandbox.tearDown()
+        }
+        try sandbox.install([e2b])
+        let manager = try await sandbox.restoredManager()
+        manager.select(e2b)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: sandbox.root.path)
+
+        await manager.delete(e2b)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sandbox.root.path)
+        #expect(manager.errorMessage?.hasPrefix("Could not delete \(e2b.title):") == true)
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e2b.fileName).path))
+        // The model is still there, so its selection comes back.
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        manager.refreshInstalledModels()
+        #expect(manager.installedModelFiles == [e2b.fileName])
     }
 }
 
