@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
+import XCTest
 @testable import Writers_Block
 
 // MARK: - Gemma prompt template
@@ -225,37 +226,6 @@ struct GGUFDownloadCatalogTests {
         try bytes.write(to: url)
         let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         #expect(try GGUFModelCatalog.fileSHA256(at: url) == expected)
-    }
-
-    /// Each hashed chunk must leave memory before the next is read. Holding them all kept a
-    /// whole multi-GB model resident during verification and the app was jetsammed.
-    @Test func hashingALargeFileKeepsOnlyOneChunkResident() throws {
-        let directory = try makeModelsDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("large.gguf")
-        try writeSparseFile(url, bytes: 1 << 30) // 1 GiB; reads return zero pages without touching disk.
-
-        // Sampled once per chunk from inside the hash loop, so a pool around the whole loop
-        // (drained only on return) still shows the growth.
-        let baseline = try physicalFootprint()
-        var peak = baseline
-        _ = try GGUFModelCatalog.fileSHA256(at: url, cancellationCheck: { peak = max(peak, try physicalFootprint()) })
-        let grownBy = peak - baseline
-        // Measured: about 3 MiB with the per-chunk pool, about 1,100 MiB without it. The margin
-        // absorbs allocations by unrelated tests running in parallel in the same process.
-        #expect(grownBy < 256 * 1_048_576, "hashing grew the footprint by \(grownBy / 1_048_576) MiB")
-    }
-
-    private func physicalFootprint() throws -> Int64 {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
-        let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-        try #require(result == KERN_SUCCESS)
-        return Int64(info.phys_footprint)
     }
 
     private func isolatedDefaults() -> (UserDefaults, String) {
@@ -1008,5 +978,44 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.engineChoice == .appleIntelligence)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
         #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+    }
+}
+
+// MARK: - Hash loop memory bound
+
+/// XCTest on purpose: the bundle runs its XCTest cases serially and finishes them before the
+/// Swift Testing run starts, so no other test's allocations land in this measurement.
+final class GGUFHashMemoryTests: XCTestCase {
+    /// Each hashed chunk must leave memory before the next is read. Holding them all kept a
+    /// whole multi-GB model resident during verification and the app was jetsammed.
+    func testHashingALargeFileKeepsOnlyOneChunkResident() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-memory-\(UUID().uuidString).gguf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 1 << 30) // 1 GiB, sparse: reads return zero pages without touching disk.
+        try handle.close()
+
+        // Sampled once per chunk from inside the hash loop, so a pool around the whole loop
+        // (drained only on return) still shows the growth.
+        let baseline = try physicalFootprint()
+        var peak = baseline
+        _ = try GGUFModelCatalog.fileSHA256(at: url, cancellationCheck: { peak = max(peak, try physicalFootprint()) })
+        let grownBy = peak - baseline
+        // Measured: about 3 MiB with the per-chunk pool, 1103 MiB without it.
+        XCTAssertLessThan(grownBy, 256 * 1_048_576, "hashing grew the footprint by \(grownBy / 1_048_576) MiB")
+    }
+
+    private func physicalFootprint() throws -> Int64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS)
+        return Int64(info.phys_footprint)
     }
 }
