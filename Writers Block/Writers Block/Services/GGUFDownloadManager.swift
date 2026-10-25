@@ -392,10 +392,12 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
     /// Set while `delete` runs; starts, choices and imports wait for it.
     @Published private(set) var deletingModelFileName: String?
-    /// Entries deleted in this process. A completion the system delivers for one of them
-    /// after the delete (a background download that finished while the app was away) is
-    /// discarded instead of republishing the model; a new `start` lifts it.
-    nonisolated private let deletedFileNames = LockedNames()
+    /// Entries deleted since their last download began, kept in the defaults so they
+    /// survive a relaunch. A completion or error the system delivers for one of them after
+    /// the delete (a background download that finished while the app was away) is
+    /// discarded instead of republishing the model or its resume data; the next download
+    /// of that entry beginning lifts it.
+    nonisolated private let deletedFileNames: DeletedEntries
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var receivedBytes: Int64 = 0
@@ -435,6 +437,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         self.modelsRoot = modelsRoot
         self.defaults = defaults
         self.totalRAMBytes = totalRAMBytes
+        deletedFileNames = DeletedEntries(defaults: defaults)
         super.init()
         selectedModelFileName = GGUFModelSelection.currentFileName(defaults: defaults)
         engineChoice = GGUFEngineChoice.current(defaults: defaults)
@@ -500,7 +503,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     func start(_ option: GGUFDownloadOption) {
         guard activeTask == nil, !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil else { return }
-        deletedFileNames.remove(option.fileName)
         refreshInstalledModels()
         if installedModelFiles.contains(option.fileName) {
             select(option)
@@ -753,6 +755,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
+        deletedFileNames.remove(option.fileName)  // a download of this entry is a fresh intent
         activeDownloadID = option.id
         progressSampleTime = Date()
         progressSampleBytes = receivedBytes
@@ -933,7 +936,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     ) {
         guard let error, (error as NSError).code != NSURLErrorCancelled else { return }
         let option = GGUFDownloadCatalog.option(id: task.taskDescription)
-        if let option,
+        if let option, !deletedFileNames.contains(option.fileName),
            let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
            let directory = try? modelsDirectory(create: true) {
             try? resumeData.write(
@@ -1053,12 +1056,28 @@ nonisolated private final class PublishOutcome: @unchecked Sendable {
     var error: Error?
 }
 
-nonisolated private final class LockedNames: @unchecked Sendable {
+/// File names of entries deleted since their last download began, under
+/// `deletedGGUFModelFileNames` in the manager's defaults.
+nonisolated private final class DeletedEntries: @unchecked Sendable {
+    private static let key = "deletedGGUFModelFileNames"
     private let lock = NSLock()
-    private var names: Set<String> = []
-    func insert(_ name: String) { lock.withLock { _ = names.insert(name) } }
-    func remove(_ name: String) { lock.withLock { _ = names.remove(name) } }
-    func contains(_ name: String) -> Bool { lock.withLock { names.contains(name) } }
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) { self.defaults = defaults }
+
+    func insert(_ name: String) { update { $0.insert(name) } }
+    func remove(_ name: String) { update { $0.remove(name) } }
+    func contains(_ name: String) -> Bool { lock.withLock { load().contains(name) } }
+
+    private func load() -> Set<String> { Set(defaults.stringArray(forKey: Self.key) ?? []) }
+
+    private func update(_ body: (inout Set<String>) -> Void) {
+        lock.withLock {
+            var names = load()
+            body(&names)
+            defaults.set(names.sorted(), forKey: Self.key)
+        }
+    }
 }
 
 private enum GGUFDownloadError: LocalizedError {
