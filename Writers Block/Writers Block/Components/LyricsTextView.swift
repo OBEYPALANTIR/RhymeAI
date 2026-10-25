@@ -101,7 +101,11 @@ struct LyricsTextView: UIViewRepresentable {
             textChanged: textChanged,
             highlight: activeHighlight
         ) {
-            context.coordinator.updateRewriteHighlight(textView, highlight: activeHighlight)
+            context.coordinator.updateRewriteHighlight(
+                textView,
+                highlight: activeHighlight,
+                animated: context.transaction.animation != nil && !context.transaction.disablesAnimations
+            )
         }
         if context.coordinator.shouldKeepCursorVisible(
             textChanged: textChanged,
@@ -314,9 +318,13 @@ struct LyricsTextView: UIViewRepresentable {
             highlight: LyricsRewriteHighlight?
         ) -> Bool {
             let changed = textChanged || lastRewriteHighlight != highlight
+            clearedInsertionHighlight = highlight == nil && lastRewriteHighlight?.isInsertion == true
             lastRewriteHighlight = highlight
             return changed
         }
+
+        /// The update in progress removes the "Use line" mark; only that mark fades.
+        private var clearedInsertionHighlight = false
 
         func shouldKeepCursorVisible(
             textChanged: Bool,
@@ -644,10 +652,10 @@ struct LyricsTextView: UIViewRepresentable {
             scheduleKeepCursorVisible()
         }
 
-        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?) {
+        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?, animated: Bool = false) {
             guard let rewriteHighlightView else { return }
             guard let highlight, highlight.range.length > 0 else {
-                rewriteHighlightView.configure(rects: [], isLoading: false, colors: nil)
+                rewriteHighlightView.clear(fading: animated && clearedInsertionHighlight)
                 return
             }
 
@@ -861,11 +869,39 @@ final class RewriteHighlightOverlayView: UIView {
     private(set) var isLoading = false
     private(set) var colors: RewriteHighlightColors?
 
+    /// The "Use line" mark dries into the page on the settle spring (response
+    /// 0.42, damping 0.80) instead of switching off. The rewrite highlight is
+    /// cleared without a fade, as is any clear with animations disabled.
+    static let fadeDuration: TimeInterval = RhymeAITokens.Motion.settleDuration
+    static let fadeDamping: CGFloat = 0.80
+
     func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
+        // A new highlight cancels a fade in progress.
+        layer.removeAllAnimations()
+        alpha = 1
         self.rects = rects
         self.isLoading = isLoading
         self.colors = colors
         setNeedsDisplay()
+    }
+
+    func clear(fading: Bool) {
+        guard fading, !rects.isEmpty, alpha > 0 else {
+            configure(rects: [], isLoading: false, colors: nil)
+            return
+        }
+        UIView.animate(
+            withDuration: Self.fadeDuration,
+            delay: 0,
+            usingSpringWithDamping: Self.fadeDamping,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState]
+        ) {
+            self.alpha = 0
+        } completion: { finished in
+            guard finished else { return }
+            self.configure(rects: [], isLoading: false, colors: nil)
+        }
     }
 
     override func draw(_ rect: CGRect) {

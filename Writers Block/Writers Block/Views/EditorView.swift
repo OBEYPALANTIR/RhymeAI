@@ -7,7 +7,8 @@ func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
     "\(wordCount)w · \(syllableCount)s"
 }
 
-private enum EditorViewConstants {
+/// Shared with the drawer toast and the Backup row, which mirror the save indicator's 80%.
+enum EditorViewConstants {
     enum UnBlockChrome {
         static let expandedButtonWidth: CGFloat = 136
         static let expandedWordmarkWidth: CGFloat = 76
@@ -50,6 +51,11 @@ private enum EditorViewConstants {
         static let savedStatusOpacity: Double = 0.8
         static let disabledExportOpacity: Double = 0.4
         static let enabledExportOpacity: Double = 1.0
+    }
+
+    enum InsertionHighlight {
+        /// How long "Use line" keeps its mark before it dries into the page (PARITY: Android holds the same).
+        static let holdDuration: TimeInterval = 2.0
     }
 
     enum ControlChrome {
@@ -181,9 +187,12 @@ struct EditorView: View {
         }
         .task(id: viewModel.insertionFeedbackID) {
             guard viewModel.insertionFeedbackID != nil else { return }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(EditorViewConstants.InsertionHighlight.holdDuration))
             guard !Task.isCancelled else { return }
-            viewModel.clearInsertionHighlight()
+            // The mark fades on the settle tier like ink drying; Reduce Motion clears it in one frame.
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
+                viewModel.clearInsertionHighlight()
+            }
             try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 28 : 6))
             guard !Task.isCancelled else { return }
             viewModel.clearInsertionFeedback()
