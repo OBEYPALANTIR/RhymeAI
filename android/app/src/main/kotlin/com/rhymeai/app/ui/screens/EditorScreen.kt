@@ -295,8 +295,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val songColumnAlpha = remember { Animatable(1f) }
     val openingSong = viewModel.openingSong
     LaunchedEffect(openingSong) {
-        if (openingSong && animationsEnabled) {
+        if (!animationsEnabled) return@LaunchedEffect
+        if (openingSong) {
             songColumnAlpha.animateTo(0f, tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing))
+        } else if (songSettle.fadeRequest == songSettle.startedRequest && songColumnAlpha.value < 1f) {
+            // The open ended without a new song (it failed); bring the column back.
+            songColumnAlpha.animateTo(1f, tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
         }
     }
     val openRevision = viewModel.openRevision
