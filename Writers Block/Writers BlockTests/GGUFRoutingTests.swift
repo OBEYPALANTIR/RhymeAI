@@ -215,6 +215,59 @@ struct GGUFDownloadCatalogTests {
         #expect(try GGUFModelStorage.removeStaleArtifacts(for: option, in: directory, defaults: defaults) == 0)
     }
 
+    @Test func fileDigestMatchesCryptoKitAcrossChunkBoundaries() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Three 1 MiB chunks plus a short tail, so the loop crosses chunk boundaries and ends mid-chunk.
+        var bytes = Data(count: 3 * 1_048_576 + 17)
+        for index in bytes.indices { bytes[index] = UInt8(truncatingIfNeeded: index &* 31) }
+        let url = directory.appendingPathComponent("digest.gguf")
+        try bytes.write(to: url)
+        let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        #expect(try GGUFModelCatalog.fileSHA256(at: url) == expected)
+    }
+
+    /// Each hashed chunk must leave memory before the next is read. Holding them all kept a
+    /// whole multi-GB model resident during verification and the app was jetsammed.
+    @Test func verifyingAMultiGigabyteFileKeepsTheFileOutOfMemory() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let chunk = 1_048_576
+        let chunks = 1_024 // 1 GiB, sparse: reads return zero pages without touching disk.
+        let url = directory.appendingPathComponent("large.gguf")
+        try writeSparseFile(url, bytes: Int64(chunk * chunks))
+
+        var hasher = SHA256()
+        let zeros = Data(count: chunk)
+        var head = zeros
+        head.replaceSubrange(0..<4, with: Data("GGUF".utf8))
+        hasher.update(data: head)
+        for _ in 1..<chunks { hasher.update(data: zeros) }
+        let option = GGUFDownloadOption(
+            id: "large", title: "Large", subtitle: "", size: "1 GiB",
+            fileName: "large.gguf", expectedBytes: Int64(chunk * chunks),
+            sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/large.gguf")!, isRecommended: false
+        )
+
+        let before = try physicalFootprint()
+        try GGUFDownloadManager.validateDownload(at: url, option: option)
+        let grownBy = try physicalFootprint() - before
+        #expect(grownBy < 64 * 1_048_576, "verification grew the footprint by \(grownBy / 1_048_576) MiB")
+    }
+
+    private func physicalFootprint() throws -> Int64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        try #require(result == KERN_SUCCESS)
+        return Int64(info.phys_footprint)
+    }
+
     private func isolatedDefaults() -> (UserDefaults, String) {
         let suite = "gguf-verified-\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)

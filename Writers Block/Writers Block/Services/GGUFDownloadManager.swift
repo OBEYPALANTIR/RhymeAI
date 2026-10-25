@@ -1,5 +1,4 @@
 import Combine
-import CryptoKit
 import Darwin
 import Foundation
 struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
@@ -331,7 +330,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     static let shared = GGUFDownloadManager()
     nonisolated static let backgroundIdentifier = "ShaydeTree.Writers-Block.model-downloads"
     nonisolated private static let progressUpdateBytes: Int64 = 1024 * 1024
-    nonisolated private static let verificationBufferBytes = 8 * 1024 * 1024
 
     @Published private(set) var installedModelFiles: Set<String> = []
     @Published private(set) var activeDownloadID: String?
@@ -848,14 +846,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         guard try handle.read(upToCount: 4) == Data([0x47, 0x47, 0x55, 0x46]) else {
             throw GGUFDownloadError.invalidFormat
         }
-        try handle.seek(toOffset: 0)
-
-        var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: verificationBufferBytes), !chunk.isEmpty {
-            hasher.update(data: chunk)
-        }
-        let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        guard checksum == option.sha256 else {
+        guard try GGUFModelCatalog.fileSHA256(at: url) == option.sha256 else {
             throw GGUFDownloadError.checksumMismatch
         }
     }
