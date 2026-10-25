@@ -34,15 +34,18 @@ class SettingsModelDeleteUiTest {
     private val downloading = mutableStateOf<GemmaDownload?>(null)
     private val revision = mutableStateOf(0)
     private val deleted = mutableListOf<GemmaDownload>()
+    private var wroteFixture = false
 
     @Before fun installStaleFile() {
         // Never touch a real download; a stale (wrong-size) file stands in for an installed one.
         assumeFalse("a real model is installed on this device", installed.isFile && installed.length() > 1_000_000L)
         installed.writeBytes(ByteArray(32))
+        wroteFixture = true
     }
 
     @After fun cleanUp() {
-        installed.delete()
+        // @After still runs after a skipped @Before; only remove what this test wrote.
+        if (wroteFixture) installed.delete()
     }
 
     @Test fun confirmingDeleteRemovesTheFileAndTheRowOffersDownloadAgain() {

@@ -145,6 +145,9 @@ internal object SongOpenTestHooks {
 }
 
 /** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
+/** Persisted when the selected local model was deleted: restore must not pick another one. */
+private const val NO_LOCAL_MODEL_SELECTION = ""
+
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -2707,10 +2710,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (persisted != storedModels) {
             repo.saveLocalModels(persisted)
         }
-        selectedLocalModelId = repo.selectedLocalModelIdFlow.first()
-            ?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
-            ?: persisted.firstOrNull()?.id
-        repo.saveSelectedLocalModelId(selectedLocalModelId)
+        val storedSelection = repo.selectedLocalModelIdFlow.first()
+        // An explicit "none" (the selected model was deleted) never falls back to another model.
+        val cleared = storedSelection == NO_LOCAL_MODEL_SELECTION
+        selectedLocalModelId = storedSelection?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
+            ?: persisted.firstOrNull()?.id?.takeUnless { cleared }
+        repo.saveSelectedLocalModelId(selectedLocalModelId ?: NO_LOCAL_MODEL_SELECTION.takeIf { cleared })
         if (selectedProvider == AIProvider.LOCAL) {
             selectedSavedLocalModel()?.let { model ->
                 loadLocalModel(java.io.File(filesDir, model.fileName).absolutePath)
@@ -2761,6 +2766,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSavedLocalModel(modelId: String) {
         val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        if (gemmaDeletingModel?.fileName == model.fileName) return
         modelChoiceRevision++
         val ticket = beginLocalModelChange()
         val generation = localModelValidationGeneration
@@ -2862,6 +2868,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: com.rhymeai.app.ui.components.GemmaDownload,
         choiceRevisionAtStart: Long? = null
     ): Boolean {
+        if (gemmaDeletingModel?.fileName == model.fileName) return false
         if (choiceRevisionAtStart == null) {
             modelChoiceRevision++
             LocalModelTestHooks.beforeUseValidation?.await()
@@ -2887,7 +2894,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     internal fun startGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
-        if (gemmaDownloadingModel != null) return
+        if (gemmaDownloadingModel != null || gemmaDeletingModel?.fileName == model.fileName) return
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
         gemmaDownloadVerifying = false
@@ -2998,56 +3005,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /** The catalog model being deleted; its row actions, download, use and select are refused meanwhile. */
+    internal var gemmaDeletingModel by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
+        private set
+
     /**
      * Deletes an installed catalog model together with its partial download and resume state.
-     * The selected model is unloaded first on the loader's serial path so the delete never
-     * races a load; its selection is cleared and no other model is picked in its place.
+     * Every delete runs on the loader's serial path so it never overlaps a load or unload. The
+     * selected model is unloaded first, its selection is cleared and persisted as an explicit
+     * none, and no other model is picked in its place; a download finishing later does not
+     * re-select on its own. Bookkeeping follows the disk whatever the outcome, and every
+     * failure, including a persistence failure, reports on the download error row.
      */
     internal fun deleteDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload) {
-        if (gemmaDownloadingModel?.fileName == model.fileName) return
+        if (gemmaDeletingModel != null || gemmaDownloadingModel?.fileName == model.fileName) return
         val app = getApplication<android.app.Application>()
+        val installedFile = java.io.File(app.filesDir, model.fileName)
+        gemmaDeletingModel = model
         gemmaDownloadError = null
-        val removeFiles: suspend () -> Unit = {
-            withContext(Dispatchers.IO) {
-                com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
+        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName ||
+            localModelPath == installedFile.absolutePath
+        val attempt: suspend () -> Unit = {
+            try {
+                if (wasSelected) {
+                    localModelService.unload()
+                    repo.saveSelectedLocalModelId(NO_LOCAL_MODEL_SELECTION)
+                }
+                try {
+                    withContext(Dispatchers.IO) {
+                        com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
+                    }
+                } finally {
+                    // Whatever was removed, the rows and the saved list follow the disk.
+                    gemmaDownloadRevision++
+                    if (!installedFile.isFile) {
+                        verifiedGemmaFileNames -= model.fileName
+                        savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
+                        repo.saveLocalModels(savedLocalModels)
+                    }
+                }
+            } catch (error: Exception) {
+                gemmaLastDownloadAttempt = null
+                gemmaDownloadError = "Failed to delete ${model.label}: ${error.message}"
+            } finally {
+                gemmaDeletingModel = null
             }
         }
-        val forget: () -> Unit = {
-            verifiedGemmaFileNames -= model.fileName
-            savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
-            gemmaDownloadRevision++
-            viewModelScope.launch { repo.saveLocalModels(savedLocalModels) }
-        }
-        val fail: (Exception) -> Unit = { error ->
-            gemmaLastDownloadAttempt = null
-            gemmaDownloadError = "Failed to delete ${model.label}: ${error.message}"
-        }
-        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName ||
-            localModelPath == java.io.File(app.filesDir, model.fileName).absolutePath
         if (!wasSelected) {
             viewModelScope.launch {
-                try {
-                    removeFiles()
-                    forget()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    fail(error)
-                }
+                withContext(NonCancellable) { localModelOperations.serialized(attempt) }
             }
             return
         }
+        modelChoiceRevision++
         val ticket = beginLocalModelChange()
         localModelPath = null
         selectedLocalModelId = null
-        viewModelScope.launch { repo.saveSelectedLocalModelId(null) }
         localModelOperations.launch(
-            viewModelScope, ticket, {
-                localModelService.unload()
-                removeFiles()
-            },
-            onSuccess = forget,
-            onFailure = fail,
+            viewModelScope, ticket,
+            // A newer selection may supersede this ticket, but the delete it started completes.
+            { withContext(NonCancellable) { attempt() } },
+            onSuccess = {},
+            onFailure = {},
             onFinished = { localModelLoading = false }
         )
     }

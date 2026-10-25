@@ -57,13 +57,17 @@ class GemmaDeleteInstrumentedTest {
         val temp = gemmaDownloadTempFile(app.cacheDir, download).apply { writeBytes(ByteArray(8)) }
         val state = gemmaDownloadStateFile(temp).apply { writeBytes(ByteArray(4)) }
         assertTrue(runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download) })
+        // A second saved model (custom, so restore keeps it) is the fallback a relaunch must not pick.
+        onMain { viewModel.registerAndSelectLocalModel(other.absolutePath, "Other", isCustom = true, select = false) }
         assertEquals(file.name, viewModel.selectedLocalModelId)
         assertTrue(file.name in viewModel.verifiedGemmaFileNames)
         waitUntil("load attempt to settle") { !viewModel.localModelLoading }
+        val choiceRevisionBefore = viewModel.modelChoiceRevision
 
         onMain { viewModel.deleteDownloadedGemma(download) }
-        waitUntil("delete to finish") { !viewModel.localModelLoading && !file.exists() }
+        waitUntil("delete to finish") { viewModel.gemmaDeletingModel == null && !viewModel.localModelLoading }
 
+        assertFalse(file.exists())
         assertFalse(temp.exists())
         assertFalse(state.exists())
         assertNull(viewModel.selectedLocalModelId)
@@ -72,6 +76,14 @@ class GemmaDeleteInstrumentedTest {
         assertFalse(file.name in viewModel.verifiedGemmaFileNames)
         assertTrue(viewModel.savedLocalModels.none { it.fileName == file.name })
         assertNull(viewModel.gemmaDownloadError)
+        assertTrue("a download finishing later must not re-select", viewModel.modelChoiceRevision > choiceRevisionBefore)
+
+        // Relaunch: the explicit "none" survives and the other installed model is not selected instead.
+        lateinit var relaunched: MainViewModel
+        onMain { relaunched = MainViewModel(app) }
+        waitUntil("relaunch to restore saved models") { relaunched.savedLocalModels.any { it.fileName == other.name } }
+        assertNull(relaunched.selectedLocalModelId)
+        assertTrue(relaunched.savedLocalModels.none { it.fileName == file.name })
     }
 
     @Test
