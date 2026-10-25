@@ -23,19 +23,21 @@ struct BackupStatusGlyphTests {
         #expect(EditorViewConstants.TopBar.savedStatusOpacity == 0.8)
     }
 
-    @Test func theSuccessColourLeavesAtTheMinute() {
-        let ink = AppAppearanceStyle.ink.palette.secondaryInk
-        #expect(color(.connected(lastBackupAt: now.addingTimeInterval(-60))) == ink)
-        #expect(color(.connected(lastBackupAt: now.addingTimeInterval(-3_600))) == ink)
-        #expect(color(.connected(lastBackupAt: nil)) == ink, "Not backed up yet")
+    @Test(arguments: [AppAppearanceStyle.ink, .paper, .graphite])
+    func theSuccessColourLeavesAtTheMinute(_ style: AppAppearanceStyle) {
+        let ink = style.palette.secondaryInk
+        #expect(color(.connected(lastBackupAt: now.addingTimeInterval(-60)), style) == ink)
+        #expect(color(.connected(lastBackupAt: now.addingTimeInterval(-3_600)), style) == ink)
+        #expect(color(.connected(lastBackupAt: nil), style) == ink, "Not backed up yet")
     }
 
-    @Test func theOtherStatesStayInSecondaryInkAndAFailureIsTheErrorColour() {
-        let palette = AppAppearanceStyle.ink.palette
-        #expect(color(.notConnected) == palette.secondaryInk)
-        #expect(color(.pending) == palette.secondaryInk)
-        #expect(color(.backingUp) == palette.secondaryInk)
-        #expect(color(.failed(reason: "Backup failed.", lastBackupAt: now)) == palette.error, "a failure is never green, even seconds after a backup")
+    @Test(arguments: [AppAppearanceStyle.ink, .paper, .graphite])
+    func theOtherStatesStayInSecondaryInkAndAFailureIsTheErrorColour(_ style: AppAppearanceStyle) {
+        let palette = style.palette
+        #expect(color(.notConnected, style) == palette.secondaryInk)
+        #expect(color(.pending, style) == palette.secondaryInk)
+        #expect(color(.backingUp, style) == palette.secondaryInk)
+        #expect(color(.failed(reason: "Backup failed.", lastBackupAt: now), style) == palette.error, "a failure is never green, even seconds after a backup")
     }
 
     @Test func justNowIsTheFirstMinute() {

@@ -871,9 +871,10 @@ struct EditorView: View {
             // ask again until the focus system reports it. A cancelled attempt
             // (the layout branch replacing this view) stays retryable.
             for _ in 0..<4 {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
                 titleFocusedOpen = open
                 try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
                 if titleFocusedOpen == open {
                     focusedNewSongOpen = open
                     return

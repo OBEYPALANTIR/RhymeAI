@@ -899,6 +899,13 @@ final class RewriteHighlightOverlayView: UIView {
     /// that replaced it meanwhile.
     private var generation = 0
 
+    /// Runs the fade. Tests inject a driver that hands the changes and the
+    /// completion back, so the fade's states can be checked without a clock.
+    typealias FadeDriver = (_ animation: Animation, _ changes: @escaping () -> Void, _ completion: @escaping () -> Void) -> Void
+    var fadeDriver: FadeDriver = { animation, changes, completion in
+        UIView.animate(animation, changes: changes, completion: completion)
+    }
+
     func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
         // A new highlight cancels a fade in progress.
         generation += 1
@@ -920,12 +927,12 @@ final class RewriteHighlightOverlayView: UIView {
         }
         generation += 1
         let fading = generation
-        UIView.animate(animation) {
-            self.alpha = 0
-        } completion: {
-            guard self.generation == fading else { return }
+        fadeDriver(animation, { [weak self] in
+            self?.alpha = 0
+        }, { [weak self] in
+            guard let self, self.generation == fading else { return }
             self.configure(rects: [], isLoading: false, colors: nil)
-        }
+        })
     }
 
     override func draw(_ rect: CGRect) {

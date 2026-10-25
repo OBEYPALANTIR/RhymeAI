@@ -45,6 +45,25 @@ struct EditorOpenTokenTests {
     }
 
     @MainActor
+    @Test func consecutiveOpensOfTheSameKindStillGetDistinctTokens() throws {
+        let (viewModel, container) = try Self.makeViewModel()
+        let project = SongProject(id: "song-1", title: "Harbour Lights", lyrics: "The ropes drip water on the train", theme: "")
+        container.mainContext.insert(project)
+        try container.mainContext.save()
+
+        viewModel.newProject()
+        let firstNewSong = viewModel.editorOpen
+        viewModel.newProject()
+        #expect(viewModel.editorOpen.id != firstNewSong.id, "New Song twice in a row focuses the title twice")
+
+        viewModel.loadProject(project)
+        let firstLoad = viewModel.editorOpen
+        viewModel.loadProject(project)
+        #expect(viewModel.editorOpen.id != firstLoad.id, "reopening the same song cross-fades again")
+        #expect(!viewModel.editorOpen.isNewSong)
+    }
+
+    @MainActor
     @Test func anUnsavedSongsFirstSaveKeepsItsToken() throws {
         let (viewModel, _) = try Self.makeViewModel()
         viewModel.newProject()
