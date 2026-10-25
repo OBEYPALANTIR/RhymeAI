@@ -3047,8 +3047,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaDeletingModel = model
         gemmaDeleteCounts[model.fileName] = (gemmaDeleteCounts[model.fileName] ?: 0) + 1
         gemmaDownloadError = null
-        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName ||
-            localModelPath == installedFile.absolutePath
+        // Only the saved selection counts: localModelPath also names a rejected selection attempt.
+        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName
         val attempt: suspend () -> Unit = {
             try {
                 if (wasSelected) {

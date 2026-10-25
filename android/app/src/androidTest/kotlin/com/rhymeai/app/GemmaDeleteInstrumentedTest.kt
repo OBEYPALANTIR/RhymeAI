@@ -111,6 +111,27 @@ class GemmaDeleteInstrumentedTest {
     }
 
     @Test
+    fun deletingAModelWhoseSelectionWasRejectedLeavesTheSelectedModelAlone() {
+        assertTrue(runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(download) })
+        assertTrue(runBlocking(Dispatchers.Main) { viewModel.useDownloadedGemma(otherDownload, viewModel.modelChoiceRevision - 1) })
+        waitUntil("load attempt to settle") { !viewModel.localModelLoading }
+
+        // Selecting the other model is rejected (its fixture is not in the trusted catalog), which
+        // leaves the selection on the first model but the last attempted load path on the other.
+        onMain { viewModel.selectSavedLocalModel(other.name) }
+        waitUntil("rejected selection to settle") { !viewModel.localModelLoading && viewModel.localModelError != null }
+        assertEquals(file.name, viewModel.selectedLocalModelId)
+        assertEquals(other.absolutePath, viewModel.localModelPath)
+
+        onMain { viewModel.deleteDownloadedGemma(otherDownload) }
+        waitUntil("delete to finish") { viewModel.gemmaDeletingModel == null && !other.exists() }
+
+        assertEquals(file.name, viewModel.selectedLocalModelId)
+        assertTrue(file.exists())
+        assertNull(viewModel.gemmaDownloadError)
+    }
+
+    @Test
     fun aRegistrationStillWritingItsSelectionCannotUndoADeletedModelsClearedSelection() {
         // Fallback candidate for a relaunch that wrongly finds a missing selection.
         onMain { viewModel.registerAndSelectLocalModel(other.absolutePath, "Other", isCustom = true, select = false) }
