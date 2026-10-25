@@ -123,6 +123,10 @@ struct EditorView: View {
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
+    @FocusState private var titleFieldIsFocused: Bool
+    /// The New Song open whose title focus has already been granted, so a
+    /// re-created editor does not raise the keyboard again.
+    @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
     @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
     // UnBlock collapses into a pencil circle while the mic is recording.
     @State private var unblockWordmarkOpacity: Double = EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
@@ -821,6 +825,7 @@ struct EditorView: View {
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
+                    .focused($titleFieldIsFocused)
                     .onChange(of: viewModel.title) {
                         viewModel.triggerAutoSave()
                     }
@@ -844,6 +849,16 @@ struct EditorView: View {
             ))
         }
         .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
+        // New Song: once the drawer or welcome has left, the caret is already
+        // in the title, so the first keystroke is the song's name.
+        .task(id: viewModel.editorOpen) {
+            let open = viewModel.editorOpen
+            guard open.isNewSong, focusedNewSongOpen != open else { return }
+            focusedNewSongOpen = open
+            try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+            guard !Task.isCancelled else { return }
+            titleFieldIsFocused = true
+        }
         .scrollPosition($writingScrollPosition)
         .onScrollGeometryChange(for: Double.self) { geometry in
             Double(geometry.contentOffset.y + geometry.contentInsets.top)
