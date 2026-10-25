@@ -1,6 +1,7 @@
 package com.rhymeai.app
 
 import android.app.Application
+import com.rhymeai.app.ui.theme.DesignTokens
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -278,8 +279,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var suggestionInsertion by mutableStateOf<SuggestionInsertion?>(null)
         private set
     private var suggestionInsertionRevision = 0L
-    /** Bumped when a different song fills the editor (open, New Song, template, import) so the writing column cross-fades once; a first autosave does not bump it. */
+    /** Bumped when a different song fills the editor (open, New Song, template, import) so the writing column fades in once; a first autosave does not bump it. */
     var openRevision by mutableIntStateOf(0)
+        private set
+    /** True while another song is being fetched for an editor that is on screen; the writing column fades out meanwhile. */
+    var openingSong by mutableStateOf(false)
         private set
     /** Bumped by New Song so the editor puts the caret in the title once the blank page is up. */
     var newSongRevision by mutableIntStateOf(0)
@@ -1902,11 +1906,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Gives an on-screen editor the dismiss tier to fade its column out before another song replaces it; with animations off there is nothing to wait for. */
+    private suspend fun settleBeforeOpen() {
+        if (showStartMenu) return
+        openingSong = true
+        val animatorScale = android.provider.Settings.Global.getFloat(
+            getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        )
+        if (animatorScale > 0f) delay(DesignTokens.Motion.dismissMillis.toLong())
+    }
+
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
             viewModelScope.launch {
                 try {
+                    settleBeforeOpen()
                     val project = repo.selectProject(requestedProject.id)
                     dismissRewrite()
                     title = project.title
@@ -1918,10 +1933,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
+                    // Cleared in the same frame the new song lands, so the fade-in starts from there.
+                    openingSong = false
                     openRevision++
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open the song", error)
+                } finally {
+                    openingSong = false
                 }
             }
         }

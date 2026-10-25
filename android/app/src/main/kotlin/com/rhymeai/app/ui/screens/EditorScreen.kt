@@ -109,7 +109,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -122,10 +121,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.layer.CompositingStrategy
-import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -247,14 +242,11 @@ private var SemanticsPropertyReceiver.editorInsertionHighlightAlpha by EditorIns
 
 /**
  * Song-open settle bookkeeping. Plain fields, written in the composition that first sees a new
- * [MainViewModel.openRevision], so the layer swap lands in the same frame as the new content.
+ * [MainViewModel.openRevision], so the first frame of the new song is already at alpha 0.
  */
 private class SongOpenSettle(var revision: Int) {
-    var liveLayer = 0
     var fadeRequest = 0
     var startedRequest = 0
-    var liveScrollPx = 0
-    var frozenScrollPx = 0
 }
 
 @Composable
@@ -296,15 +288,28 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     val snackbarHostState = remember { SnackbarHostState() }
     val insertionSnackbarHostState = remember { SnackbarHostState() }
 
-    // Song-open settle: the frame the previous song last drew fades out on the dismiss tier while
-    // the new song's column fades in on the state tier. The old frame is a recorded graphics
-    // layer, so nothing is composed twice and the cursor and scroll restore land first. Children
-    // of the writing column must not add graphics layers of their own: a layer is drawn by
-    // reference and would show the new song through the frozen frame.
+    // Song-open settle: while the view model fetches another song (openingSong) the writing column
+    // fades out on the dismiss tier; when the new song's state lands (openRevision) it fades in on
+    // the state tier. Opacity only; the restored cursor and scroll are already underneath.
     val songSettle = remember { SongOpenSettle(viewModel.openRevision) }
-    val songLayers = listOf(rememberGraphicsLayer(), rememberGraphicsLayer())
-    val songIncomingAlpha = remember { Animatable(1f) }
-    val songOutgoingAlpha = remember { Animatable(0f) }
+    val songColumnAlpha = remember { Animatable(1f) }
+    val openingSong = viewModel.openingSong
+    LaunchedEffect(openingSong) {
+        if (openingSong && animationsEnabled) {
+            songColumnAlpha.animateTo(0f, tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing))
+        }
+    }
+    val openRevision = viewModel.openRevision
+    if (songSettle.revision != openRevision) {
+        songSettle.revision = openRevision
+        if (animationsEnabled) songSettle.fadeRequest++
+    }
+    LaunchedEffect(songSettle.fadeRequest) {
+        if (songSettle.fadeRequest == 0) return@LaunchedEffect
+        songColumnAlpha.snapTo(0f)
+        songSettle.startedRequest = songSettle.fadeRequest
+        songColumnAlpha.animateTo(1f, tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
+    }
 
     // New Song: the caret is already in the title once the blank page is up.
     val titleFocusRequester = remember { FocusRequester() }
@@ -844,36 +849,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
             }
             LaunchedEffect(scrollState, viewModel.editorPositionRevision) {
                 snapshotFlow { scrollState.value }.collectLatest { offset ->
-                    songSettle.liveScrollPx = offset
                     viewModel.rememberEditorPosition(with(density) { offset.toDp().value })
                 }
-            }
-            // Decided here, after the scroll state keyed by the new song exists, so the frozen frame
-            // keeps the old song's scroll offset and the swap lands in this same frame.
-            val openRevision = viewModel.openRevision
-            if (songSettle.revision != openRevision) {
-                songSettle.revision = openRevision
-                if (animationsEnabled) {
-                    songSettle.liveLayer = 1 - songSettle.liveLayer
-                    songSettle.frozenScrollPx = songSettle.liveScrollPx
-                    songSettle.fadeRequest++
-                }
-            }
-            LaunchedEffect(songSettle.fadeRequest) {
-                if (songSettle.fadeRequest == 0) return@LaunchedEffect
-                songIncomingAlpha.snapTo(0f)
-                songOutgoingAlpha.snapTo(1f)
-                songSettle.startedRequest = songSettle.fadeRequest
-                launch {
-                    songOutgoingAlpha.animateTo(
-                        0f,
-                        tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)
-                    )
-                }
-                songIncomingAlpha.animateTo(
-                    1f,
-                    tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing)
-                )
             }
             val activeRewriteSurfaceHeightPx = when {
                 rewriteReviewVisible -> rewriteReviewBarHeightPx
@@ -1018,33 +995,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("editorScrollContainer")
-                        .semantics { editorOpenSettleAlpha = songIncomingAlpha.value }
-                        .verticalScroll(scrollState)
-                        .drawWithContent {
-                            if (!animationsEnabled) {
-                                drawContent()
-                                return@drawWithContent
-                            }
-                            // Alphas are read every frame so the snap that starts a fade redraws this node.
-                            val incoming = songIncomingAlpha.value
-                            val outgoing = songOutgoingAlpha.value
-                            val pending = songSettle.fadeRequest != songSettle.startedRequest
-                            val live = songLayers[songSettle.liveLayer]
-                            live.compositingStrategy = CompositingStrategy.ModulateAlpha
-                            live.record { this@drawWithContent.drawContent() }
-                            live.alpha = if (pending) 0f else incoming
-                            drawLayer(live)
-                            val outgoingAlpha = if (pending) 1f else outgoing
-                            if (outgoingAlpha > 0f) {
-                                val frozen = songLayers[1 - songSettle.liveLayer]
-                                frozen.compositingStrategy = CompositingStrategy.ModulateAlpha
-                                frozen.alpha = outgoingAlpha
-                                // Keep the old frame where it was on screen whatever the new song's scroll.
-                                translate(top = (scrollState.value - songSettle.frozenScrollPx).toFloat()) {
-                                    drawLayer(frozen)
-                                }
-                            }
+                        .semantics { editorOpenSettleAlpha = songColumnAlpha.value }
+                        .graphicsLayer {
+                            // A fade-in that has not started yet holds the new song's first frame at 0.
+                            alpha = if (songSettle.fadeRequest != songSettle.startedRequest) 0f else songColumnAlpha.value
                         }
+                        .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
