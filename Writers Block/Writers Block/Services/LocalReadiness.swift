@@ -27,6 +27,9 @@ struct LocalReadiness {
         if AIService.shouldUseGemma() {
             return LocalReadiness(title: "Ready", detail: "Gemma · on this device", canGenerate: true)
         }
+        if AIService.gemmaChoiceCleared() {
+            return LocalReadiness(title: "Choose a model", detail: "Download a local model to use UnBlock on this device.", canGenerate: false)
+        }
         if #available(iOS 26.0, *) {
             switch SystemLanguageModel.default.availability {
             case .available:

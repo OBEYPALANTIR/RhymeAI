@@ -180,6 +180,8 @@ struct AIService {
                         let makeTokens: () -> AsyncThrowingStream<String, Error>
                         if Self.shouldUseGemma(), let path = Self.firstGGUFPath() {
                             makeTokens = { Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner) }
+                        } else if Self.gemmaChoiceCleared() {
+                            throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
                         } else if #available(iOS 26.0, *) {
                             makeTokens = { streamAppleLocalChunks(prompt: prompt) }
                         } else {
@@ -1288,6 +1290,18 @@ struct AIService {
         await ggufRunner.unload()
     }
 
+    /// The Gemma engine is chosen but the user deleted its model and has not picked another:
+    /// the assistant stays in the local-model setup state instead of silently moving to
+    /// Apple Intelligence.
+    static func gemmaChoiceCleared(
+        engineChoice: GGUFEngineChoice = GGUFEngineChoice.current,
+        cleared: Bool = GGUFModelSelection.isCleared()
+    ) -> Bool {
+        engineChoice == .gemma && cleared
+    }
+
+    static let noGGUFModelReason = "No GGUF model found. Download a Gemma model in Settings."
+
     /// Ensure the shared GGUF runner has the correct model loaded, then call
     /// generate(prompt:) and return the raw output.
     private func callGGUF(
@@ -1300,9 +1314,7 @@ struct AIService {
         } else if let path = Self.firstGGUFPath() {
             route = SynonymGGUFRoute(filePath: path)
         } else {
-            throw AIServiceError.localModelUnavailable(
-                reason: "No GGUF model found. Download a Gemma model in Settings."
-            )
+            throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
         }
         return try await route.generate(prompt: prompt, runner: Self.ggufRunner)
     }
@@ -1691,6 +1703,9 @@ struct AIService {
         }
 
         if provider == .local {
+            if Self.gemmaChoiceCleared() {
+                throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
+            }
             // Gemma engine: route through downloaded GGUF model.
             if Self.shouldUseGemma() {
                 return try await callGGUFRewrite(

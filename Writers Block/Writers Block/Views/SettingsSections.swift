@@ -243,7 +243,8 @@ struct SettingsLocalModelSection: View {
             .accessibilityIdentifier("importCustomGGUFModel")
             if let customImportError { Text(customImportError).foregroundStyle(appearance.palette.error) }
         }
-        .disabled(ggufDownloadManager.activeDownloadID != nil || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying)
+        .disabled(ggufDownloadManager.activeDownloadID != nil || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
+                  ggufDownloadManager.deletingModelFileName != nil)
         .fileImporter(isPresented: $customModelImporterPresented, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
@@ -382,7 +383,7 @@ struct SettingsLocalModelSection: View {
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
-                  ggufDownloadManager.isVerifying ||
+                  ggufDownloadManager.isVerifying || ggufDownloadManager.deletingModelFileName != nil ||
                   (ggufDownloadManager.activeDownloadID != nil && !isDownloading))
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
         // A stale same-name file (previous version) is not installed but is still deletable.
@@ -402,7 +403,7 @@ struct SettingsLocalModelSection: View {
                 .buttonStyle(.rhymePress)
                 // Off while this entry downloads (cancel that first) or a local model is loading or generating.
                 .disabled(isDownloading || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
-                          inferenceStatus.loadingCount > 0 || viewModel.isLoading || viewModel.rewriteLoading)
+                          ggufDownloadManager.deletingModelFileName != nil || inferenceStatus.loadingCount > 0 || viewModel.isLoading || viewModel.rewriteLoading)
                 .accessibilityLabel("Delete \(option.title)")
                 .accessibilityIdentifier("gemmaDelete.\(option.id)")
                 .padding(.horizontal, RhymeAITokens.Spacing.sm)

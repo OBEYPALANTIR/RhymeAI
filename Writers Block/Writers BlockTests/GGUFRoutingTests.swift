@@ -1148,6 +1148,65 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.errorMessage == nil)
     }
 
+    /// The persisted selection can name a stale file while the manager shows the verified
+    /// fallback; deleting that file still clears the selection, and nothing is taken up.
+    @Test func deletingAStaleFileThatIsThePersistedSelectionClearsIt() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let stale = sandbox.root.appendingPathComponent(e2b.fileName)
+        #expect(FileManager.default.createFile(atPath: stale.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: stale)
+        try handle.truncate(atOffset: 3_427_878_784)
+        try handle.close()
+        GGUFModelSelection.save(fileName: e2b.fileName, defaults: sandbox.defaults)
+        let manager = try await sandbox.restoredManager()
+        try #require(manager.selectedModelFileName == e4b.fileName)
+        try #require(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+
+        await manager.delete(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root) == nil)
+        #expect(AIService.gemmaChoiceCleared(engineChoice: .gemma, cleared: GGUFModelSelection.isCleared(defaults: sandbox.defaults)))
+        #expect(!AIService.gemmaChoiceCleared(engineChoice: .appleIntelligence, cleared: true))
+    }
+
+    /// Only this entry's artifacts go: a similarly named file, a resume blob of another
+    /// entry and a custom import stay.
+    @Test func deleteLeavesSimilarlyNamedFilesAlone() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b])
+        let kept = [
+            sandbox.root.appendingPathComponent("\(e2b.fileName).backup.gguf"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-personal.gguf"),
+            sandbox.root.appendingPathComponent("custom-notes.txt"),
+            GGUFModelStorage.resumeDataURL(for: e4b, in: sandbox.root),
+        ]
+        let removed = [
+            sandbox.root.appendingPathComponent("\(e2b.fileName).download"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-0.part"),
+            sandbox.root.appendingPathComponent("\(e2b.fileName).resume"),
+        ]
+        for url in kept + removed { try Data("x".utf8).write(to: url) }
+        let manager = try await sandbox.restoredManager()
+
+        await manager.delete(e2b)
+
+        #expect(manager.errorMessage == nil)
+        for url in kept { #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
+        for url in removed + [sandbox.root.appendingPathComponent(e2b.fileName)] {
+            #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)")
+        }
+    }
+
     @Test func deleteFailureIsReportedAndKeepsTheModel() async throws {
         let e2b = GGUFDownloadCatalog.options[0]
         let sandbox = try Sandbox()

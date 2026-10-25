@@ -187,6 +187,11 @@ nonisolated enum GGUFModelSelection {
         }
     }
 
+    /// True between `clearExplicitly` and the next `save`.
+    static func isCleared(defaults: UserDefaults = .standard) -> Bool {
+        withStateLock { defaults.bool(forKey: clearedKey) }
+    }
+
     /// The user deleted the selected model: nothing is selected, and `preferredFileName`
     /// stops falling back to another installed model until the next explicit choice.
     static func clearExplicitly(defaults: UserDefaults = .standard) {
@@ -213,7 +218,7 @@ nonisolated enum GGUFModelSelection {
                 (catalog.contains($0) || registered.contains($0))
         })
         if let selectedFileName, installed.contains(selectedFileName) { return selectedFileName }
-        if withStateLock({ defaults.bool(forKey: clearedKey) }) { return nil }
+        if isCleared(defaults: defaults) { return nil }
         let fits = GGUFModelCatalog.models
             .filter { !GGUFDownloadCatalog.needsMoreMemory($0, totalRAMBytes: totalRAMBytes) }
             .map(\.fileName)
@@ -311,6 +316,18 @@ nonisolated protocol LocalGGUFRunner: AnyObject, Sendable {
 
     /// Release native resources. Safe to call when not loaded.
     func unload() async
+
+    /// Runs `removal` (the deletion of the model file named `fileName`) on the runner's own
+    /// serial path, after releasing that model if it is the resident one, so no load or
+    /// generation overlaps the removal.
+    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws
+}
+
+extension LocalGGUFRunner {
+    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws {
+        await unload()
+        try removal()
+    }
 }
 
 // MARK: - Factory
@@ -884,6 +901,13 @@ actor GGUFLlamaService: LocalGGUFRunner {
         await acquireTransaction()
         defer { releaseTransaction() }
         releaseNative()
+    }
+
+    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        if loadedPath.map({ URL(fileURLWithPath: $0).lastPathComponent }) == fileName { releaseNative() }
+        try removal()
     }
 
     private func releaseNative() {
