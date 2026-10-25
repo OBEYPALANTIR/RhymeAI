@@ -15,6 +15,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
+import com.rhymeai.app.ui.components.gemmaDownloadStateFile
+import com.rhymeai.app.ui.components.gemmaDownloadTempFile
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -35,8 +37,15 @@ class ModelDeleteUiTest {
     private var wroteFixture = false
 
     @Before fun launch() {
-        // Never touch a real download; a stale (wrong-size) file stands in for an installed one.
-        assumeFalse("a real model is installed on this device", installed.isFile && installed.length() > 1_000_000L)
+        // Never touch a real download or a paused one: the production delete this test confirms
+        // removes every artifact of the entry, so skip when any of them already exists.
+        val cacheDir = ApplicationProvider.getApplicationContext<android.content.Context>().cacheDir
+        val temp = gemmaDownloadTempFile(cacheDir, model)
+        assumeFalse(
+            "an artifact of ${model.fileName} already exists on this device",
+            installed.exists() || temp.exists() || gemmaDownloadStateFile(temp).exists()
+        )
+        // A stale (wrong-size) file stands in for an installed one.
         installed.writeBytes(ByteArray(32))
         wroteFixture = true
         scenario = ActivityScenario.launch(MainActivity::class.java)

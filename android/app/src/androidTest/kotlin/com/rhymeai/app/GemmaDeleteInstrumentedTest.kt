@@ -66,10 +66,13 @@ class GemmaDeleteInstrumentedTest {
         assertTrue(file.name in viewModel.verifiedGemmaFileNames)
         waitUntil("load attempt to settle") { !viewModel.localModelLoading }
         val choiceRevisionBefore = viewModel.modelChoiceRevision
+        val unloadsBefore = viewModel.localModelUnloadCount
 
         onMain { viewModel.deleteDownloadedGemma(download) }
         waitUntil("delete to finish") { viewModel.gemmaDeletingModel == null && !viewModel.localModelLoading }
 
+        // The service released its context on the delete path itself, not only through the load's own cleanup.
+        assertEquals(unloadsBefore + 1, viewModel.localModelUnloadCount)
         assertFalse(file.exists())
         assertFalse(temp.exists())
         assertFalse(state.exists())

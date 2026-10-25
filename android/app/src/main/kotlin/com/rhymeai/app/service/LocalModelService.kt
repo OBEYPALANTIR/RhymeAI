@@ -384,9 +384,14 @@ class LocalModelService : AutoCloseable {
         return renderedPrompt
     }
 
+    /** Completed unloads, so tests can check that a path released the native context without a resident model. */
+    internal var unloadCount = 0
+        private set
+
     suspend fun unload() = withContext(Dispatchers.IO) {
         stopActiveGeneration()
         modelMutex.withLock {
+            unloadCount++
             val loadedContext = contextId
             activeTokenChannel?.close()
             activeTokenChannel = null
