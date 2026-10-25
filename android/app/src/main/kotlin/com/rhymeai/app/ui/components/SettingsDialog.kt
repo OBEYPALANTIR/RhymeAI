@@ -51,6 +51,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
@@ -65,7 +66,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
@@ -152,6 +155,9 @@ internal fun SettingsDialog(
     verifiedGemmaFileNames: Set<String> = emptySet(),
     onStartGemmaDownload: (GemmaDownload) -> Unit = {},
     onUseDownloadedGemma: suspend (GemmaDownload) -> Boolean = { false },
+    onDeleteDownloadedGemma: (GemmaDownload) -> Unit = {},
+    // True while a suggestion, rewrite or synonym request is running on the local model.
+    localModelGenerating: Boolean = false,
     // Backup
     backup: BackupSectionState = BackupSectionState(),
     backupActions: BackupSectionActions = BackupSectionActions(),
@@ -221,6 +227,27 @@ internal fun SettingsDialog(
     var copyingFile by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
+
+    var gemmaToDelete by remember { mutableStateOf<GemmaDownload?>(null) }
+    gemmaToDelete?.let { model ->
+        val installedBytes = remember(model) { File(context.filesDir, model.fileName).length() }
+        AlertDialog(
+            onDismissRequest = { gemmaToDelete = null },
+            title = { Text("Delete ${model.label}?") },
+            text = { Text("Frees ${formatFileSize(installedBytes)} on this device. You can download it again later.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    gemmaToDelete = null
+                    onDeleteDownloadedGemma(model)
+                }) {
+                    Text("Delete", color = colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { gemmaToDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     fun useDownloadedModel(model: GemmaDownload) {
         copyingFile = true
@@ -659,6 +686,11 @@ internal fun SettingsDialog(
                                     }
                                     val isInstalled = installedError == null &&
                                         model.fileName in verifiedGemmaFileNames
+                                    // Any file under the catalog name is deletable, including a stale
+                                    // version that fails the size check, so the user can reclaim it.
+                                    val isDeletable = remember(gemmaDownloadRevision, model.fileName) {
+                                        installedFile.isFile
+                                    }
                                     val installedLabel = if (isInstalled) {
                                         "Downloaded - ${formatFileSize(installedFile.length())}"
                                     } else {
@@ -674,79 +706,93 @@ internal fun SettingsDialog(
                                     // Warn only when the model needs more RAM than this device has;
                                     // downloading is still allowed.
                                     val exceedsRam = gemmaModelNeedsMoreMemory(model, deviceTotalRamBytes)
-                                    OutlinedButton(
-                                        onClick = {
-                                            if (isInstalled) {
-                                                useDownloadedModel(model)
-                                            } else {
-                                                onStartGemmaDownload(model)
-                                            }
-                                        },
-                                        enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                                        colors = ButtonDefaults.outlinedButtonColors(
-                                            containerColor = downloadFill,
-                                            disabledContainerColor = downloadFill
-                                        )
-                                    ) {
-                                        // The model name and icon slot stay put as progress changes.
-                                        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
-                                            if (isDownloadingThis) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(16.dp),
-                                                    color = colorScheme.primary,
-                                                    strokeWidth = 2.dp
-                                                )
-                                            } else {
-                                                Icon(
-                                                    if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
-                                                    null,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                        }
-                                        Column(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(start = 8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (isInstalled) {
+                                                    useDownloadedModel(model)
+                                                } else {
+                                                    onStartGemmaDownload(model)
+                                                }
+                                            },
+                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null,
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                containerColor = downloadFill,
+                                                disabledContainerColor = downloadFill
+                                            )
                                         ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Text(model.label, fontWeight = FontWeight.Medium)
-                                                if (isRecommended) {
-                                                    Text(
-                                                        "Recommended",
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Medium,
-                                                        color = colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier
-                                                            .background(
-                                                                colorScheme.surfaceVariant,
-                                                                RoundedCornerShape(4.dp)
-                                                            )
-                                                            .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
+                                            // The model name and icon slot stay put as progress changes.
+                                            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                                                if (isDownloadingThis) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        color = colorScheme.primary,
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
+                                                        null,
+                                                        modifier = Modifier.size(18.dp)
                                                     )
                                                 }
                                             }
-                                            Text(
-                                                when {
-                                                    isDownloadingThis && gemmaDownloadVerifying -> "Verifying download..."
-                                                    isDownloadingThis -> formatDownloadProgress(gemmaDownloadProgress)
-                                                    else -> installedLabel
-                                                },
-                                                fontSize = 12.sp,
-                                                color = colorScheme.onSurfaceVariant
-                                            )
-                                            if (exceedsRam) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .padding(start = 8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(model.label, fontWeight = FontWeight.Medium)
+                                                    if (isRecommended) {
+                                                        Text(
+                                                            "Recommended",
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.Medium,
+                                                            color = colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier
+                                                                .background(
+                                                                    colorScheme.surfaceVariant,
+                                                                    RoundedCornerShape(4.dp)
+                                                                )
+                                                                .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
                                                 Text(
-                                                    "May be slow on this device — needs more memory",
+                                                    when {
+                                                        isDownloadingThis && gemmaDownloadVerifying -> "Verifying download..."
+                                                        isDownloadingThis -> formatDownloadProgress(gemmaDownloadProgress)
+                                                        else -> installedLabel
+                                                    },
                                                     fontSize = 12.sp,
-                                                    color = colorScheme.error
+                                                    color = colorScheme.onSurfaceVariant
                                                 )
+                                                if (exceedsRam) {
+                                                    Text(
+                                                        "May be slow on this device — needs more memory",
+                                                        fontSize = 12.sp,
+                                                        color = colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (isDeletable) {
+                                            // Disabled, not hidden, while this entry downloads or the
+                                            // local model is loading or generating.
+                                            IconButton(
+                                                onClick = { gemmaToDelete = model },
+                                                enabled = !isDownloadingThis && !localModelLoading &&
+                                                    !copyingFile && !localModelGenerating,
+                                                colors = IconButtonDefaults.iconButtonColors(contentColor = colorScheme.error)
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Delete ${model.label}")
                                             }
                                         }
                                     }
