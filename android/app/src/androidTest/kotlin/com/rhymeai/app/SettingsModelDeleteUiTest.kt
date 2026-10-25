@@ -24,8 +24,11 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
-/** The Settings row for an installed catalog model offers Delete, confirms, then offers Download again. */
+/** The Settings row for a verified installed catalog model offers Delete, confirms, then offers Download again. */
 class SettingsModelDeleteUiTest {
     @get:Rule val compose = createComposeRule()
 
@@ -33,13 +36,18 @@ class SettingsModelDeleteUiTest {
     private val installed = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, model.fileName)
     private val downloading = mutableStateOf<GemmaDownload?>(null)
     private val revision = mutableStateOf(0)
+    private val verified = mutableStateOf(setOf(model.fileName))
     private val deleted = mutableListOf<GemmaDownload>()
     private var wroteFixture = false
 
-    @Before fun installStaleFile() {
-        // Never touch a real download; a stale (wrong-size) file stands in for an installed one.
+    @Before fun installVerifiedFixture() {
+        // Never touch a real download. A sparse file of the catalog size with a GGUF header passes the
+        // row's size and header checks without using the emulator's disk, so the row starts as Downloaded.
         assumeFalse("a real model is installed on this device", installed.isFile && installed.length() > 1_000_000L)
-        installed.writeBytes(ByteArray(32))
+        RandomAccessFile(installed, "rw").use { file ->
+            file.write(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).put("GGUF".toByteArray()).putInt(3).array())
+            file.setLength(model.expectedBytes)
+        }
         wroteFixture = true
     }
 
@@ -48,14 +56,16 @@ class SettingsModelDeleteUiTest {
         if (wroteFixture) installed.delete()
     }
 
-    @Test fun confirmingDeleteRemovesTheFileAndTheRowOffersDownloadAgain() {
+    @Test fun confirmingDeleteTurnsTheDownloadedRowBackIntoADownloadRow() {
         showSettings()
-        deleteButton().performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("Downloaded - 3.43 GB").performScrollTo().assertIsDisplayed()
+        deleteButton().assertIsEnabled().performClick()
         compose.onNodeWithText("Delete ${model.label}?").assertIsDisplayed()
-        compose.onNodeWithText("Frees 0.00 GB on this device. You can download it again later.").assertIsDisplayed()
+        compose.onNodeWithText("Frees 3.43 GB on this device. You can download it again later.").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithText("Delete ${model.label}?").assertDoesNotExist()
         assertFalse(deleted.contains(model))
+        compose.onNodeWithText("Downloaded - 3.43 GB").assertIsDisplayed()
 
         deleteButton().performClick()
         compose.onNodeWithText("Delete").performClick()
@@ -63,6 +73,7 @@ class SettingsModelDeleteUiTest {
         compose.onNodeWithText("Delete ${model.label}?").assertDoesNotExist()
         assertFalse(installed.exists())
         deleteButton().assertDoesNotExist()
+        compose.onNodeWithText("Downloaded - 3.43 GB").assertDoesNotExist()
         compose.onNodeWithText(model.description).performScrollTo().assertIsDisplayed()
     }
 
@@ -98,9 +109,11 @@ class SettingsModelDeleteUiTest {
                     onUnloadLocalModel = {},
                     gemmaDownloadingModel = downloading.value,
                     gemmaDownloadRevision = revision.value,
+                    verifiedGemmaFileNames = verified.value,
                     onDeleteDownloadedGemma = {
                         deleted += it
                         installed.delete()
+                        verified.value = emptySet()
                         revision.value++
                     },
                     onDismiss = {}
