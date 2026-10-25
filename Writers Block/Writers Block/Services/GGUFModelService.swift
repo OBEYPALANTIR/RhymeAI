@@ -89,10 +89,14 @@ nonisolated enum GGUFModelCatalog {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+        // read(upToCount:) returns autoreleased chunks. Without a pool per chunk they all
+        // stay resident until this returns, which jetsams the app on a multi-GB model.
+        while try autoreleasepool(invoking: {
+            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
             try cancellationCheck()
             hasher.update(data: data)
-        }
+            return true
+        }) {}
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
