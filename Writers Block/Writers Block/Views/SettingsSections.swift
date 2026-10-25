@@ -646,17 +646,47 @@ struct SettingsCloudBackupSection: View {
     /// "Last backed up 2 minutes ago · Google Drive"; refreshed while visible.
     private var providerStatusRow: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Label(providerStatusText(now: context.date), systemImage: providerStatusIcon)
-                .font(.caption)
-                .foregroundStyle(isFailed ? appearance.palette.error : appearance.palette.secondaryInk)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("backupProviderStatus")
+            let text = providerStatusText(now: context.date)
+            Label {
+                Text(text)
+            } icon: {
+                Image(systemName: providerStatusIcon)
+                    // "just now" wears the success colour at the save indicator's 80%; the text stays in ink.
+                    .foregroundStyle(providerStatusIconColor(now: context.date))
+                    .symbolEffect(.rotate, isActive: isBackingUp && !reduceMotion)
+            }
+            .font(.caption)
+            .foregroundStyle(isFailed ? appearance.palette.error : appearance.palette.secondaryInk)
+            .fixedSize(horizontal: false, vertical: true)
+            // Text and glyph cross-fade in place on the state tier instead of swapping in one frame.
+            .contentTransition(.opacity)
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: text)
+            .accessibilityIdentifier("backupProviderStatus")
         }
     }
 
     private var isFailed: Bool {
         if case .failed = viewModel.backupStatus { return true }
         return false
+    }
+
+    private var isBackingUp: Bool {
+        if case .backingUp = viewModel.backupStatus { return true }
+        return false
+    }
+
+    /// True while the row reads "Last backed up just now".
+    static func isJustBackedUp(_ lastBackupAt: Date?, now: Date) -> Bool {
+        guard let lastBackupAt else { return false }
+        return now.timeIntervalSince(lastBackupAt) < 60
+    }
+
+    private func providerStatusIconColor(now: Date) -> Color {
+        if isFailed { return appearance.palette.error }
+        if case .connected(let last) = viewModel.backupStatus, Self.isJustBackedUp(last, now: now) {
+            return appearance.palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity)
+        }
+        return appearance.palette.secondaryInk
     }
 
     private func providerStatusText(now: Date) -> String {
@@ -676,7 +706,7 @@ struct SettingsCloudBackupSection: View {
 
     private func lastBackedUp(_ date: Date?, now: Date) -> String {
         guard let date else { return "Not backed up yet" }
-        guard now.timeIntervalSince(date) >= 60 else { return "Last backed up just now" }
+        guard !Self.isJustBackedUp(date, now: now) else { return "Last backed up just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return "Last backed up \(formatter.localizedString(for: date, relativeTo: now))"
