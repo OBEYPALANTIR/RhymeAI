@@ -1225,6 +1225,19 @@ final class Writers_BlockUITests: XCTestCase {
         app.buttons["UI Trash Song"].tap()
         XCTAssertTrue(app.buttons["Restore"].isEnabled)
         XCTAssertTrue(app.buttons["Delete"].isEnabled)
+
+        // Restore says so: the row leaves, the Trash empties with its next-step
+        // caption, and the drawer's toast names the song with an Open action.
+        app.buttons["Restore"].tap()
+        XCTAssertTrue(app.staticTexts["Restored \u{201c}UI Trash Song\u{201d}"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No Songs in Trash"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Deleted songs stay here for 30 days."].exists)
+        XCTAssertFalse(app.buttons["UI Trash Song"].exists)
+        attachScreenshot(app, name: "trash-restored-toast")
+        app.buttons["Open"].tap()
+        let title = app.textFields["songTitleEditor"]
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !app.staticTexts["Trash"].exists }))
+        XCTAssertEqual(title.value as? String, "UI Trash Song")
     }
 
     @MainActor

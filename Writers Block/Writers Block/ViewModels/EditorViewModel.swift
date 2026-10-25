@@ -1679,9 +1679,11 @@ final class EditorViewModel: ObservableObject {
         return true
     }
 
+    /// Returns the restored song, which the Trash's toast can open, or nil
+    /// when the save failed and the song stays in Trash.
     @discardableResult
-    func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> Bool {
-        guard let context = modelContext else { return false }
+    func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> SongProject? {
+        guard let context = modelContext else { return nil }
         let restoredProject = trashedProject.restoredProject()
         removeExistingProjects(id: restoredProject.id, in: context)
         context.insert(restoredProject)
@@ -1691,10 +1693,10 @@ final class EditorViewModel: ObservableObject {
         } catch {
             context.rollback()
             errorMessage = "Couldn't restore this song. It remains in Trash."
-            return false
+            return nil
         }
         scheduleTrashPurge()
-        return true
+        return restoredProject
     }
 
     @discardableResult
