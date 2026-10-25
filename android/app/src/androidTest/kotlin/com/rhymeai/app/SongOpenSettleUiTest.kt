@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModelProvider
+import kotlinx.coroutines.CompletableDeferred
 import com.rhymeai.app.ui.screens.EditorInsertionHighlightAlpha
 import com.rhymeai.app.ui.screens.EditorOpenSettleAlpha
 import com.rhymeai.app.ui.screens.EditorScreen
@@ -20,6 +21,7 @@ import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 
@@ -32,6 +34,8 @@ class SongOpenSettleUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private lateinit var vm: MainViewModel
     private val draft = "The ropes drip water on the train"
+
+    @After fun releaseHooks() { SongOpenTestHooks.beforeSwap?.complete(Unit); SongOpenTestHooks.beforeSwap = null }
 
     private fun showEditor(animations: Boolean) {
         compose.activityRule.scenario.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
@@ -91,12 +95,17 @@ class SongOpenSettleUiTest {
         // Let the syllable analysis land before sampling the resting ink.
         compose.mainClock.advanceTimeBy(600)
         val restingInk = columnInk()
+        // Hold the swap so the leaving column can be sampled; the beat itself runs in real time.
+        val hold = CompletableDeferred<Unit>()
+        SongOpenTestHooks.beforeSwap = hold
         compose.runOnUiThread { vm.loadProject(saved) }
         stepUntil("the column to start leaving") { settleAlpha() < 1f }
         val leaving = settleAlpha()
         compose.mainClock.advanceTimeBy(48)
         val leavingInk = columnInk()
         val leavingTitle = vm.title
+        SongOpenTestHooks.beforeSwap = null
+        hold.complete(Unit)
         stepUntil("the saved song to open") { vm.title == "Untitled Pop Song" }
         compose.mainClock.advanceTimeByFrame()
         val arriving = settleAlpha()
@@ -155,16 +164,37 @@ class SongOpenSettleUiTest {
         }
         compose.mainClock.advanceTimeByFrame()
         assertEquals(1f, highlightAlpha(), 0f)
+        // Sampled at the end of the hold, once the inserted line's syllable analysis (real-time work)
+        // has been drawn, so only the fill differs between the samples.
         compose.mainClock.advanceTimeBy(1_900)
+        Thread.sleep(600)
+        compose.mainClock.advanceTimeByFrame()
         assertEquals("Held for the full two seconds", 1f, highlightAlpha(), 0f)
+        val heldInk = lyricsInk()
         compose.mainClock.advanceTimeBy(100 + 48)
         val drying = highlightAlpha()
         compose.mainClock.advanceTimeBy(96)
         val drier = highlightAlpha()
+        val dryingInk = lyricsInk()
         compose.mainClock.advanceTimeBy(1_500)
+        val driedInk = lyricsInk()
         assertTrue("Highlight must fade rather than switch off: $drying / $drier", drying < 1f && drying > 0f && drier < drying)
         assertEquals(0f, highlightAlpha(), 0f)
+        // Rendered pixels: the 12% fill makes the lyrics darker while held, less so while drying, not at all once dry.
+        assertTrue("Fill must be drawn and dry away: $heldInk / $dryingInk / $driedInk", heldInk > dryingInk && dryingInk > driedInk)
         compose.mainClock.autoAdvance = true
+    }
+
+    /** Darkness of the lyrics field (1 = all ink); the insertion fill adds to it. */
+    private fun lyricsInk(): Double {
+        Thread.sleep(48)
+        val pixels = compose.onNodeWithTag("lyricsEditor").captureToImage().toPixelMap()
+        var sum = 0.0
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val p = pixels[x, y]
+            sum += 1f - (0.299f * p.red + 0.587f * p.green + 0.114f * p.blue)
+        }
+        return sum / (pixels.height * pixels.width)
     }
 
     @Test fun reducedMotionClearsTheUseLineHighlightInOneFrame() {

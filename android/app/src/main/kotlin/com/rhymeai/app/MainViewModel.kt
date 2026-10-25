@@ -139,6 +139,11 @@ internal object NewSongTestHooks {
     @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
+/** Lets a test hold an open after its settle beat, with the column faded, before the song swaps (null in the app). */
+internal object SongOpenTestHooks {
+    @Volatile var beforeSwap: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 /** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -1922,13 +1927,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun settleBeforeOpen(request: Int): Boolean {
         if (showStartMenu) return true
         openingSong = true
-        val animatorScale = android.provider.Settings.Global.getFloat(
-            getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
-        )
-        if (animatorScale > 0f) delay((DesignTokens.Motion.dismissMillis * animatorScale).toLong())
+        val animatorScale = animatorScaleNow()
+        // Waited in short steps so animations removed mid-beat release the editor at once.
+        val deadline = android.os.SystemClock.uptimeMillis() + (DesignTokens.Motion.dismissMillis * animatorScale).toLong()
+        while (android.os.SystemClock.uptimeMillis() < deadline && animatorScaleNow() > 0f && request == openRequest) delay(16)
+        SongOpenTestHooks.beforeSwap?.await()
         // A newer open took over during the beat; it owns the editor and openingSong now.
         return request == openRequest
     }
+
+    private fun animatorScaleNow(): Float = android.provider.Settings.Global.getFloat(
+        getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+    )
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
@@ -1939,6 +1949,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     showProjectsDialog = false
                     if (!settleBeforeOpen(request)) return@launch
                     val project = repo.selectProject(requestedProject.id)
+                    // Overtaken while the song was read (Back, or another open): leave the editor alone.
+                    if (request != openRequest) return@launch
                     dismissRewrite()
                     title = project.title
                     lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -2479,6 +2491,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyAtomicLyricsEdit(nextValue: TextFieldValue) {
+        if (openingSong) return
         cancelEditorAIWork()
         suggestionInsertion = null
         val safeValue = nextValue.withValidRanges()
@@ -2525,6 +2538,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun goToStartMenu(onReady: () -> Unit = {}) {
+        // Back cancels any open still waiting out its settle beat.
+        openRequest++
+        openingSong = false
         flushCurrentDraft { suggestionInsertion = null; showStartMenu = true; onReady() }
     }
 
