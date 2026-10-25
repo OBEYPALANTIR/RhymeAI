@@ -834,7 +834,16 @@ struct EditorView: View {
             }
             .frame(maxWidth: RhymeAITokens.Layout.editorMaxWidth)
             .frame(maxWidth: .infinity)
+            // A song opening cross-fades the writing column in place: the old
+            // page leaves on the dismiss tier, the new one arrives on the state
+            // tier, opacity only. Reduce Motion keeps the one-frame swap.
+            .id(viewModel.editorOpen)
+            .transition(reduceMotion ? .identity : .asymmetric(
+                insertion: .opacity.animation(RhymeAITokens.Motion.state),
+                removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
+            ))
         }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
         .scrollPosition($writingScrollPosition)
         .onScrollGeometryChange(for: Double.self) { geometry in
             Double(geometry.contentOffset.y + geometry.contentInsets.top)

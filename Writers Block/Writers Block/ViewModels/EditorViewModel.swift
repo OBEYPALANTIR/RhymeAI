@@ -481,6 +481,16 @@ final class EditorViewModel: ObservableObject {
     @Published var currentProjectId: String?
     @Published var saveStatus: SaveStatus = .idle
 
+    /// One song opened or started in the editor. `newProject` and `loadProject`
+    /// issue a fresh token so the writing column can cross-fade once per open;
+    /// an unsaved song's first autosave keeps its token and does not re-fade.
+    struct EditorOpen: Hashable {
+        let id = UUID()
+        /// New Song moves focus to the title field; opening a saved song keeps its restored cursor.
+        let isNewSong: Bool
+    }
+    @Published private(set) var editorOpen = EditorOpen(isNewSong: false)
+
     @Published var companion = WritingCompanion()
     @Published var showNotebook = false
     @Published var companionError: String?
@@ -1588,6 +1598,7 @@ final class EditorViewModel: ObservableObject {
         theme = ""
         cursorPosition = 0
         currentProjectId = nil
+        editorOpen = EditorOpen(isNewSong: true)
         resetCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -1624,6 +1635,7 @@ final class EditorViewModel: ObservableObject {
         theme = project.theme
         cursorPosition = 0
         currentProjectId = project.id
+        editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
         errorMessage = nil
