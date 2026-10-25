@@ -75,6 +75,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -2754,7 +2755,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
             .sortedBy { it.displayName.lowercase() }
         viewModelScope.launch {
-            repo.saveLocalModels(savedLocalModels)
+            persistSavedLocalModels()
             if (select) repo.saveSelectedLocalModelId(model.id)
         }
         if (!select) return
@@ -2869,6 +2870,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         choiceRevisionAtStart: Long? = null
     ): Boolean {
         if (gemmaDeletingModel?.fileName == model.fileName) return false
+        val deletesAtStart = gemmaDeleteCounts[model.fileName]
         if (choiceRevisionAtStart == null) {
             modelChoiceRevision++
             LocalModelTestHooks.beforeUseValidation?.await()
@@ -2882,8 +2884,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             verifiedGemmaFileNames -= model.fileName
             return false
         }
-        // A delete may have started while the integrity check ran; never publish a selection it removes.
-        if (gemmaDeletingModel?.fileName == model.fileName) return false
+        // A delete may have started, or started and finished, while the integrity check ran;
+        // never publish a selection for a file it removed.
+        if (gemmaDeletingModel?.fileName == model.fileName || gemmaDeleteCounts[model.fileName] != deletesAtStart) {
+            return false
+        }
         verifiedGemmaFileNames += model.fileName
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
@@ -3011,6 +3016,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     internal var gemmaDeletingModel by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
         private set
 
+    /** Deletes started per catalog file; a download validated across one must not publish its selection. */
+    private val gemmaDeleteCounts = mutableMapOf<String, Int>()
+    private val savedLocalModelsWriteLock = Mutex()
+
+    /** Writes the saved list as it stands when its turn comes, so an older queued write cannot restore a deleted entry. */
+    private suspend fun persistSavedLocalModels() =
+        savedLocalModelsWriteLock.withLock { repo.saveLocalModels(savedLocalModels) }
+
     /**
      * Deletes an installed catalog model together with its partial download and resume state.
      * Every delete runs on the loader's serial path so it never overlaps a load or unload. The
@@ -3024,6 +3037,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val app = getApplication<android.app.Application>()
         val installedFile = java.io.File(app.filesDir, model.fileName)
         gemmaDeletingModel = model
+        gemmaDeleteCounts[model.fileName] = (gemmaDeleteCounts[model.fileName] ?: 0) + 1
         gemmaDownloadError = null
         val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName ||
             localModelPath == installedFile.absolutePath
@@ -3032,6 +3046,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (wasSelected) {
                     localModelService.unload()
                     repo.saveSelectedLocalModelId(NO_LOCAL_MODEL_SELECTION)
+                    // Cleared only once both succeeded, so a failed attempt can be retried whole.
+                    localModelPath = null
+                    selectedLocalModelId = null
                 }
                 try {
                     withContext(Dispatchers.IO) {
@@ -3043,7 +3060,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (!installedFile.isFile) {
                         verifiedGemmaFileNames -= model.fileName
                         savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
-                        repo.saveLocalModels(savedLocalModels)
+                        persistSavedLocalModels()
                     }
                 }
             } catch (error: Exception) {
@@ -3055,10 +3072,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val ticket = if (wasSelected) {
             modelChoiceRevision++
-            beginLocalModelChange().also {
-                localModelPath = null
-                selectedLocalModelId = null
-            }
+            beginLocalModelChange()
         } else {
             null
         }
