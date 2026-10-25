@@ -1293,8 +1293,9 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.errorMessage == nil)
     }
 
-    /// A completion the system delivers after the entry was deleted here (a background
-    /// download that finished while the app was away) is discarded, not republished.
+    /// A completion the system delivers after the entry was deleted (a background download
+    /// that finished while the app was away, even across a relaunch) is discarded, not
+    /// republished, until a download of that entry begins again.
     @Test func completionDeliveredAfterADeleteIsDiscarded() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.tearDown() }
@@ -1324,10 +1325,16 @@ struct GGUFDownloadCompletionTests {
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: sandbox.defaults) == nil)
 
-        // A new start is a fresh intent; the next completion installs again.
-        manager.start(option)
+        // The app was terminated before the callback: a fresh manager still discards it.
+        let relaunched = try await sandbox.restoredManager()
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+
+        // A download of the entry beginning is a fresh intent; the next completion installs.
+        relaunched.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value)
         #expect(try Data(contentsOf: installed) == valid)
     }
 
