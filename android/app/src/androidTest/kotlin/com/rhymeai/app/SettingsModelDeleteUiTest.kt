@@ -16,6 +16,8 @@ import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.GemmaDownload
 import com.rhymeai.app.ui.components.SettingsDialog
+import com.rhymeai.app.ui.components.gemmaDownloadStateFile
+import com.rhymeai.app.ui.components.gemmaDownloadTempFile
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import org.junit.After
 import org.junit.Assert.assertFalse
@@ -43,7 +45,12 @@ class SettingsModelDeleteUiTest {
     @Before fun installVerifiedFixture() {
         // Never touch a real download. A sparse file of the catalog size with a GGUF header passes the
         // row's size and header checks without using the emulator's disk, so the row starts as Downloaded.
-        assumeFalse("a real model is installed on this device", installed.isFile && installed.length() > 1_000_000L)
+        val cacheDir = ApplicationProvider.getApplicationContext<android.content.Context>().cacheDir
+        val temp = gemmaDownloadTempFile(cacheDir, model)
+        assumeFalse(
+            "an artifact of ${model.fileName} already exists on this device",
+            installed.exists() || temp.exists() || gemmaDownloadStateFile(temp).exists()
+        )
         RandomAccessFile(installed, "rw").use { file ->
             file.write(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).put("GGUF".toByteArray()).putInt(3).array())
             file.setLength(model.expectedBytes)

@@ -387,6 +387,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var scriptedSuggestions by mutableStateOf<ScriptedSuggestionStream?>(null)
     val localReady: Boolean get() = localModelLoaded && !localModelLoading && localModelError == null
+    internal val localModelUnloadCount: Int get() = localModelService.unloadCount
     /** Suggest Next Line can run on the device: the local model is ready, or a scripted stream answers it. */
     val localSuggestionsReady: Boolean get() = localReady || scriptedSuggestions != null
     val localReadinessLabel: String get() = when {
