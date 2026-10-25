@@ -18,6 +18,8 @@ struct TrashBinView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var onDismiss: (() -> Void)? = nil
+    /// The songs a Restore put back, so the drawer can confirm it.
+    var onRestored: (([SongProject]) -> Void)? = nil
 
     private enum TrashTab: String, CaseIterable {
         case projects = "Songs"
@@ -163,12 +165,16 @@ struct TrashBinView: View {
 
                 ForEach(trashedProjects, id: \.id) { project in
                     trashRow(project)
+                        // A restored or deleted row leaves on the dismiss tier
+                        // while the rows below close the gap on the standard spring.
+                        .transition(reduceMotion ? .opacity : .opacity.animation(RhymeAITokens.Motion.dismiss))
                 }
             }
             .padding(.top, RhymeAITokens.Spacing.sm)
             .padding(.bottom, RhymeAITokens.Spacing.xxl)
         }
         .scrollContentBackground(.hidden)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: trashIds)
     }
 
     private var selectionHeader: some View {
@@ -272,12 +278,14 @@ struct TrashBinView: View {
 
                 ForEach(trashedMemos) { memo in
                     trashRecordingRow(memo)
+                        .transition(reduceMotion ? .opacity : .opacity.animation(RhymeAITokens.Motion.dismiss))
                 }
             }
             .padding(.top, RhymeAITokens.Spacing.sm)
             .padding(.bottom, RhymeAITokens.Spacing.xxl)
         }
         .scrollContentBackground(.hidden)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: trashedMemos.map(\.id))
     }
 
     private func trashRecordingRow(_ memo: TrashedVoiceMemo) -> some View {
@@ -402,8 +410,8 @@ struct TrashBinView: View {
 
     private func restoreSelected() {
         if activeTab == .projects {
-            let projects = selectedProjects
-            projects.forEach { _ = viewModel.restoreTrashedProject($0) }
+            let restored = selectedProjects.compactMap { viewModel.restoreTrashedProject($0) }
+            if !restored.isEmpty { onRestored?(restored) }
         } else {
             selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
             reloadTrashedMemos()

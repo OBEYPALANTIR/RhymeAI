@@ -77,7 +77,10 @@ struct ProjectsDrawerView: View {
     private struct UndoToast: Identifiable {
         let id = UUID()
         let message: String
-        let undo: () -> Void
+        /// A leading glyph in the success colour at the save indicator's 80%, e.g. the Restore tick.
+        var systemImage: String? = nil
+        var actionLabel = "Undo"
+        let action: (() -> Void)?
     }
 
     nonisolated private struct RecordingFolder: Identifiable, Sendable {
@@ -86,9 +89,9 @@ struct ProjectsDrawerView: View {
         let items: [RecordingItem]
     }
 
-    private func showUndoToast(_ message: String, undo: @escaping () -> Void) {
+    private func showUndoToast(_ message: String, systemImage: String? = nil, actionLabel: String = "Undo", undo: (() -> Void)?) {
         withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
-            undoToast = UndoToast(message: message, undo: undo)
+            undoToast = UndoToast(message: message, systemImage: systemImage, actionLabel: actionLabel, action: undo)
         }
     }
 
@@ -106,23 +109,31 @@ struct ProjectsDrawerView: View {
 
     private func undoToastView(_ toast: UndoToast) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
+            if let systemImage = toast.systemImage {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(appearance.palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
+                    .accessibilityHidden(true)
+            }
             Text(toast.message)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
             Spacer(minLength: RhymeAITokens.Spacing.sm)
-            Button {
-                withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
-                    toast.undo()
-                    undoToast = nil
+            if let action = toast.action {
+                Button {
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                        action()
+                        undoToast = nil
+                    }
+                } label: {
+                    Text(toast.actionLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(appearance.palette.action)
+                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
                 }
-            } label: {
-                Text("Undo")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(appearance.palette.action)
-                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                .buttonStyle(.rhymePress)
             }
-            .buttonStyle(.rhymePress)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
@@ -246,6 +257,16 @@ struct ProjectsDrawerView: View {
                 TrashBinView(onDismiss: {
                     withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
                         trashBinPresented = false
+                    }
+                }, onRestored: { restored in
+                    if restored.count == 1, let song = restored.first {
+                        let title = song.title.isEmpty ? "Untitled Song" : song.title
+                        showUndoToast("Restored \u{201c}\(title)\u{201d}", systemImage: "checkmark", actionLabel: "Open") {
+                            viewModel.loadProject(song)
+                            dismissAfterNavigation()
+                        }
+                    } else {
+                        showUndoToast("\(restored.count) songs restored", systemImage: "checkmark", undo: nil)
                     }
                 })
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
