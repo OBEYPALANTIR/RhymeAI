@@ -1,0 +1,131 @@
+package com.rhymeai.app
+
+import android.os.SystemClock
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.ViewModelProvider
+import com.rhymeai.app.ui.screens.EditorInsertionHighlightAlpha
+import com.rhymeai.app.ui.screens.EditorOpenSettleAlpha
+import com.rhymeai.app.ui.screens.EditorScreen
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.RhymeAITheme
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+/**
+ * The real editor against the real view model: a song opening cross-fades the writing column,
+ * New Song puts the caret in the title, and a used line's highlight dries instead of switching off.
+ */
+@OptIn(ExperimentalTestApi::class)
+class SongOpenSettleUiTest {
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    private lateinit var vm: MainViewModel
+    private val draft = "The ropes drip water on the train"
+
+    private fun showEditor(animations: Boolean) {
+        compose.activityRule.scenario.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
+        compose.waitUntil(10_000) { vm.appearanceLoaded && !vm.restoringDraft }
+        compose.runOnIdle { vm.seedEditorForTesting("Harbour Lights", draft, TextRange(draft.length)) }
+        compose.setContent {
+            RhymeAITheme {
+                CompositionLocalProvider(LocalAnimationsEnabled provides animations) {
+                    EditorScreen(viewModel = vm)
+                }
+            }
+        }
+        compose.onNodeWithTag("songTitleEditor").assertIsDisplayed()
+    }
+
+    private fun settleAlpha() =
+        compose.onNodeWithTag("editorScrollContainer").fetchSemanticsNode().config[EditorOpenSettleAlpha]
+
+    private fun highlightAlpha() =
+        compose.onNodeWithTag("lyricsEditor").fetchSemanticsNode().config[EditorInsertionHighlightAlpha]
+
+    /** Steps the paused clock one frame at a time while the view model finishes its work. */
+    private fun stepUntil(what: String, condition: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (!condition()) {
+            check(SystemClock.uptimeMillis() < deadline) { "Timed out waiting for $what" }
+            compose.mainClock.advanceTimeByFrame()
+        }
+    }
+
+    @Test fun openingAnotherSongCrossFadesTheWritingColumnOnTheStateTier() {
+        showEditor(animations = true)
+        assertEquals(1f, settleAlpha(), 0f)
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { vm.applyTemplate("Pop Song", "", "We folded every promise twice") }
+        stepUntil("the template to open") { vm.title == "Untitled Pop Song" }
+        compose.mainClock.advanceTimeByFrame()
+        val entering = settleAlpha()
+        compose.mainClock.advanceTimeBy(64)
+        val during = settleAlpha()
+        compose.mainClock.advanceTimeBy(600)
+        val settled = settleAlpha()
+        assertTrue("Incoming column must fade in: $entering / $during / $settled", entering < 0.5f && during > entering && during < 1f)
+        assertEquals(1f, settled, 0.001f)
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test fun reducedMotionOpensAnotherSongInOneFrame() {
+        showEditor(animations = false)
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { vm.applyTemplate("Pop Song", "", "We folded every promise twice") }
+        stepUntil("the template to open") { vm.title == "Untitled Pop Song" }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(1f, settleAlpha(), 0f)
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test fun newSongPutsTheCaretInTheTitle() {
+        showEditor(animations = true)
+        compose.runOnUiThread { vm.newProject() }
+        compose.waitUntil(10_000) { vm.newSongRevision == 1 && vm.title.isEmpty() }
+        compose.onNodeWithTag("songTitleEditor").assertIsFocused()
+    }
+
+    @Test fun useLineHighlightHoldsTwoSecondsThenDriesOnTheSettleSpring() {
+        showEditor(animations = true)
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread {
+            vm.onLyricsChanged(TextFieldValue(draft, TextRange(draft.length)))
+            vm.insertSuggestion("A gull cries out above the chain")
+        }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(1f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(1_900)
+        assertEquals("Held for the full two seconds", 1f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(100 + 48)
+        val drying = highlightAlpha()
+        compose.mainClock.advanceTimeBy(96)
+        val drier = highlightAlpha()
+        compose.mainClock.advanceTimeBy(1_500)
+        assertTrue("Highlight must fade rather than switch off: $drying / $drier", drying < 1f && drying > 0f && drier < drying)
+        assertEquals(0f, highlightAlpha(), 0f)
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test fun reducedMotionClearsTheUseLineHighlightInOneFrame() {
+        showEditor(animations = false)
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread {
+            vm.onLyricsChanged(TextFieldValue(draft, TextRange(draft.length)))
+            vm.insertSuggestion("A gull cries out above the chain")
+        }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(1f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(2_000 + 32)
+        assertEquals(0f, highlightAlpha(), 0f)
+        compose.mainClock.autoAdvance = true
+    }
+}

@@ -1,6 +1,9 @@
 package com.rhymeai.app.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -9,6 +12,8 @@ import androidx.navigation.compose.composable
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.ui.screens.EditorScreen
 import com.rhymeai.app.ui.screens.WelcomeScreen
+import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 
 object Routes {
     const val WELCOME = "welcome"
@@ -22,10 +27,19 @@ fun RhymeNavGraph(
     startDestination: String = Routes.WELCOME,
     modifier: Modifier = Modifier
 ) {
+    // Welcome and editor cross-fade in place on the page tier; nothing travels.
+    val pageFade = tween<Float>(
+        if (LocalAnimationsEnabled.current) DesignTokens.Motion.pageFadeMillis else 0,
+        easing = DesignTokens.Motion.standardEasing
+    )
     NavHost(
         navController = navController,
         startDestination = startDestination,
-        modifier = modifier
+        modifier = modifier,
+        enterTransition = { fadeIn(pageFade) },
+        exitTransition = { fadeOut(pageFade) },
+        popEnterTransition = { fadeIn(pageFade) },
+        popExitTransition = { fadeOut(pageFade) }
     ) {
         composable(Routes.WELCOME) {
             WelcomeScreen(
