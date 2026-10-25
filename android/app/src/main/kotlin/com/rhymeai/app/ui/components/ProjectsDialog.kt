@@ -1128,25 +1128,30 @@ private fun TrashBinPage(
                 )
 
                 if (isProjectsTab) {
-                    if (sortedTrashedProjects.isEmpty()) {
-                        EmptyDrawerState(
-                            icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                            text = "No songs in the Trash Bin.",
-                            caption = "Deleted songs stay here for 30 days.",
-                            animateIn = sawTrashedSongs
+                    // One list whether or not it is empty, so the last restored row still leaves on
+                    // the dismiss tier while the empty state fades in where it always sat.
+                    val noSongs = sortedTrashedProjects.isEmpty()
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = if (noSongs) PaddingValues(0.dp) else PaddingValues(
+                            start = DesignTokens.Spacing.lg,
+                            top = DesignTokens.Spacing.md,
+                            end = DesignTokens.Spacing.lg,
+                            bottom = contentBottomPadding
                         )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentPadding = PaddingValues(
-                                start = DesignTokens.Spacing.lg,
-                                top = DesignTokens.Spacing.md,
-                                end = DesignTokens.Spacing.lg,
-                                bottom = contentBottomPadding
-                            )
-                        ) {
+                    ) {
+                        if (noSongs) {
+                            item(key = "empty") {
+                                EmptyDrawerState(
+                                    icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                                    text = "No songs in the Trash Bin.",
+                                    caption = "Deleted songs stay here for 30 days.",
+                                    animateIn = sawTrashedSongs
+                                )
+                            }
+                        } else {
                             item {
                                 TrashSelectionHeaderRow(
                                     selected = allSelected,
@@ -1214,30 +1219,33 @@ private fun TrashBinPage(
                                 CircularProgressIndicator()
                             }
                         }
-                        trashedMemos.orEmpty().isEmpty() -> {
-                            EmptyDrawerState(
-                                icon = { Icon(Icons.Default.Mic, contentDescription = null) },
-                                text = if (trashedMemosFailed) {
-                                    "Trashed recordings could not be read. Close and reopen the Trash Bin to try again."
-                                } else {
-                                    "No recordings in the Trash Bin."
-                                },
-                                caption = if (trashedMemosFailed) null else "Deleted recordings stay here for 30 days.",
-                                animateIn = sawTrashedMemos
-                            )
-                        }
                         else -> {
+                            val noMemos = trashedMemos.orEmpty().isEmpty()
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .weight(1f),
-                                contentPadding = PaddingValues(
+                                contentPadding = if (noMemos) PaddingValues(0.dp) else PaddingValues(
                                     start = DesignTokens.Spacing.lg,
                                     top = DesignTokens.Spacing.md,
                                     end = DesignTokens.Spacing.lg,
                                     bottom = contentBottomPadding
                                 )
                             ) {
+                                if (noMemos) {
+                                    item(key = "empty") {
+                                        EmptyDrawerState(
+                                            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                                            text = if (trashedMemosFailed) {
+                                                "Trashed recordings could not be read. Close and reopen the Trash Bin to try again."
+                                            } else {
+                                                "No recordings in the Trash Bin."
+                                            },
+                                            caption = if (trashedMemosFailed) null else "Deleted recordings stay here for 30 days.",
+                                            animateIn = sawTrashedMemos
+                                        )
+                                    }
+                                } else {
                                 item {
                                     TrashSelectionHeaderRow(
                                         selected = allSelected,
@@ -1269,6 +1277,7 @@ private fun TrashBinPage(
                                             onToggle = { toggleMemoSelection(trashedMemo.file.absolutePath) }
                                         )
                                     }
+                                }
                                 }
                             }
                         }

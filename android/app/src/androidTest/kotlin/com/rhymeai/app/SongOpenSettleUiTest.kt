@@ -3,6 +3,8 @@ package com.rhymeai.app
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.graphics.toPixelMap
@@ -37,18 +39,64 @@ class SongOpenSettleUiTest {
 
     @After fun releaseHooks() { SongOpenTestHooks.beforeSwap?.complete(Unit); SongOpenTestHooks.beforeSwap = null }
 
-    private fun showEditor(animations: Boolean) {
+    private fun showEditor(animations: Boolean) = showEditor(mutableStateOf(animations))
+
+    private fun showEditor(animations: MutableState<Boolean>) {
         compose.activityRule.scenario.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
         compose.waitUntil(10_000) { vm.appearanceLoaded && !vm.restoringDraft }
         compose.runOnIdle { vm.seedEditorForTesting("Harbour Lights", draft, TextRange(draft.length)) }
         compose.setContent {
             RhymeAITheme {
-                CompositionLocalProvider(LocalAnimationsEnabled provides animations) {
+                CompositionLocalProvider(LocalAnimationsEnabled provides animations.value) {
                     EditorScreen(viewModel = vm)
                 }
             }
         }
         compose.onNodeWithTag("songTitleEditor").assertIsDisplayed()
+    }
+
+    private fun insertLine() {
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread {
+            vm.onLyricsChanged(TextFieldValue(draft, TextRange(draft.length)))
+            vm.insertSuggestion("A gull cries out above the chain")
+        }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(1f, highlightAlpha(), 0f)
+    }
+
+    @Test fun animationsRemovedDuringTheHoldKeepItsDeadlineAndClearAtIt() {
+        val animations = mutableStateOf(true)
+        showEditor(animations)
+        insertLine()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.runOnUiThread { animations.value = false }
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals("The hold neither restarts nor ends early", 1f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(900)
+        assertEquals(1f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(100 + 32)
+        assertEquals("Cleared in one frame at the deadline", 0f, highlightAlpha(), 0f)
+        compose.mainClock.advanceTimeBy(2_000)
+        assertEquals("A cleared mark never comes back", 0f, highlightAlpha(), 0f)
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test fun animationsRemovedDuringTheDryingClearTheMarkAtOnce() {
+        val animations = mutableStateOf(true)
+        showEditor(animations)
+        insertLine()
+        compose.mainClock.advanceTimeBy(2_000 + 100)
+        val drying = highlightAlpha()
+        assertTrue("Drying must be under way: $drying", drying < 1f && drying > 0f)
+        compose.runOnUiThread { animations.value = false }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals("Removed mid-drying, the mark clears at once", 0f, highlightAlpha(), 0f)
+        compose.runOnUiThread { animations.value = true }
+        compose.mainClock.advanceTimeBy(500)
+        assertEquals("A cleared mark never comes back", 0f, highlightAlpha(), 0f)
+        compose.mainClock.autoAdvance = true
     }
 
     private fun settleAlpha() =
