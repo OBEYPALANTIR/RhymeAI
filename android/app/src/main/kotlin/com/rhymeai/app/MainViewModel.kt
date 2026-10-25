@@ -1880,10 +1880,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject(onReady: () -> Unit = {}) {
+        val request = ++openRequest
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
             viewModelScope.launch {
-                val request = ++openRequest
                 try {
                     // The drawer leaves with the tap; the blank page follows once the column has faded.
                     showProjectsDialog = false
@@ -1941,10 +1942,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
+        val request = ++openRequest
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
             viewModelScope.launch {
-                val request = ++openRequest
                 try {
                     showProjectsDialog = false
                     if (!settleBeforeOpen(request)) return@launch
@@ -2186,10 +2188,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
+        val request = ++openRequest
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             viewModelScope.launch {
                 showProjectsDialog = false
-                val request = ++openRequest
                 val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
                 if (!owned) return@launch
                 dismissRewrite()
@@ -2298,10 +2301,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
+        val request = ++openRequest
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             viewModelScope.launch {
                 showTemplatesDialog = false
-                val request = ++openRequest
                 val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
                 if (!owned) return@launch
                 dismissRewrite()
@@ -2532,6 +2536,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onThemeChanged(newTheme: String) {
+        if (openingSong) return
         cancelEditorAIWork()
         theme = newTheme
         triggerAutoSave()
