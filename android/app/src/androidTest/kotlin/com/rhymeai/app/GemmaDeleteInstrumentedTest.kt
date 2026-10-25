@@ -81,7 +81,9 @@ class GemmaDeleteInstrumentedTest {
         // Relaunch: the explicit "none" survives and the other installed model is not selected instead.
         lateinit var relaunched: MainViewModel
         onMain { relaunched = MainViewModel(app) }
-        waitUntil("relaunch to restore saved models") { relaunched.savedLocalModels.any { it.fileName == other.name } }
+        // aiSettingsLoaded flips after restoreSavedLocalModels has finished restoring the selection.
+        waitUntil("relaunch to finish restoring") { relaunched.aiSettingsLoaded }
+        assertTrue(relaunched.savedLocalModels.any { it.fileName == other.name })
         assertNull(relaunched.selectedLocalModelId)
         assertTrue(relaunched.savedLocalModels.none { it.fileName == file.name })
     }

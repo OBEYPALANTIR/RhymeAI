@@ -2882,6 +2882,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             verifiedGemmaFileNames -= model.fileName
             return false
         }
+        // A delete may have started while the integrity check ran; never publish a selection it removes.
+        if (gemmaDeletingModel?.fileName == model.fileName) return false
         verifiedGemmaFileNames += model.fileName
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
@@ -3051,24 +3053,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 gemmaDeletingModel = null
             }
         }
-        if (!wasSelected) {
-            viewModelScope.launch {
-                withContext(NonCancellable) { localModelOperations.serialized(attempt) }
+        val ticket = if (wasSelected) {
+            modelChoiceRevision++
+            beginLocalModelChange().also {
+                localModelPath = null
+                selectedLocalModelId = null
             }
-            return
+        } else {
+            null
         }
-        modelChoiceRevision++
-        val ticket = beginLocalModelChange()
-        localModelPath = null
-        selectedLocalModelId = null
-        localModelOperations.launch(
-            viewModelScope, ticket,
-            // A newer selection may supersede this ticket, but the delete it started completes.
-            { withContext(NonCancellable) { attempt() } },
-            onSuccess = {},
-            onFailure = {},
-            onFinished = { localModelLoading = false }
-        )
+        viewModelScope.launch {
+            // Queued behind any load or unload and never superseded: a newer selection waits for
+            // the delete to finish instead of abandoning it half way.
+            withContext(NonCancellable) { localModelOperations.serialized(attempt) }
+            if (ticket != null && localModelOperations.isCurrent(ticket)) localModelLoading = false
+        }
     }
 
     fun onBackground() {
