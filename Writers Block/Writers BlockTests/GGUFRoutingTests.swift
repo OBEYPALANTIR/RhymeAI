@@ -1276,6 +1276,61 @@ struct GGUFDownloadCompletionTests {
         }
     }
 
+    /// A directory under the catalog name is neither offered for deletion nor removed.
+    @Test func directoryUnderTheModelNameIsNeitherDeletableNorRemoved() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let folder = sandbox.root.appendingPathComponent(e2b.fileName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: folder.appendingPathComponent("inside.txt"))
+        let manager = try await sandbox.restoredManager()
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+
+        await manager.delete(e2b)
+
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("inside.txt").path))
+        #expect(manager.errorMessage == nil)
+    }
+
+    /// A completion the system delivers after the entry was deleted here (a background
+    /// download that finished while the app was away) is discarded, not republished.
+    @Test func completionDeliveredAfterADeleteIsDiscarded() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+
+        // Nothing deleted: the completion installs.
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try Data(contentsOf: installed) == valid)
+
+        await manager.delete(option)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: sandbox.defaults) == nil)
+
+        // A new start is a fresh intent; the next completion installs again.
+        manager.start(option)
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try Data(contentsOf: installed) == valid)
+    }
+
     @Test func artifactNamesFollowTheDownloaderGrammar() {
         let e2b = GGUFDownloadCatalog.options[0]
         for name in ["\(e2b.fileName).download", "\(e2b.fileName).resume", "\(e2b.fileName).059e73281d764ba0.resume",

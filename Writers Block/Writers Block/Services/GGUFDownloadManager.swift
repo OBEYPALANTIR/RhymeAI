@@ -303,15 +303,19 @@ enum GGUFModelStorage {
     ) throws {
         let fileManager = FileManager.default
         let installedURL = directory.appendingPathComponent(option.fileName)
-        if fileManager.fileExists(atPath: installedURL.path) {
+        if isRegularFile(installedURL) {
             try fileManager.removeItem(at: installedURL)
         }
         GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
-        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])
-        where isDownloadArtifactName(url.lastPathComponent, of: option)
-            && (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == false {
+        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+        where isDownloadArtifactName(url.lastPathComponent, of: option) && isRegularFile(url) {
             try fileManager.removeItem(at: url)
         }
+    }
+
+    /// A directory or anything else under a model's name is never counted or removed.
+    nonisolated static func isRegularFile(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
 
     /// Exactly the names the downloader writes for `option`: `<file>.download` staging,
@@ -388,6 +392,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
     /// Set while `delete` runs; starts, choices and imports wait for it.
     @Published private(set) var deletingModelFileName: String?
+    /// Entries deleted in this process. A completion the system delivers for one of them
+    /// after the delete (a background download that finished while the app was away) is
+    /// discarded instead of republishing the model; a new `start` lifts it.
+    nonisolated private let deletedFileNames = LockedNames()
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var receivedBytes: Int64 = 0
@@ -411,7 +419,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// Tests give each manager its own models directory and defaults; nil means the
     /// app's `GGUFModelStorage.modelsDirectory`.
     private let modelsRoot: URL?
-    private let defaults: UserDefaults
+    nonisolated(unsafe) private let defaults: UserDefaults  // thread-safe per Foundation, not marked Sendable
     private let totalRAMBytes: UInt64
     private var progressSampleTime = Date()
     private var progressSampleBytes: Int64 = 0
@@ -471,8 +479,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         let directory = try? modelsDirectory(create: false)
         installedModelFiles = Set(directory.map { GGUFModelStorage.installedModelFileNames(in: $0, defaults: defaults) } ?? [])
         catalogBytesOnDisk = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
-            guard let directory,
-                  let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(option.fileName).path) else {
+            guard let url = directory?.appendingPathComponent(option.fileName),
+                  GGUFModelStorage.isRegularFile(url),
+                  let identity = try? GGUFModelFileIdentity.read(at: url.path) else {
                 return nil
             }
             return (option.fileName, identity.size)
@@ -491,6 +500,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     func start(_ option: GGUFDownloadOption) {
         guard activeTask == nil, !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil else { return }
+        deletedFileNames.remove(option.fileName)
         refreshInstalledModels()
         if installedModelFiles.contains(option.fileName) {
             select(option)
@@ -620,9 +630,11 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
         do {
             let directory = try modelsDirectory(create: false)
-            let defaults = self.defaults
+            let defaults = SendableDefaults(value: defaults)
+            let deletedFileNames = self.deletedFileNames
             try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
+                try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults.value)
+                deletedFileNames.insert(option.fileName)
             }
             statusMessage = "\(option.title) deleted."
             errorMessage = nil
@@ -873,24 +885,7 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
             try? FileManager.default.removeItem(at: stagingURL)
             try FileManager.default.moveItem(at: location, to: stagingURL)
-            try Self.validateStaging(at: stagingURL, in: directory, option: option)
-            // Still on the delegate queue, so the background session's finish event waits
-            // for the publish as it did for the whole install.
-            let published = DispatchSemaphore(value: 0)
-            let failure = ErrorBox()
-            let defaults = self.defaults
-            Task {
-                do {
-                    try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                        try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults)
-                    }
-                } catch {
-                    failure.error = error
-                }
-                published.signal()
-            }
-            published.wait()
-            if let error = failure.error { throw error }
+            guard try installCompletedDownload(from: stagingURL, in: directory, option: option) else { return }
             Task { @MainActor [weak self] in
                 self?.finish(option: option)
             }
@@ -899,6 +894,36 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
                 self?.fail(taskIdentifier: downloadTask.taskIdentifier, option: option, error: error)
             }
         }
+    }
+
+    /// Validates a staged completion on the calling (delegate) queue, then publishes it on
+    /// the runner's serial path; the call waits for the publish, so the background session's
+    /// finish event follows it as it did for the whole install. Returns false, with the
+    /// staged file discarded, when this entry was deleted in this process since.
+    nonisolated func installCompletedDownload(from stagingURL: URL, in directory: URL, option: GGUFDownloadOption) throws -> Bool {
+        try Self.validateStaging(at: stagingURL, in: directory, option: option)
+        let done = DispatchSemaphore(value: 0)
+        let outcome = PublishOutcome()
+        let defaults = SendableDefaults(value: defaults)
+        let deletedFileNames = self.deletedFileNames
+        Task {
+            do {
+                try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
+                    if deletedFileNames.contains(option.fileName) {
+                        try? FileManager.default.removeItem(at: stagingURL)
+                        outcome.published = false
+                        return
+                    }
+                    try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
+                }
+            } catch {
+                outcome.error = error
+            }
+            done.signal()
+        }
+        done.wait()
+        if let error = outcome.error { throw error }
+        return outcome.published
     }
 
     nonisolated func urlSession(
@@ -940,8 +965,9 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         try await Task.detached {
             try validateStaging(at: stagingURL, in: directory, option: option)
         }.value
+        let defaults = SendableDefaults(value: defaults)
         try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-            try publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults)
+            try publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
         }
     }
 
@@ -1016,8 +1042,23 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     }
 }
 
-private final class ErrorBox: @unchecked Sendable {
+/// UserDefaults is thread-safe but not marked Sendable; the gate closures carry it in this.
+nonisolated private struct SendableDefaults: @unchecked Sendable {
+    let value: UserDefaults
+}
+
+/// Written once by the publish task and read after the semaphore it signals.
+nonisolated private final class PublishOutcome: @unchecked Sendable {
+    var published = true
     var error: Error?
+}
+
+nonisolated private final class LockedNames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: Set<String> = []
+    func insert(_ name: String) { lock.withLock { _ = names.insert(name) } }
+    func remove(_ name: String) { lock.withLock { _ = names.remove(name) } }
+    func contains(_ name: String) -> Bool { lock.withLock { names.contains(name) } }
 }
 
 private enum GGUFDownloadError: LocalizedError {
