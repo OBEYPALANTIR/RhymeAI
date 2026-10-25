@@ -190,10 +190,10 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// detections with no element or frame a modal-sheet surface produces,
     /// measured from runs and keyed by the window width in points, because
     /// the count depends on the layout: 834 is the iPad Pro 11-inch portrait,
-    /// 1192 the iPad Pro 12.9-inch at Display Zoom "More Space". The count
-    /// must land inside the measured range: one more, such as new unlabelled
-    /// text inside the sheet, fails the test, and so does one fewer, so a
-    /// changed baseline gets re-measured. An unmeasured width allows none.
+    /// 1192 the iPad Pro 12.9-inch at Display Zoom "More Space". A count
+    /// outside the measured range fails the test: above it for new unlabelled
+    /// text inside the sheet, below it so a changed baseline gets re-measured.
+    /// An unmeasured width allows none.
     private func audit(_ app: XCUIApplication, _ surface: String, unattributableText: [CGFloat: ClosedRange<Int>] = [:]) {
         // Let presentation animations settle so frames are final.
         Thread.sleep(forTimeInterval: 1)
