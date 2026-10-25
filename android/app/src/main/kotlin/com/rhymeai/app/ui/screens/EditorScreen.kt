@@ -103,6 +103,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
@@ -207,7 +208,9 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -354,17 +357,28 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         else viewModel.dismissSuggestionInsertion(insertion.id)
     }
     val insertionHighlightAlpha = remember { Animatable(0f) }
-    // Keyed on the live animations flag too: toggled mid-hold, the hold restarts and ends the right way.
-    LaunchedEffect(insertion?.id, showBottomSheet, pendingAssistantSheet, animationsEnabled) {
+    val liveAnimationsEnabled by rememberUpdatedState(animationsEnabled)
+    LaunchedEffect(insertion?.id, showBottomSheet, pendingAssistantSheet) {
         highlightedInsertionId = null
         insertionHighlightAlpha.snapTo(0f)
         if (insertion == null || showBottomSheet || pendingAssistantSheet) return@LaunchedEffect
         highlightedInsertionId = insertion.id
         insertionHighlightAlpha.snapTo(1f)
         delay(2_000)
-        // The mark dries into the page on the settle spring instead of switching off.
-        if (animationsEnabled) insertionHighlightAlpha.animateTo(0f, DesignTokens.Motion.settleSpring())
-        else insertionHighlightAlpha.snapTo(0f)
+        // The mark dries into the page on the settle spring instead of switching off; animations
+        // removed before or during the drying clear it at once, without restarting the hold.
+        if (liveAnimationsEnabled) {
+            coroutineScope {
+                val drying = launch { insertionHighlightAlpha.animateTo(0f, DesignTokens.Motion.settleSpring()) }
+                val removed = launch {
+                    snapshotFlow { liveAnimationsEnabled }.first { !it }
+                    drying.cancel()
+                }
+                drying.join()
+                removed.cancel()
+            }
+        }
+        insertionHighlightAlpha.snapTo(0f)
         highlightedInsertionId = null
     }
 
