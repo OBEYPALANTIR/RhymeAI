@@ -233,9 +233,17 @@ fun SongRecordingsDialog(
                 else if (visible.isEmpty()) item {
                     Text(when {
                         listFailed -> "Recordings could not be read. Close and reopen this sheet to try again."
-                        search.isBlank() -> "No recordings yet. Record or import audio for this song."
+                        search.isBlank() -> "No recordings yet."
                         else -> "No recordings match your search."
                     })
+                    if (!listFailed && search.isBlank()) {
+                        Spacer(Modifier.height(DesignTokens.Spacing.xs))
+                        Text(
+                            "Tap the mic in the editor to record a voice memo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (visible.isNotEmpty()) item {
                     Column(Modifier.padding(vertical = DesignTokens.Spacing.sm)) {

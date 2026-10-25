@@ -13,6 +13,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -40,6 +41,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -164,6 +166,8 @@ fun ProjectsDrawer(
     val trashTransition = remember { MutableTransitionState(false) }
     var isTrashBinClosing by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    // The empty state fades in only when the list empties under the writer; a drawer that opens empty shows it at once.
+    val openedWithoutSongs = remember { projects.isEmpty() }
 
     fun openTrashBin() {
         isTrashBinClosing = false
@@ -414,7 +418,9 @@ fun ProjectsDrawer(
                                     item {
                                         EmptyDrawerState(
                                             icon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
-                                            text = "No saved songs yet."
+                                            text = "No saved songs yet.",
+                                            caption = "Create New Song starts a blank page.",
+                                            animateIn = !openedWithoutSongs
                                         )
                                     }
                                 } else if (filteredProjects.isEmpty()) {
@@ -529,11 +535,13 @@ fun ProjectsDrawer(
                 TrashBinPage(
                     trashedProjects = trashedProjects,
                     onRestoreProject = onRestoreProject,
+                    onOpenProject = { project -> closeDrawer { onLoadProject(project) } },
                     onPermanentlyDeleteProject = onPermanentlyDeleteProject,
                     onRecordingPurgeIncomplete = onRecordingPurgeIncomplete,
                     onDismiss = ::closeTrashBin,
                     service = service,
-                    projects = projects
+                    projects = projects,
+                    snackbarHostState = snackbarHostState
                 )
             }
 
@@ -790,28 +798,49 @@ internal fun RecordingMemoRow(
     }
 }
 
+/**
+ * Glyph in secondary ink, the title, and a caption naming the next action. With [animateIn] the
+ * state fades in on the state tier (a list emptied under the writer); otherwise it is simply there.
+ */
 @Composable
-private fun EmptyDrawerState(icon: @Composable () -> Unit, text: String) {
+private fun EmptyDrawerState(
+    icon: @Composable () -> Unit,
+    text: String,
+    caption: String? = null,
+    animateIn: Boolean = false
+) {
     val colorScheme = MaterialTheme.colorScheme
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val appearance = remember { MutableTransitionState(!animateIn).apply { targetState = true } }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = DesignTokens.Spacing.golden),
-        horizontalAlignment = Alignment.CenterHorizontally
+    AnimatedVisibility(
+        visibleState = appearance,
+        enter = fadeIn(tween(if (animationsEnabled) DesignTokens.Motion.standardMillis else 0, easing = DesignTokens.Motion.standardEasing)),
+        exit = ExitTransition.None
     ) {
-        Box(
-            modifier = Modifier.size(DesignTokens.Touch.minTarget),
-            contentAlignment = Alignment.Center
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = DesignTokens.Spacing.golden),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            androidx.compose.runtime.CompositionLocalProvider(
-                androidx.compose.material3.LocalContentColor provides colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            Box(
+                modifier = Modifier.size(DesignTokens.Touch.minTarget),
+                contentAlignment = Alignment.Center
             ) {
-                icon()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides colorScheme.onSurfaceVariant
+                ) {
+                    icon()
+                }
+            }
+            Spacer(Modifier.height(DesignTokens.Spacing.md))
+            Text(text, color = colorScheme.onSurfaceVariant)
+            if (caption != null) {
+                Spacer(Modifier.height(DesignTokens.Spacing.xs))
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
             }
         }
-        Spacer(Modifier.height(DesignTokens.Spacing.md))
-        Text(text, color = colorScheme.onSurfaceVariant)
     }
 }
 
@@ -893,14 +922,30 @@ private fun ProjectDrawerRow(
 private fun TrashBinPage(
     trashedProjects: List<TrashedSongProject>,
     onRestoreProject: (String) -> Unit,
+    onOpenProject: (SongProject) -> Unit,
     onPermanentlyDeleteProject: (String) -> Unit,
     onRecordingPurgeIncomplete: () -> Unit,
     onDismiss: () -> Unit,
     service: VoiceMemoService?,
-    projects: List<SongProject>
+    projects: List<SongProject>,
+    snackbarHostState: SnackbarHostState
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val openedWithoutTrashedSongs = remember { trashedProjects.isEmpty() }
+    // Rows leave on the dismiss tier and the rows below close the gap on the standard spring.
+    fun Modifier.trashRowMotion(scope: LazyItemScope): Modifier = if (animationsEnabled) {
+        with(scope) {
+            animateItem(
+                fadeInSpec = null,
+                fadeOutSpec = tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing),
+                placementSpec = DesignTokens.Motion.standardSpring(IntOffset.VisibilityThreshold)
+            )
+        }
+    } else {
+        this
+    }
     // 0 = Projects, 1 = Recordings
     var selectedTrashTab by remember { mutableStateOf(0) }
     val isProjectsTab = selectedTrashTab == 0
@@ -1000,9 +1045,22 @@ private fun TrashBinPage(
 
     fun restoreSelected() {
         if (isProjectsTab) {
-            val idsToRestore = selectedIds.toList()
-            idsToRestore.forEach(onRestoreProject)
+            val restored = sortedTrashedProjects.filter { it.project.id in selectedIds }.map { it.project }
+            restored.forEach { onRestoreProject(it.id) }
             selectedIds = emptySet()
+            scope.launch {
+                val single = restored.singleOrNull()
+                if (single != null) {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Restored “${single.title.ifEmpty { "Untitled Song" }}”",
+                        actionLabel = "Open",
+                        duration = SnackbarDuration.Short
+                    )
+                    if (result == SnackbarResult.ActionPerformed) onOpenProject(single)
+                } else if (restored.size > 1) {
+                    snackbarHostState.showSnackbar("${restored.size} songs restored", duration = SnackbarDuration.Short)
+                }
+            }
         } else {
             val memosToRestore = trashedMemos.orEmpty().filter { it.file.absolutePath in selectedMemoPaths }
             scope.launch {
@@ -1062,7 +1120,9 @@ private fun TrashBinPage(
                     if (sortedTrashedProjects.isEmpty()) {
                         EmptyDrawerState(
                             icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                            text = "No songs in the Trash Bin."
+                            text = "No songs in the Trash Bin.",
+                            caption = "Deleted songs stay here for 30 days.",
+                            animateIn = !openedWithoutTrashedSongs
                         )
                     } else {
                         LazyColumn(
@@ -1099,11 +1159,13 @@ private fun TrashBinPage(
                             }
 
                             items(sortedTrashedProjects, key = { it.project.id }) { trashedProject ->
-                                TrashProjectSelectableRow(
-                                    trashedProject = trashedProject,
-                                    selected = trashedProject.project.id in selectedIds,
-                                    onToggle = { toggleSelection(trashedProject.project.id) }
-                                )
+                                Box(Modifier.trashRowMotion(this)) {
+                                    TrashProjectSelectableRow(
+                                        trashedProject = trashedProject,
+                                        selected = trashedProject.project.id in selectedIds,
+                                        onToggle = { toggleSelection(trashedProject.project.id) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1148,7 +1210,8 @@ private fun TrashBinPage(
                                     "Trashed recordings could not be read. Close and reopen the Trash Bin to try again."
                                 } else {
                                     "No recordings in the Trash Bin."
-                                }
+                                },
+                                caption = if (trashedMemosFailed) null else "Deleted recordings stay here for 30 days."
                             )
                         }
                         else -> {
@@ -1186,12 +1249,14 @@ private fun TrashBinPage(
                                 }
 
                                 items(trashedMemos.orEmpty(), key = { it.file.absolutePath }) { trashedMemo ->
-                                    TrashRecordingSelectableRow(
-                                        trashedMemo = trashedMemo,
-                                        projectTitle = projectTitleById[trashedMemo.projectId] ?: "Deleted song",
-                                        selected = trashedMemo.file.absolutePath in selectedMemoPaths,
-                                        onToggle = { toggleMemoSelection(trashedMemo.file.absolutePath) }
-                                    )
+                                    Box(Modifier.trashRowMotion(this)) {
+                                        TrashRecordingSelectableRow(
+                                            trashedMemo = trashedMemo,
+                                            projectTitle = projectTitleById[trashedMemo.projectId] ?: "Deleted song",
+                                            selected = trashedMemo.file.absolutePath in selectedMemoPaths,
+                                            onToggle = { toggleMemoSelection(trashedMemo.file.absolutePath) }
+                                        )
+                                    }
                                 }
                             }
                         }
