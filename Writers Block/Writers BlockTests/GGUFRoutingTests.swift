@@ -428,6 +428,41 @@ struct GGUFModelSelectionTests {
     }
 }
 
+// MARK: - Cleared selection routing
+
+/// Serialized: reads and writes the standard engine, selection and cleared-flag keys.
+@Suite(.serialized)
+@MainActor
+struct GGUFClearedChoiceRoutingTests {
+    @Test func synonymsStayOnTheNoModelErrorWhileGemmaIsChosenWithAClearedSelection() async throws {
+        let defaults = UserDefaults.standard
+        let originalEngine = defaults.string(forKey: "ggufEngineChoice")
+        let originalSelection = GGUFModelSelection.currentFileName
+        let originalCleared = GGUFModelSelection.isCleared()
+        defer {
+            if let originalEngine { defaults.set(originalEngine, forKey: "ggufEngineChoice") } else { defaults.removeObject(forKey: "ggufEngineChoice") }
+            if let originalSelection { GGUFModelSelection.save(fileName: originalSelection) } else { GGUFModelSelection.clear() }
+            if !originalCleared { defaults.removeObject(forKey: "ggufModelSelectionCleared") }
+        }
+        GGUFEngineChoice.gemma.save()
+        GGUFModelSelection.clearExplicitly()
+        #expect(AIService.gemmaChoiceCleared())
+        #expect(LocalReadiness.current().title == "Choose a model")
+
+        do {
+            _ = try await AIService().getSynonyms(provider: .local, apiKey: "", modelId: "local-model", word: "light", lineContext: "a quiet light")
+            Issue.record("Expected the no-model error")
+        } catch AIServiceError.localModelUnavailable(let reason) {
+            #expect(reason == AIService.noGGUFModelReason)
+        }
+
+        // Choosing Apple Intelligence lifts it; the cleared flag itself stays until a model is chosen.
+        GGUFEngineChoice.appleIntelligence.save()
+        #expect(!AIService.gemmaChoiceCleared())
+        #expect(GGUFModelSelection.isCleared())
+    }
+}
+
 // MARK: - GGUFEngineChoice
 
 // Serialized: every test reads/writes the same UserDefaults key, so the
@@ -632,6 +667,33 @@ struct GGUFDownloadIntegrityTests {
         #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    @Test func gatedInstallPublishesThroughTheRunner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let suite = "gguf-gated-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try Data(valid.dropLast()).write(to: staging)
+        await #expect(throws: (any Error).self) {
+            try await GGUFDownloadManager.installDownloadGated(from: staging, in: directory, option: option, defaults: defaults)
+        }
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        try valid.write(to: staging)
+        try await GGUFDownloadManager.installDownloadGated(from: staging, in: directory, option: option, defaults: defaults)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults)?.sha256 == option.sha256)
     }
 
     @Test func filesystemFailurePreservesValidatedStagingForRetry() throws {
@@ -1186,7 +1248,9 @@ struct GGUFDownloadCompletionTests {
         try sandbox.install([e2b])
         let kept = [
             sandbox.root.appendingPathComponent("\(e2b.fileName).backup.gguf"),
+            sandbox.root.appendingPathComponent("\(e2b.fileName).notes.resume"),
             sandbox.root.appendingPathComponent("\(e2b.id).segment-personal.gguf"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-personal.part"),
             sandbox.root.appendingPathComponent("custom-notes.txt"),
             GGUFModelStorage.resumeDataURL(for: e4b, in: sandbox.root),
         ]
@@ -1194,16 +1258,34 @@ struct GGUFDownloadCompletionTests {
             sandbox.root.appendingPathComponent("\(e2b.fileName).download"),
             sandbox.root.appendingPathComponent("\(e2b.id).segment-0.part"),
             sandbox.root.appendingPathComponent("\(e2b.fileName).resume"),
+            GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root),
         ]
         for url in kept + removed { try Data("x".utf8).write(to: url) }
+        // A directory under an artifact name is never removed.
+        let folder = sandbox.root.appendingPathComponent("\(e2b.id).segment-1.part", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         let manager = try await sandbox.restoredManager()
 
         await manager.delete(e2b)
 
         #expect(manager.errorMessage == nil)
+        #expect(FileManager.default.fileExists(atPath: folder.path))
         for url in kept { #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
         for url in removed + [sandbox.root.appendingPathComponent(e2b.fileName)] {
             #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)")
+        }
+    }
+
+    @Test func artifactNamesFollowTheDownloaderGrammar() {
+        let e2b = GGUFDownloadCatalog.options[0]
+        for name in ["\(e2b.fileName).download", "\(e2b.fileName).resume", "\(e2b.fileName).059e73281d764ba0.resume",
+                     "\(e2b.id).segment-0.part", "\(e2b.id).segment-12.resume"] {
+            #expect(GGUFModelStorage.isDownloadArtifactName(name, of: e2b), "\(name)")
+        }
+        for name in [e2b.fileName, "\(e2b.fileName).notes.resume", "\(e2b.fileName).059e73281d764ba.resume",
+                     "\(e2b.fileName).backup.gguf", "\(e2b.id).segment-personal.part", "\(e2b.id).segment-.part",
+                     "\(e2b.id).segment-1.gguf", GGUFDownloadCatalog.options[1].fileName] {
+            #expect(!GGUFModelStorage.isDownloadArtifactName(name, of: e2b), "\(name)")
         }
     }
 

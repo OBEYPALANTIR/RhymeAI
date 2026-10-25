@@ -1596,6 +1596,9 @@ struct AIService {
                 if let ggufRoute {
                     return try await callGGUF(prompt: prompt, route: ggufRoute)
                 }
+                if Self.gemmaChoiceCleared() {
+                    throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
+                }
                 if #available(iOS 26.0, *) {
                     return try await callLocalRaw(
                         prompt: prompt,
