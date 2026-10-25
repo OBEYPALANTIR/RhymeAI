@@ -596,8 +596,7 @@ fun AssistantPanel(
                                     onKeep = { viewModel.keepAlternate(suggestedLine.text) },
                                     isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
                                     onUse = {
-                                        viewModel.insertSuggestion(suggestedLine.text)
-                                        onSuggestionInserted()
+                                        if (viewModel.insertSuggestion(suggestedLine.text)) onSuggestionInserted()
                                     }
                                 )
                             }

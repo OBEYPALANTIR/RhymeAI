@@ -486,6 +486,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 saveWorkspaceForActiveIdentity(id, preserved)
+                // The song may have started leaving for another one while the checkpoint saved.
+                if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
                 workspaces = workspaces + (id to preserved)
                 dismissRewrite()
@@ -1845,8 +1847,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingRewriteRange = null
     }
 
-    fun insertSuggestion(suggestion: String) {
-        if (openingSong) return
+    /** Returns false when nothing was inserted (the song is leaving for another one). */
+    fun insertSuggestion(suggestion: String): Boolean {
+        if (openingSong) return false
         // Same placement the rhyme context was computed for: a blank cursor line is
         // filled, otherwise the suggestion becomes a new line after the cursor's line.
         val insertion = NextLinePlacement(lyrics, cursorPosition).inserting(suggestion)
@@ -1858,6 +1861,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         suggestions = emptyList()
         triggerAutoSave()
+        return true
     }
 
     fun dismissSuggestionInsertion(id: Long) {
