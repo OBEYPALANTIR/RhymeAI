@@ -314,15 +314,21 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         songSettle.startedRequest = songSettle.fadeRequest
         songColumnAlpha.animateTo(1f, tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
     }
+    // Animations removed mid-flight: settle at the visible state at once.
+    LaunchedEffect(animationsEnabled) {
+        if (!animationsEnabled) {
+            songSettle.startedRequest = songSettle.fadeRequest
+            songColumnAlpha.snapTo(1f)
+        }
+    }
 
-    // New Song: the caret is already in the title once the blank page is up.
+    // New Song: the caret is already in the title once the blank page is up, for that open only.
     val titleFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    var newSongFocusedRevision by rememberSaveable { mutableIntStateOf(0) }
-    val newSongRevision = viewModel.newSongRevision
-    LaunchedEffect(newSongRevision, viewModel.showProjectsDialog) {
-        if (newSongRevision == 0 || newSongRevision == newSongFocusedRevision || viewModel.showProjectsDialog) return@LaunchedEffect
-        newSongFocusedRevision = newSongRevision
+    var newSongFocusedRevision by rememberSaveable { mutableIntStateOf(-1) }
+    LaunchedEffect(openRevision, viewModel.showProjectsDialog) {
+        if (openRevision != viewModel.newSongOpenRevision || openRevision == newSongFocusedRevision || viewModel.showProjectsDialog) return@LaunchedEffect
+        newSongFocusedRevision = openRevision
         titleFocusRequester.requestFocus()
         keyboardController?.show()
     }
@@ -1002,7 +1008,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         .semantics { editorOpenSettleAlpha = songColumnAlpha.value }
                         .graphicsLayer {
                             // A fade-in that has not started yet holds the new song's first frame at 0.
-                            alpha = if (songSettle.fadeRequest != songSettle.startedRequest) 0f else songColumnAlpha.value
+                            alpha = when {
+                                !animationsEnabled -> 1f
+                                songSettle.fadeRequest != songSettle.startedRequest -> 0f
+                                else -> songColumnAlpha.value
+                            }
                         }
                         .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
@@ -1017,7 +1027,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     BasicTextField(
                         value = viewModel.title,
-                        onValueChange = { viewModel.onTitleChanged(it) },
+                        // Nothing typed while the column leaves for another song can land in either song.
+                        onValueChange = { if (!viewModel.openingSong) viewModel.onTitleChanged(it) },
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1176,7 +1187,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         BasicTextField(
                             value = if (viewModel.hasActiveRewrite) inlineRewriteValue else viewModel.lyricsFieldValue,
                             onValueChange = {
-                                if (!viewModel.hasActiveRewrite) {
+                                if (!viewModel.hasActiveRewrite && !viewModel.openingSong) {
                                     viewModel.onLyricsChanged(it)
                                 }
                             },
@@ -1190,13 +1201,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 .testTag("lyricsEditor")
                                 .semantics { editorInsertionHighlightAlpha = insertionHighlightAlpha.value }
                                 .drawWithCache {
-                                    val range = insertion?.takeIf { it.id == highlightedInsertionId }?.range
+                                    // Focus mode shows no highlight (board #4).
+                                    val range = if (focusMode) null else insertion?.takeIf { it.id == highlightedInsertionId }?.range
                                     val layout = lyricsTextLayout?.takeIf { it.layoutInput.text.text == viewModel.lyrics }
                                     val path = if (range != null && layout != null && range.min < range.max) {
                                         layout.getPathForRange(range.min, range.max.coerceAtMost(viewModel.lyrics.length))
                                     } else null
                                     onDrawBehind {
-                                        if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f * insertionHighlightAlpha.value))
+                                        // Animations removed mid-hold: the mark stays solid until its hold clears it.
+                                        val mark = insertionHighlightAlpha.value
+                                        val alpha = if (animationsEnabled || mark == 0f) mark else 1f
+                                        if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f * alpha))
                                     }
                                 }
                                 .rewriteLoadingHighlight(

@@ -285,8 +285,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while another song is being fetched for an editor that is on screen; the writing column fades out meanwhile. */
     var openingSong by mutableStateOf(false)
         private set
-    /** Bumped by New Song so the editor puts the caret in the title once the blank page is up. */
-    var newSongRevision by mutableIntStateOf(0)
+    /** The [openRevision] New Song produced, so the editor puts the caret in the title for that open only. */
+    var newSongOpenRevision by mutableIntStateOf(-1)
         private set
     var isLoading by mutableStateOf(false)
     /**
@@ -1875,22 +1875,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun newProject(onReady: () -> Unit = {}) {
         flushCurrentDraft {
             autoSaveJob?.cancel()
-            // The draft is saved (the flush); the editor opens the new song at once, before the
-            // selection is stored, so nothing typed from here on is ever cleared by this New Song.
-            dismissRewrite()
-            title = ""
-            lyricsFieldValue = TextFieldValue("")
-            theme = ""
-            currentProjectId = null
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
-            openRevision++
-            newSongRevision++
             viewModelScope.launch {
                 try {
+                    // The drawer leaves with the tap; the blank page follows once the column has faded.
+                    showProjectsDialog = false
+                    settleBeforeOpen()
+                    // The draft is saved (the flush); the editor opens the new song at once, before the
+                    // selection is stored, so nothing typed from here on is ever cleared by this New Song.
+                    dismissRewrite()
+                    title = ""
+                    lyricsFieldValue = TextFieldValue("")
+                    theme = ""
+                    currentProjectId = null
+                    restoreEditorPosition()
+                    suggestions = emptyList()
+                    showStartMenu = false
+                    resetLyricsHistory()
+                    openingSong = false
+                    openRevision++
+                    newSongOpenRevision = openRevision
                     NewSongTestHooks.beforeSelectionSave?.await()
                     // Typing (or another song opened) since the editor cleared owns the stored
                     // selection now; the empty new song's selection is stored only if untouched.
@@ -1901,19 +1904,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
+                } finally {
+                    openingSong = false
                 }
             }
         }
     }
 
-    /** Gives an on-screen editor the dismiss tier to fade its column out before another song replaces it; with animations off there is nothing to wait for. */
+    /**
+     * Gives an on-screen editor the dismiss tier to fade its column out before another song replaces
+     * it, at the system animator scale; with animations removed there is nothing to wait for.
+     * The caller clears [openingSong] in the same frame it bumps [openRevision].
+     */
     private suspend fun settleBeforeOpen() {
         if (showStartMenu) return
         openingSong = true
         val animatorScale = android.provider.Settings.Global.getFloat(
             getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
         )
-        if (animatorScale > 0f) delay(DesignTokens.Motion.dismissMillis.toLong())
+        if (animatorScale > 0f) delay((DesignTokens.Motion.dismissMillis * animatorScale).toLong())
     }
 
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
@@ -1921,6 +1930,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             autoSaveJob?.cancel()
             viewModelScope.launch {
                 try {
+                    showProjectsDialog = false
                     settleBeforeOpen()
                     val project = repo.selectProject(requestedProject.id)
                     dismissRewrite()
@@ -1930,7 +1940,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     currentProjectId = project.id
                     restoreEditorPosition()
                     suggestions = emptyList()
-                    showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
                     // Cleared in the same frame the new song lands, so the fade-in starts from there.
@@ -1981,18 +1990,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun restoreTrashedProject(id: String) {
+    fun restoreTrashedProject(id: String, onCommitted: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
+            var restored = false
             try {
                 val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
                     ?: return@launch reportMissingTrashProject()
                 projects = committed.projects
                 trashedProjects = committed.trashedProjects
+                restored = true
                 scheduleTrashPurge()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 persistenceError = trashFailureMessage("restore the song", error)
+            } finally {
+                onCommitted(restored)
             }
         }
     }
@@ -2156,30 +2169,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
         flushCurrentDraft {
-            dismissRewrite()
-            val project = imported.copy(
-                id = java.util.UUID.randomUUID().toString(),
-                title = imported.title.ifBlank { "Imported Song" },
-                updatedAt = System.currentTimeMillis()
-            )
-            pendingProjectCreationIds.add(project.id)
-            projects = listOf(project) + projects
-            title = project.title
-            lyricsFieldValue = TextFieldValue(project.lyrics)
-            theme = project.theme
-            currentProjectId = project.id
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
-            openRevision++
             viewModelScope.launch {
-                try {
-                    persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
-                    onReady()
-                } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                    reconcileFailedProjectSave(project, error)
+                showProjectsDialog = false
+                try { settleBeforeOpen() } finally { openingSong = false }
+                dismissRewrite()
+                val project = imported.copy(
+                    id = java.util.UUID.randomUUID().toString(),
+                    title = imported.title.ifBlank { "Imported Song" },
+                    updatedAt = System.currentTimeMillis()
+                )
+                pendingProjectCreationIds.add(project.id)
+                projects = listOf(project) + projects
+                title = project.title
+                lyricsFieldValue = TextFieldValue(project.lyrics)
+                theme = project.theme
+                currentProjectId = project.id
+                restoreEditorPosition()
+                suggestions = emptyList()
+                showStartMenu = false
+                resetLyricsHistory()
+                openRevision++
+                viewModelScope.launch {
+                    try {
+                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
+                        onReady()
+                    } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                        reconcileFailedProjectSave(project, error)
+                    }
                 }
             }
         }
@@ -2263,19 +2279,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
         flushCurrentDraft {
-            dismissRewrite()
-            title = "Untitled $name"
-            theme = templateTheme
-            lyricsFieldValue = TextFieldValue(templateLyrics)
-            currentProjectId = null
-            restoreEditorPosition()
-            showTemplatesDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
-            openRevision++
-            triggerAutoSave()
+            viewModelScope.launch {
+                showTemplatesDialog = false
+                try { settleBeforeOpen() } finally { openingSong = false }
+                dismissRewrite()
+                title = "Untitled $name"
+                theme = templateTheme
+                lyricsFieldValue = TextFieldValue(templateLyrics)
+                currentProjectId = null
+                restoreEditorPosition()
+                showStartMenu = false
+                resetLyricsHistory()
+                openRevision++
+                triggerAutoSave()
 
-            onReady()
+                onReady()
+            }
         }
     }
 

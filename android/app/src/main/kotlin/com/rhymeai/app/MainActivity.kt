@@ -238,7 +238,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDeleteProject = { id, onCommitted -> viewModel.moveProjectToTrash(id, onCommitted) },
-                            onRestoreProject = { viewModel.restoreTrashedProject(it) },
+                            onRestoreProject = { id, onCommitted -> viewModel.restoreTrashedProject(id, onCommitted) },
                             onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
                             onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
                             onRecordingPurgeIncomplete = viewModel::reportRecordingPurgeFailure,

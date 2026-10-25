@@ -5,7 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.text.TextRange
@@ -92,10 +94,28 @@ class SongOpenSettleUiTest {
         stepUntil("the saved song to open") { vm.title == "Untitled Pop Song" }
         compose.mainClock.advanceTimeByFrame()
         val arriving = settleAlpha()
+        val arrivingInk = columnInk()
+        compose.mainClock.advanceTimeBy(64)
+        val duringInk = columnInk()
         compose.mainClock.advanceTimeBy(600)
+        val settledInk = columnInk()
         assertTrue("Column must fade out, then in: $leaving / $arriving", leaving < 1f && arriving < 0.5f)
         assertEquals(1f, settleAlpha(), 0.001f)
+        // Rendered pixels, not just the probe: the page is blank as the song lands and the ink grows in.
+        assertTrue("Ink must arrive gradually: $arrivingInk / $duringInk / $settledInk", arrivingInk < duringInk && duringInk < settledInk)
         compose.mainClock.autoAdvance = true
+    }
+
+    /** Darkness of the writing column's top rows (1 = all ink); the canvas is near white. */
+    private fun columnInk(): Double {
+        val pixels = compose.onNodeWithTag("editorScrollContainer").captureToImage().toPixelMap()
+        val rows = minOf(pixels.height, 260)
+        var sum = 0.0
+        for (y in 0 until rows) for (x in 0 until pixels.width) {
+            val p = pixels[x, y]
+            sum += 1f - (0.299f * p.red + 0.587f * p.green + 0.114f * p.blue)
+        }
+        return sum / (rows * pixels.width)
     }
 
     @Test fun reducedMotionOpensAnotherSongInOneFrame() {
@@ -111,7 +131,7 @@ class SongOpenSettleUiTest {
     @Test fun newSongPutsTheCaretInTheTitle() {
         showEditor(animations = true)
         compose.runOnUiThread { vm.newProject() }
-        compose.waitUntil(10_000) { vm.newSongRevision == 1 && vm.title.isEmpty() }
+        compose.waitUntil(10_000) { vm.newSongOpenRevision == vm.openRevision && vm.title.isEmpty() }
         compose.onNodeWithTag("songTitleEditor").assertIsFocused()
     }
 

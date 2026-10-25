@@ -89,7 +89,11 @@ internal fun BackupSection(
     val connected = state.status !is BackupStatus.NotConnected
     val working = state.status is BackupStatus.BackingUp || state.busyLabel != null
     // shortcut: "just now" is read off the shared status copy (relativeTime, under 60 s); pass nowMillis in if a second reader needs it.
-    val justBackedUp = state.status is BackupStatus.Connected && statusLine.contains("just now")
+    val statusLook = BackupStatusLook(
+        line = statusLine,
+        justBackedUp = state.status is BackupStatus.Connected && statusLine.contains("just now"),
+        failed = state.status is BackupStatus.Failed
+    )
     var showMigration by remember { mutableStateOf(false) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(BackupArchive.MIME_TYPE)
@@ -113,9 +117,10 @@ internal fun BackupSection(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // Status text and glyph cross-fade in place: in on the state tier, out on the dismiss tier.
-        StatusSwap(target = statusLine, animationsEnabled = animationsEnabled, label = "backupStatus") { line ->
+        // Each frame draws only from its own target, so the leaving line keeps its glyph and colour.
+        StatusSwap(target = statusLook, animationsEnabled = animationsEnabled, label = "backupStatus") { look ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (justBackedUp && line == statusLine) {
+                if (look.justBackedUp) {
                     // Success at 80% on the canvas is fine for a glyph; the text stays in ink.
                     Icon(
                         Icons.Default.CheckCircle,
@@ -126,9 +131,9 @@ internal fun BackupSection(
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
-                    line,
+                    look.line,
                     fontSize = 13.sp,
-                    color = if (state.status is BackupStatus.Failed) colorScheme.error else colorScheme.onSurface,
+                    color = if (look.failed) colorScheme.error else colorScheme.onSurface,
                     modifier = Modifier.testTag("backup_status")
                 )
             }
@@ -203,6 +208,8 @@ private fun BackupRow(
         }
     }
 }
+
+private data class BackupStatusLook(val line: String, val justBackedUp: Boolean, val failed: Boolean)
 
 /** Cross-fades [content] when [target] changes (in 260 ms, out 160 ms); with animations removed it swaps in one frame. */
 @Composable
