@@ -135,6 +135,47 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Download paused. Tap Download to resume."].waitForExistence(timeout: 10))
     }
 
+    /// Delete on an installed, selected catalog model asks first; confirming frees it, clears
+    /// the selection and leaves the row offering Download again.
+    @MainActor
+    func testDeletingAnInstalledModelAsksFirstThenOffersDownloadAgain() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song", "--ui-test-seed-installed-gguf-model"])
+        app.launch()
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        app.buttons["Local"].tap()
+        let row = app.buttons["gemmaDownload.gemma-4-e2b"]
+        let delete = app.buttons["gemmaDelete.gemma-4-e2b"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        for _ in 0..<8 where !delete.isHittable {
+            app.scrollViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(delete.isHittable)
+        XCTAssertTrue(row.label.contains("Selected"))
+        func attach(_ name: String) {
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = name
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+        attach("Installed model row with Delete")
+
+        delete.tap()
+        let confirmation = app.alerts["Delete RhymeAI Gemma 4 E2B?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirmation.staticTexts["Frees 3.43 GB on this device. You can download it again later."].exists)
+        attach("Delete confirmation")
+        confirmation.buttons["Delete"].tap()
+
+        XCTAssertTrue(app.staticTexts["RhymeAI Gemma 4 E2B deleted."].waitForExistence(timeout: 10))
+        XCTAssertFalse(delete.exists)
+        XCTAssertTrue(row.label.contains("Download"))
+        XCTAssertFalse(row.label.contains("Selected"))
+        attach("Row offers Download after delete")
+    }
+
     @MainActor
     func testLongDraftRestoresVisibleScrollAndCaretWhenSwitchingSongs() throws {
         let app = isolatedUITestApp()

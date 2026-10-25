@@ -292,6 +292,24 @@ enum GGUFModelStorage {
         return freedBytes
     }
 
+    /// Removes everything `option` left in `directory` — the installed file whatever its
+    /// size or marker (a previous version is deletable too), staging, resume data and the
+    /// legacy segmented-download parts — and its verified marker.
+    nonisolated static func removeArtifacts(
+        for option: GGUFDownloadOption,
+        in directory: URL,
+        defaults: UserDefaults = .standard
+    ) throws {
+        let fileManager = FileManager.default
+        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            let name = url.lastPathComponent
+            if name == option.fileName || name.hasPrefix("\(option.fileName).") || name.hasPrefix("\(option.id).segment-") {
+                try fileManager.removeItem(at: url)
+            }
+        }
+        GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
+    }
+
     /// Reclaims stale artifacts first, then requires room for the rest of the download
     /// plus a reserve, so a device that only has room once the previous version is gone
     /// can upgrade and a paused download can resume into the space it already holds.
@@ -341,6 +359,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     nonisolated private static let progressUpdateBytes: Int64 = 1024 * 1024
 
     @Published private(set) var installedModelFiles: Set<String> = []
+    /// Bytes on disk under each catalog file name: a verified install or a same-name file
+    /// that fails the size or marker check (a previous version), either of which Delete removes.
+    @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var receivedBytes: Int64 = 0
@@ -423,6 +444,13 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func refreshInstalledModels() {
         let directory = try? modelsDirectory(create: false)
         installedModelFiles = Set(directory.map { GGUFModelStorage.installedModelFileNames(in: $0, defaults: defaults) } ?? [])
+        catalogBytesOnDisk = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
+            guard let directory,
+                  let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(option.fileName).path) else {
+                return nil
+            }
+            return (option.fileName, identity.size)
+        })
         if let preferred = GGUFModelSelection.preferredFileName(
             in: Array(installedModelFiles),
             selectedFileName: GGUFModelSelection.currentFileName(defaults: defaults),
@@ -545,6 +573,38 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                     : "Download stopped. Tap Download to restart."
             }
         }
+    }
+
+    /// Removes `option` from this device: its file (verified or a stale same-name version),
+    /// staging, resume data and verified marker. Deleting the selected model clears the
+    /// selection — no other model is taken up in its place — and unloads it through the
+    /// runner's own serial gate, so a load or generation in flight finishes first.
+    func delete(_ option: GGUFDownloadOption) async {
+        guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying else { return }
+        // Cleared before the file goes, so a request racing the delete cannot resolve to it.
+        let wasSelected = selectedModelFileName == option.fileName
+        if wasSelected {
+            modelChoiceRevision += 1
+            GGUFModelSelection.clearExplicitly(defaults: defaults)
+            selectedModelFileName = nil
+            await AIService.unloadGGUFRunner()
+        }
+        do {
+            let directory = try modelsDirectory(create: false)
+            let defaults = self.defaults
+            try await Task.detached {
+                try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
+            }.value
+            statusMessage = "\(option.title) deleted."
+            errorMessage = nil
+        } catch {
+            if wasSelected, let directory = try? modelsDirectory(create: false),
+               FileManager.default.fileExists(atPath: directory.appendingPathComponent(option.fileName).path) {
+                GGUFModelSelection.save(fileName: option.fileName, defaults: defaults)
+            }
+            errorMessage = "Could not delete \(option.title): \(error.localizedDescription)"
+        }
+        refreshInstalledModels()
     }
 
     // MARK: - Choice made while a download runs
