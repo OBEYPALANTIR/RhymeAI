@@ -292,22 +292,29 @@ enum GGUFModelStorage {
         return freedBytes
     }
 
-    /// Removes everything `option` left in `directory` — the installed file whatever its
-    /// size or marker (a previous version is deletable too), staging, resume data and the
-    /// legacy segmented-download parts — and its verified marker.
+    /// Removes what `option` left in `directory`: the installed file whatever its size or
+    /// marker (a previous version is deletable too) together with its verified marker, then
+    /// `<file>.download` staging, every `<file>.*.resume` blob and the legacy segment parts.
+    /// Nothing else under a similar name is touched.
     nonisolated static func removeArtifacts(
         for option: GGUFDownloadOption,
         in directory: URL,
         defaults: UserDefaults = .standard
     ) throws {
         let fileManager = FileManager.default
+        let installedURL = directory.appendingPathComponent(option.fileName)
+        if fileManager.fileExists(atPath: installedURL.path) {
+            try fileManager.removeItem(at: installedURL)
+        }
+        GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
         for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             let name = url.lastPathComponent
-            if name == option.fileName || name.hasPrefix("\(option.fileName).") || name.hasPrefix("\(option.id).segment-") {
+            let isResume = name.hasPrefix("\(option.fileName).") && name.hasSuffix(".resume")
+            let isLegacyPart = isLegacyGGUFDownloadArtifact(fileName: name) && name.hasPrefix("\(option.id).segment-")
+            if name == "\(option.fileName).download" || isResume || isLegacyPart {
                 try fileManager.removeItem(at: url)
             }
         }
-        GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
     }
 
     /// Reclaims stale artifacts first, then requires room for the rest of the download
@@ -362,6 +369,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// Bytes on disk under each catalog file name: a verified install or a same-name file
     /// that fails the size or marker check (a previous version), either of which Delete removes.
     @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
+    /// Set while `delete` runs; starts, choices and imports wait for it.
+    @Published private(set) var deletingModelFileName: String?
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var receivedBytes: Int64 = 0
@@ -464,7 +473,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func start(_ option: GGUFDownloadOption) {
-        guard activeTask == nil, !isRestoringDownloads, !isPausing, !isVerifying else { return }
+        guard activeTask == nil, !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil else { return }
         refreshInstalledModels()
         if installedModelFiles.contains(option.fileName) {
             select(option)
@@ -576,25 +585,29 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     /// Removes `option` from this device: its file (verified or a stale same-name version),
-    /// staging, resume data and verified marker. Deleting the selected model clears the
-    /// selection — no other model is taken up in its place — and unloads it through the
-    /// runner's own serial gate, so a load or generation in flight finishes first.
+    /// staging, resume data and verified marker. Deleting the selected model — shown or
+    /// persisted — clears the selection and no other model is taken up in its place. The
+    /// removal runs on the runner's serial path, which first releases the model if it is
+    /// resident, so a load or generation in flight finishes before the file goes.
     func delete(_ option: GGUFDownloadOption) async {
-        guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying else { return }
+        guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return }
+        deletingModelFileName = option.fileName
+        defer { deletingModelFileName = nil }
         // Cleared before the file goes, so a request racing the delete cannot resolve to it.
+        // The persisted name can differ from the shown one when a stale file lost its spot.
         let wasSelected = selectedModelFileName == option.fileName
+            || GGUFModelSelection.currentFileName(defaults: defaults) == option.fileName
         if wasSelected {
             modelChoiceRevision += 1
             GGUFModelSelection.clearExplicitly(defaults: defaults)
             selectedModelFileName = nil
-            await AIService.unloadGGUFRunner()
         }
         do {
             let directory = try modelsDirectory(create: false)
             let defaults = self.defaults
-            try await Task.detached {
+            try await AIService.ggufRunner.removeModelFile(named: option.fileName) {
                 try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
-            }.value
+            }
             statusMessage = "\(option.title) deleted."
             errorMessage = nil
         } catch {
@@ -611,6 +624,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     //
     /// An explicit choice; completion's own selection goes through `selectInstalled`.
     func select(_ option: GGUFDownloadOption) {
+        guard deletingModelFileName == nil else { return }
         modelChoiceRevision += 1
         selectInstalled(option)
     }
@@ -632,7 +646,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func selectCustom(_ model: GGUFCustomModel) -> Bool {
-        guard activeDownloadID == nil, !isRestoringDownloads, !isVerifying else { return false }
+        guard activeDownloadID == nil, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return false }
         do {
             let url = try modelsDirectory(create: false).appendingPathComponent(model.fileName)
             try GGUFModelCatalog.validateCustomFile(at: url)
@@ -651,7 +665,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     func importCustomModel(from sourceURL: URL) async -> Bool {
-        guard activeDownloadID == nil, !isRestoringDownloads, !isVerifying else { return false }
+        guard activeDownloadID == nil, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return false }
         isVerifying = true
         statusMessage = "Importing \(sourceURL.lastPathComponent)…"
         errorMessage = nil
