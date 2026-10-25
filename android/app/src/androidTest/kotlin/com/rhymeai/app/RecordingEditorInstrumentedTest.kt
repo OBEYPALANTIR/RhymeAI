@@ -82,6 +82,7 @@ class RecordingEditorInstrumentedTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("importRecording").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("importRecording").assertIsDisplayed()
         compose.onNodeWithTag("recordingsDone").assertIsDisplayed()
-        compose.onNodeWithText("No recordings yet. Record or import audio for this song.").assertIsDisplayed()
+        compose.onNodeWithText("No recordings yet.").assertIsDisplayed()
+        compose.onNodeWithText("Tap the mic in the editor to record a voice memo.").assertIsDisplayed()
     }
 }
