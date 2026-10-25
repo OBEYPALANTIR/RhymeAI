@@ -948,6 +948,13 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(manager.statusMessage == "\(e4b.title) selected. May be slow on this device — needs more memory.")
 
+        // A choice made while it ran still carries the warning.
+        manager.select(e2b)
+        manager.beginDownloadForTest(e4b)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.statusMessage == "\(e4b.title) downloaded. May be slow on this device — needs more memory.")
+
         // E2B is never gated, and a device with enough memory selects E4B on completion.
         manager.beginDownloadForTest(e2b)
         #expect(manager.finishForTest(e2b))
@@ -956,6 +963,47 @@ struct GGUFDownloadCompletionTests {
         roomy.beginDownloadForTest(e4b)
         #expect(roomy.finishForTest(e4b))
         #expect(roomy.statusMessage == "\(e4b.title) downloaded and selected.")
+    }
+
+    /// With E4B the only installed model and nothing chosen, neither the manager's refresh
+    /// nor runtime resolution falls back to it on a device short on memory; an explicit
+    /// saved choice of E4B is still honoured.
+    @Test func fallbackNeverPicksAModelTheDeviceIsShortOnMemoryFor() async throws {
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let small: UInt64 = 8 << 30
+        let roomy: UInt64 = 16 << 30
+
+        let manager = try await sandbox.restoredManager(totalRAMBytes: small)
+        #expect(manager.selectedModelFileName == nil)
+        manager.beginDownloadForTest(e4b)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(manager.statusMessage == "\(e4b.title) downloaded but not selected. May be slow on this device — needs more memory.")
+
+        #expect(GGUFModelSelection.preferredFileName(
+            in: [e4b.fileName], selectedFileName: nil, defaults: sandbox.defaults, totalRAMBytes: small
+        ) == nil)
+        #expect(GGUFModelSelection.preferredFileName(
+            in: [e4b.fileName], selectedFileName: nil, defaults: sandbox.defaults, totalRAMBytes: roomy
+        ) == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(
+            defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: small
+        ) == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+
+        // The user's explicit choice is kept, on refresh and at runtime.
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        manager.refreshInstalledModels()
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(
+            defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: small
+        )?.lastPathComponent == e4b.fileName)
+        #expect(try await sandbox.restoredManager(totalRAMBytes: roomy).selectedModelFileName == e4b.fileName)
     }
 
     @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
