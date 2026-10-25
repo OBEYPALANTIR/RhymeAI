@@ -155,7 +155,9 @@ struct SettingsLocalModelSection: View {
             localStatusRow
 
             if GGUFModelService.isEngineAvailable {
-                if !ggufDownloadManager.installedModelFiles.isEmpty {
+                // Also while Gemma stays chosen with nothing installed (its model was deleted),
+                // so Apple Intelligence can still be picked.
+                if !ggufDownloadManager.installedModelFiles.isEmpty || ggufDownloadManager.engineChoice == .gemma {
                     enginePickerRow
                 }
 

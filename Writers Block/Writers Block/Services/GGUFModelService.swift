@@ -317,16 +317,16 @@ nonisolated protocol LocalGGUFRunner: AnyObject, Sendable {
     /// Release native resources. Safe to call when not loaded.
     func unload() async
 
-    /// Runs `removal` (the deletion of the model file named `fileName`) on the runner's own
-    /// serial path, after releasing that model if it is the resident one, so no load or
-    /// generation overlaps the removal.
-    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws
+    /// Runs `body` (the removal or replacement of the model file named `fileName`) on the
+    /// runner's own serial path, after releasing that model if it is the resident one, so
+    /// no load or generation overlaps the change on disk.
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws
 }
 
 extension LocalGGUFRunner {
-    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws {
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws {
         await unload()
-        try removal()
+        try body()
     }
 }
 
@@ -903,11 +903,11 @@ actor GGUFLlamaService: LocalGGUFRunner {
         releaseNative()
     }
 
-    func removeModelFile(named fileName: String, _ removal: @Sendable () throws -> Void) async throws {
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws {
         await acquireTransaction()
         defer { releaseTransaction() }
         if loadedPath.map({ URL(fileURLWithPath: $0).lastPathComponent }) == fileName { releaseNative() }
-        try removal()
+        try body()
     }
 
     private func releaseNative() {

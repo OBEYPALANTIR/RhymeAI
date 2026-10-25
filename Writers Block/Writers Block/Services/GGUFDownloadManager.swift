@@ -307,14 +307,31 @@ enum GGUFModelStorage {
             try fileManager.removeItem(at: installedURL)
         }
         GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
-        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
-            let name = url.lastPathComponent
-            let isResume = name.hasPrefix("\(option.fileName).") && name.hasSuffix(".resume")
-            let isLegacyPart = isLegacyGGUFDownloadArtifact(fileName: name) && name.hasPrefix("\(option.id).segment-")
-            if name == "\(option.fileName).download" || isResume || isLegacyPart {
-                try fileManager.removeItem(at: url)
+        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])
+        where isDownloadArtifactName(url.lastPathComponent, of: option)
+            && (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == false {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    /// Exactly the names the downloader writes for `option`: `<file>.download` staging,
+    /// `<file>.resume` (pre-keyed) or `<file>.<16 hex>.resume` blobs, and the removed
+    /// segmented downloader's `<id>.segment-<n>.part|.resume`.
+    nonisolated static func isDownloadArtifactName(_ name: String, of option: GGUFDownloadOption) -> Bool {
+        if name == "\(option.fileName).download" || name == "\(option.fileName).resume" { return true }
+        let resumeHead = "\(option.fileName)."
+        if name.hasPrefix(resumeHead), name.hasSuffix(".resume") {
+            let key = name.dropFirst(resumeHead.count).dropLast(".resume".count)
+            return key.count == 16 && key.allSatisfy(\.isHexDigit)
+        }
+        let segmentHead = "\(option.id).segment-"
+        if name.hasPrefix(segmentHead) {
+            for suffix in [".part", ".resume"] where name.hasSuffix(suffix) {
+                let index = name.dropFirst(segmentHead.count).dropLast(suffix.count)
+                return !index.isEmpty && index.allSatisfy(\.isNumber)
             }
         }
+        return false
     }
 
     /// Reclaims stale artifacts first, then requires room for the rest of the download
@@ -495,9 +512,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 setVerifying(optionID: option.id)
                 Task {
                     do {
-                        try await Task.detached {
-                            try Self.installDownload(from: stagingURL, in: directory, option: option)
-                        }.value
+                        try await Self.installDownloadGated(from: stagingURL, in: directory, option: option, defaults: defaults)
                         finish(option: option)
                     } catch {
                         isVerifying = false
@@ -588,7 +603,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// staging, resume data and verified marker. Deleting the selected model — shown or
     /// persisted — clears the selection and no other model is taken up in its place. The
     /// removal runs on the runner's serial path, which first releases the model if it is
-    /// resident, so a load or generation in flight finishes before the file goes.
+    /// resident, so a load, a generation or a download publishing the same name (also on
+    /// that path) finishes before the file goes.
     func delete(_ option: GGUFDownloadOption) async {
         guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return }
         deletingModelFileName = option.fileName
@@ -605,7 +621,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let directory = try modelsDirectory(create: false)
             let defaults = self.defaults
-            try await AIService.ggufRunner.removeModelFile(named: option.fileName) {
+            try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
                 try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
             }
             statusMessage = "\(option.title) deleted."
@@ -857,7 +873,24 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
             try? FileManager.default.removeItem(at: stagingURL)
             try FileManager.default.moveItem(at: location, to: stagingURL)
-            try Self.installDownload(from: stagingURL, in: directory, option: option)
+            try Self.validateStaging(at: stagingURL, in: directory, option: option)
+            // Still on the delegate queue, so the background session's finish event waits
+            // for the publish as it did for the whole install.
+            let published = DispatchSemaphore(value: 0)
+            let failure = ErrorBox()
+            let defaults = self.defaults
+            Task {
+                do {
+                    try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
+                        try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults)
+                    }
+                } catch {
+                    failure.error = error
+                }
+                published.signal()
+            }
+            published.wait()
+            if let error = failure.error { throw error }
             Task { @MainActor [weak self] in
                 self?.finish(option: option)
             }
@@ -896,12 +929,34 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         }
     }
 
+    /// Validation off the main actor, then the publish on the runner's serial path, so a
+    /// delete or load of the same file cannot overlap the rename.
+    nonisolated static func installDownloadGated(
+        from stagingURL: URL,
+        in directory: URL,
+        option: GGUFDownloadOption,
+        defaults: UserDefaults = .standard
+    ) async throws {
+        try await Task.detached {
+            try validateStaging(at: stagingURL, in: directory, option: option)
+        }.value
+        try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
+            try publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults)
+        }
+    }
+
     nonisolated static func installDownload(
         from stagingURL: URL,
         in directory: URL,
         option: GGUFDownloadOption,
         defaults: UserDefaults = .standard
     ) throws {
+        try validateStaging(at: stagingURL, in: directory, option: option)
+        try publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults)
+    }
+
+    /// Hashes the staged file; invalid bytes are discarded with their resume data.
+    nonisolated static func validateStaging(at stagingURL: URL, in directory: URL, option: GGUFDownloadOption) throws {
         let resumeURL = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         do {
             try validateDownload(at: stagingURL, option: option)
@@ -919,6 +974,16 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             }
             throw error
         }
+    }
+
+    /// Publishes a validated staged file under the catalog name and records its marker.
+    nonisolated static func publishDownload(
+        from stagingURL: URL,
+        in directory: URL,
+        option: GGUFDownloadOption,
+        defaults: UserDefaults = .standard
+    ) throws {
+        let resumeURL = GGUFModelStorage.resumeDataURL(for: option, in: directory)
         var excludedStagingURL = stagingURL
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -949,6 +1014,10 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             throw GGUFDownloadError.checksumMismatch
         }
     }
+}
+
+private final class ErrorBox: @unchecked Sendable {
+    var error: Error?
 }
 
 private enum GGUFDownloadError: LocalizedError {
