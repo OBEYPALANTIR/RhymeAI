@@ -4,7 +4,12 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -53,14 +58,17 @@ class BackupSectionUiTest {
         compose.setContent {
             RhymeAITheme {
                 androidx.compose.runtime.CompositionLocalProvider(LocalAnimationsEnabled provides animations) {
-                    val current = state.value
-                    BackupSection(
-                        state = current,
-                        actions = BackupSectionActions(onDisconnect = { disconnects++ }),
-                        statusLine = backupStatusLine(current.status, 10 * 60_000L),
-                        subtleColor = androidx.compose.ui.graphics.Color.Gray,
-                        textFieldColors = OutlinedTextFieldDefaults.colors()
-                    )
+                    // On the app's surface, as in Settings, so rendered ink can be measured against the canvas.
+                    androidx.compose.material3.Surface {
+                        val current = state.value
+                        BackupSection(
+                            state = current,
+                            actions = BackupSectionActions(onDisconnect = { disconnects++ }),
+                            statusLine = backupStatusLine(current.status, 10 * 60_000L),
+                            subtleColor = androidx.compose.ui.graphics.Color.Gray,
+                            textFieldColors = OutlinedTextFieldDefaults.colors()
+                        )
+                    }
                 }
             }
         }
@@ -77,12 +85,34 @@ class BackupSectionUiTest {
         compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText("Backing up… · Google Drive").assertExists()
         compose.onNodeWithText("Last backed up just now · Google Drive").assertExists()
+        // The arriving line is longer than the leaving one: its tail is the one region only it paints.
+        val leavingRight = compose.onNodeWithText("Backing up… · Google Drive").getBoundsInRoot().right
+        val arriving = compose.onNodeWithText("Last backed up just now · Google Drive").getBoundsInRoot()
+        compose.mainClock.advanceTimeBy(64)
+        val tailInkMidway = ink(leavingRight + 8.dp, arriving.right, arriving.top, arriving.bottom)
         compose.mainClock.advanceTimeBy(400)
         compose.onNodeWithText("Backing up… · Google Drive").assertDoesNotExist()
         compose.onNodeWithText("Last backed up just now · Google Drive").assertIsDisplayed()
+        val tailInkSettled = ink(leavingRight + 8.dp, arriving.right, arriving.top, arriving.bottom)
+        assertTrue("Arriving text must fade in, not snap: $tailInkMidway / $tailInkSettled", tailInkMidway > 0.0 && tailInkMidway < tailInkSettled * 0.8)
         compose.onNodeWithTag("backup_status_check", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("Back up now").assertIsDisplayed()
         compose.mainClock.autoAdvance = true
+    }
+
+    /** Mean darkness of a root-relative region (1 = all ink). */
+    private fun ink(left: androidx.compose.ui.unit.Dp, right: androidx.compose.ui.unit.Dp, top: androidx.compose.ui.unit.Dp, bottom: androidx.compose.ui.unit.Dp): Double {
+        // The test clock is paused; the renderer still needs a real vsync to present the last frame.
+        Thread.sleep(48)
+        val pixels = compose.onRoot().captureToImage().toPixelMap()
+        val d = compose.density.density
+        val x0 = (left.value * d).toInt().coerceIn(0, pixels.width - 1); val x1 = (right.value * d).toInt().coerceIn(x0 + 1, pixels.width)
+        val y0 = (top.value * d).toInt().coerceIn(0, pixels.height - 1); val y1 = (bottom.value * d).toInt().coerceIn(y0 + 1, pixels.height)
+        var sum = 0.0
+        for (y in y0 until y1) for (x in x0 until x1) {
+            val p = pixels[x, y]; sum += 1f - (0.299f * p.red + 0.587f * p.green + 0.114f * p.blue)
+        }
+        return sum / ((y1 - y0) * (x1 - x0))
     }
 
     @Test fun reducedMotionSwapsTheStatusInOneFrame() {
