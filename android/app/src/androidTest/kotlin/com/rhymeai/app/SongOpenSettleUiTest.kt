@@ -77,6 +77,27 @@ class SongOpenSettleUiTest {
         compose.mainClock.autoAdvance = true
     }
 
+    @Test fun openingASavedSongFadesTheColumnOutThenInAgain() {
+        showEditor(animations = true)
+        // Save one song and start another, so a saved song opens while a different one is on screen.
+        compose.runOnUiThread { vm.applyTemplate("Pop Song", "", "We folded every promise twice") }
+        compose.waitUntil(10_000) { vm.projects.any { it.title == "Untitled Pop Song" } }
+        val saved = vm.projects.first { it.title == "Untitled Pop Song" }
+        compose.runOnUiThread { vm.applyTemplate("Ballad", "", draft) }
+        compose.waitUntil(10_000) { vm.title == "Untitled Ballad" }
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { vm.loadProject(saved) }
+        stepUntil("the column to start leaving") { settleAlpha() < 1f }
+        val leaving = settleAlpha()
+        stepUntil("the saved song to open") { vm.title == "Untitled Pop Song" }
+        compose.mainClock.advanceTimeByFrame()
+        val arriving = settleAlpha()
+        compose.mainClock.advanceTimeBy(600)
+        assertTrue("Column must fade out, then in: $leaving / $arriving", leaving < 1f && arriving < 0.5f)
+        assertEquals(1f, settleAlpha(), 0.001f)
+        compose.mainClock.autoAdvance = true
+    }
+
     @Test fun reducedMotionOpensAnotherSongInOneFrame() {
         showEditor(animations = false)
         compose.mainClock.autoAdvance = false
