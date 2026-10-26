@@ -288,19 +288,30 @@ struct ModelRowView: View {
                 .onChange(of: content.strike) { _, struck in struck ? beginStrike() : endStrike() }
                 .modelRowProbe(identifier, "title")
             ZStack(alignment: .topLeading) {
-                // Two caption lines are always reserved, so the title holds still while the
-                // copy changes; the wave sits in the second, a φ step under one-line progress copy.
+                // Reserved whatever the state: two caption lines, or one line with the wave a φ
+                // step under it, so the title holds still while the copy changes.
                 Text(verbatim: " \n ").font(.caption).hidden()
-                metadata
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .modelRowProbe(identifier, "metadata")
-                    .overlay(alignment: .bottomLeading) {
-                        progressLine
-                            .alignmentGuide(.bottom) { $0[.top] - Tokens.waveGap }
+                VStack(spacing: Tokens.waveGap) {
+                    Text(verbatim: " ").font(.caption)
+                    Color.clear.frame(height: Tokens.waveHeight)
+                }
+                .hidden()
+                // The wave is laid out under the copy, so copy that wraps (large text) pushes it,
+                // and anything below it, down rather than under it.
+                VStack(alignment: .leading, spacing: Tokens.waveGap) {
+                    metadata
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .modelRowProbe(identifier, "metadata")
+                    if content.line != .none {
+                        progressLine.transition(.opacity)
                     }
+                }
+                .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: content.line == .none)
             }
             if stacked, content.chip != nil {
-                chipCell.padding(.top, RhymeAITokens.Spacing.xxs)
+                chipCell
+                    .padding(.top, RhymeAITokens.Spacing.xxs)
+                    .modelRowProbe(identifier, "chip")
             }
         }
         .multilineTextAlignment(.leading)
@@ -314,14 +325,18 @@ struct ModelRowView: View {
     private var metadata: some View {
         let palette = appearance.palette
         return VStack(alignment: .leading, spacing: 0) {
-            Group {
-                if content.metadataIsWarning {
-                    warningLabel(content.metadata)
-                } else {
-                    Text(content.metadata).foregroundStyle(palette.secondaryInk)
+            // New copy fades in on the state tier and the old fades out on the dismiss tier.
+            ZStack(alignment: .topLeading) {
+                Group {
+                    if content.metadataIsWarning {
+                        warningLabel(content.metadata)
+                    } else {
+                        Text(content.metadata).foregroundStyle(palette.secondaryInk)
+                    }
                 }
+                .id(content.metadata)
+                .transition(swap)
             }
-            .contentTransition(.opacity)
             .rhymeAnimation(RhymeAITokens.Motion.state, value: content.metadata)
             if let warning = content.warning {
                 warningLabel(warning)
@@ -348,26 +363,20 @@ struct ModelRowView: View {
     private var progressLine: some View {
         let palette = appearance.palette
         return ZStack {
-            if content.line != .none {
-                ZStack {
-                    ModelRowWave(progress: 1)
-                        .stroke(palette.placeholder, style: Self.waveStroke)
-                    switch content.line {
-                    case .ghost:
-                        ModelRowGhostLine(ink: palette.primaryInk)
-                    case .written(let fraction):
-                        ModelRowWrittenLine(fraction: CGFloat(fraction), ink: palette.primaryInk)
-                    case .none:
-                        EmptyView()
-                    }
-                }
-                .transition(.opacity)
+            ModelRowWave(progress: 1)
+                .stroke(palette.placeholder, style: Self.waveStroke)
+            switch content.line {
+            case .ghost:
+                ModelRowGhostLine(ink: palette.primaryInk)
+            case .written(let fraction):
+                ModelRowWrittenLine(fraction: CGFloat(fraction), ink: palette.primaryInk)
+            case .none:
+                EmptyView()
             }
         }
         .frame(height: Tokens.waveHeight)
         .frame(maxWidth: .infinity)
         .modelRowProbe(identifier, "wave")
-        .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: content.line == .none)
         .accessibilityHidden(true)
     }
 

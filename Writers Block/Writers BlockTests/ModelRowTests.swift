@@ -119,6 +119,22 @@ struct ModelRowTests {
         }
     }
 
+    /// At accessibility sizes the progress copy wraps; the wave is laid out under it, and the
+    /// chip, which moves under the metadata there, sits below the wave instead of across it.
+    @Test func atAccessibilitySizesTheWaveStaysUnderWrappedCopyAndAboveTheChip() async throws {
+        for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
+            for index in [1, 2, 3] {  // starting, downloading, paused: each has a chip
+                let id = "probe-ax-\(size)-\(index)"
+                let frames = try await layOut(ModelRowContent.gallery[index], width: 345, identifier: id, typeSize: size)
+                let metadata = try #require(frames["metadata"], "\(id)")
+                let wave = try #require(frames["wave"], "\(id)")
+                let chip = try #require(frames["chip"], "\(id)")
+                #expect(abs(wave.minY - (metadata.maxY + RhymeAITokens.ModelRow.waveGap)) < 0.5, "\(id): \(wave) under \(metadata)")
+                #expect(chip.minY >= wave.maxY, "\(id): chip \(chip) crosses wave \(wave)")
+            }
+        }
+    }
+
     /// One even wave: every crest and trough at the same height, one wavelength apart.
     @Test func theWaveIsEven() {
         let period = RhymeAITokens.ModelRow.wavePeriod
@@ -136,14 +152,19 @@ struct ModelRowTests {
     }
 
     /// Lays a row out in a window and returns its parts' frames from the layout probe.
-    private func layOut(_ sample: (content: ModelRowContent, isWet: Bool), width: CGFloat, identifier: String) async throws -> [String: CGRect] {
+    private func layOut(
+        _ sample: (content: ModelRowContent, isWet: Bool),
+        width: CGFloat,
+        identifier: String,
+        typeSize: DynamicTypeSize = .large
+    ) async throws -> [String: CGRect] {
         let host = UIHostingController(rootView:
             ModelRowView(content: sample.content, isWet: sample.isWet, identifier: identifier, columnIdentifier: "column",
                          action: {}, columnAction: {})
-                .environment(\.dynamicTypeSize, .large)
+                .environment(\.dynamicTypeSize, typeSize)
                 .frame(width: width)
         )
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 200))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 600))
         window.rootViewController = host
         window.isHidden = false
         defer { window.isHidden = true }
@@ -154,7 +175,7 @@ struct ModelRowTests {
             host.view.layoutIfNeeded()
         }
         var frames: [String: CGRect] = [:]
-        for part in ["title", "metadata", "wave"] {
+        for part in ["title", "metadata", "wave", "chip"] {
             frames[part] = ModelRowLayoutProbe.frames["\(identifier).\(part)"]
         }
         try #require(frames["title"] != nil, "no layout for \(identifier)")
