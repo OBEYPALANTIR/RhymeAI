@@ -94,8 +94,10 @@ object DesignTokens {
         val column = Rhythm.primary
         val chipHeight = Rhythm.section
         val glyph = 21.dp
-        /** The progress line's baseline above the row's bottom edge. */
-        val progressInset = 9.dp
+        /** The download wave: a φ step under the progress copy, one even wave 8 tall, 21 long. */
+        val waveGap = Rhythm.tight
+        val waveHeight = Rhythm.tight
+        val wavePeriod = Rhythm.standard
         const val accessibilityFontScale = 1.5f
     }
 

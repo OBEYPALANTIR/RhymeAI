@@ -66,6 +66,7 @@ import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.MultiContentMeasurePolicy
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -109,6 +110,8 @@ internal val ModelRowChipDryness = SemanticsPropertyKey<Float>("ModelRowChipDryn
 private var SemanticsPropertyReceiver.modelRowChipDryness by ModelRowChipDryness
 
 private val MODEL_ROW_METADATA_LINE_HEIGHT = 16.sp
+
+internal const val MODEL_ROW_WAVE_TAG = "modelRowWave"
 
 internal const val MODEL_ROW_MEMORY_WARNING = "Writes slowly: needs 10 GB"
 internal const val MODEL_ROW_EMPTY_NUDGE = "No model on this device yet. Download one and suggestions keep writing offline."
@@ -302,12 +305,6 @@ internal fun ModelRow(
                 .background(colors.surface)
                 .border(1.dp, border, shape)
         ) {
-            val line = Modifier.progressWave(
-                guide = colors.outlineVariant,
-                ink = colors.onSurface,
-                ghostInk = placeholderColorFor(appearance),
-                motion = motion
-            )
             Box(
                 Modifier
                     .weight(1f)
@@ -325,13 +322,12 @@ internal fun ModelRow(
                             else -> Unit
                         }
                     }
-                    .then(if (accessibilitySize) line else Modifier)
             ) {
                 val text = @Composable {
                     ModelRowText(
                         state = state,
                         motion = motion,
-                        modifier = (if (accessibilitySize) Modifier else line.fillMaxHeight())
+                        modifier = (if (accessibilitySize) Modifier else Modifier.fillMaxHeight())
                             .padding(
                                 start = DesignTokens.Rhythm.standard,
                                 end = DesignTokens.Rhythm.tight,
@@ -422,17 +418,24 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
             modifier = Modifier.strike(colors.onSurfaceVariant, motion) { titleLayout }
         )
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
-        // Two metadata lines are always reserved, so the title holds still while the copy changes.
-        val metadataMinHeight = with(LocalDensity.current) { (MODEL_ROW_METADATA_LINE_HEIGHT * 2).toDp() }
-        AnimatedContent(
-            targetState = state,
-            contentKey = { it.kind },
-            transitionSpec = { modelRowSwap(motion.animations) },
-            contentAlignment = Alignment.TopStart,
-            modifier = Modifier.heightIn(min = metadataMinHeight),
-            label = "modelRowMetadata"
-        ) { shown ->
-            Column {
+        // Two metadata lines are always reserved, so the title holds still while the copy changes;
+        // the download wave sits in the second, a φ step (8dp) under the one-line progress copy.
+        val density = LocalDensity.current
+        val lineHeight = with(density) { MODEL_ROW_METADATA_LINE_HEIGHT.toDp() }
+        var metadataHeight by remember { mutableStateOf(lineHeight) }
+        Box(Modifier.heightIn(min = lineHeight * 2)) {
+            AnimatedContent(
+                targetState = state,
+                contentKey = { it.kind },
+                transitionSpec = { modelRowSwap(motion.animations) },
+                contentAlignment = Alignment.TopStart,
+                label = "modelRowMetadata"
+            ) { shown ->
+            Column(
+                Modifier.onSizeChanged { size ->
+                    if (shown.kind == state.kind) metadataHeight = with(density) { size.height.toDp() }
+                }
+            ) {
                 shown.metadata?.let {
                     Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = colors.onSurfaceVariant)
                 }
@@ -444,6 +447,16 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
                     }
                 }
             }
+            }
+            ModelRowWave(
+                motion = motion,
+                ink = colors.onSurface,
+                trackInk = placeholderColorFor(LocalAppAppearance.current),
+                // Under the copy it belongs to; with no line it rests, invisible, inside the reserved lines.
+                modifier = Modifier.padding(
+                    top = (if (state.hasLine) maxOf(metadataHeight, lineHeight) else lineHeight) + DesignTokens.ModelRow.waveGap
+                )
+            )
         }
     }
 }
@@ -495,12 +508,6 @@ private fun ModelRowActionColumn(state: ModelRowState, enabled: Boolean, onClick
         Modifier
             .width(DesignTokens.ModelRow.column)
             .fillMaxHeight()
-            .drawBehind {
-                // The hairline marks the column only while it holds something.
-                if (column != ModelRowColumn.None) {
-                    drawLine(colors.outlineVariant, Offset(0f, 0f), Offset(0f, size.height), strokeWidth = 1.dp.toPx())
-                }
-            }
             .then(
                 if (control) {
                     Modifier
@@ -649,42 +656,53 @@ private fun rememberModelRowMotion(state: ModelRowState, animations: Boolean): M
 }
 
 /**
- * The download line: the suggestion ghost's wave from 21dp to the column's end less 8dp, its
- * baseline 9dp above the bottom edge, over a 1dp guide. Written in ink, or looping in
- * placeholder ink while the length is not known yet.
+ * The download line under the progress copy: one even wave (constant amplitude and
+ * wavelength, one stroke) across the text column. The written share is in ink and the rest
+ * in placeholder ink; while the length is not known yet the ghost's one-line loop writes it.
  */
-private fun Modifier.progressWave(guide: Color, ink: Color, ghostInk: Color, motion: ModelRowMotion): Modifier = drawWithCache {
-    val start = DesignTokens.Rhythm.standard.toPx()
-    val width = size.width - start - DesignTokens.Rhythm.tight.toPx()
-    val waveHeight = SuggestionPlaceholderMotion.WAVE_HEIGHT_DP.dp.toPx()
-    // The wave's midline sits on the baseline.
-    val top = size.height - DesignTokens.ModelRow.progressInset.toPx() - waveHeight / 2f
-    val path = wavePath(width.coerceAtLeast(0f), SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), waveHeight)
-    val measure = PathMeasure().apply { setPath(path, false) }
-    val drawn = Path()
-    val guideStroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    val stroke = Stroke(width = SuggestionPlaceholderMotion.STROKE_WIDTH_DP.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    onDrawBehind {
-        val alpha = motion.lineAlpha()
-        if (alpha <= 0f || width <= 0f) return@onDrawBehind
-        val ghost = motion.ghost()
-        val fraction = if (ghost) motion.ghostProgress() else motion.written()
-        translate(start, top) {
-            drawPath(path, guide, alpha = alpha, style = guideStroke)
-            drawSegment(measure, drawn, fraction, if (ghost) ghostInk else ink, alpha, stroke)
-        }
+@Composable
+private fun ModelRowWave(motion: ModelRowMotion, ink: Color, trackInk: Color, modifier: Modifier) {
+    Spacer(
+        modifier
+            .fillMaxWidth()
+            .height(DesignTokens.ModelRow.waveHeight)
+            .testTag(MODEL_ROW_WAVE_TAG)
+            .drawWithCache {
+                val path = evenWavePath(size.width, DesignTokens.ModelRow.wavePeriod.toPx(), size.height)
+                val measure = PathMeasure().apply { setPath(path, false) }
+                val drawn = Path()
+                val stroke = Stroke(width = SuggestionPlaceholderMotion.STROKE_WIDTH_DP.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                onDrawBehind {
+                    val alpha = motion.lineAlpha()
+                    if (alpha <= 0f || size.width <= 0f) return@onDrawBehind
+                    val fraction = if (motion.ghost()) motion.ghostProgress() else motion.written()
+                    drawPath(path, trackInk, alpha = alpha, style = stroke)
+                    drawSegment(measure, drawn, fraction, ink, alpha, stroke)
+                }
+            }
+    )
+}
+
+/** A sine wave from x = 0 to [width]: one crest and trough every [period], filling [height]. */
+internal fun evenWavePath(width: Float, period: Float, height: Float): Path = Path().apply {
+    val amplitude = height / 2f
+    val steps = (width / 2f).toInt().coerceAtLeast(1)
+    for (i in 0..steps) {
+        val x = width * i / steps
+        val y = amplitude - amplitude * kotlin.math.sin(2.0 * Math.PI * x / period).toFloat()
+        if (i == 0) moveTo(x, y) else lineTo(x, y)
     }
 }
 
 /** The delete strike: the same wave across the title's first line, tip first, in secondary ink. */
 private fun Modifier.strike(color: Color, motion: ModelRowMotion, layout: () -> TextLayoutResult?): Modifier = drawWithCache {
     val text = layout()
-    val waveHeight = SuggestionPlaceholderMotion.WAVE_HEIGHT_DP.dp.toPx()
+    val waveHeight = DesignTokens.ModelRow.waveHeight.toPx()
     val stroke = Stroke(width = SuggestionPlaceholderMotion.STROKE_WIDTH_DP.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
     val left = text?.getLineLeft(0) ?: 0f
     val width = text?.let { it.getLineRight(0) - left } ?: 0f
     val centre = text?.let { (it.getLineTop(0) + it.getLineBottom(0)) / 2f } ?: 0f
-    val path = wavePath(width.coerceAtLeast(0f), SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), waveHeight)
+    val path = evenWavePath(width.coerceAtLeast(0f), DesignTokens.ModelRow.wavePeriod.toPx(), waveHeight)
     val measure = PathMeasure().apply { setPath(path, false) }
     val drawn = Path()
     onDrawWithContent {

@@ -18,10 +18,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
+import com.rhymeai.app.ui.components.MODEL_ROW_WAVE_TAG
 import com.rhymeai.app.ui.components.ModelRow
 import com.rhymeai.app.ui.components.ModelRowChipDryness
 import com.rhymeai.app.ui.components.catalogModelRowState
 import com.rhymeai.app.ui.components.customModelRowState
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import org.junit.Assert.assertEquals
@@ -116,6 +118,30 @@ class ModelRowUiTest {
         }
         val first = tops.first().second
         tops.forEach { (kind, top) -> assertEquals("title moved in $kind", first.value, top.value, 0.5f) }
+    }
+
+    @Test fun theDownloadWaveSitsAPhiStepUnderTheProgressCopyClearOfTheBottomEdge() {
+        val lineStates = listOf(
+            e2b(downloading = true, progress = 0f) to "Starting download…",
+            e2b(downloading = true, progress = 0.43f) to "1.47 of 3.43 GB · 43%",
+            e2b(pausedBytes = onDisk * 43 / 100) to "Paused · 1.47 of 3.43 GB",
+            e2b(downloading = true, progress = 1f, verifying = true) to "Checking the file…"
+        )
+        showRow()
+        lineStates.forEach { (state, copy) ->
+            compose.runOnIdle { shown = state }
+            compose.waitForIdle()
+            val metadata = compose.onNodeWithText(copy, useUnmergedTree = true).getBoundsInRoot()
+            val wave = compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).getBoundsInRoot()
+            val row = compose.onNodeWithTag("row").getBoundsInRoot()
+            assertEquals("${state.kind}: gap under the copy", 8f, (wave.top - metadata.bottom).value, 0.5f)
+            assertEquals("${state.kind}: wave height", 8f, (wave.bottom - wave.top).value, 0.5f)
+            assertTrue("${state.kind}: wave starts in the text column", wave.left >= metadata.left - 0.5.dp)
+            assertTrue(
+                "${state.kind}: wave clear of the bottom edge (${(row.bottom - wave.bottom).value}dp)",
+                (row.bottom - wave.bottom).value >= DesignTokens.Rhythm.related.value - 0.5f
+            )
+        }
     }
 
     @Test fun aMemoryGatedModelOnDiskNeedsAThirdLine() {
