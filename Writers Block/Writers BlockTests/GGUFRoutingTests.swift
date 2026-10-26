@@ -1534,6 +1534,63 @@ struct GGUFDownloadCompletionTests {
         manager.cancelDownload(e2b)
     }
 
+    /// A Pause accepted just as the transfer finished: the check began, then the pause cleared
+    /// the running task. The completion, or its failure, still ends the check, so downloads,
+    /// choices, imports and deletes are not left disabled.
+    @Test(arguments: [true, false])
+    func aPauseThatRacesTheCompletionNeverLeavesTheCheckOpen(completes: Bool) async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let manager = try await sandbox.restoredManager()
+        manager.beginTransferForTest(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.pauseDownload()
+        manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
+        for _ in 0..<250 where manager.isPausing { try await Task.sleep(for: .milliseconds(20)) }
+        try #require(!manager.isPausing)
+        #expect(manager.activeTransferIdentifier == nil)
+
+        if completes {
+            manager.finishForTest(e2b, taskIdentifier: transfer)
+        } else {
+            manager.failForTest(e2b, taskIdentifier: transfer, error: CocoaError(.fileWriteUnknown))
+            #expect(manager.errorMessage?.hasPrefix("Download failed for \(e2b.title)") == true)
+        }
+        #expect(!manager.isVerifying)
+        #expect(manager.activeDownloadID == nil)
+    }
+
+    /// When a completion was already published, a Cancel that follows keeps the installed
+    /// model and says so; it never removes an install.
+    @Test func aCompletionPublishedBeforeCancelKeepsTheModel() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", character: "",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+        manager.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Task.detached {
+            try manager.installCompletedDownload(from: staging, in: directory, option: option, taskIdentifier: 4_242)
+        }.value)
+
+        manager.cancelDownload(option)
+
+        #expect(try Data(contentsOf: installed) == valid)
+        #expect(manager.statusMessage == "Fixture had already finished downloading.")
+        #expect(manager.installedModelFiles.contains(option.fileName))
+    }
+
     /// Resume shows the saved count, then the offset URLSession actually resumed at; a
     /// lower count arriving late is ignored, so the line never runs backwards on its own.
     @Test func resumeOffsetReplacesTheSavedCountAndProgressNeverGoesBack() async throws {

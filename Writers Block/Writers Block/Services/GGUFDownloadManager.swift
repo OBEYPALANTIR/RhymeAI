@@ -433,6 +433,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// after a relaunch, installs the file without selecting it.
     private var modelChoiceRevision = 0
     private var choiceRevisionAtDownloadStart: Int?
+    /// The transfer whose file is being checked, kept until its completion or failure lands,
+    /// even if a Pause cleared the running task in between.
+    private var verifyingTransfer: Int?
     /// Tests give each manager its own models directory and defaults; nil means the
     /// app's `GGUFModelStorage.modelsDirectory`.
     private let modelsRoot: URL?
@@ -643,7 +646,6 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func cancelDownload(_ option: GGUFDownloadOption) {
         guard !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil,
               activeDownloadID == option.id || pausedBytes[option.fileName] != nil else { return }
-        deletedFileNames.insert(option.fileName)
         var transfer = activeDownloadID == option.id ? activeTask : nil
         if activeDownloadID == option.id {
             activeTask = nil
@@ -660,19 +662,26 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             transfer = session.downloadTask(withResumeData: resumeData)
             transfer?.resume()
         }
+        let deletedFileNames = self.deletedFileNames
         do {
-            // Under the ledger's lock, so an error callback cannot save resume data after this.
+            // Under the ledger's lock, which a completion also holds from its last check through
+            // its rename: either the cancel lands first and the completion is discarded, or the
+            // completion was already published and the installed model stays.
             try cancelledTransfers.cancel(transfer?.taskIdentifier) {
+                deletedFileNames.insert(option.fileName)
                 transfer?.cancel()
                 try GGUFModelStorage.removeDownloadArtifacts(for: option, in: modelsDirectory(create: false))
             }
-            statusMessage = "Download of \(option.title) cancelled."
+            refreshInstalledModels()
+            statusMessage = installedModelFiles.contains(option.fileName)
+                ? "\(option.title) had already finished downloading."
+                : "Download of \(option.title) cancelled."
             errorMessage = nil
         } catch {
+            refreshInstalledModels()
             statusMessage = nil
             errorMessage = "Could not cancel \(option.title): \(error.localizedDescription)"
         }
-        refreshInstalledModels()
     }
 
     /// Removes `option` from this device: its file (verified or a stale same-name version),
@@ -853,6 +862,15 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         finish(option: option, taskIdentifier: taskIdentifier)
     }
 
+    /// `beginDownloadForTest` with a real transfer that is never resumed, so it neither
+    /// touches the network nor fails on its own.
+    func beginTransferForTest(_ option: GGUFDownloadOption) {
+        let task = session.downloadTask(with: ggufDownloadRequest(for: option))
+        task.taskDescription = option.id
+        activeTask = task
+        beginDownloadForTest(option)
+    }
+
     /// The running transfer's identifier, for tests of callbacks from an older transfer.
     var activeTransferIdentifier: Int? { activeTask?.taskIdentifier }
 
@@ -862,6 +880,14 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
 
     func resumedForTest(taskIdentifier: Int, offset: Int64) {
         resumed(taskIdentifier: taskIdentifier, offset: offset)
+    }
+
+    func setVerifyingForTest(_ option: GGUFDownloadOption, taskIdentifier: Int) {
+        setVerifying(optionID: option.id, taskIdentifier: taskIdentifier)
+    }
+
+    func failForTest(_ option: GGUFDownloadOption, taskIdentifier: Int, error: Error) {
+        fail(taskIdentifier: taskIdentifier, option: option, error: error)
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
@@ -928,17 +954,19 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     /// Installs the finished download; returns whether it was also selected. A completion
-    /// from an older transfer (`taskIdentifier` not the running one) only refreshes the rows,
-    /// leaving the running download alone.
+    /// from an older transfer while another one runs only refreshes the rows, leaving the
+    /// running download alone. With nothing running (a Pause accepted just as the transfer
+    /// finished) the completion still ends the check, so the manager is never left verifying.
     @discardableResult
     private func finish(option: GGUFDownloadOption, taskIdentifier: Int? = nil) -> Bool {
-        if let taskIdentifier, activeTask?.taskIdentifier != taskIdentifier {
+        if let taskIdentifier, let running = activeTask, running.taskIdentifier != taskIdentifier {
             refreshInstalledModels()
             return false
         }
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false
+        verifyingTransfer = nil
         progress = 1
         receivedBytes = option.expectedBytes
         let selects = choiceRevisionAtDownloadStart == modelChoiceRevision
@@ -959,8 +987,11 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         return true
     }
 
+    /// A failure of the running transfer, or of the transfer whose file is being checked even
+    /// if a Pause cleared the running task meanwhile, so a check never stays open.
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
-        guard activeTask?.taskIdentifier == taskIdentifier, !isPausing else { return }
+        guard verifyingTransfer == taskIdentifier || (activeTask?.taskIdentifier == taskIdentifier && !isPausing) else { return }
+        verifyingTransfer = nil
         choiceRevisionAtDownloadStart = nil
         activeTask = nil
         activeDownloadID = nil
@@ -977,6 +1008,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
         progress = 1
         isVerifying = true
+        verifyingTransfer = taskIdentifier
         statusMessage = "Verifying \(option.title)…"
     }
 
@@ -1065,12 +1097,16 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         Task {
             do {
                 try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                    if deletedFileNames.contains(option.fileName) || taskIdentifier.map(cancelledTransfers.contains) == true {
-                        try? FileManager.default.removeItem(at: stagingURL)
-                        outcome.published = false
-                        return
+                    // The last check and the rename hold the ledger's lock, so a Cancel cannot
+                    // fall between them.
+                    try cancelledTransfers.withLock { cancelled in
+                        if deletedFileNames.contains(option.fileName) || taskIdentifier.map(cancelled.contains) == true {
+                            try? FileManager.default.removeItem(at: stagingURL)
+                            outcome.published = false
+                            return
+                        }
+                        try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
                     }
-                    try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
                 }
             } catch {
                 outcome.error = error
@@ -1240,6 +1276,10 @@ nonisolated private final class CancelledTransfers: @unchecked Sendable {
 
     func unlessCancelled<T>(_ identifier: Int, _ body: () -> T) -> T? {
         lock.withLock { identifiers.contains(identifier) ? nil : body() }
+    }
+
+    func withLock<T>(_ body: (Set<Int>) throws -> T) rethrows -> T {
+        try lock.withLock { try body(identifiers) }
     }
 }
 
