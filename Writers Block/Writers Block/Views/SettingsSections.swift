@@ -247,11 +247,12 @@ struct SettingsLocalModelSection: View {
                 inUse: ggufDownloadManager.selectedModelFileName == deletion.fileName
             ))
         }
-        .onChange(of: ggufDownloadManager.freedSpace) { _, freed in
-            guard let freed else { return }
-            AccessibilityNotification.Announcement(
-                "\(freed.title) deleted. \(ModelRowContent.size(freed.bytes)) back for your songs."
-            ).post()
+        .onChange(of: ggufDownloadManager.freedSpace) { old, new in
+            for freed in new.values where old[freed.fileName] != freed {
+                AccessibilityNotification.Announcement(
+                    "\(freed.title) deleted. \(ModelRowContent.size(freed.bytes)) back for your songs."
+                ).post()
+            }
         }
         .task(id: wetFileName) {
             guard wetFileName != nil else { return }
@@ -264,25 +265,27 @@ struct SettingsLocalModelSection: View {
     private var customModelSelector: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             SettingsSectionTitle("Custom Models", systemImage: "externaldrive")
-            ForEach(GGUFCustomModelRegistry.models().filter { ggufDownloadManager.installedModelFiles.contains($0.fileName) }) { model in
-                let content = ModelRowContent.custom(model, facts: facts(fileName: model.fileName))
-                ModelRowView(
-                    content: content,
-                    isColumnEnabled: !isLocalModelBusy,
-                    isWet: wetFileName == model.fileName,
-                    identifier: "customGGUF.\(model.id)",
-                    columnIdentifier: "customGGUFDelete.\(model.id)",
-                    action: {
-                        guard content.chip == .use else { return }
-                        viewModel.cancelEditorAIWork()
-                        if ggufDownloadManager.selectCustom(model) {
-                            beginWet(model.fileName)
-                            viewModel.saveProvider(.local)
-                            viewModel.saveModel(.localModel)
-                        }
-                    },
-                    columnAction: { modelToDelete = .custom(model) }
-                )
+            VStack(spacing: RhymeAITokens.Rhythm.tight) {
+                ForEach(GGUFCustomModelRegistry.models().filter { ggufDownloadManager.installedModelFiles.contains($0.fileName) }) { model in
+                    let content = ModelRowContent.custom(model, facts: facts(fileName: model.fileName))
+                    ModelRowView(
+                        content: content,
+                        isColumnEnabled: !isLocalModelBusy,
+                        isWet: wetFileName == model.fileName,
+                        identifier: "customGGUF.\(model.id)",
+                        columnIdentifier: "customGGUFDelete.\(model.id)",
+                        action: {
+                            guard content.chip == .use else { return }
+                            viewModel.cancelEditorAIWork()
+                            if ggufDownloadManager.selectCustom(model) {
+                                beginWet(model.fileName)
+                                viewModel.saveProvider(.local)
+                                viewModel.saveModel(.localModel)
+                            }
+                        },
+                        columnAction: { modelToDelete = .custom(model) }
+                    )
+                }
             }
             Button {
                 customModelImporterPresented = true
@@ -373,7 +376,7 @@ struct SettingsLocalModelSection: View {
             receivedBytes: manager.receivedBytes,
             pausedBytes: manager.pausedBytes[fileName],
             isDeleting: manager.deletingModelFileName == fileName,
-            freedBytes: manager.freedSpace?.fileName == fileName ? manager.freedSpace?.bytes : nil,
+            freedBytes: manager.freedSpace[fileName]?.bytes,
             needsMoreMemory: option.map(manager.needsMoreMemory) ?? false
         )
     }

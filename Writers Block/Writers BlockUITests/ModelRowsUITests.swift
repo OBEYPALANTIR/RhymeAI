@@ -8,7 +8,7 @@ final class ModelRowsUITests: XCTestCase {
     }
 
     /// `ModelRowContent.gallery` order; the row labels the screenshots are checked against.
-    private static let galleryCount = 15
+    private static let galleryCount = 16
     static let inUseMessage = "Frees 3.43 GB on this device. You can download it again later. It's in use now; on-device suggestions stop until you choose another model."
 
     @MainActor
@@ -37,7 +37,9 @@ final class ModelRowsUITests: XCTestCase {
             // to the chip, so a long title or warning beside Download wraps and the row grows.
             let rowWidth = app.buttons["gemmaDownload.gemma-4-e2b"].frame.width + 55
             for (id, height) in heights {
-                if rowWidth >= 332 {
+                // Gallery 11, the downloaded unselected E4B under 10 GB, has three metadata lines
+                // in the spec's copy and grows below a 407pt row (see ModelRowTests).
+                if rowWidth >= 332, id != "modelRowGallery.11" || rowWidth >= 407 {
                     XCTAssertEqual(height, 89, accuracy: 0.5, "\(id) in \(style) at \(rowWidth)pt")
                 } else {
                     XCTAssertGreaterThanOrEqual(height, 88.5, "\(id) in \(style) at \(rowWidth)pt")

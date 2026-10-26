@@ -1168,8 +1168,7 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.bytesOnDisk[e2b.fileName] == nil)
         #expect(manager.statusMessage == "\(e2b.title) deleted.")
         #expect(manager.errorMessage == nil)
-        #expect(manager.freedSpace?.fileName == e2b.fileName)
-        #expect(manager.freedSpace?.bytes == e2b.expectedBytes)
+        #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
 
         #expect(manager.selectedModelFileName == nil)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
@@ -1395,7 +1394,7 @@ struct GGUFDownloadCompletionTests {
             receivedBytes: manager.receivedBytes,
             pausedBytes: manager.pausedBytes[option.fileName],
             isDeleting: manager.deletingModelFileName == option.fileName,
-            freedBytes: manager.freedSpace?.fileName == option.fileName ? manager.freedSpace?.bytes : nil
+            freedBytes: manager.freedSpace[option.fileName]?.bytes
         ))
     }
 
@@ -1501,6 +1500,79 @@ struct GGUFDownloadCompletionTests {
         #expect(FileManager.default.fileExists(atPath: installed.path))
     }
 
+    /// After Cancel and a new download of the same entry, the cancelled transfer's late
+    /// progress, completion and resume data are all discarded and never touch the new one.
+    @Test func aCancelledTransfersLateCallbacksNeverTouchTheNextDownload() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        let manager = try await sandbox.restoredManager()
+        manager.start(e2b)
+        let old = try #require(manager.activeTransferIdentifier)
+        manager.cancelDownload(e2b)
+        try Self.resumeBlob(received: 1_000_000_000).write(to: resume)
+        manager.start(e2b)
+        let current = try #require(manager.activeTransferIdentifier)
+        #expect(current != old)
+
+        manager.receiveProgressForTest(e2b, taskIdentifier: old, bytes: 3_000_000_000)
+        #expect(manager.receivedBytes == 1_000_000_000)
+        #expect(!manager.finishForTest(e2b, taskIdentifier: old))
+        #expect(manager.activeDownloadID == e2b.id)
+        #expect(!manager.saveResumeData(Data("late".utf8), for: e2b, taskIdentifier: old))
+        #expect(try Data(contentsOf: resume) == Self.resumeBlob(received: 1_000_000_000))
+
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        try Data("not the model".utf8).write(to: staging)
+        let directory = sandbox.root
+        #expect(try await Task.detached {
+            try manager.installCompletedDownload(from: staging, in: directory, option: e2b, taskIdentifier: old)
+        }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        manager.cancelDownload(e2b)
+    }
+
+    /// Resume shows the saved count, then the offset URLSession actually resumed at; a
+    /// lower count arriving late is ignored, so the line never runs backwards on its own.
+    @Test func resumeOffsetReplacesTheSavedCountAndProgressNeverGoesBack() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try Self.resumeBlob(received: 1_474_000_000).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root))
+        let manager = try await sandbox.restoredManager()
+        manager.start(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.receiveProgressForTest(e2b, taskIdentifier: transfer, bytes: 1_000_000_000)
+        #expect(manager.receivedBytes == 1_474_000_000)
+        manager.resumedForTest(taskIdentifier: transfer, offset: 0)  // the server restarted the file
+        #expect(manager.receivedBytes == 0)
+        manager.receiveProgressForTest(e2b, taskIdentifier: transfer, bytes: 2 << 20)
+        #expect(manager.receivedBytes == 2 << 20)
+        manager.cancelDownload(e2b)
+    }
+
+    /// Each delete's "back for your songs" line keeps its own 4 s: a second delete does not
+    /// cut the first one short.
+    @Test func freedSpaceIsHeldPerModel() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
+
+        await manager.delete(e2b)
+        await manager.delete(e4b)
+
+        #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
+        #expect(manager.freedSpace[e4b.fileName]?.bytes == e4b.expectedBytes)
+        try await Task.sleep(for: .seconds(GGUFDownloadManager.freedSpaceHold + 0.5))
+        #expect(manager.freedSpace.isEmpty)
+    }
+
     // MARK: Custom model delete
 
     /// Delete on an imported model removes the app's copy and its registration and clears
@@ -1538,8 +1610,7 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
         #expect(GGUFModelSelection.isCleared(defaults: sandbox.defaults))
         #expect(manager.bytesOnDisk[model.fileName] == nil)
-        #expect(manager.freedSpace?.fileName == model.fileName)
-        #expect(manager.freedSpace?.bytes == Int64(bytes.count))
+        #expect(manager.freedSpace[model.fileName]?.bytes == Int64(bytes.count))
         #expect(manager.statusMessage == "Night Drive deleted.")
     }
 

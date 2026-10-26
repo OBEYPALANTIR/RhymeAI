@@ -327,9 +327,7 @@ struct ModelRowView: View {
                 ModelRowGhostLine(ink: palette.placeholder)
                     .transition(.opacity)
             case .written(let fraction):
-                ModelRowWave(progress: CGFloat(fraction))
-                    .stroke(palette.primaryInk, style: Self.waveStroke)
-                    .rhymeAnimation(RhymeAITokens.Motion.feedback, value: fraction)
+                ModelRowWrittenLine(fraction: CGFloat(fraction), ink: palette.primaryInk)
                     .transition(.opacity)
             }
         }
@@ -379,7 +377,7 @@ struct ModelRowView: View {
                         wetness: chip == .selected && isWet ? 1 : 0,
                         palette: appearance.palette
                     ))
-                    .transition(.opacity)
+                    .transition(swap)
             }
         }
         .rhymeAnimation(RhymeAITokens.Motion.state, value: content.chip)
@@ -406,7 +404,7 @@ struct ModelRowView: View {
                     .accessibilityElement()
                     .accessibilityLabel("Deleting \(content.title)")
                     .accessibilityAddTraits(.updatesFrequently)
-                    .transition(.opacity)
+                    .transition(swap)
             }
         }
         .frame(width: Tokens.column)
@@ -431,7 +429,16 @@ struct ModelRowView: View {
         .disabled(!isColumnEnabled)
         .accessibilityLabel(label)
         .accessibilityIdentifier(columnIdentifier)
-        .transition(.opacity)
+        .transition(swap)
+    }
+
+    /// A chip or glyph arriving fades in on the state tier and one leaving fades out on the
+    /// dismiss tier, in place; one frame under Reduce Motion.
+    private var swap: AnyTransition {
+        reduceMotion ? .identity : .asymmetric(
+            insertion: .opacity.animation(RhymeAITokens.Motion.state),
+            removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
+        )
     }
 }
 
@@ -468,6 +475,29 @@ private struct ModelRowChipInk: ViewModifier, Animatable {
                 .foregroundStyle(palette.primaryInk)
                 .overlay { shape.strokeBorder(palette.outlineStrong, lineWidth: 1) }
         }
+    }
+}
+
+/// The written share of the download line. Each step forward is drawn on the feedback tier;
+/// a step back (a resume that restarted lower) is shown at once, never animated backwards.
+private struct ModelRowWrittenLine: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let fraction: CGFloat
+    let ink: Color
+    @State private var shown: CGFloat?
+
+    var body: some View {
+        ModelRowWave(progress: shown ?? fraction)
+            .stroke(ink, style: ModelRowView.waveStroke)
+            .onChange(of: fraction) { old, new in
+                if new > old {
+                    withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) { shown = new }
+                } else {
+                    var jump = Transaction(animation: nil)
+                    jump.disablesAnimations = true
+                    withTransaction(jump) { shown = new }
+                }
+            }
     }
 }
 
@@ -527,6 +557,7 @@ extension ModelRowContent {
             (catalog(e2b, facts: Facts(bytesOnDisk: 3_427_878_784)), false),
             (catalog(e4b, facts: Facts(needsMoreMemory: true)), false),
             (catalog(e4b, facts: Facts(bytesOnDisk: e4b.expectedBytes, isInstalled: true, isSelected: true, needsMoreMemory: true)), false),
+            (catalog(e4b, facts: Facts(bytesOnDisk: e4b.expectedBytes, isInstalled: true, needsMoreMemory: true)), false),
             (catalog(e2b, facts: Facts(bytesOnDisk: e2b.expectedBytes, isInstalled: true, isDeleting: true)), false),
             (catalog(e2b, facts: Facts(freedBytes: e2b.expectedBytes)), false),
             (ModelRowContent.custom(custom, facts: Facts(bytesOnDisk: 812_000_000)), false),
