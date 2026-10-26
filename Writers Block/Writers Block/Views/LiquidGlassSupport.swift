@@ -83,8 +83,10 @@ enum RhymeAITokens {
         static let column: CGFloat = Rhythm.primary
         static let chipHeight: CGFloat = Rhythm.section
         static let glyph: CGFloat = 21
-        /// The progress line's baseline above the row's bottom edge.
-        static let progressInset: CGFloat = 9
+        /// The download wave: a φ step under the progress copy, one even wave 8 tall and 21 long.
+        static let waveGap: CGFloat = Rhythm.tight
+        static let waveHeight: CGFloat = Rhythm.tight
+        static let wavePeriod: CGFloat = Rhythm.standard
     }
 
     enum Motion {

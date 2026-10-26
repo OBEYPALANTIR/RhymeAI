@@ -91,6 +91,76 @@ struct ModelRowTests {
         }
     }
 
+    /// The download wave sits a φ step (8pt) under the progress copy inside the text column,
+    /// well clear of the card's bottom edge, and the title holds still across every state.
+    @Test func waveSitsUnderTheMetadataAndTheTitleHoldsStill() async throws {
+        let progressStates = [1, 2, 3, 4]  // starting, downloading, paused, checking
+        for width in [CGFloat(345), 332, 407] {
+            var titleTops: [Int: CGFloat] = [:]
+            for (index, sample) in ModelRowContent.gallery.enumerated() {
+                let id = "probe-\(Int(width))-\(index)"
+                let frames = try await layOut(sample, width: width, identifier: id)
+                titleTops[index] = frames["title"]?.minY
+                guard progressStates.contains(index) else {
+                    #expect(sample.content.line == .none, "state \(index)")
+                    continue
+                }
+                let metadata = try #require(frames["metadata"], "state \(index) at \(width)")
+                let wave = try #require(frames["wave"], "state \(index) at \(width)")
+                #expect(abs(wave.minY - (metadata.maxY + RhymeAITokens.ModelRow.waveGap)) < 0.5, "state \(index) at \(width): \(wave) under \(metadata)")
+                #expect(wave.height == RhymeAITokens.ModelRow.waveHeight)
+                #expect(wave.maxY <= RhymeAITokens.ModelRow.height - RhymeAITokens.Rhythm.related, "state \(index) at \(width): \(wave)")
+                #expect(abs(wave.minX - RhymeAITokens.Rhythm.standard) < 0.5)
+            }
+            // The downloaded, unselected E4B under 10 GB (11) grows below 407pt; see above.
+            let still = titleTops.filter { $0.key != 11 || width >= 407 }.values
+            #expect(still.count >= 15)
+            #expect((still.max() ?? 0) - (still.min() ?? 0) < 0.5, "title tops at \(width): \(titleTops)")
+        }
+    }
+
+    /// One even wave: every crest and trough at the same height, one wavelength apart.
+    @Test func theWaveIsEven() {
+        let period = RhymeAITokens.ModelRow.wavePeriod
+        let height = RhymeAITokens.ModelRow.waveHeight
+        let points = ModelRowMotion.evenWavePoints(width: period * 4)
+        for crest in 0..<4 {
+            let top = CGFloat(crest) * period + period / 4
+            let bottom = top + period / 2
+            let nearTop = points.min { abs($0.x - top) < abs($1.x - top) }!
+            let nearBottom = points.min { abs($0.x - bottom) < abs($1.x - bottom) }!
+            #expect(nearTop.y < 0.25, "crest \(crest)")  // sampled every 2pt
+            #expect(nearBottom.y > height - 0.25, "trough \(crest)")
+        }
+        #expect(points.allSatisfy { $0.y >= -0.001 && $0.y <= height + 0.001 })
+    }
+
+    /// Lays a row out in a window and returns its parts' frames from the layout probe.
+    private func layOut(_ sample: (content: ModelRowContent, isWet: Bool), width: CGFloat, identifier: String) async throws -> [String: CGRect] {
+        let host = UIHostingController(rootView:
+            ModelRowView(content: sample.content, isWet: sample.isWet, identifier: identifier, columnIdentifier: "column",
+                         action: {}, columnAction: {})
+                .environment(\.dynamicTypeSize, .large)
+                .frame(width: width)
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 200))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        let deadline = Date().addingTimeInterval(10)
+        while ModelRowLayoutProbe.frames["\(identifier).title"] == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+            host.view.layoutIfNeeded()
+        }
+        var frames: [String: CGRect] = [:]
+        for part in ["title", "metadata", "wave"] {
+            frames[part] = ModelRowLayoutProbe.frames["\(identifier).\(part)"]
+        }
+        try #require(frames["title"] != nil, "no layout for \(identifier)")
+        return frames
+    }
+
     /// Reduce Motion: the ghost holds its still frame, Select goes straight to the dry chip
     /// and the strike appears whole; with motion the ghost loops like the suggestion ghost.
     @Test func reduceMotionFallbacks() {

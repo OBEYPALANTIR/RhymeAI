@@ -160,6 +160,18 @@ enum ModelRowMotion {
 
     /// How long the wet chip holds before it dries: the Use-line highlight's hold.
     static let wetHold = EditorViewConstants.InsertionHighlight.holdDuration
+
+    /// One even wave across `width`: a sine with one crest and trough every `period`, filling
+    /// `height`, so every crest has the same height and spacing (Android `evenWavePath`).
+    static func evenWavePoints(width: CGFloat, period: CGFloat = RhymeAITokens.ModelRow.wavePeriod,
+                               height: CGFloat = RhymeAITokens.ModelRow.waveHeight) -> [CGPoint] {
+        guard width > 0, period > 0 else { return [] }
+        let steps = max(1, Int(width / 2))
+        return (0...steps).map { step in
+            let x = width * CGFloat(step) / CGFloat(steps)
+            return CGPoint(x: x, y: height / 2 - height / 2 * sin(2 * .pi * x / period))
+        }
+    }
 }
 
 /// Text column at the major golden share of the row (61.8%), the chip centred in the rest
@@ -195,7 +207,7 @@ private struct ModelRowSplit: Layout {
     }
 }
 
-/// The UnBlock wave as a shape whose drawn share animates (the download line, the strike).
+/// The row's even wave, drawn tip first to `progress` (the download line, the strike).
 private struct ModelRowWave: Shape {
     var progress: CGFloat
     var animatableData: CGFloat {
@@ -204,7 +216,9 @@ private struct ModelRowWave: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
-        ScribbleStroke(widthShare: 1, progress: progress).path(in: rect)
+        var path = Path()
+        path.addLines(ModelRowMotion.evenWavePoints(width: rect.width, height: rect.height))
+        return path.offsetBy(dx: rect.minX, dy: rect.minY).trimmedPath(from: 0, to: progress)
     }
 }
 
@@ -258,6 +272,7 @@ struct ModelRowView: View {
                 .rhymeAnimation(RhymeAITokens.Motion.feedback, value: content.isSelected)
         }
         .accessibilityElement(children: .contain)
+        .coordinateSpace(.named(identifier))
     }
 
     // MARK: Text column
@@ -271,7 +286,19 @@ struct ModelRowView: View {
                 .textRenderer(ModelRowStrikeRenderer(drawn: strikeDrawn, opacity: strikeOpacity, ink: palette.secondaryInk))
                 .onAppear { if content.strike { beginStrike() } }
                 .onChange(of: content.strike) { _, struck in struck ? beginStrike() : endStrike() }
-            metadata
+                .modelRowProbe(identifier, "title")
+            ZStack(alignment: .topLeading) {
+                // Two caption lines are always reserved, so the title holds still while the
+                // copy changes; the wave sits in the second, a φ step under one-line progress copy.
+                Text(verbatim: " \n ").font(.caption).hidden()
+                metadata
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .modelRowProbe(identifier, "metadata")
+                    .overlay(alignment: .bottomLeading) {
+                        progressLine
+                            .alignmentGuide(.bottom) { $0[.top] - Tokens.waveGap }
+                    }
+            }
             if stacked, content.chip != nil {
                 chipCell.padding(.top, RhymeAITokens.Spacing.xxs)
             }
@@ -282,7 +309,6 @@ struct ModelRowView: View {
         .padding(.trailing, RhymeAITokens.Rhythm.tight)
         .padding(.vertical, RhymeAITokens.Rhythm.related)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) { progressLine }
     }
 
     private var metadata: some View {
@@ -315,33 +341,32 @@ struct ModelRowView: View {
         .foregroundStyle(appearance.palette.warning)
     }
 
-    /// The download line in the text column, its baseline 9 above the row's bottom, over a
-    /// 1pt outline guide. Hidden from assistive technology; the row's value carries progress.
-    @ViewBuilder
+    /// The download wave under the progress copy, across the text column: one even wave whose
+    /// written share is primary ink and the rest placeholder ink; while no bytes have come the
+    /// ghost's one-line loop writes it. Hidden from assistive technology; the row's value
+    /// carries progress.
     private var progressLine: some View {
         let palette = appearance.palette
-        Group {
-            switch content.line {
-            case .none:
-                EmptyView()
-            case .ghost:
-                ModelRowGhostLine(ink: palette.placeholder)
-                    .transition(.opacity)
-            case .written(let fraction):
-                ModelRowWrittenLine(fraction: CGFloat(fraction), ink: palette.primaryInk)
-                    .transition(.opacity)
-            }
-        }
-        .frame(height: SuggestionInkLineMotion.waveHeight)
-        .frame(maxWidth: .infinity)
-        .background(alignment: .bottom) {
+        return ZStack {
             if content.line != .none {
-                Rectangle().fill(palette.outline).frame(height: 1)
+                ZStack {
+                    ModelRowWave(progress: 1)
+                        .stroke(palette.placeholder, style: Self.waveStroke)
+                    switch content.line {
+                    case .ghost:
+                        ModelRowGhostLine(ink: palette.primaryInk)
+                    case .written(let fraction):
+                        ModelRowWrittenLine(fraction: CGFloat(fraction), ink: palette.primaryInk)
+                    case .none:
+                        EmptyView()
+                    }
+                }
+                .transition(.opacity)
             }
         }
-        .padding(.leading, RhymeAITokens.Rhythm.standard)
-        .padding(.trailing, RhymeAITokens.Rhythm.tight)
-        .padding(.bottom, Tokens.progressInset)
+        .frame(height: Tokens.waveHeight)
+        .frame(maxWidth: .infinity)
+        .modelRowProbe(identifier, "wave")
         .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: content.line == .none)
         .accessibilityHidden(true)
     }
@@ -418,11 +443,6 @@ struct ModelRowView: View {
         }
         .frame(width: Tokens.column)
         .frame(maxHeight: .infinity)
-        .overlay(alignment: .leading) {
-            if content.column != .empty {
-                Rectangle().fill(palette.outline).frame(width: 1)
-            }
-        }
         .rhymeAnimation(RhymeAITokens.Motion.state, value: content.column)
     }
 
@@ -519,8 +539,7 @@ private struct ModelRowGhostLine: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
-            ScribbleStroke(
-                widthShare: 1,
+            ModelRowWave(
                 progress: ModelRowMotion.ghostProgress(elapsed: context.date.timeIntervalSince(appeared), reduceMotion: reduceMotion)
             )
             .stroke(ink, style: ModelRowView.waveStroke)
@@ -548,18 +567,37 @@ private struct ModelRowStrikeRenderer: TextRenderer, Animatable {
         for line in layout { context.draw(line) }
         guard drawn > 0, opacity > 0, let first = layout.first else { return }
         let bounds = first.typographicBounds.rect
-        let height = SuggestionInkLineMotion.waveHeight
+        let height = RhymeAITokens.ModelRow.waveHeight
         let rect = CGRect(x: bounds.minX, y: bounds.midY - height / 2, width: bounds.width, height: height)
         context.opacity = opacity
         context.stroke(
-            ScribbleStroke(widthShare: 1, progress: drawn).path(in: rect),
+            ModelRowWave(progress: drawn).path(in: rect),
             with: .color(ink),
             style: ModelRowView.waveStroke
         )
     }
 }
 
+extension View {
+    /// Records this part's frame in its row for `ModelRowTests` (debug builds only).
+    func modelRowProbe(_ row: String, _ part: String) -> some View {
+        #if DEBUG
+        onGeometryChange(for: CGRect.self) { $0.frame(in: .named(row)) } action: { frame in
+            ModelRowLayoutProbe.frames["\(row).\(part)"] = frame
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 #if DEBUG
+/// Laid-out frames of row parts by "<row identifier>.<part>", in the row's coordinates.
+@MainActor
+enum ModelRowLayoutProbe {
+    static var frames: [String: CGRect] = [:]
+}
+
 extension ModelRowContent {
     /// Every row state, built through the same resolver, for `UITestFlags.modelRowGallery`.
     static var gallery: [(content: ModelRowContent, isWet: Bool)] {

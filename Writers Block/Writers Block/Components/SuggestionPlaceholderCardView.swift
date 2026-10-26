@@ -96,8 +96,7 @@ enum SuggestionInkLineMotion {
 }
 
 /// One scribbled line, `widthShare` of the space it is given, drawn tip first to `progress`.
-/// Also the model row's download line and delete strike.
-struct ScribbleStroke: Shape {
+private struct ScribbleStroke: Shape {
     var widthShare: CGFloat
     var progress: CGFloat
 
