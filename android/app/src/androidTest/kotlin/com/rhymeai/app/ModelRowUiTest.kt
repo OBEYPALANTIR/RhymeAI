@@ -144,6 +144,23 @@ class ModelRowUiTest {
         }
     }
 
+    @Test fun noFrameOfAStateChangeResizesTheRowOrMovesTheTitle() {
+        // Two-line copy to one-line copy plus the wave, and back, checked on every frame of the change.
+        shown = e2b()
+        showRow()
+        val title = { compose.onNodeWithText(e2b.label, useUnmergedTree = true).getBoundsInRoot().top.value }
+        val top = title()
+        compose.mainClock.autoAdvance = false
+        for (next in listOf(e2b(downloading = true, progress = 0f), e2b(downloading = true, progress = 0.43f), e2b())) {
+            compose.runOnUiThread { shown = next }
+            repeat(20) {
+                compose.mainClock.advanceTimeByFrame()
+                compose.onNodeWithTag("row").assertHeightIsEqualTo(89.dp)
+                assertEquals("title moved going to ${next.kind}", top, title(), 0.5f)
+            }
+        }
+    }
+
     @Test fun aMemoryGatedModelOnDiskNeedsAThirdLine() {
         // Known spec conflict (build spec §2, state 9b): "Richer lines · 5.34 GB on this device"
         // wraps in the 200dp text column and the warning keeps its own line, so this one state

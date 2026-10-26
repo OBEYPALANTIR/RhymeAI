@@ -66,7 +66,6 @@ import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.MultiContentMeasurePolicy
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -420,9 +419,7 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
         // Two metadata lines are always reserved, so the title holds still while the copy changes;
         // the download wave sits in the second, a φ step (8dp) under the one-line progress copy.
-        val density = LocalDensity.current
-        val lineHeight = with(density) { MODEL_ROW_METADATA_LINE_HEIGHT.toDp() }
-        var metadataHeight by remember { mutableStateOf(lineHeight) }
+        val lineHeight = with(LocalDensity.current) { MODEL_ROW_METADATA_LINE_HEIGHT.toDp() }
         Box(Modifier.heightIn(min = lineHeight * 2)) {
             AnimatedContent(
                 targetState = state,
@@ -431,11 +428,7 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
                 contentAlignment = Alignment.TopStart,
                 label = "modelRowMetadata"
             ) { shown ->
-            Column(
-                Modifier.onSizeChanged { size ->
-                    if (shown.kind == state.kind) metadataHeight = with(density) { size.height.toDp() }
-                }
-            ) {
+            Column {
                 shown.metadata?.let {
                     Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = colors.onSurfaceVariant)
                 }
@@ -452,10 +445,9 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
                 motion = motion,
                 ink = colors.onSurface,
                 trackInk = placeholderColorFor(LocalAppAppearance.current),
-                // Under the copy it belongs to; with no line it rests, invisible, inside the reserved lines.
-                modifier = Modifier.padding(
-                    top = (if (state.hasLine) maxOf(metadataHeight, lineHeight) else lineHeight) + DesignTokens.ModelRow.waveGap
-                )
+                // The progress copy is always one line, so the wave's place is fixed: no measuring,
+                // nothing that could resize the row on the frame a state changes.
+                modifier = Modifier.padding(top = lineHeight + DesignTokens.ModelRow.waveGap)
             )
         }
     }
