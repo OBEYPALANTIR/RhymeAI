@@ -1386,7 +1386,7 @@ struct GGUFDownloadCompletionTests {
         directory: URL,
         option: GGUFDownloadOption,
         taskIdentifier: Int? = nil,
-        timeout: TimeInterval = 120
+        timeout: TimeInterval = 600
     ) async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
             let once = ResumeOnce(continuation)
@@ -1422,10 +1422,11 @@ struct GGUFDownloadCompletionTests {
     }
 
     /// Waits for `condition` up to `timeout` of wall time. CI runs every suite in parallel on
-    /// a small runner, where main-actor and URLSession callbacks lag by many seconds (single
-    /// tests take minutes there), so the bound is generous and counted in time, not loop turns;
-    /// a condition that never holds still fails the test instead of hanging it.
-    static func eventually(timeout: TimeInterval = 90, _ condition: () -> Bool) async -> Bool {
+    /// a small runner whose main actor stays saturated for minutes (a callback queued behind it
+    /// landed after more than 130 s, so a 90 s bound failed), hence 10 minutes: far past any
+    /// lag measured there, far under the job's 45-minute limit. A condition that never holds
+    /// still fails the test instead of hanging the job.
+    static func eventually(timeout: TimeInterval = 600, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() >= deadline { return false }
