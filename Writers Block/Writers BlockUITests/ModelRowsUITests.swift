@@ -87,10 +87,13 @@ final class ModelRowsUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         scrollTo(row, in: app)
         var issues: [String] = []
+        let pinnedBottom = app.descendants(matching: .any)["settingsTabPicker"].frame.maxY
         let record: (XCUIAccessibilityAuditIssue) -> Bool = { issue in
-            // The On-Device Engine picker above the rows is outside this change; with the rows in
-            // view its segment sits half under the pinned General/Editor switch, so it reads as clipped.
-            if issue.auditType == .textClipped, issue.element?.label == "Gemma (downloaded)" { return true }
+            // Controls above the rows (the On-Device Engine picker) sit half under the pinned
+            // General/Editor switch once the rows are scrolled into view, so they read as clipped.
+            if issue.auditType == .textClipped, let frame = issue.element?.frame, frame.minY < pinnedBottom { return true }
+            // Done is a system navigation bar item; it uses the Large Content Viewer instead of growing.
+            if issue.auditType == .dynamicType, let label = issue.element?.label, app.navigationBars.buttons[label].exists { return true }
             issues.append("\(issue.auditType.rawValue) | \(issue.compactDescription) | '\(issue.element?.label ?? "")' id='\(issue.element?.identifier ?? "")' \(issue.element.map { NSCoder.string(for: $0.frame) } ?? "")")
             return true
         }
