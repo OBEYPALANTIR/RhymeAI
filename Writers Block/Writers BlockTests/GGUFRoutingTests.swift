@@ -1314,14 +1314,14 @@ struct GGUFDownloadCompletionTests {
 
         // Nothing deleted: the completion installs.
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option))
         #expect(try Data(contentsOf: installed) == valid)
 
         await manager.delete(option)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
 
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option) == false)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: sandbox.defaults) == nil)
@@ -1329,13 +1329,13 @@ struct GGUFDownloadCompletionTests {
         // The app was terminated before the callback: a fresh manager still discards it.
         let relaunched = try await sandbox.restoredManager()
         try valid.write(to: staging)
-        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(try await Self.deliverCompletion(relaunched, staging: staging, directory: directory, option: option) == false)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
 
         // A download of the entry beginning is a fresh intent; the next completion installs.
         relaunched.beginDownloadForTest(option)
         try valid.write(to: staging)
-        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Self.deliverCompletion(relaunched, staging: staging, directory: directory, option: option))
         #expect(try Data(contentsOf: installed) == valid)
     }
 
@@ -1374,6 +1374,53 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
         manager.refreshInstalledModels()
         #expect(manager.installedModelFiles == [e2b.fileName])
+    }
+
+    /// Delivers a finished download the way URLSession does: `installCompletedDownload` blocks
+    /// its calling thread until the publish on the runner's serial path is done, which is right
+    /// on the session's delegate queue but must never happen on the Swift concurrency pool.
+    /// There, tests running in parallel (CI) each block a pool thread and starve the very
+    /// publish task they wait for, and the run hangs. So it runs on a GCD thread, and the wait
+    /// is bounded: a regression fails here after `timeout` instead of hanging the job.
+    private static func deliverCompletion(
+        _ manager: GGUFDownloadManager,
+        staging: URL,
+        directory: URL,
+        option: GGUFDownloadOption,
+        taskIdentifier: Int? = nil,
+        timeout: TimeInterval = 30
+    ) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                once.resume(with: Result {
+                    try manager.installCompletedDownload(from: staging, in: directory, option: option, taskIdentifier: taskIdentifier)
+                })
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                once.resume(with: .failure(CompletionTimedOut(seconds: timeout)))
+            }
+        }
+    }
+
+    private struct CompletionTimedOut: Error, CustomStringConvertible {
+        let seconds: TimeInterval
+        var description: String { "installCompletedDownload did not return within \(Int(seconds)) s" }
+    }
+
+    /// Resumes its continuation once: the first of the result and the timeout wins.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Error>?
+
+        init(_ continuation: CheckedContinuation<Bool, Error>) { self.continuation = continuation }
+
+        func resume(with result: Result<Bool, Error>) {
+            lock.withLock {
+                defer { continuation = nil }
+                return continuation
+            }?.resume(with: result)
+        }
     }
 
     // MARK: Pause, resume and cancel (model rows)
@@ -1490,13 +1537,13 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.activeDownloadID == nil)
 
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option) == false)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
         #expect(!FileManager.default.fileExists(atPath: staging.path))
 
         manager.beginDownloadForTest(option)
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option))
         #expect(FileManager.default.fileExists(atPath: installed.path))
     }
 
@@ -1527,9 +1574,7 @@ struct GGUFDownloadCompletionTests {
         let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
         try Data("not the model".utf8).write(to: staging)
         let directory = sandbox.root
-        #expect(try await Task.detached {
-            try manager.installCompletedDownload(from: staging, in: directory, option: e2b, taskIdentifier: old)
-        }.value == false)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: e2b, taskIdentifier: old) == false)
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         manager.cancelDownload(e2b)
     }
@@ -1613,9 +1658,7 @@ struct GGUFDownloadCompletionTests {
         let directory = sandbox.root
         manager.beginDownloadForTest(option)
         try valid.write(to: staging)
-        #expect(try await Task.detached {
-            try manager.installCompletedDownload(from: staging, in: directory, option: option, taskIdentifier: 4_242)
-        }.value)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option, taskIdentifier: 4_242))
 
         manager.cancelDownload(option)
 
@@ -1659,7 +1702,12 @@ struct GGUFDownloadCompletionTests {
 
         #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
         #expect(manager.freedSpace[e4b.fileName]?.bytes == e4b.expectedBytes)
-        try await Task.sleep(for: .seconds(GGUFDownloadManager.freedSpaceHold + 0.5))
+        // Each line expires on its own clock; polled with a deadline, as a loaded runner can
+        // be slow to deliver the 4 s timer, and a line that never clears still fails here.
+        let deadline = Date().addingTimeInterval(GGUFDownloadManager.freedSpaceHold + 20)
+        while !manager.freedSpace.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
         #expect(manager.freedSpace.isEmpty)
     }
 
