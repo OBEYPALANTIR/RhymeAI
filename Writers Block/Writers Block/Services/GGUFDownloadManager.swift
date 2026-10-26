@@ -4,8 +4,8 @@ import Foundation
 struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
-    let subtitle: String
-    let size: String
+    /// The model's character in the writer's words, leading its row's metadata.
+    let character: String
     let fileName: String
     let expectedBytes: Int64
     let sha256: String
@@ -25,8 +25,7 @@ enum GGUFDownloadCatalog {
         GGUFDownloadOption(
             id: "gemma-4-e2b",
             title: "RhymeAI Gemma 4 E2B",
-            subtitle: "Recommended for iPhone and iPad",
-            size: "3.43 GB",
+            character: "Quick drafts",
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
             expectedBytes: 3_427_880_800,
             sha256: "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
@@ -38,8 +37,7 @@ enum GGUFDownloadCatalog {
         GGUFDownloadOption(
             id: "gemma-4-e4b",
             title: "RhymeAI Gemma 4 E4B",
-            subtitle: "For devices with at least 10 GB memory",
-            size: "5.34 GB",
+            character: "Richer lines",
             fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
             expectedBytes: 5_335_292_800,
             sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
@@ -307,9 +305,15 @@ enum GGUFModelStorage {
             try fileManager.removeItem(at: installedURL)
         }
         GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
-        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+        try removeDownloadArtifacts(for: option, in: directory)
+    }
+
+    /// Only the downloader's own files for `option` (staging, resume blobs, legacy segments);
+    /// an installed model under the catalog name stays. Cancel uses this.
+    nonisolated static func removeDownloadArtifacts(for option: GGUFDownloadOption, in directory: URL) throws {
+        for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
         where isDownloadArtifactName(url.lastPathComponent, of: option) && isRegularFile(url) {
-            try fileManager.removeItem(at: url)
+            try FileManager.default.removeItem(at: url)
         }
     }
 
@@ -387,9 +391,17 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     nonisolated private static let progressUpdateBytes: Int64 = 1024 * 1024
 
     @Published private(set) var installedModelFiles: Set<String> = []
-    /// Bytes on disk under each catalog file name: a verified install or a same-name file
-    /// that fails the size or marker check (a previous version), either of which Delete removes.
-    @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
+    /// Bytes on disk under each catalog file name (a verified install or a same-name file
+    /// that fails the size or marker check, a previous version, either of which Delete
+    /// removes) and under each registered custom model's file name.
+    @Published private(set) var bytesOnDisk: [String: Int64] = [:]
+    /// Bytes already received by each catalog entry with a saved resume blob and no task:
+    /// a paused download, which Resume continues and Cancel discards.
+    @Published private(set) var pausedBytes: [String: Int64] = [:]
+    /// What each recent delete gave back, by file name, each shown on its row for
+    /// `freedSpaceHold` from its own delete.
+    @Published private(set) var freedSpace: [String: FreedSpace] = [:]
+    nonisolated static let freedSpaceHold: TimeInterval = 4.0
     /// Set while `delete` runs; starts, choices and imports wait for it.
     @Published private(set) var deletingModelFileName: String?
     /// Entries deleted since their last download began, kept in the defaults so they
@@ -398,6 +410,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// discarded instead of republishing the model or its resume data; the next download
     /// of that entry beginning lifts it.
     nonisolated private let deletedFileNames: DeletedEntries
+    /// Transfers the writer cancelled. Their callbacks are discarded even after a new
+    /// download of the same entry begins, and their resume data is never written.
+    nonisolated private let cancelledTransfers = CancelledTransfers()
     @Published private(set) var activeDownloadID: String?
     @Published private(set) var progress: Double = 0
     @Published private(set) var receivedBytes: Int64 = 0
@@ -418,6 +433,9 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// after a relaunch, installs the file without selecting it.
     private var modelChoiceRevision = 0
     private var choiceRevisionAtDownloadStart: Int?
+    /// The transfer whose file is being checked, kept until its completion or failure lands,
+    /// even if a Pause cleared the running task in between.
+    private var verifyingTransfer: Int?
     /// Tests give each manager its own models directory and defaults; nil means the
     /// app's `GGUFModelStorage.modelsDirectory`.
     private let modelsRoot: URL?
@@ -481,13 +499,19 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func refreshInstalledModels() {
         let directory = try? modelsDirectory(create: false)
         installedModelFiles = Set(directory.map { GGUFModelStorage.installedModelFileNames(in: $0, defaults: defaults) } ?? [])
-        catalogBytesOnDisk = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
-            guard let url = directory?.appendingPathComponent(option.fileName),
+        let names = GGUFDownloadCatalog.options.map(\.fileName) + GGUFCustomModelRegistry.models(defaults: defaults).map(\.fileName)
+        bytesOnDisk = Dictionary(names.compactMap { name in
+            guard let url = directory?.appendingPathComponent(name),
                   GGUFModelStorage.isRegularFile(url),
                   let identity = try? GGUFModelFileIdentity.read(at: url.path) else {
                 return nil
             }
-            return (option.fileName, identity.size)
+            return (name, identity.size)
+        }, uniquingKeysWith: { first, _ in first })
+        pausedBytes = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
+            guard let directory, activeDownloadID != option.id,
+                  GGUFModelStorage.isRegularFile(GGUFModelStorage.resumeDataURL(for: option, in: directory)) else { return nil }
+            return (option.fileName, GGUFModelStorage.resumedBytes(for: option, in: directory))
         })
         if let preferred = GGUFModelSelection.preferredFileName(
             in: Array(installedModelFiles),
@@ -542,15 +566,18 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             }
             let resumeURL = resumeDataURL(for: option, directory: directory)
             let task: URLSessionDownloadTask
+            var resumedBytes: Int64 = 0
             if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
                 task = session.downloadTask(withResumeData: resumeData)
+                resumedBytes = GGUFModelStorage.resumedBytes(for: option, in: directory)
             } else {
                 task = session.downloadTask(with: ggufDownloadRequest(for: option))
             }
             task.taskDescription = option.id
             task.priority = URLSessionTask.highPriority
             activeTask = task
-            beginDownload(option: option, receivedBytes: 0)
+            // A resume picks up where its line stopped instead of restarting the ghost.
+            beginDownload(option: option, receivedBytes: resumedBytes)
             task.resume()
         } catch {
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
@@ -605,9 +632,55 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 self.activeDownloadID = nil
                 self.isPausing = false
                 self.statusMessage = saved
-                    ? "Download paused. Tap Download to resume."
+                    ? "Download paused. Tap Resume to continue."
                     : "Download stopped. Tap Download to restart."
+                self.refreshInstalledModels()
             }
+        }
+    }
+
+    /// Cancel: stops the transfer, running or paused, and discards what it received (staging
+    /// and resume data); an installed model under the same name stays. Recorded like a
+    /// delete, so a completion or error the session still delivers for it is discarded
+    /// rather than publishing the model or saving resume data; the next download lifts it.
+    func cancelDownload(_ option: GGUFDownloadOption) {
+        guard !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil,
+              activeDownloadID == option.id || pausedBytes[option.fileName] != nil else { return }
+        var transfer = activeDownloadID == option.id ? activeTask : nil
+        if activeDownloadID == option.id {
+            activeTask = nil
+            activeDownloadID = nil
+            choiceRevisionAtDownloadStart = nil
+            progress = 0
+            receivedBytes = 0
+        } else if let directory = try? modelsDirectory(create: false),
+                  let resumeData = try? Data(contentsOf: GGUFModelStorage.resumeDataURL(for: option, in: directory)),
+                  !resumeData.isEmpty {
+            // A paused transfer's bytes sit in URLSession's own temporary file, which the
+            // resume blob only names; cancelling a task made from the blob lets URLSession
+            // delete that file.
+            transfer = session.downloadTask(withResumeData: resumeData)
+            transfer?.resume()
+        }
+        let deletedFileNames = self.deletedFileNames
+        do {
+            // Under the ledger's lock, which a completion also holds from its last check through
+            // its rename: either the cancel lands first and the completion is discarded, or the
+            // completion was already published and the installed model stays.
+            try cancelledTransfers.cancel(transfer?.taskIdentifier) {
+                deletedFileNames.insert(option.fileName)
+                transfer?.cancel()
+                try GGUFModelStorage.removeDownloadArtifacts(for: option, in: modelsDirectory(create: false))
+            }
+            refreshInstalledModels()
+            statusMessage = installedModelFiles.contains(option.fileName)
+                ? "\(option.title) had already finished downloading."
+                : "Download of \(option.title) cancelled."
+            errorMessage = nil
+        } catch {
+            refreshInstalledModels()
+            statusMessage = nil
+            errorMessage = "Could not cancel \(option.title): \(error.localizedDescription)"
         }
     }
 
@@ -619,12 +692,39 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// that path) finishes before the file goes.
     func delete(_ option: GGUFDownloadOption) async {
         guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return }
-        deletingModelFileName = option.fileName
+        let deletedFileNames = self.deletedFileNames
+        await removeModel(fileName: option.fileName, title: option.title) { directory, defaults in
+            try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
+            deletedFileNames.insert(option.fileName)
+        }
+    }
+
+    /// Removes the app's own copy of an imported model and its registration, on the same
+    /// serial path and with the same selection rule as `delete`. Import copied the file the
+    /// writer picked; that original is never touched.
+    func deleteCustom(_ model: GGUFCustomModel) async {
+        guard !isRestoringDownloads, !isVerifying, deletingModelFileName == nil,
+              model.fileName == URL(fileURLWithPath: model.fileName).lastPathComponent,
+              GGUFCustomModelRegistry.contains(fileName: model.fileName, defaults: defaults) else { return }
+        await removeModel(fileName: model.fileName, title: model.displayName) { directory, defaults in
+            let copy = directory.appendingPathComponent(model.fileName)
+            if GGUFModelStorage.isRegularFile(copy) { try FileManager.default.removeItem(at: copy) }
+            GGUFCustomModelRegistry.remove(fileName: model.fileName, defaults: defaults)
+        }
+    }
+
+    private func removeModel(
+        fileName: String,
+        title: String,
+        remove: @escaping @Sendable (URL, UserDefaults) throws -> Void
+    ) async {
+        deletingModelFileName = fileName
         defer { deletingModelFileName = nil }
+        let bytes = bytesOnDisk[fileName] ?? 0
         // Cleared before the file goes, so a request racing the delete cannot resolve to it.
         // The persisted name can differ from the shown one when a stale file lost its spot.
-        let wasSelected = selectedModelFileName == option.fileName
-            || GGUFModelSelection.currentFileName(defaults: defaults) == option.fileName
+        let wasSelected = selectedModelFileName == fileName
+            || GGUFModelSelection.currentFileName(defaults: defaults) == fileName
         if wasSelected {
             modelChoiceRevision += 1
             GGUFModelSelection.clearExplicitly(defaults: defaults)
@@ -633,21 +733,29 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let directory = try modelsDirectory(create: false)
             let defaults = SendableDefaults(value: defaults)
-            let deletedFileNames = self.deletedFileNames
-            try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults.value)
-                deletedFileNames.insert(option.fileName)
+            try await AIService.ggufRunner.withExclusiveAccess(toModelFile: fileName) {
+                try remove(directory, defaults.value)
             }
-            statusMessage = "\(option.title) deleted."
+            statusMessage = "\(title) deleted."
             errorMessage = nil
+            let freed = FreedSpace(fileName: fileName, title: title, bytes: bytes)
+            freedSpace[fileName] = freed
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.freedSpaceHold))
+                if self?.freedSpace[fileName] == freed { self?.freedSpace[fileName] = nil }
+            }
         } catch {
             if wasSelected, let directory = try? modelsDirectory(create: false),
-               FileManager.default.fileExists(atPath: directory.appendingPathComponent(option.fileName).path) {
-                GGUFModelSelection.save(fileName: option.fileName, defaults: defaults)
+               FileManager.default.fileExists(atPath: directory.appendingPathComponent(fileName).path) {
+                GGUFModelSelection.save(fileName: fileName, defaults: defaults)
             }
-            errorMessage = "Could not delete \(option.title): \(error.localizedDescription)"
+            errorMessage = "Could not delete \(title): \(error.localizedDescription)"
         }
         refreshInstalledModels()
+    }
+
+    func needsMoreMemory(_ option: GGUFDownloadOption) -> Bool {
+        GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: totalRAMBytes)
     }
 
     // MARK: - Choice made while a download runs
@@ -719,7 +827,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             let model = try await withTaskCancellationHandler {
                 try await task.value
             } onCancel: { task.cancel() }
-            GGUFCustomModelRegistry.register(model)
+            GGUFCustomModelRegistry.register(model, defaults: defaults)
             isVerifying = false
             refreshInstalledModels()
             return selectCustom(model)
@@ -750,8 +858,36 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     }
 
     @discardableResult
-    func finishForTest(_ option: GGUFDownloadOption) -> Bool {
-        finish(option: option)
+    func finishForTest(_ option: GGUFDownloadOption, taskIdentifier: Int? = nil) -> Bool {
+        finish(option: option, taskIdentifier: taskIdentifier)
+    }
+
+    /// `beginDownloadForTest` with a real transfer that is never resumed, so it neither
+    /// touches the network nor fails on its own.
+    func beginTransferForTest(_ option: GGUFDownloadOption) {
+        let task = session.downloadTask(with: ggufDownloadRequest(for: option))
+        task.taskDescription = option.id
+        activeTask = task
+        beginDownloadForTest(option)
+    }
+
+    /// The running transfer's identifier, for tests of callbacks from an older transfer.
+    var activeTransferIdentifier: Int? { activeTask?.taskIdentifier }
+
+    func receiveProgressForTest(_ option: GGUFDownloadOption, taskIdentifier: Int, bytes: Int64) {
+        receiveProgress(optionID: option.id, taskIdentifier: taskIdentifier, bytes: bytes)
+    }
+
+    func resumedForTest(taskIdentifier: Int, offset: Int64) {
+        resumed(taskIdentifier: taskIdentifier, offset: offset)
+    }
+
+    func setVerifyingForTest(_ option: GGUFDownloadOption, taskIdentifier: Int?) {
+        setVerifying(optionID: option.id, taskIdentifier: taskIdentifier)
+    }
+
+    func failForTest(_ option: GGUFDownloadOption, taskIdentifier: Int, error: Error) {
+        fail(taskIdentifier: taskIdentifier, option: option, error: error)
     }
 
     private func beginDownload(option: GGUFDownloadOption, receivedBytes: Int64) {
@@ -781,8 +917,10 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         }
     }
 
-    private func receiveProgress(optionID: String?, bytes: Int64) {
-        guard activeDownloadID == optionID,
+    /// Progress of the running transfer only, and never backwards within it: a lower count
+    /// (a late event from before a resume) is ignored. A restart is reported by `resumed`.
+    private func receiveProgress(optionID: String?, taskIdentifier: Int, bytes: Int64) {
+        guard activeDownloadID == optionID, activeTask?.taskIdentifier == taskIdentifier, bytes >= receivedBytes,
               let option = GGUFDownloadCatalog.option(id: optionID) else {
             return
         }
@@ -804,12 +942,32 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         statusMessage = "Downloading \(option.title)… \(Int(progress * 100))% · \(transfer)\(rate)"
     }
 
-    /// Installs the finished download; returns whether it was also selected.
+    /// Where URLSession actually resumed: the saved count shown at Resume is replaced by the
+    /// real offset, lower when the server restarted the file. Progress climbs from there.
+    private func resumed(taskIdentifier: Int, offset: Int64) {
+        guard activeTask?.taskIdentifier == taskIdentifier,
+              let option = GGUFDownloadCatalog.option(id: activeDownloadID) else { return }
+        receivedBytes = max(0, offset)
+        progress = min(1, Double(receivedBytes) / Double(option.expectedBytes))
+        progressSampleTime = Date()
+        progressSampleBytes = receivedBytes
+    }
+
+    /// Installs the finished download; returns whether it was also selected. A transfer's
+    /// completion ends only its own operation: the running transfer, or the check it opened
+    /// even if a Pause cleared the running task since. Otherwise (another download, check or
+    /// import is under way, or nothing is) it only refreshes the rows, so the published file
+    /// shows as installed and no other operation's state is touched.
     @discardableResult
-    private func finish(option: GGUFDownloadOption) -> Bool {
+    private func finish(option: GGUFDownloadOption, taskIdentifier: Int? = nil) -> Bool {
+        if let taskIdentifier, activeTask?.taskIdentifier != taskIdentifier, verifyingTransfer != taskIdentifier {
+            refreshInstalledModels()
+            return false
+        }
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false
+        verifyingTransfer = nil
         progress = 1
         receivedBytes = option.expectedBytes
         let selects = choiceRevisionAtDownloadStart == modelChoiceRevision
@@ -830,23 +988,28 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         return true
     }
 
+    /// A failure of the running transfer, or of the transfer whose file is being checked even
+    /// if a Pause cleared the running task meanwhile, so a check never stays open.
     private func fail(taskIdentifier: Int, option: GGUFDownloadOption?, error: Error) {
-        guard activeTask?.taskIdentifier == taskIdentifier, !isPausing else { return }
+        guard verifyingTransfer == taskIdentifier || (activeTask?.taskIdentifier == taskIdentifier && !isPausing) else { return }
+        verifyingTransfer = nil
         choiceRevisionAtDownloadStart = nil
         activeTask = nil
         activeDownloadID = nil
         isVerifying = false
         statusMessage = nil
         errorMessage = "Download failed\(option.map { " for \($0.title)" } ?? ""): \(error.localizedDescription)"
+        refreshInstalledModels()  // a failure that saved resume data leaves the entry paused
     }
 
-    private func setVerifying(optionID: String?) {
-        guard activeDownloadID == optionID,
+    private func setVerifying(optionID: String?, taskIdentifier: Int? = nil) {
+        guard activeDownloadID == optionID, taskIdentifier == nil || activeTask?.taskIdentifier == taskIdentifier,
               let option = GGUFDownloadCatalog.option(id: optionID) else {
             return
         }
         progress = 1
         isVerifying = true
+        verifyingTransfer = taskIdentifier
         statusMessage = "Verifying \(option.title)…"
     }
 
@@ -864,7 +1027,18 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
                 (totalBytesWritten - bytesWritten) / Self.progressUpdateBytes ||
                 totalBytesWritten == totalBytesExpectedToWrite else { return }
         Task { @MainActor [weak self] in
-            self?.receiveProgress(optionID: downloadTask.taskDescription, bytes: totalBytesWritten)
+            self?.receiveProgress(optionID: downloadTask.taskDescription, taskIdentifier: downloadTask.taskIdentifier, bytes: totalBytesWritten)
+        }
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didResumeAtOffset fileOffset: Int64,
+        expectedTotalBytes: Int64
+    ) {
+        Task { @MainActor [weak self] in
+            self?.resumed(taskIdentifier: downloadTask.taskIdentifier, offset: fileOffset)
         }
     }
 
@@ -875,8 +1049,9 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     ) {
         let optionID = downloadTask.taskDescription
         guard let option = GGUFDownloadCatalog.option(id: optionID) else { return }
+        let transfer = downloadTask.taskIdentifier
         Task { @MainActor [weak self] in
-            self?.setVerifying(optionID: optionID)
+            self?.setVerifying(optionID: optionID, taskIdentifier: transfer)
         }
 
         do {
@@ -888,9 +1063,9 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             let stagingURL = directory.appendingPathComponent("\(option.fileName).download")
             try? FileManager.default.removeItem(at: stagingURL)
             try FileManager.default.moveItem(at: location, to: stagingURL)
-            guard try installCompletedDownload(from: stagingURL, in: directory, option: option) else { return }
+            guard try installCompletedDownload(from: stagingURL, in: directory, option: option, taskIdentifier: transfer) else { return }
             Task { @MainActor [weak self] in
-                self?.finish(option: option)
+                self?.finish(option: option, taskIdentifier: transfer)
             }
         } catch {
             Task { @MainActor [weak self] in
@@ -902,8 +1077,19 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     /// Validates a staged completion on the calling (delegate) queue, then publishes it on
     /// the runner's serial path; the call waits for the publish, so the background session's
     /// finish event follows it as it did for the whole install. Returns false, with the
-    /// staged file discarded, when this entry was deleted in this process since.
-    nonisolated func installCompletedDownload(from stagingURL: URL, in directory: URL, option: GGUFDownloadOption) throws -> Bool {
+    /// staged file discarded, when this entry was deleted since or its transfer was cancelled
+    /// (checked before hashing and again on the serial path).
+    nonisolated func installCompletedDownload(
+        from stagingURL: URL,
+        in directory: URL,
+        option: GGUFDownloadOption,
+        taskIdentifier: Int? = nil
+    ) throws -> Bool {
+        let cancelledTransfers = self.cancelledTransfers
+        if let taskIdentifier, cancelledTransfers.contains(taskIdentifier) {
+            try? FileManager.default.removeItem(at: stagingURL)
+            return false
+        }
         try Self.validateStaging(at: stagingURL, in: directory, option: option)
         let done = DispatchSemaphore(value: 0)
         let outcome = PublishOutcome()
@@ -912,12 +1098,16 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
         Task {
             do {
                 try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                    if deletedFileNames.contains(option.fileName) {
-                        try? FileManager.default.removeItem(at: stagingURL)
-                        outcome.published = false
-                        return
+                    // The last check and the rename hold the ledger's lock, so a Cancel cannot
+                    // fall between them.
+                    try cancelledTransfers.withLock { cancelled in
+                        if deletedFileNames.contains(option.fileName) || taskIdentifier.map(cancelled.contains) == true {
+                            try? FileManager.default.removeItem(at: stagingURL)
+                            outcome.published = false
+                            return
+                        }
+                        try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
                     }
-                    try Self.publishDownload(from: stagingURL, in: directory, option: option, defaults: defaults.value)
                 }
             } catch {
                 outcome.error = error
@@ -936,17 +1126,23 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     ) {
         guard let error, (error as NSError).code != NSURLErrorCancelled else { return }
         let option = GGUFDownloadCatalog.option(id: task.taskDescription)
-        if let option, !deletedFileNames.contains(option.fileName),
-           let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
-           let directory = try? modelsDirectory(create: true) {
-            try? resumeData.write(
-                to: GGUFModelStorage.resumeDataURL(for: option, in: directory),
-                options: .atomic
-            )
+        if let option, let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            saveResumeData(resumeData, for: option, taskIdentifier: task.taskIdentifier)
         }
         Task { @MainActor [weak self] in
             self?.fail(taskIdentifier: task.taskIdentifier, option: option, error: error)
         }
+    }
+
+    /// A failed transfer's resume data, unless the entry was deleted or the transfer
+    /// cancelled; under the ledger's lock, so it cannot land after a cancel's cleanup.
+    @discardableResult
+    nonisolated func saveResumeData(_ data: Data, for option: GGUFDownloadOption, taskIdentifier: Int) -> Bool {
+        cancelledTransfers.unlessCancelled(taskIdentifier) {
+            guard !deletedFileNames.contains(option.fileName),
+                  let directory = try? modelsDirectory(create: true) else { return false }
+            return (try? data.write(to: GGUFModelStorage.resumeDataURL(for: option, in: directory), options: .atomic)) != nil
+        } ?? false
     }
 
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
@@ -1045,6 +1241,14 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
     }
 }
 
+/// The bytes a delete gave back, for its row's "back for your songs" line.
+struct FreedSpace: Equatable {
+    let id = UUID()
+    let fileName: String
+    let title: String
+    let bytes: Int64
+}
+
 /// UserDefaults is thread-safe but not marked Sendable; the gate closures carry it in this.
 nonisolated private struct SendableDefaults: @unchecked Sendable {
     let value: UserDefaults
@@ -1054,6 +1258,30 @@ nonisolated private struct SendableDefaults: @unchecked Sendable {
 nonisolated private final class PublishOutcome: @unchecked Sendable {
     var published = true
     var error: Error?
+}
+
+/// Identifiers of transfers the writer cancelled, in this process. Cancel's cleanup and a
+/// failed transfer's resume-data write run under the same lock.
+nonisolated private final class CancelledTransfers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identifiers: Set<Int> = []
+
+    func contains(_ identifier: Int) -> Bool { lock.withLock { identifiers.contains(identifier) } }
+
+    func cancel(_ identifier: Int?, cleanup: () throws -> Void) throws {
+        try lock.withLock {
+            if let identifier { identifiers.insert(identifier) }
+            try cleanup()
+        }
+    }
+
+    func unlessCancelled<T>(_ identifier: Int, _ body: () -> T) -> T? {
+        lock.withLock { identifiers.contains(identifier) ? nil : body() }
+    }
+
+    func withLock<T>(_ body: (Set<Int>) throws -> T) rethrows -> T {
+        try lock.withLock { try body(identifiers) }
+    }
 }
 
 /// File names of entries deleted since their last download began, under
