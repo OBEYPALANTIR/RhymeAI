@@ -67,7 +67,9 @@ import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
@@ -2866,6 +2868,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var gemmaDownloadRevision by mutableStateOf(0)
         private set
+    /** Counts started runs, so a row's progress line restarts from each run's own bytes. */
+    var gemmaDownloadStarts by mutableStateOf(0)
+        private set
     var verifiedGemmaFileNames by mutableStateOf<Set<String>>(emptySet())
         private set
 
@@ -2912,6 +2917,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     internal fun startGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
         if (gemmaDownloadingModel != null || isDeletingLocalModelFile(model.fileName)) return
+        gemmaDownloadStarts++
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
         gemmaDownloadVerifying = false
@@ -2924,9 +2930,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val run = GemmaRun()
         gemmaDownloadRuns[model.fileName] = run
 
-        run.job = viewModelScope.launch(Dispatchers.IO) {
-            // Not cancellable: a run paused while it waits still waits, so the chain never breaks.
+        // Undispatched and not cancellable while it waits: even a run paused before it was
+        // scheduled waits for the one before it, so the chain never breaks.
+        run.job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) { previous?.join() }
+            yield() // off the caller's thread before any file work; a stopped run ends here
             val destFile = java.io.File(app.filesDir, model.fileName)
             val tempFile = com.rhymeai.app.ui.components.gemmaDownloadTempFile(app.cacheDir, model)
             try {
@@ -3046,7 +3054,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaDownloadRevision++
         val run = GemmaRun()
         gemmaDownloadRuns[model.fileName] = run
-        run.job = viewModelScope.launch {
+        run.job = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) { previous?.job?.join() }
             try {
                 withContext(Dispatchers.IO) { com.rhymeai.app.ui.components.deleteGemmaPartial(model, app.cacheDir) }

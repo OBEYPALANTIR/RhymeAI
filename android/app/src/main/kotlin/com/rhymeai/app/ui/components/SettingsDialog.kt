@@ -158,6 +158,7 @@ internal fun SettingsDialog(
     gemmaDownloadError: String? = null,
     gemmaLastDownloadAttempt: GemmaDownload? = null,
     gemmaDownloadRevision: Int = 0,
+    gemmaDownloadStarts: Int = 0,
     verifiedGemmaFileNames: Set<String> = emptySet(),
     onStartGemmaDownload: (GemmaDownload) -> Unit = {},
     onUseDownloadedGemma: suspend (GemmaDownload) -> Boolean = { false },
@@ -742,7 +743,8 @@ internal fun SettingsDialog(
                                             verifying = gemmaDownloadVerifying,
                                             pausedBytes = pausedBytes,
                                             deleting = gemmaDeletingModel?.fileName == model.fileName,
-                                            freedBytes = visibleFreed?.takeIf { it.fileName == model.fileName }?.bytes
+                                            freedBytes = visibleFreed?.takeIf { it.fileName == model.fileName }?.bytes,
+                                            downloadRun = gemmaDownloadStarts
                                         )
                                         ModelRow(
                                             state = state,

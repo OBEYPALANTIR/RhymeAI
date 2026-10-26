@@ -125,7 +125,9 @@ internal data class ModelRowState(
     val warning: String?,
     val progress: Float?,
     val a11yLabel: String,
-    val a11yValue: String
+    val a11yValue: String,
+    /** Which download run the line belongs to; a new run's line starts from its own bytes. */
+    val lineRun: Int = 0
 ) {
     val chip: ModelRowChip?
         get() = when (kind) {
@@ -177,7 +179,26 @@ internal fun catalogModelRowState(
     verifying: Boolean = false,
     pausedBytes: Long? = null,
     deleting: Boolean = false,
-    freedBytes: Long? = null
+    freedBytes: Long? = null,
+    downloadRun: Int = 0
+): ModelRowState = catalogModelRowCopy(
+    model, fileBytes, verified, selected, recommended, needsMoreMemory,
+    downloading, downloadProgress, verifying, pausedBytes, deleting, freedBytes
+).copy(lineRun = downloadRun)
+
+private fun catalogModelRowCopy(
+    model: GemmaDownload,
+    fileBytes: Long?,
+    verified: Boolean,
+    selected: Boolean,
+    recommended: Boolean,
+    needsMoreMemory: Boolean,
+    downloading: Boolean,
+    downloadProgress: Float?,
+    verifying: Boolean,
+    pausedBytes: Long?,
+    deleting: Boolean,
+    freedBytes: Long?
 ): ModelRowState {
     val title = model.label
     val catalogSize = formatFileSize(model.expectedBytes)
@@ -567,6 +588,11 @@ private fun rememberModelRowMotion(state: ModelRowState, animations: Boolean): M
             else lineAlpha.snapTo(0f)
             written.snapTo(0f)
         }
+    }
+    // A new run (Resume after a Cancel, say) restarts the stroke from its own bytes.
+    val firstRun = remember { state.lineRun }
+    LaunchedEffect(state.lineRun) {
+        if (state.lineRun != firstRun) written.snapTo(state.progress ?: 0f)
     }
     LaunchedEffect(state.progress, animations) {
         val target = state.progress ?: return@LaunchedEffect

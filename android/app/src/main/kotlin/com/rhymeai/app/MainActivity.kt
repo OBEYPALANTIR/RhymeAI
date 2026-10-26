@@ -306,6 +306,7 @@ class MainActivity : ComponentActivity() {
                             gemmaDownloadError = viewModel.gemmaDownloadError,
                             gemmaLastDownloadAttempt = viewModel.gemmaLastDownloadAttempt,
                             gemmaDownloadRevision = viewModel.gemmaDownloadRevision,
+                            gemmaDownloadStarts = viewModel.gemmaDownloadStarts,
                             verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },

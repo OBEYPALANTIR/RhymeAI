@@ -64,6 +64,11 @@ internal fun recommendedGemmaModel(totalRamBytes: Long): GemmaDownload {
 internal fun gemmaModelNeedsMoreMemory(model: GemmaDownload, totalRamBytes: Long): Boolean =
     model.fileName == GEMMA_DOWNLOADS[1].fileName && totalRamBytes < RAM_THRESHOLD_E4B_BYTES
 
+/** Lets a test hold a stopping run before its last checkpoint (null in the app). */
+internal object GemmaDownloadTestHooks {
+    @Volatile var beforeFinalCheckpoint: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 internal data class GemmaDownload(
     val label: String,
     /** The model's character in the writer's words, first in its row's metadata. */
@@ -270,7 +275,10 @@ internal suspend fun downloadGemmaToTemp(
         reporter.checkpoint(force = true)
     } catch (error: Exception) {
         // A pause cancels this scope; the last checkpoint still records every byte written.
-        withContext(NonCancellable) { reporter.checkpoint(force = true) }
+        withContext(NonCancellable) {
+            GemmaDownloadTestHooks.beforeFinalCheckpoint?.await()
+            reporter.checkpoint(force = true)
+        }
         throw error
     }
 

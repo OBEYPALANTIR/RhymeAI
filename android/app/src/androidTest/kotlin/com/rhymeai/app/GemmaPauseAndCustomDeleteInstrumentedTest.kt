@@ -8,12 +8,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.GemmaDownload
+import com.rhymeai.app.ui.components.GemmaDownloadTestHooks
 import com.rhymeai.app.ui.components.copyLocalModelAtomically
 import com.rhymeai.app.ui.components.gemmaDownloadSegments
 import com.rhymeai.app.ui.components.gemmaDownloadStateFile
 import com.rhymeai.app.ui.components.gemmaDownloadTempFile
 import com.rhymeai.app.ui.components.gemmaPartialBytes
 import com.rhymeai.app.ui.components.saveDownloadState
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -103,20 +105,26 @@ class GemmaPauseAndCustomDeleteInstrumentedTest {
         // An older version under the catalog name, written after the run reclaimed stale files at its start.
         installed.writeBytes(ByteArray(8) { 7 })
 
-        // Pause, Resume and Pause again before the first run has stopped, then Cancel: the runs stay
-        // chained, so the cancel's cleanup comes after every run's last checkpoint.
-        onMain {
-            viewModel.pauseGemmaDownload()
-            viewModel.startGemmaDownload(model)
-            viewModel.pauseGemmaDownload()
-            viewModel.cancelGemmaDownload(model)
+        // Pause, Resume and Pause again in one go while the first run is held before its last
+        // checkpoint, then Cancel: the runs stay chained, so the cleanup waits for that checkpoint.
+        val checkpointGate = CompletableDeferred<Unit>()
+        GemmaDownloadTestHooks.beforeFinalCheckpoint = checkpointGate
+        try {
+            onMain {
+                viewModel.pauseGemmaDownload()
+                viewModel.startGemmaDownload(model)
+                viewModel.pauseGemmaDownload()
+                viewModel.cancelGemmaDownload(model)
+            }
+            assertNull(viewModel.gemmaDownloadingModel)
+            SystemClock.sleep(1_000)
+            instrumentation.waitForIdleSync()
+            assertTrue("the cleanup must not run before the stopping run's checkpoint", temp.exists())
+        } finally {
+            GemmaDownloadTestHooks.beforeFinalCheckpoint = null
+            checkpointGate.complete(Unit)
         }
-        assertNull(viewModel.gemmaDownloadingModel)
         waitUntil("the cancel to remove the partial") { !temp.exists() && !gemmaDownloadStateFile(temp).exists() }
-        SystemClock.sleep(1_500)
-        instrumentation.waitForIdleSync()
-        assertFalse("no stopped run writes its state back after the cleanup", gemmaDownloadStateFile(temp).exists())
-        assertFalse(temp.exists())
         assertNull(gemmaPartialBytes(model, app.cacheDir))
         assertNull(viewModel.gemmaDownloadError)
         assertArrayEquals("the installed file is never touched", ByteArray(8) { 7 }, installed.readBytes())
