@@ -1,7 +1,6 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -37,7 +36,9 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -423,13 +424,23 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
         // Two metadata lines are always reserved, so the title holds still while the copy changes;
         // the download wave sits in the second, a φ step (8dp) under the one-line progress copy.
-        val metadataTransition = updateTransition(state, label = "modelRowMetadata")
+        // Every copy the cross-fade still shows, the leaving ones included, however many changes
+        // overlap; registered while each is composed.
+        val onScreen = remember { mutableStateListOf<ModelRowState>() }
         val metadata = @Composable {
-            metadataTransition.AnimatedContent(
+            AnimatedContent(
+                targetState = state,
                 contentKey = { it.kind },
                 transitionSpec = { modelRowSwap(motion.animations) },
-                contentAlignment = Alignment.TopStart
-            ) { shown -> ModelRowMetadata(shown, colors.onSurfaceVariant, warningColor) }
+                contentAlignment = Alignment.TopStart,
+                label = "modelRowMetadata"
+            ) { shown ->
+                DisposableEffect(shown) {
+                    onScreen += shown
+                    onDispose { onScreen -= shown }
+                }
+                ModelRowMetadata(shown, colors.onSurfaceVariant, warningColor)
+            }
         }
         val wave = @Composable {
             ModelRowWave(
@@ -451,16 +462,17 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
             fun measure(text: String, w: Int) = measurer.measure(text, copyStyle, constraints = Constraints(maxWidth = w.coerceAtLeast(1))).size.height
             return (shown.metadata?.let { measure(it, width) } ?: 0) + (shown.warning?.let { measure(it, width - warningInset) } ?: 0)
         }
-        // The copy still fading out while the metadata cross-fades, if it is another state's.
-        val outgoing = metadataTransition.currentState.takeIf { it.kind != state.kind }
         Layout(
             contents = listOf(metadata, wave),
-            measurePolicy = remember(state, outgoing, reserved, copyStyle, measurer) {
+            measurePolicy = remember(state, reserved, copyStyle, measurer) {
                 MetadataWavePolicy(
                     hasLine = state.hasLine,
                     reserved = reserved,
                     copyHeight = { width -> copyHeight(state, width) },
-                    outgoingHeight = outgoing?.let { leaving -> { width -> copyHeight(leaving, width) } }
+                    // Read at measure time, so a copy registered this frame is already counted.
+                    outgoingHeight = { width ->
+                        onScreen.filter { it.kind != state.kind }.maxOfOrNull { copyHeight(it, width) } ?: 0
+                    }
                 )
             }
         )
@@ -495,7 +507,7 @@ private class MetadataWavePolicy(
     private val hasLine: Boolean,
     private val reserved: Int,
     private val copyHeight: (width: Int) -> Int,
-    private val outgoingHeight: ((width: Int) -> Int)?
+    private val outgoingHeight: (width: Int) -> Int
 ) : MultiContentMeasurePolicy {
     private fun Density.waveTop(copyHeight: Int) = copyHeight + DesignTokens.ModelRow.waveGap.roundToPx()
 
@@ -509,7 +521,7 @@ private class MetadataWavePolicy(
         val copyAbove = if (hasLine) probeHeight else reserved / 2
         val waveTop = waveTop(copyAbove)
         val clear = (hasLine || probeHeight <= copyAbove) &&
-            (outgoingHeight == null || outgoingHeight.invoke(constraints.maxWidth) <= copyAbove)
+            outgoingHeight(constraints.maxWidth) <= copyAbove
         val height = maxOf(reserved, metadataPlaceable.height, if (hasLine) waveTop + wavePlaceable.height else 0)
         return layout(constraints.maxWidth, height) {
             metadataPlaceable.place(0, 0)

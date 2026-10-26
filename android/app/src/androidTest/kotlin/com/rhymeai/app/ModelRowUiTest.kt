@@ -79,13 +79,14 @@ class ModelRowUiTest {
     private var shown by mutableStateOf(everyState.first())
     private var animations by mutableStateOf(true)
     private var fontScale by mutableStateOf(1f)
+    private var rowWidth by mutableStateOf(370.dp)
 
     private fun showRow() {
         compose.setContent {
             RhymeAITheme {
                 val density = LocalDensity.current
                 CompositionLocalProvider(LocalAnimationsEnabled provides animations, LocalDensity provides Density(density.density, fontScale)) {
-                    Box(Modifier.width(370.dp)) {
+                    Box(Modifier.width(rowWidth)) {
                         ModelRow(
                             state = shown,
                             chipEnabled = true,
@@ -148,6 +149,40 @@ class ModelRowUiTest {
                 compose.onNodeWithText(copy, useUnmergedTree = true).getBoundsInRoot().bottom
             assertEquals("${next.kind}: gap under the copy", 8f, gap.value, 0.5f)
         }
+    }
+
+    @Test fun changesThatOverlapNeverPutTheWaveThroughCopyStillLeaving() {
+        // Resume at font scale 1.4 in a row where the Paused copy wraps and the progress copy does
+        // not: Paused → Starting → Downloading on consecutive frames, before the first cross-fade
+        // has finished, so three copies are on screen at once and the leaving one is the tallest.
+        fontScale = 1.4f
+        val paused = e2b(pausedBytes = onDisk * 43 / 100)
+        val starting = e2b(downloading = true, progress = 0f)
+        val writing = e2b(downloading = true, progress = 0.43f)
+        shown = paused
+        showRow()
+        fun copyHeight(state: ModelRowState): Float {
+            compose.runOnIdle { shown = state }
+            compose.waitForIdle()
+            return compose.onNodeWithText(state.metadata!!, useUnmergedTree = true).getBoundsInRoot().let { (it.bottom - it.top).value }
+        }
+        val width = (300..420 step 5).map { it.dp }.firstOrNull { width ->
+            compose.runOnIdle { rowWidth = width }
+            copyHeight(paused) > maxOf(copyHeight(starting), copyHeight(writing))
+        }
+        assertTrue("no row width wraps the Paused copy alone", width != null)
+        compose.runOnIdle { shown = paused }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { shown = starting }
+        compose.mainClock.advanceTimeByFrame()
+        assertWaveClearOf(paused, starting)
+        compose.runOnUiThread { shown = writing }
+        repeat(30) {
+            compose.mainClock.advanceTimeByFrame()
+            assertWaveClearOf(paused, starting, writing)
+        }
+        compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).assertExists()
     }
 
     @Test fun theDownloadWaveSitsAPhiStepUnderTheProgressCopyClearOfTheBottomEdge() {

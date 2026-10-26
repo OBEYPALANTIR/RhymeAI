@@ -70,6 +70,13 @@ class GemmaPauseAndCustomDeleteInstrumentedTest {
     }
 
     @After fun tearDown() {
+        // Stop any run this test left going and let it finish before the fixtures go, so a late
+        // checkpoint cannot recreate them.
+        if (::viewModel.isInitialized && ::model.isInitialized) {
+            onMain { viewModel.cancelGemmaDownload(model) }
+            val temp = gemmaDownloadTempFile(app.cacheDir, model)
+            runCatching { waitUntil("the run to stop") { !temp.exists() && !gemmaDownloadStateFile(temp).exists() } }
+        }
         runCatching { stall.close() }
         synchronized(held) { held.forEach { runCatching { it.close() } } }
         val temp = gemmaDownloadTempFile(app.cacheDir, model)
