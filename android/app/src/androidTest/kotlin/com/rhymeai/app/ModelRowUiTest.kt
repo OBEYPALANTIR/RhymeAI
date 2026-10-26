@@ -14,8 +14,11 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.MODEL_ROW_WAVE_TAG
@@ -73,11 +76,13 @@ class ModelRowUiTest {
 
     private var shown by mutableStateOf(everyState.first())
     private var animations by mutableStateOf(true)
+    private var fontScale by mutableStateOf(1f)
 
     private fun showRow() {
         compose.setContent {
             RhymeAITheme {
-                CompositionLocalProvider(LocalAnimationsEnabled provides animations) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalAnimationsEnabled provides animations, LocalDensity provides Density(density.density, fontScale)) {
                     Box(Modifier.width(370.dp)) {
                         ModelRow(
                             state = shown,
@@ -118,6 +123,30 @@ class ModelRowUiTest {
         }
         val first = tops.first().second
         tops.forEach { (kind, top) -> assertEquals("title moved in $kind", first.value, top.value, 0.5f) }
+    }
+
+    @Test fun atALargeTextSizeTheWaveFollowsWrappedProgressCopyOnEveryFrame() {
+        // Font scale 1.4 keeps the split; "Paused · 1.47 of 3.43 GB" wraps in the narrower text column.
+        fontScale = 1.4f
+        shown = e2b()
+        showRow()
+        compose.mainClock.autoAdvance = false
+        for ((next, copy) in listOf(
+            e2b(downloading = true, progress = 0.43f) to "1.47 of 3.43 GB · 43%",
+            e2b(pausedBytes = onDisk * 43 / 100) to "Paused · 1.47 of 3.43 GB",
+            e2b(downloading = true, progress = 1f, verifying = true) to "Checking the file…"
+        )) {
+            compose.runOnUiThread { shown = next }
+            repeat(20) {
+                compose.mainClock.advanceTimeByFrame()
+                val text = compose.onAllNodesWithText(copy, useUnmergedTree = true).fetchSemanticsNodes().maxOf { it.boundsInRoot.bottom }
+                val waveTop = compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+                assertTrue("${next.kind}: wave over its copy (${waveTop - text}px)", waveTop >= text)
+            }
+            val gap = compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).getBoundsInRoot().top -
+                compose.onNodeWithText(copy, useUnmergedTree = true).getBoundsInRoot().bottom
+            assertEquals("${next.kind}: gap under the copy", 8f, gap.value, 0.5f)
+        }
     }
 
     @Test fun theDownloadWaveSitsAPhiStepUnderTheProgressCopyClearOfTheBottomEdge() {

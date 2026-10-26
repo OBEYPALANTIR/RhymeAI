@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -80,6 +81,8 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -419,37 +422,95 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
         // Two metadata lines are always reserved, so the title holds still while the copy changes;
         // the download wave sits in the second, a φ step (8dp) under the one-line progress copy.
-        val lineHeight = with(LocalDensity.current) { MODEL_ROW_METADATA_LINE_HEIGHT.toDp() }
-        Box(Modifier.heightIn(min = lineHeight * 2)) {
+        val metadata = @Composable {
             AnimatedContent(
                 targetState = state,
                 contentKey = { it.kind },
                 transitionSpec = { modelRowSwap(motion.animations) },
                 contentAlignment = Alignment.TopStart,
                 label = "modelRowMetadata"
-            ) { shown ->
-            Column {
-                shown.metadata?.let {
-                    Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = colors.onSurfaceVariant)
-                }
-                shown.warning?.let {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.WarningAmber, null, tint = warningColor, modifier = Modifier.size(12.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = warningColor)
-                    }
-                }
-            }
-            }
+            ) { shown -> ModelRowMetadata(shown, colors.onSurfaceVariant, warningColor) }
+        }
+        val wave = @Composable {
             ModelRowWave(
                 motion = motion,
                 ink = colors.onSurface,
                 trackInk = placeholderColorFor(LocalAppAppearance.current),
-                // The progress copy is always one line, so the wave's place is fixed: no measuring,
-                // nothing that could resize the row on the frame a state changes.
-                modifier = Modifier.padding(top = lineHeight + DesignTokens.ModelRow.waveGap)
+                modifier = Modifier
             )
         }
+        // The copy the row is moving to, measured as text so the wave sits under it even on the
+        // frame the state changes (the cross-fading copy above holds both states' copy).
+        val measurer = rememberTextMeasurer()
+        val copy = state.metadata.orEmpty()
+        // Resolved the way Text resolves the copy's style, so both measure the same.
+        val copyStyle = LocalTextStyle.current.merge(TextStyle(fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT))
+        val reserved = with(LocalDensity.current) { MODEL_ROW_METADATA_LINE_HEIGHT.roundToPx() * 2 }
+        Layout(
+            contents = listOf(metadata, wave),
+            measurePolicy = remember(state.hasLine, reserved, copy, copyStyle, measurer) {
+                MetadataWavePolicy(state.hasLine, reserved) { width ->
+                    measurer.measure(copy, copyStyle, constraints = Constraints(maxWidth = width)).size.height
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ModelRowMetadata(shown: ModelRowState, ink: Color, warningColor: Color) {
+    Column {
+        shown.metadata?.let {
+            Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = ink)
+        }
+        shown.warning?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.WarningAmber, null, tint = warningColor, modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = warningColor)
+            }
+        }
+    }
+}
+
+/**
+ * Two metadata lines are always reserved, so the title holds still while the copy changes.
+ * The wave goes a φ step (8dp) under the progress copy: at default size that copy is one
+ * line and the wave fills the second reserved line; when large text wraps it, the wave
+ * follows it down, measured in the same pass so no frame overlaps or resizes.
+ */
+private class MetadataWavePolicy(
+    private val hasLine: Boolean,
+    private val reserved: Int,
+    private val copyHeight: (width: Int) -> Int
+) : MultiContentMeasurePolicy {
+    private fun Density.waveTop(copyHeight: Int) = copyHeight + DesignTokens.ModelRow.waveGap.roundToPx()
+
+    override fun MeasureScope.measure(measurables: List<List<Measurable>>, constraints: Constraints): MeasureResult {
+        val (metadata, wave) = measurables
+        val loose = constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity)
+        val metadataPlaceable = metadata.first().measure(loose)
+        val probeHeight = copyHeight(constraints.maxWidth)
+        val wavePlaceable = wave.first().measure(Constraints.fixedWidth(constraints.maxWidth))
+        // With no line the wave rests, invisible, inside the reserved lines.
+        val waveTop = waveTop(if (hasLine) probeHeight else reserved / 2)
+        val height = maxOf(reserved, metadataPlaceable.height, if (hasLine) waveTop + wavePlaceable.height else 0)
+        return layout(constraints.maxWidth, height) {
+            metadataPlaceable.place(0, 0)
+            wavePlaceable.place(0, waveTop)
+        }
+    }
+
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<List<IntrinsicMeasurable>>, width: Int): Int =
+        intrinsicHeight(measurables, width)
+
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<List<IntrinsicMeasurable>>, width: Int): Int =
+        intrinsicHeight(measurables, width)
+
+    private fun IntrinsicMeasureScope.intrinsicHeight(measurables: List<List<IntrinsicMeasurable>>, width: Int): Int {
+        val (metadata, wave) = measurables
+        val withWave = if (hasLine) waveTop(copyHeight(width)) + wave.first().minIntrinsicHeight(width) else 0
+        return maxOf(reserved, metadata.first().minIntrinsicHeight(width), withWave)
     }
 }
 
