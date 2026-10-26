@@ -882,7 +882,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         resumed(taskIdentifier: taskIdentifier, offset: offset)
     }
 
-    func setVerifyingForTest(_ option: GGUFDownloadOption, taskIdentifier: Int) {
+    func setVerifyingForTest(_ option: GGUFDownloadOption, taskIdentifier: Int?) {
         setVerifying(optionID: option.id, taskIdentifier: taskIdentifier)
     }
 
@@ -953,13 +953,14 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         progressSampleBytes = receivedBytes
     }
 
-    /// Installs the finished download; returns whether it was also selected. A completion
-    /// from an older transfer while another one runs only refreshes the rows, leaving the
-    /// running download alone. With nothing running (a Pause accepted just as the transfer
-    /// finished) the completion still ends the check, so the manager is never left verifying.
+    /// Installs the finished download; returns whether it was also selected. A transfer's
+    /// completion ends only its own operation: the running transfer, or the check it opened
+    /// even if a Pause cleared the running task since. Otherwise (another download, check or
+    /// import is under way, or nothing is) it only refreshes the rows, so the published file
+    /// shows as installed and no other operation's state is touched.
     @discardableResult
     private func finish(option: GGUFDownloadOption, taskIdentifier: Int? = nil) -> Bool {
-        if let taskIdentifier, let running = activeTask, running.taskIdentifier != taskIdentifier {
+        if let taskIdentifier, activeTask?.taskIdentifier != taskIdentifier, verifyingTransfer != taskIdentifier {
             refreshInstalledModels()
             return false
         }

@@ -225,6 +225,8 @@ struct ModelRowView: View {
     let columnAction: () -> Void
 
     private typealias Tokens = RhymeAITokens.ModelRow
+    @State private var strikeDrawn: CGFloat = 0
+    @State private var strikeOpacity: Double = 0
 
     var body: some View {
         let palette = appearance.palette
@@ -266,10 +268,9 @@ struct ModelRowView: View {
             Text(content.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(palette.primaryInk)
-                .overlay(alignment: .topLeading) {
-                    if content.strike { strike }
-                }
-                .rhymeAnimation(RhymeAITokens.Motion.dismiss, value: content.strike)
+                .textRenderer(ModelRowStrikeRenderer(drawn: strikeDrawn, opacity: strikeOpacity, ink: palette.secondaryInk))
+                .onAppear { if content.strike { beginStrike() } }
+                .onChange(of: content.strike) { _, struck in struck ? beginStrike() : endStrike() }
             metadata
             if stacked, content.chip != nil {
                 chipCell.padding(.top, RhymeAITokens.Spacing.xxs)
@@ -345,17 +346,25 @@ struct ModelRowView: View {
         .accessibilityHidden(true)
     }
 
-    /// The strike, centred on the title's first line and as wide as it: a one-line copy of
-    /// the title, hidden, measures it.
-    private var strike: some View {
-        Text(content.title)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .hidden()
-            .overlay {
-                ModelRowStrike(ink: appearance.palette.secondaryInk)
-            }
-            .accessibilityHidden(true)
+    /// The strike draws tip first on the state tier, or whole at once under Reduce Motion.
+    private func beginStrike() {
+        var reset = Transaction(animation: nil)
+        reset.disablesAnimations = true
+        withTransaction(reset) {
+            strikeOpacity = 1
+            strikeDrawn = ModelRowMotion.strikeStart(reduceMotion: reduceMotion)
+        }
+        withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) { strikeDrawn = 1 }
+    }
+
+    /// It leaves on the dismiss tier, or in one frame under Reduce Motion.
+    private func endStrike() {
+        guard !reduceMotion else {
+            strikeOpacity = 0
+            strikeDrawn = 0
+            return
+        }
+        withAnimation(RhymeAITokens.Motion.dismiss) { strikeOpacity = 0 } completion: { strikeDrawn = 0 }
     }
 
     static let waveStroke = StrokeStyle(lineWidth: SuggestionInkLineMotion.strokeWidth, lineCap: .round, lineJoin: .round)
@@ -519,21 +528,34 @@ private struct ModelRowGhostLine: View {
     }
 }
 
-/// The delete strike, drawn tip first on the state tier; whole at once under Reduce Motion.
-private struct ModelRowStrike: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// Draws the title, then the delete strike across its first line as laid out, so a wrapped
+/// title is struck only as far as its first line runs. Text drawn this way is not read by
+/// assistive technology beyond the title itself.
+private struct ModelRowStrikeRenderer: TextRenderer, Animatable {
+    var drawn: CGFloat
+    var opacity: Double
     let ink: Color
-    @State private var drawn: CGFloat?
 
-    var body: some View {
-        ModelRowWave(progress: drawn ?? ModelRowMotion.strikeStart(reduceMotion: reduceMotion))
-            .stroke(ink, style: ModelRowView.waveStroke)
-            .frame(height: SuggestionInkLineMotion.waveHeight)
-            .onAppear {
-                drawn = ModelRowMotion.strikeStart(reduceMotion: reduceMotion)
-                withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) { drawn = 1 }
-            }
-            .transition(.opacity)
+    var animatableData: AnimatablePair<CGFloat, Double> {
+        get { AnimatablePair(drawn, opacity) }
+        set {
+            drawn = newValue.first
+            opacity = newValue.second
+        }
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        for line in layout { context.draw(line) }
+        guard drawn > 0, opacity > 0, let first = layout.first else { return }
+        let bounds = first.typographicBounds.rect
+        let height = SuggestionInkLineMotion.waveHeight
+        let rect = CGRect(x: bounds.minX, y: bounds.midY - height / 2, width: bounds.width, height: height)
+        context.opacity = opacity
+        context.stroke(
+            ScribbleStroke(widthShare: 1, progress: drawn).path(in: rect),
+            with: .color(ink),
+            style: ModelRowView.waveStroke
+        )
     }
 }
 

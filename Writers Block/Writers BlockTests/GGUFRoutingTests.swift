@@ -1562,6 +1562,39 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.activeDownloadID == nil)
     }
 
+    /// The other order: the Pause clears the running task before the check registers, so the
+    /// check is refused, and a newer operation (here another entry's check) starts. The old
+    /// transfer's completion or failure must leave that operation alone.
+    @Test(arguments: [true, false])
+    func aPausedTransfersLateCompletionLeavesANewerOperationAlone(completes: Bool) async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let manager = try await sandbox.restoredManager()
+        manager.beginTransferForTest(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.pauseDownload()
+        for _ in 0..<250 where manager.isPausing { try await Task.sleep(for: .milliseconds(20)) }
+        try #require(!manager.isPausing)
+        manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
+        #expect(!manager.isVerifying)
+
+        manager.beginDownloadForTest(e4b)
+        manager.setVerifyingForTest(e4b, taskIdentifier: nil)
+        try #require(manager.isVerifying)
+
+        if completes {
+            #expect(!manager.finishForTest(e2b, taskIdentifier: transfer))
+        } else {
+            manager.failForTest(e2b, taskIdentifier: transfer, error: CocoaError(.fileWriteUnknown))
+            #expect(manager.errorMessage == nil)
+        }
+        #expect(manager.isVerifying)
+        #expect(manager.activeDownloadID == e4b.id)
+    }
+
     /// When a completion was already published, a Cancel that follows keeps the installed
     /// model and says so; it never removes an install.
     @Test func aCompletionPublishedBeforeCancelKeepsTheModel() async throws {
