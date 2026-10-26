@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
 import com.rhymeai.app.ui.components.MODEL_ROW_WAVE_TAG
 import com.rhymeai.app.ui.components.ModelRow
+import com.rhymeai.app.ui.components.ModelRowState
 import com.rhymeai.app.ui.components.ModelRowChipDryness
 import com.rhymeai.app.ui.components.catalogModelRowState
 import com.rhymeai.app.ui.components.customModelRowState
@@ -136,12 +138,11 @@ class ModelRowUiTest {
             e2b(pausedBytes = onDisk * 43 / 100) to "Paused · 1.47 of 3.43 GB",
             e2b(downloading = true, progress = 1f, verifying = true) to "Checking the file…"
         )) {
+            val before = shown
             compose.runOnUiThread { shown = next }
             repeat(20) {
                 compose.mainClock.advanceTimeByFrame()
-                val text = compose.onAllNodesWithText(copy, useUnmergedTree = true).fetchSemanticsNodes().maxOf { it.boundsInRoot.bottom }
-                val waveTop = compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
-                assertTrue("${next.kind}: wave over its copy (${waveTop - text}px)", waveTop >= text)
+                assertWaveClearOf(before, next)
             }
             val gap = compose.onNodeWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).getBoundsInRoot().top -
                 compose.onNodeWithText(copy, useUnmergedTree = true).getBoundsInRoot().bottom
@@ -180,13 +181,27 @@ class ModelRowUiTest {
         val title = { compose.onNodeWithText(e2b.label, useUnmergedTree = true).getBoundsInRoot().top.value }
         val top = title()
         compose.mainClock.autoAdvance = false
-        for (next in listOf(e2b(downloading = true, progress = 0f), e2b(downloading = true, progress = 0.43f), e2b())) {
+        val steps = listOf(
+            e2b(downloading = true, progress = 0f),
+            e2b(downloading = true, progress = 0.43f),
+            e2b(downloading = true, progress = 1f, verifying = true),
+            e2b(fileBytes = onDisk, verified = true),
+            e2b(fileBytes = onDisk, verified = true, selected = true),
+            e2b(fileBytes = onDisk, verified = true, deleting = true),
+            e2b(),
+            e2b(downloading = true, progress = 0.2f),
+            e2b()
+        )
+        var previous = shown
+        for (next in steps) {
             compose.runOnUiThread { shown = next }
             repeat(20) {
                 compose.mainClock.advanceTimeByFrame()
                 compose.onNodeWithTag("row").assertHeightIsEqualTo(89.dp)
                 assertEquals("title moved going to ${next.kind}", top, title(), 0.5f)
+                assertWaveClearOf(previous, next)
             }
+            previous = next
         }
     }
 
@@ -259,6 +274,17 @@ class ModelRowUiTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "43 percent, 1.47 of 3.43 GB"))
         compose.onNodeWithTag("cancel")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Cancel download of RhymeAI Gemma 4 E2B")))
+    }
+
+    /** On this frame the wave, if it is laid out, sits below every line of either state's copy still on screen. */
+    private fun assertWaveClearOf(vararg states: ModelRowState) {
+        val wave = compose.onAllNodesWithTag(MODEL_ROW_WAVE_TAG, useUnmergedTree = true).fetchSemanticsNodes()
+            .singleOrNull()?.takeIf { it.layoutInfo.isPlaced } ?: return
+        val copies = states.flatMap { listOfNotNull(it.metadata, it.warning) }.distinct()
+        val lowest = copies.flatMap { copy -> compose.onAllNodesWithText(copy, useUnmergedTree = true).fetchSemanticsNodes() }
+            .filter { it.layoutInfo.isPlaced }
+            .maxOfOrNull { it.boundsInRoot.bottom } ?: return
+        assertTrue("wave crosses copy (${wave.boundsInRoot.top - lowest}px) in ${states.map { it.kind }}", wave.boundsInRoot.top >= lowest)
     }
 
     private fun dryness(): Float =

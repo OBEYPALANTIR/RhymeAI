@@ -1,6 +1,7 @@
 package com.rhymeai.app.ui.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -422,13 +423,12 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
         // Two metadata lines are always reserved, so the title holds still while the copy changes;
         // the download wave sits in the second, a φ step (8dp) under the one-line progress copy.
+        val metadataTransition = updateTransition(state, label = "modelRowMetadata")
         val metadata = @Composable {
-            AnimatedContent(
-                targetState = state,
+            metadataTransition.AnimatedContent(
                 contentKey = { it.kind },
                 transitionSpec = { modelRowSwap(motion.animations) },
-                contentAlignment = Alignment.TopStart,
-                label = "modelRowMetadata"
+                contentAlignment = Alignment.TopStart
             ) { shown -> ModelRowMetadata(shown, colors.onSurfaceVariant, warningColor) }
         }
         val wave = @Composable {
@@ -442,16 +442,26 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
         // The copy the row is moving to, measured as text so the wave sits under it even on the
         // frame the state changes (the cross-fading copy above holds both states' copy).
         val measurer = rememberTextMeasurer()
-        val copy = state.metadata.orEmpty()
         // Resolved the way Text resolves the copy's style, so both measure the same.
         val copyStyle = LocalTextStyle.current.merge(TextStyle(fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT))
-        val reserved = with(LocalDensity.current) { MODEL_ROW_METADATA_LINE_HEIGHT.roundToPx() * 2 }
+        val density = LocalDensity.current
+        val reserved = with(density) { MODEL_ROW_METADATA_LINE_HEIGHT.roundToPx() * 2 }
+        val warningInset = with(density) { (12.dp + 3.dp).roundToPx() }
+        fun copyHeight(shown: ModelRowState, width: Int): Int {
+            fun measure(text: String, w: Int) = measurer.measure(text, copyStyle, constraints = Constraints(maxWidth = w.coerceAtLeast(1))).size.height
+            return (shown.metadata?.let { measure(it, width) } ?: 0) + (shown.warning?.let { measure(it, width - warningInset) } ?: 0)
+        }
+        // The copy still fading out while the metadata cross-fades, if it is another state's.
+        val outgoing = metadataTransition.currentState.takeIf { it.kind != state.kind }
         Layout(
             contents = listOf(metadata, wave),
-            measurePolicy = remember(state.hasLine, reserved, copy, copyStyle, measurer) {
-                MetadataWavePolicy(state.hasLine, reserved) { width ->
-                    measurer.measure(copy, copyStyle, constraints = Constraints(maxWidth = width)).size.height
-                }
+            measurePolicy = remember(state, outgoing, reserved, copyStyle, measurer) {
+                MetadataWavePolicy(
+                    hasLine = state.hasLine,
+                    reserved = reserved,
+                    copyHeight = { width -> copyHeight(state, width) },
+                    outgoingHeight = outgoing?.let { leaving -> { width -> copyHeight(leaving, width) } }
+                )
             }
         )
     }
@@ -477,12 +487,15 @@ private fun ModelRowMetadata(shown: ModelRowState, ink: Color, warningColor: Col
  * Two metadata lines are always reserved, so the title holds still while the copy changes.
  * The wave goes a φ step (8dp) under the progress copy: at default size that copy is one
  * line and the wave fills the second reserved line; when large text wraps it, the wave
- * follows it down, measured in the same pass so no frame overlaps or resizes.
+ * follows it down, measured in the same pass so no frame resizes the row. The wave is left
+ * out of any frame where it would cross copy: while taller outgoing copy is still fading
+ * (it arrives once the cross-fade ends), and while it fades out under taller incoming copy.
  */
 private class MetadataWavePolicy(
     private val hasLine: Boolean,
     private val reserved: Int,
-    private val copyHeight: (width: Int) -> Int
+    private val copyHeight: (width: Int) -> Int,
+    private val outgoingHeight: ((width: Int) -> Int)?
 ) : MultiContentMeasurePolicy {
     private fun Density.waveTop(copyHeight: Int) = copyHeight + DesignTokens.ModelRow.waveGap.roundToPx()
 
@@ -492,12 +505,15 @@ private class MetadataWavePolicy(
         val metadataPlaceable = metadata.first().measure(loose)
         val probeHeight = copyHeight(constraints.maxWidth)
         val wavePlaceable = wave.first().measure(Constraints.fixedWidth(constraints.maxWidth))
-        // With no line the wave rests, invisible, inside the reserved lines.
-        val waveTop = waveTop(if (hasLine) probeHeight else reserved / 2)
+        // With no line the wave rests (fading, then invisible) one line down, where it last was.
+        val copyAbove = if (hasLine) probeHeight else reserved / 2
+        val waveTop = waveTop(copyAbove)
+        val clear = (hasLine || probeHeight <= copyAbove) &&
+            (outgoingHeight == null || outgoingHeight.invoke(constraints.maxWidth) <= copyAbove)
         val height = maxOf(reserved, metadataPlaceable.height, if (hasLine) waveTop + wavePlaceable.height else 0)
         return layout(constraints.maxWidth, height) {
             metadataPlaceable.place(0, 0)
-            wavePlaceable.place(0, waveTop)
+            if (clear) wavePlaceable.place(0, waveTop)
         }
     }
 
