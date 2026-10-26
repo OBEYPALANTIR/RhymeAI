@@ -632,7 +632,8 @@ internal fun SettingsDialog(
                                             ),
                                             chipEnabled = rowsIdle && gemmaDownloadingModel == null,
                                             columnEnabled = rowsIdle && !localModelGenerating,
-                                            onChip = { if (!isSelected) onSelectSavedLocalModel(model.id) },
+                                            // Selected and loaded: nothing to do. Selected but unloaded or failed: load it again.
+                                            onChip = { if (!isSelected || !localModelLoaded) onSelectSavedLocalModel(model.id) },
                                             onColumn = {
                                                 deleteRequest = ModelDeleteRequest(model.displayName, bytes, custom = true, inUse = isSelected) {
                                                     onDeleteCustomLocalModel(model.id)
@@ -763,7 +764,9 @@ internal fun SettingsDialog(
                                                     ModelRowChip.Download, ModelRowChip.Resume, ModelRowChip.Update -> onStartGemmaDownload(model)
                                                     ModelRowChip.Pause -> onPauseGemmaDownload()
                                                     ModelRowChip.Use -> useDownloadedModel(model)
-                                                    ModelRowChip.Selected, null -> Unit
+                                                    // Reloads the selection after Unload Model or a failed load.
+                                                    ModelRowChip.Selected -> if (!localModelLoaded) onSelectSavedLocalModel(model.fileName)
+                                                    null -> Unit
                                                 }
                                             },
                                             onColumn = {

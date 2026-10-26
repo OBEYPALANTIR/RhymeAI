@@ -657,7 +657,8 @@ private fun Modifier.progressWave(guide: Color, ink: Color, ghostInk: Color, mot
     val start = DesignTokens.Rhythm.standard.toPx()
     val width = size.width - start - DesignTokens.Rhythm.tight.toPx()
     val waveHeight = SuggestionPlaceholderMotion.WAVE_HEIGHT_DP.dp.toPx()
-    val top = size.height - DesignTokens.ModelRow.progressInset.toPx() - waveHeight
+    // The wave's midline sits on the baseline.
+    val top = size.height - DesignTokens.ModelRow.progressInset.toPx() - waveHeight / 2f
     val path = wavePath(width.coerceAtLeast(0f), SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), waveHeight)
     val measure = PathMeasure().apply { setPath(path, false) }
     val drawn = Path()

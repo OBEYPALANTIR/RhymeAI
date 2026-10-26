@@ -37,6 +37,8 @@ class SettingsModelRowsUiTest {
     // A catalog download as Settings saved it before the split, under its old display name.
     private val savedCatalog = SavedLocalModel(id = e2b.fileName, displayName = "RhymeAI Gemma E2B", fileName = e2b.fileName, isCustom = false)
     private val selectedId = mutableStateOf<String?>(null)
+    private val loaded = mutableStateOf(false)
+    private val selections = mutableListOf<String>()
     private val downloading = mutableStateOf<GemmaDownload?>(null)
     private val progress = mutableStateOf<Float?>(null)
     private var paused = 0
@@ -80,6 +82,19 @@ class SettingsModelRowsUiTest {
         compose.runOnIdle { assertEquals(listOf(custom.id), customDeletes) }
     }
 
+    @Test fun aSelectedModelThatIsNotLoadedLoadsAgainFromItsRow() {
+        selectedId.value = custom.id
+        loaded.value = true
+        showSettings()
+        compose.onNodeWithTag("customGGUF.${custom.id}").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals("a loaded selection does nothing", emptyList<String>(), selections) }
+
+        // After Unload Model, or a failed load, the selected row loads it again.
+        compose.runOnIdle { loaded.value = false }
+        compose.onNodeWithTag("customGGUF.${custom.id}").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf(custom.id), selections) }
+    }
+
     @Test fun theDownloadingRowPausesFromItsChipAndCancelsFromItsColumn() {
         downloading.value = e2b
         progress.value = 0.43f
@@ -101,7 +116,7 @@ class SettingsModelRowsUiTest {
                     currentProvider = AIProvider.LOCAL,
                     currentModel = AIModel.LOCAL_MODEL,
                     localModelLoading = false,
-                    localModelLoaded = false,
+                    localModelLoaded = loaded.value,
                     localModelPath = null,
                     localModelError = null,
                     savedLocalModels = listOf(savedCatalog, custom),
@@ -110,7 +125,7 @@ class SettingsModelRowsUiTest {
                     onSaveProvider = {},
                     onSaveModel = {},
                     onRegisterLocalModel = { _, _ -> },
-                    onSelectSavedLocalModel = { selectedId.value = it },
+                    onSelectSavedLocalModel = { selections += it; selectedId.value = it },
                     onUnloadLocalModel = {},
                     gemmaDownloadingModel = downloading.value,
                     gemmaDownloadProgress = progress.value,
