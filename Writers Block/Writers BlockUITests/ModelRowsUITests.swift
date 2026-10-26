@@ -95,6 +95,9 @@ final class ModelRowsUITests: XCTestCase {
         var issues: [String] = []
         var rows: [CGRect] = []
         var unattributed: [String] = []
+        // Only what is on screen: between the pinned General/Editor switch and the Save bar.
+        let top = app.descendants(matching: .any)["settingsTabPicker"].frame.maxY
+        let bottom = app.buttons["saveSettingsButton"].frame.minY
         let record: (XCUIAccessibilityAuditIssue) -> Bool = { issue in
             // A modal sheet yields text detections with no element or frame (measured per
             // layout in AccessibilityAuditUITests); they cannot be tied to the rows, so they
@@ -104,6 +107,8 @@ final class ModelRowsUITests: XCTestCase {
                 return true
             }
             if let frame = issue.element?.frame, !rows.contains(where: { $0.intersects(frame) }) { return true }
+            // Text partly under the pinned switch or Save bar: the audit samples the bar's pixels.
+            if let frame = issue.element?.frame, frame.minY < top || frame.maxY > bottom { return true }
             // The pinned Save Settings bar overlaps rows scrolled under it; it is disabled, and
             // inactive components are exempt from text contrast.
             if issue.auditType == .contrast, issue.element?.isEnabled == false { return true }
@@ -114,9 +119,6 @@ final class ModelRowsUITests: XCTestCase {
             return true
         }
         let rowQuery = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'gemmaDownload.' OR identifier BEGINSWITH 'modelRowGallery.' OR identifier BEGINSWITH 'customGGUF.'"))
-        // Only what is on screen: between the pinned General/Editor switch and the Save bar.
-        let top = app.descendants(matching: .any)["settingsTabPicker"].frame.maxY
-        let bottom = app.buttons["saveSettingsButton"].frame.minY
         func measureRows() {
             rows = rowQuery.allElementsBoundByIndex.compactMap { row in
                 var frame = row.frame
