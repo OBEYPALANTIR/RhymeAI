@@ -86,21 +86,53 @@ final class ModelRowsUITests: XCTestCase {
         let row = app.buttons["gemmaDownload.gemma-4-e2b"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         scrollTo(row, in: app)
+        // The audit covers the whole sheet; only issues on the model rows (row button plus its
+        // 55pt column) or with no element count. Controls elsewhere in Settings are outside
+        // this change and the existing AccessibilityAuditUITests baselines.
         var issues: [String] = []
-        let pinnedBottom = app.descendants(matching: .any)["settingsTabPicker"].frame.maxY
+        var rows: [CGRect] = []
+        var unattributed: [String] = []
         let record: (XCUIAccessibilityAuditIssue) -> Bool = { issue in
-            // Controls above the rows (the On-Device Engine picker) sit half under the pinned
-            // General/Editor switch once the rows are scrolled into view, so they read as clipped.
-            if issue.auditType == .textClipped, let frame = issue.element?.frame, frame.minY < pinnedBottom { return true }
-            // Done is a system navigation bar item; it uses the Large Content Viewer instead of growing.
-            if issue.auditType == .dynamicType, let label = issue.element?.label, app.navigationBars.buttons[label].exists { return true }
+            // A modal sheet yields text detections with no element or frame (measured per
+            // layout in AccessibilityAuditUITests); they cannot be tied to the rows, so they
+            // are listed in an attachment rather than failed here.
+            if issue.element == nil, issue.auditType == .elementDetection {
+                unattributed.append(issue.compactDescription)
+                return true
+            }
+            if let frame = issue.element?.frame, !rows.contains(where: { $0.intersects(frame) }) { return true }
+            // The pinned Save Settings bar overlaps rows scrolled under it; it is disabled, and
+            // inactive components are exempt from text contrast.
+            if issue.auditType == .contrast, issue.element?.isEnabled == false { return true }
+            // The pinned General/Editor switch hands the audit a system segmented control whose
+            // segment frames are taller than the drawn segments and reach over the rows below.
+            if issue.auditType == .contrast, let label = issue.element?.label, app.segmentedControls.buttons[label].exists { return true }
             issues.append("\(issue.auditType.rawValue) | \(issue.compactDescription) | '\(issue.element?.label ?? "")' id='\(issue.element?.identifier ?? "")' \(issue.element.map { NSCoder.string(for: $0.frame) } ?? "")")
             return true
         }
+        let rowQuery = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'gemmaDownload.' OR identifier BEGINSWITH 'modelRowGallery.' OR identifier BEGINSWITH 'customGGUF.'"))
+        // Only what is on screen: between the pinned General/Editor switch and the Save bar.
+        let top = app.descendants(matching: .any)["settingsTabPicker"].frame.maxY
+        let bottom = app.buttons["saveSettingsButton"].frame.minY
+        func measureRows() {
+            rows = rowQuery.allElementsBoundByIndex.compactMap { row in
+                var frame = row.frame
+                frame.size.width += 55
+                let visible = frame.insetBy(dx: 1, dy: 1).intersection(CGRect(x: frame.minX, y: top, width: frame.width, height: bottom - top))
+                return visible.isNull || visible.isEmpty ? nil : visible
+            }
+        }
+        measureRows()
+        XCTAssertGreaterThan(rows.count, 2)
         try app.performAccessibilityAudit(for: .all, record)
         let last = app.buttons["modelRowGallery.\(Self.galleryCount - 1)"]
         scrollTo(last, in: app)
+        measureRows()
         try app.performAccessibilityAudit(for: .all, record)
+        let note = XCTAttachment(string: "unattributed detections: \(unattributed.count)\n" + unattributed.joined(separator: "\n"))
+        note.name = "audit-\(device)-unattributed"
+        note.lifetime = .keepAlways
+        add(note)
         XCTAssertTrue(issues.isEmpty, issues.joined(separator: "\n"))
     }
 
@@ -131,7 +163,7 @@ final class ModelRowsUITests: XCTestCase {
 
     @MainActor
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<12 where !element.isHittable {
+        for _ in 0..<20 where !element.isHittable {
             app.scrollViews.firstMatch.swipeUp(velocity: .slow)
         }
         XCTAssertTrue(element.isHittable)
