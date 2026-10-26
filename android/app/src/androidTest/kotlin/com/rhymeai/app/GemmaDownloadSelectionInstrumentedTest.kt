@@ -44,7 +44,7 @@ class GemmaDownloadSelectionInstrumentedTest {
         val sha256 = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
         download = GemmaDownload(
             label = "Selection QA",
-            description = "test fixture",
+            character = "test fixture",
             fileName = file.name,
             url = "https://example.invalid/selection-qa.gguf",
             expectedBytes = file.length(),

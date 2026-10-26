@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.components
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -256,6 +257,72 @@ class GemmaDownloadsTest {
     }
 
     @Test
+    fun pausingADownloadKeepsItsSegmentsAndResumeContinuesFromThem() = runBlocking {
+        val dir = tempDir()
+        val tempFile = File(dir, "tiny.gguf.download")
+        val expected = validTinyGguf()
+        // The first server sends 8 of the 24 bytes, then stalls until it is released.
+        val stalled = java.util.concurrent.CountDownLatch(1)
+        val url = startServer { _, output ->
+            output.write("HTTP/1.1 206 Test\r\nContent-Length: 24\r\nContent-Range: bytes 0-23/24\r\n\r\n".toByteArray())
+            output.write(expected, 0, 8)
+            output.flush()
+            stalled.await(10, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        val model = tinyGemma(url = url, expectedBytes = expected.size.toLong(), sha256 = sha256(expected))
+
+        val run = launch(kotlinx.coroutines.Dispatchers.IO) {
+            // The app's job catches the closed connection the pause causes; so does this one.
+            runCatching { downloadGemmaToTemp(model = model, tempFile = tempFile, onProgress = {}, connectionCount = 1) }
+        }
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!(tempFile.isFile && tempFile.readBytes().copyOf(8).contentEquals(expected.copyOf(8)))) {
+            assertTrue("the first bytes never arrived", System.currentTimeMillis() < deadline)
+            Thread.sleep(20)
+        }
+        Thread.sleep(200) // let the reader record the bytes it wrote
+        // The JDK's disconnect waits on the reading thread's lock, so here the server's close ends
+        // the read; on Android, disconnect cancels the OkHttp call (GemmaPauseInstrumentedTest).
+        run.cancel()
+        stalled.countDown()
+        kotlinx.coroutines.withTimeout(5_000) { run.join() }
+
+        // Paused: the partial and its resume state survive, crediting the bytes already written.
+        assertTrue(tempFile.isFile)
+        assertTrue(gemmaDownloadStateFile(tempFile).isFile)
+        server?.close()
+
+        var resumedFrom: String? = null
+        val resumeUrl = startServer { request, output ->
+            resumedFrom = Regex("Range: bytes=(\\d+-\\d+)").find(request)?.groupValues?.get(1)
+            output.writeResponse(206, expected.copyOfRange(8, 24), contentRange = "bytes 8-23/24")
+        }
+        downloadGemmaToTemp(model = model.copy(url = resumeUrl), tempFile = tempFile, onProgress = {}, connectionCount = 1)
+
+        assertEquals("8-23", resumedFrom)
+        assertEquals(expected.toList(), tempFile.readBytes().toList())
+        assertFalse(gemmaDownloadStateFile(tempFile).exists())
+    }
+
+    @Test
+    fun cancellingRemovesOnlyThePartialNeverTheInstalledFile() {
+        val cacheDir = tempDir()
+        val filesDir = tempDir()
+        val model = tinyGemma(expectedBytes = 24)
+        val installed = File(filesDir, model.fileName).apply { writeBytes(ByteArray(24) { 3 }) }
+        val temp = gemmaDownloadTempFile(cacheDir, model).apply { writeBytes(ByteArray(24)) }
+        saveDownloadState(gemmaDownloadStateFile(temp), model, longArrayOf(6L, 0L, 0L, 0L))
+        assertEquals(6L, gemmaPartialBytes(model, cacheDir))
+
+        deleteGemmaPartial(model, cacheDir)
+
+        assertFalse(temp.exists())
+        assertFalse(gemmaDownloadStateFile(temp).exists())
+        assertNull(gemmaPartialBytes(model, cacheDir))
+        assertEquals(ByteArray(24) { 3 }.toList(), installed.readBytes().toList())
+    }
+
+    @Test
     fun resumeStateFromAnotherArtifactOrOlderFormatIsDiscarded() = runBlocking {
         val expected = validTinyGguf()
         val model = tinyGemma(expectedBytes = expected.size.toLong(), sha256 = sha256(expected))
@@ -478,16 +545,6 @@ class GemmaDownloadsTest {
     }
 
     @Test
-    fun formatDownloadProgressHandlesUnknownAndPercentValues() {
-        assertEquals("downloading...", formatDownloadProgress(null))
-        assertEquals("downloading...", formatDownloadProgress(0f))
-        assertEquals("42%", formatDownloadProgress(0.42f))
-        assertEquals("100%", formatDownloadProgress(1f))
-    }
-
-    // --- recommendedGemmaModel ---
-
-    @Test
     fun recommendedGemmaModelReturnsE2BForTypicalPhone() {
         // 8 GB phone (most Android flagships) — E4B thrashes here, so E2B is correct.
         val eightGb = 8L * 1024L * 1024L * 1024L
@@ -546,7 +603,7 @@ class GemmaDownloadsTest {
         sha256: String = "0".repeat(64)
     ) = GemmaDownload(
         label = "Gemma Tiny",
-        description = "Tiny test model.",
+        character = "Tiny test model.",
         fileName = "tiny.gguf",
         url = url,
         expectedBytes = expectedBytes,

@@ -19,6 +19,7 @@ import com.rhymeai.app.ui.components.gemmaDownloadStateFile
 import com.rhymeai.app.ui.components.gemmaDownloadTempFile
 import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assume.assumeFalse
 import org.junit.Before
@@ -74,7 +75,9 @@ class ModelDeleteUiTest {
         assertNull(vm.gemmaDownloadError)
         assertFalse(model.fileName in vm.verifiedGemmaFileNames)
         composeRule.onNode(hasText(model.label) and hasClickAction()).performScrollTo().assertIsEnabled()
-        composeRule.onNodeWithText(model.description).assertIsDisplayed()
+        // The freed line (the stale stand-in was 32 bytes) holds before the rest metadata returns.
+        composeRule.onNodeWithText("0.00 GB back for your songs").assertIsDisplayed()
+        assertNotNull(vm.localModelFreed)
     }
 
     private fun deleteButton() = composeRule.onNodeWithContentDescription("Delete ${model.label}")
