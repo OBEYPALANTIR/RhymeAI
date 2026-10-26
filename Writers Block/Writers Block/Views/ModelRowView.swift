@@ -398,10 +398,10 @@ struct ModelRowView: View {
             case .trash:
                 columnButton(systemImage: "trash", label: "Delete \(content.title)")
             case .spinner:
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(palette.secondaryInk)
-                    .accessibilityElement()
+                // The status element spans the column, like the buttons it replaces.
+                Color.clear
+                    .overlay { ProgressView().controlSize(.small).tint(palette.secondaryInk) }
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Deleting \(content.title)")
                     .accessibilityAddTraits(.updatesFrequently)
                     .transition(swap)

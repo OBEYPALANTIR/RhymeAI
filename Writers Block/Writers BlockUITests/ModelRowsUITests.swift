@@ -20,12 +20,13 @@ final class ModelRowsUITests: XCTestCase {
             var shot = 0
             let last = app.buttons["modelRowGallery.\(Self.galleryCount - 1)"]
             XCTAssertTrue(app.buttons["gemmaDownload.gemma-4-e2b"].waitForExistence(timeout: 5))
+            // The section is not lazy: every row is laid out, on screen or not.
+            for id in ["gemmaDownload.gemma-4-e2b", "gemmaDownload.gemma-4-e4b"] + (0..<Self.galleryCount).map({ "modelRowGallery.\($0)" }) {
+                let row = app.buttons[id]
+                if row.exists { heights[id] = row.frame.height }
+            }
             attach(app, "\(style)-\(device)-\(shot)")
             for _ in 0..<14 {
-                for id in ["gemmaDownload.gemma-4-e2b", "gemmaDownload.gemma-4-e4b"] + (0..<Self.galleryCount).map({ "modelRowGallery.\($0)" }) {
-                    let row = app.buttons[id]
-                    if row.exists, row.isHittable { heights[id] = row.frame.height }
-                }
                 if last.exists, last.isHittable { break }
                 app.scrollViews.firstMatch.swipeUp(velocity: .slow)
                 shot += 1
@@ -124,13 +125,15 @@ final class ModelRowsUITests: XCTestCase {
                 return visible.isNull || visible.isEmpty ? nil : visible
             }
         }
+        // One pass per group, each with the audit's own time budget (`.all` at once can run out).
+        let passes: [XCUIAccessibilityAuditType] = [.contrast, [.elementDetection, .hitRegion, .sufficientElementDescription], [.dynamicType, .textClipped, .trait]]
         measureRows()
         XCTAssertGreaterThan(rows.count, 2)
-        try app.performAccessibilityAudit(for: .all, record)
+        for types in passes { try app.performAccessibilityAudit(for: types, record) }
         let last = app.buttons["modelRowGallery.\(Self.galleryCount - 1)"]
         scrollTo(last, in: app)
         measureRows()
-        try app.performAccessibilityAudit(for: .all, record)
+        for types in passes { try app.performAccessibilityAudit(for: types, record) }
         let note = XCTAttachment(string: "unattributed detections: \(unattributed.count)\n" + unattributed.joined(separator: "\n"))
         note.name = "audit-\(device)-unattributed"
         note.lifetime = .keepAlways
@@ -157,9 +160,13 @@ final class ModelRowsUITests: XCTestCase {
     private func openLocalModels(_ app: XCUIApplication) {
         let settings = app.buttons["settingsButton"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
-        settings.tap()
         let local = app.buttons["Local"]
-        XCTAssertTrue(local.waitForExistence(timeout: 5))
+        // A tap that lands while the launch is still settling can be dropped; try again.
+        for _ in 0..<4 {
+            settings.tap()
+            if local.waitForExistence(timeout: 4) { break }
+        }
+        XCTAssertTrue(local.exists)
         local.tap()
     }
 
