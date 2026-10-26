@@ -2920,10 +2920,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val choiceRevisionAtStart = modelChoiceRevision
         val app = getApplication<android.app.Application>()
         // A paused or cancelled run of this model may still be unwinding; never let two write its partial.
-        val previous = gemmaDownloadJobs[model.fileName]
+        val previous = gemmaDownloadRuns[model.fileName]?.job
+        val run = GemmaRun()
+        gemmaDownloadRuns[model.fileName] = run
 
-        gemmaDownloadJobs[model.fileName] = viewModelScope.launch(Dispatchers.IO) {
-            previous?.join()
+        run.job = viewModelScope.launch(Dispatchers.IO) {
+            // Not cancellable: a run paused while it waits still waits, so the chain never breaks.
+            withContext(NonCancellable) { previous?.join() }
             val destFile = java.io.File(app.filesDir, model.fileName)
             val tempFile = com.rhymeai.app.ui.components.gemmaDownloadTempFile(app.cacheDir, model)
             try {
@@ -2937,22 +2940,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
+                com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(
+                    model, destFile, tempFile, unlessStopped = run::unlessStopped
+                )
                 com.rhymeai.app.ui.components.downloadGemmaAndInstall(
                     model = model,
                     tempFile = tempFile,
                     destinationFile = destFile,
                     onProgress = { progress ->
                         withContext(Dispatchers.Main) {
-                            // The last checkpoint of a paused run still reports; the row reads it from disk instead.
-                            if (isActive && gemmaDownloadingModel?.fileName == model.fileName) gemmaDownloadProgress = progress
+                            // A stopped run's last checkpoint still reports; only the live run moves the row.
+                            if (!run.stopped && gemmaDownloadRuns[model.fileName] === run) gemmaDownloadProgress = progress
                         }
                     },
                     onVerifying = {
                         withContext(Dispatchers.Main) {
                             gemmaDownloadVerifying = true
                         }
-                    }
+                    },
+                    unlessStopped = run::unlessStopped
                 )
 
                 withContext(Dispatchers.Main) {
@@ -2978,8 +2984,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** One job per catalog file: the running download, or the cancel that clears its partial. */
-    private val gemmaDownloadJobs = mutableMapOf<String, Job>()
+    /**
+     * One run per catalog file: the download, or the cancel that clears its partial. Each run
+     * waits for the one before it. A stopped run refuses its destructive steps (reclaiming a
+     * stale installed file, installing the finished one) under the same lock that stops it, so
+     * a pause or cancel the user saw take effect never deletes or installs a file afterwards.
+     */
+    private class GemmaRun {
+        var job: Job? = null
+        @Volatile var stopped = false
+            private set
+
+        fun stop() = synchronized(this) { stopped = true }
+
+        fun unlessStopped(step: () -> Boolean): Boolean = synchronized(this) {
+            if (stopped) throw CancellationException("Download stopped")
+            step()
+        }
+    }
+
+    private val gemmaDownloadRuns = mutableMapOf<String, GemmaRun>()
 
     /**
      * Stops the running download and keeps its partial file and resume state, so Resume (or
@@ -2989,7 +3013,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     internal fun pauseGemmaDownload() {
         val model = gemmaDownloadingModel ?: return
         if (gemmaDownloadVerifying) return
-        val job = gemmaDownloadJobs[model.fileName]
+        val run = gemmaDownloadRuns[model.fileName]
+        run?.stop()
+        val job = run?.job
         job?.cancel()
         gemmaDownloadingModel = null
         gemmaDownloadProgress = null
@@ -3009,16 +3035,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val running = gemmaDownloadingModel?.fileName == model.fileName
         if (running && gemmaDownloadVerifying) return
         val app = getApplication<android.app.Application>()
-        val previous = gemmaDownloadJobs[model.fileName]
+        val previous = gemmaDownloadRuns[model.fileName]
         if (running) {
-            previous?.cancel()
+            previous?.stop()
+            previous?.job?.cancel()
             gemmaDownloadingModel = null
             gemmaDownloadProgress = null
         }
         gemmaDownloadError = null
         gemmaDownloadRevision++
-        gemmaDownloadJobs[model.fileName] = viewModelScope.launch {
-            previous?.join()
+        val run = GemmaRun()
+        gemmaDownloadRuns[model.fileName] = run
+        run.job = viewModelScope.launch {
+            withContext(NonCancellable) { previous?.job?.join() }
             try {
                 withContext(Dispatchers.IO) { com.rhymeai.app.ui.components.deleteGemmaPartial(model, app.cacheDir) }
             } catch (error: java.io.IOException) {
@@ -3120,7 +3149,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaDeletingModel = model
         gemmaDeleteCounts[model.fileName] = (gemmaDeleteCounts[model.fileName] ?: 0) + 1
         // A paused run may still be writing its last checkpoint; wait for it so nothing is left behind.
-        val download = gemmaDownloadJobs[model.fileName]
+        val download = gemmaDownloadRuns[model.fileName]?.job
         deleteLocalModelFile(model.fileName, model.label, onFinished = { gemmaDeletingModel = null }) {
             download?.join()
             withContext(Dispatchers.IO) {

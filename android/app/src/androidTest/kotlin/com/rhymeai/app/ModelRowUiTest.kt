@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -104,6 +105,17 @@ class ModelRowUiTest {
                 throw AssertionError("${state.kind} \"${state.metadata}\" / \"${state.warning}\": ${error.message}", error)
             }
         }
+    }
+
+    @Test fun theTitleHoldsStillAcrossEveryState() {
+        showRow()
+        val tops = everyState.filter { it.title == e2b.label }.map { state ->
+            compose.runOnIdle { shown = state }
+            compose.waitForIdle()
+            state.kind to compose.onNodeWithText(state.title, useUnmergedTree = true).getBoundsInRoot().top
+        }
+        val first = tops.first().second
+        tops.forEach { (kind, top) -> assertEquals("title moved in $kind", first.value, top.value, 0.5f) }
     }
 
     @Test fun aMemoryGatedModelOnDiskNeedsAThirdLine() {

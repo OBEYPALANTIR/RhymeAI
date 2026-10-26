@@ -289,7 +289,8 @@ internal suspend fun downloadGemmaAndInstall(
     destinationFile: File,
     onProgress: suspend (Float) -> Unit,
     onVerifying: suspend () -> Unit = {},
-    connectionCount: Int = GEMMA_DOWNLOAD_CONNECTIONS
+    connectionCount: Int = GEMMA_DOWNLOAD_CONNECTIONS,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() }
 ) {
     if (hasGemmaDownloadState(tempFile) ||
         validateDownloadedGemmaIntegrity(model, tempFile) != null
@@ -305,12 +306,16 @@ internal suspend fun downloadGemmaAndInstall(
     validateDownloadedGemmaIntegrity(model, tempFile)?.let { validationError ->
         throw IllegalStateException(validationError)
     }
-    Files.move(
-        tempFile.toPath(),
-        destinationFile.toPath(),
-        StandardCopyOption.REPLACE_EXISTING,
-        StandardCopyOption.ATOMIC_MOVE
-    )
+    // A pause or cancel that lands while the file was checked must not install it.
+    unlessStopped {
+        Files.move(
+            tempFile.toPath(),
+            destinationFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+        true
+    }
 }
 
 private suspend fun downloadGemmaSegment(
@@ -487,11 +492,15 @@ private class GemmaProgressReporter(
  * example the previous model version under the same name) and returns the bytes freed.
  * A file that passes is never touched.
  */
-internal fun reclaimStaleInstalledGemma(model: GemmaDownload, destFile: File): Long {
+internal fun reclaimStaleInstalledGemma(
+    model: GemmaDownload,
+    destFile: File,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() }
+): Long {
     if (!destFile.isFile) return 0L
     if (validateDownloadedGemmaIntegrity(model, destFile) == null) return 0L
     val bytes = destFile.length()
-    return if (destFile.delete()) bytes else 0L
+    return if (unlessStopped { destFile.delete() }) bytes else 0L
 }
 
 /**
@@ -503,9 +512,10 @@ internal fun ensureEnoughSpaceForGemma(
     model: GemmaDownload,
     destFile: File,
     tempFile: File,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() },
     usableSpace: (File) -> Long = File::getUsableSpace
 ) {
-    reclaimStaleInstalledGemma(model, destFile)
+    reclaimStaleInstalledGemma(model, destFile, unlessStopped)
     val segments = gemmaDownloadSegments(model.expectedBytes)
     val stateFile = gemmaDownloadStateFile(tempFile)
     val downloadedTempBytes = if (stateFile.isFile) {

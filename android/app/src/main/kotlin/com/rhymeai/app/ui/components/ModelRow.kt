@@ -108,6 +108,8 @@ internal enum class ModelRowColumn { None, Cancel, Trash, Spinner }
 internal val ModelRowChipDryness = SemanticsPropertyKey<Float>("ModelRowChipDryness")
 private var SemanticsPropertyReceiver.modelRowChipDryness by ModelRowChipDryness
 
+private val MODEL_ROW_METADATA_LINE_HEIGHT = 16.sp
+
 internal const val MODEL_ROW_MEMORY_WARNING = "Writes slowly: needs 10 GB"
 internal const val MODEL_ROW_EMPTY_NUDGE = "No model on this device yet. Download one and suggestions keep writing offline."
 
@@ -399,21 +401,25 @@ private fun ModelRowText(state: ModelRowState, motion: ModelRowMotion, modifier:
             modifier = Modifier.strike(colors.onSurfaceVariant, motion) { titleLayout }
         )
         Spacer(Modifier.height(DesignTokens.Spacing.xs))
+        // Two metadata lines are always reserved, so the title holds still while the copy changes.
+        val metadataMinHeight = with(LocalDensity.current) { (MODEL_ROW_METADATA_LINE_HEIGHT * 2).toDp() }
         AnimatedContent(
             targetState = state,
             contentKey = { it.kind },
             transitionSpec = { modelRowSwap(motion.animations) },
+            contentAlignment = Alignment.TopStart,
+            modifier = Modifier.heightIn(min = metadataMinHeight),
             label = "modelRowMetadata"
         ) { shown ->
             Column {
                 shown.metadata?.let {
-                    Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = 16.sp, color = colors.onSurfaceVariant)
+                    Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = colors.onSurfaceVariant)
                 }
                 shown.warning?.let {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.WarningAmber, null, tint = warningColor, modifier = Modifier.size(12.dp))
                         Spacer(Modifier.width(3.dp))
-                        Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = 16.sp, color = warningColor)
+                        Text(it, fontSize = DesignTokens.Typography.caption, lineHeight = MODEL_ROW_METADATA_LINE_HEIGHT, color = warningColor)
                     }
                 }
             }
@@ -552,6 +558,8 @@ private fun rememberModelRowMotion(state: ModelRowState, animations: Boolean): M
 
     LaunchedEffect(state.hasLine, animations) {
         if (state.hasLine) {
+            // A new run starts from its own bytes, even if the last one's line had not finished leaving.
+            if (lineAlpha.value < 1f) written.snapTo(state.progress ?: 0f)
             lineAlpha.snapTo(1f)
         } else {
             // Cancel and Checking → Downloaded: the line leaves on the dismiss tier, then resets.

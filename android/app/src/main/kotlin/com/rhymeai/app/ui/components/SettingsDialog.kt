@@ -787,7 +787,7 @@ internal fun SettingsDialog(
                                 // Load model button
                                 Button(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
-                                    enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
+                                    enabled = rowsIdle && gemmaDownloadingModel == null,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     colors = ButtonDefaults.buttonColors(

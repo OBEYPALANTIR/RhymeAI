@@ -305,6 +305,29 @@ class GemmaDownloadsTest {
     }
 
     @Test
+    fun aStoppedRunNeitherReclaimsAStaleFileNorInstallsAFinishedOne() = runBlocking {
+        val dir = tempDir()
+        val expected = validTinyGguf()
+        val model = tinyGemma(expectedBytes = expected.size.toLong(), sha256 = sha256(expected))
+        val stopped: (() -> Boolean) -> Boolean = { throw kotlinx.coroutines.CancellationException("stopped") }
+
+        // An older version under the catalog name stays when the Update was cancelled while it was hashed.
+        val stale = File(dir, model.fileName).apply { writeBytes(expected.copyOf().also { it[23] = 9 }) }
+        assertTrue(runCatching { reclaimStaleInstalledGemma(model, stale, stopped) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertTrue(stale.exists())
+
+        // A complete staging file checked after the pause is not moved into place.
+        val temp = File(dir, "tiny.gguf.download").apply { writeBytes(expected) }
+        val destination = File(dir, "installed.gguf")
+        assertTrue(
+            runCatching { downloadGemmaAndInstall(model, temp, destination, onProgress = {}, unlessStopped = stopped) }
+                .exceptionOrNull() is kotlinx.coroutines.CancellationException
+        )
+        assertTrue(temp.exists())
+        assertFalse(destination.exists())
+    }
+
+    @Test
     fun cancellingRemovesOnlyThePartialNeverTheInstalledFile() {
         val cacheDir = tempDir()
         val filesDir = tempDir()
@@ -425,7 +448,7 @@ class GemmaDownloadsTest {
         // Free space only suffices once the stale model's bytes are returned to the volume.
         val usable: (File) -> Long = { if (destination.exists()) required - staleBytes else required }
 
-        ensureEnoughSpaceForGemma(model, destination, tempFile, usable)
+        ensureEnoughSpaceForGemma(model, destination, tempFile, usableSpace = usable)
         assertFalse(destination.exists())
 
         // A valid installed file is kept until replacement, so it is not counted as free.

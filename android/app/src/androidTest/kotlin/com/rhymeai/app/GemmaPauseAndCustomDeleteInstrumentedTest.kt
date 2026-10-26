@@ -103,9 +103,20 @@ class GemmaPauseAndCustomDeleteInstrumentedTest {
         // An older version under the catalog name, written after the run reclaimed stale files at its start.
         installed.writeBytes(ByteArray(8) { 7 })
 
-        onMain { viewModel.cancelGemmaDownload(model) }
+        // Pause, Resume and Pause again before the first run has stopped, then Cancel: the runs stay
+        // chained, so the cancel's cleanup comes after every run's last checkpoint.
+        onMain {
+            viewModel.pauseGemmaDownload()
+            viewModel.startGemmaDownload(model)
+            viewModel.pauseGemmaDownload()
+            viewModel.cancelGemmaDownload(model)
+        }
         assertNull(viewModel.gemmaDownloadingModel)
         waitUntil("the cancel to remove the partial") { !temp.exists() && !gemmaDownloadStateFile(temp).exists() }
+        SystemClock.sleep(1_500)
+        instrumentation.waitForIdleSync()
+        assertFalse("no stopped run writes its state back after the cleanup", gemmaDownloadStateFile(temp).exists())
+        assertFalse(temp.exists())
         assertNull(gemmaPartialBytes(model, app.cacheDir))
         assertNull(viewModel.gemmaDownloadError)
         assertArrayEquals("the installed file is never touched", ByteArray(8) { 7 }, installed.readBytes())
