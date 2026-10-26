@@ -4,8 +4,8 @@ import Foundation
 struct GGUFDownloadOption: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
-    let subtitle: String
-    let size: String
+    /// The model's character in the writer's words, leading its row's metadata.
+    let character: String
     let fileName: String
     let expectedBytes: Int64
     let sha256: String
@@ -25,8 +25,7 @@ enum GGUFDownloadCatalog {
         GGUFDownloadOption(
             id: "gemma-4-e2b",
             title: "RhymeAI Gemma 4 E2B",
-            subtitle: "Recommended for iPhone and iPad",
-            size: "3.43 GB",
+            character: "Quick drafts",
             fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
             expectedBytes: 3_427_880_800,
             sha256: "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
@@ -38,8 +37,7 @@ enum GGUFDownloadCatalog {
         GGUFDownloadOption(
             id: "gemma-4-e4b",
             title: "RhymeAI Gemma 4 E4B",
-            subtitle: "For devices with at least 10 GB memory",
-            size: "5.34 GB",
+            character: "Richer lines",
             fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
             expectedBytes: 5_335_292_800,
             sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
@@ -307,9 +305,15 @@ enum GGUFModelStorage {
             try fileManager.removeItem(at: installedURL)
         }
         GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
-        for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+        try removeDownloadArtifacts(for: option, in: directory)
+    }
+
+    /// Only the downloader's own files for `option` (staging, resume blobs, legacy segments);
+    /// an installed model under the catalog name stays. Cancel uses this.
+    nonisolated static func removeDownloadArtifacts(for option: GGUFDownloadOption, in directory: URL) throws {
+        for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
         where isDownloadArtifactName(url.lastPathComponent, of: option) && isRegularFile(url) {
-            try fileManager.removeItem(at: url)
+            try FileManager.default.removeItem(at: url)
         }
     }
 
@@ -387,9 +391,16 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     nonisolated private static let progressUpdateBytes: Int64 = 1024 * 1024
 
     @Published private(set) var installedModelFiles: Set<String> = []
-    /// Bytes on disk under each catalog file name: a verified install or a same-name file
-    /// that fails the size or marker check (a previous version), either of which Delete removes.
-    @Published private(set) var catalogBytesOnDisk: [String: Int64] = [:]
+    /// Bytes on disk under each catalog file name (a verified install or a same-name file
+    /// that fails the size or marker check, a previous version, either of which Delete
+    /// removes) and under each registered custom model's file name.
+    @Published private(set) var bytesOnDisk: [String: Int64] = [:]
+    /// Bytes already received by each catalog entry with a saved resume blob and no task:
+    /// a paused download, which Resume continues and Cancel discards.
+    @Published private(set) var pausedBytes: [String: Int64] = [:]
+    /// What the last delete gave back, shown on its row for `freedSpaceHold`.
+    @Published private(set) var freedSpace: FreedSpace?
+    nonisolated static let freedSpaceHold: TimeInterval = 4.0
     /// Set while `delete` runs; starts, choices and imports wait for it.
     @Published private(set) var deletingModelFileName: String?
     /// Entries deleted since their last download began, kept in the defaults so they
@@ -481,13 +492,19 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     func refreshInstalledModels() {
         let directory = try? modelsDirectory(create: false)
         installedModelFiles = Set(directory.map { GGUFModelStorage.installedModelFileNames(in: $0, defaults: defaults) } ?? [])
-        catalogBytesOnDisk = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
-            guard let url = directory?.appendingPathComponent(option.fileName),
+        let names = GGUFDownloadCatalog.options.map(\.fileName) + GGUFCustomModelRegistry.models(defaults: defaults).map(\.fileName)
+        bytesOnDisk = Dictionary(names.compactMap { name in
+            guard let url = directory?.appendingPathComponent(name),
                   GGUFModelStorage.isRegularFile(url),
                   let identity = try? GGUFModelFileIdentity.read(at: url.path) else {
                 return nil
             }
-            return (option.fileName, identity.size)
+            return (name, identity.size)
+        }, uniquingKeysWith: { first, _ in first })
+        pausedBytes = Dictionary(uniqueKeysWithValues: GGUFDownloadCatalog.options.compactMap { option in
+            guard let directory, activeDownloadID != option.id,
+                  GGUFModelStorage.isRegularFile(GGUFModelStorage.resumeDataURL(for: option, in: directory)) else { return nil }
+            return (option.fileName, GGUFModelStorage.resumedBytes(for: option, in: directory))
         })
         if let preferred = GGUFModelSelection.preferredFileName(
             in: Array(installedModelFiles),
@@ -542,15 +559,18 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             }
             let resumeURL = resumeDataURL(for: option, directory: directory)
             let task: URLSessionDownloadTask
+            var resumedBytes: Int64 = 0
             if let resumeData = try? Data(contentsOf: resumeURL), !resumeData.isEmpty {
                 task = session.downloadTask(withResumeData: resumeData)
+                resumedBytes = GGUFModelStorage.resumedBytes(for: option, in: directory)
             } else {
                 task = session.downloadTask(with: ggufDownloadRequest(for: option))
             }
             task.taskDescription = option.id
             task.priority = URLSessionTask.highPriority
             activeTask = task
-            beginDownload(option: option, receivedBytes: 0)
+            // A resume picks up where its line stopped instead of restarting the ghost.
+            beginDownload(option: option, receivedBytes: resumedBytes)
             task.resume()
         } catch {
             errorMessage = "Could not start \(option.title): \(error.localizedDescription)"
@@ -605,10 +625,38 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 self.activeDownloadID = nil
                 self.isPausing = false
                 self.statusMessage = saved
-                    ? "Download paused. Tap Download to resume."
+                    ? "Download paused. Tap Resume to continue."
                     : "Download stopped. Tap Download to restart."
+                self.refreshInstalledModels()
             }
         }
+    }
+
+    /// Cancel: stops the transfer, running or paused, and discards what it received (staging
+    /// and resume data); an installed model under the same name stays. Recorded like a
+    /// delete, so a completion or error the session still delivers for it is discarded
+    /// rather than publishing the model or saving resume data; the next download lifts it.
+    func cancelDownload(_ option: GGUFDownloadOption) {
+        guard !isRestoringDownloads, !isPausing, !isVerifying, deletingModelFileName == nil,
+              activeDownloadID == option.id || pausedBytes[option.fileName] != nil else { return }
+        deletedFileNames.insert(option.fileName)
+        if activeDownloadID == option.id {
+            activeTask?.cancel()
+            activeTask = nil
+            activeDownloadID = nil
+            choiceRevisionAtDownloadStart = nil
+            progress = 0
+            receivedBytes = 0
+        }
+        do {
+            try GGUFModelStorage.removeDownloadArtifacts(for: option, in: modelsDirectory(create: false))
+            statusMessage = "Download of \(option.title) cancelled."
+            errorMessage = nil
+        } catch {
+            statusMessage = nil
+            errorMessage = "Could not cancel \(option.title): \(error.localizedDescription)"
+        }
+        refreshInstalledModels()
     }
 
     /// Removes `option` from this device: its file (verified or a stale same-name version),
@@ -619,12 +667,39 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
     /// that path) finishes before the file goes.
     func delete(_ option: GGUFDownloadOption) async {
         guard activeDownloadID != option.id, !isRestoringDownloads, !isVerifying, deletingModelFileName == nil else { return }
-        deletingModelFileName = option.fileName
+        let deletedFileNames = self.deletedFileNames
+        await removeModel(fileName: option.fileName, title: option.title) { directory, defaults in
+            try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults)
+            deletedFileNames.insert(option.fileName)
+        }
+    }
+
+    /// Removes the app's own copy of an imported model and its registration, on the same
+    /// serial path and with the same selection rule as `delete`. Import copied the file the
+    /// writer picked; that original is never touched.
+    func deleteCustom(_ model: GGUFCustomModel) async {
+        guard !isRestoringDownloads, !isVerifying, deletingModelFileName == nil,
+              model.fileName == URL(fileURLWithPath: model.fileName).lastPathComponent,
+              GGUFCustomModelRegistry.contains(fileName: model.fileName, defaults: defaults) else { return }
+        await removeModel(fileName: model.fileName, title: model.displayName) { directory, defaults in
+            let copy = directory.appendingPathComponent(model.fileName)
+            if GGUFModelStorage.isRegularFile(copy) { try FileManager.default.removeItem(at: copy) }
+            GGUFCustomModelRegistry.remove(fileName: model.fileName, defaults: defaults)
+        }
+    }
+
+    private func removeModel(
+        fileName: String,
+        title: String,
+        remove: @escaping @Sendable (URL, UserDefaults) throws -> Void
+    ) async {
+        deletingModelFileName = fileName
         defer { deletingModelFileName = nil }
+        let bytes = bytesOnDisk[fileName] ?? 0
         // Cleared before the file goes, so a request racing the delete cannot resolve to it.
         // The persisted name can differ from the shown one when a stale file lost its spot.
-        let wasSelected = selectedModelFileName == option.fileName
-            || GGUFModelSelection.currentFileName(defaults: defaults) == option.fileName
+        let wasSelected = selectedModelFileName == fileName
+            || GGUFModelSelection.currentFileName(defaults: defaults) == fileName
         if wasSelected {
             modelChoiceRevision += 1
             GGUFModelSelection.clearExplicitly(defaults: defaults)
@@ -633,21 +708,29 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         do {
             let directory = try modelsDirectory(create: false)
             let defaults = SendableDefaults(value: defaults)
-            let deletedFileNames = self.deletedFileNames
-            try await AIService.ggufRunner.withExclusiveAccess(toModelFile: option.fileName) {
-                try GGUFModelStorage.removeArtifacts(for: option, in: directory, defaults: defaults.value)
-                deletedFileNames.insert(option.fileName)
+            try await AIService.ggufRunner.withExclusiveAccess(toModelFile: fileName) {
+                try remove(directory, defaults.value)
             }
-            statusMessage = "\(option.title) deleted."
+            statusMessage = "\(title) deleted."
             errorMessage = nil
+            let freed = FreedSpace(fileName: fileName, title: title, bytes: bytes)
+            freedSpace = freed
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.freedSpaceHold))
+                if self?.freedSpace == freed { self?.freedSpace = nil }
+            }
         } catch {
             if wasSelected, let directory = try? modelsDirectory(create: false),
-               FileManager.default.fileExists(atPath: directory.appendingPathComponent(option.fileName).path) {
-                GGUFModelSelection.save(fileName: option.fileName, defaults: defaults)
+               FileManager.default.fileExists(atPath: directory.appendingPathComponent(fileName).path) {
+                GGUFModelSelection.save(fileName: fileName, defaults: defaults)
             }
-            errorMessage = "Could not delete \(option.title): \(error.localizedDescription)"
+            errorMessage = "Could not delete \(title): \(error.localizedDescription)"
         }
         refreshInstalledModels()
+    }
+
+    func needsMoreMemory(_ option: GGUFDownloadOption) -> Bool {
+        GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: totalRAMBytes)
     }
 
     // MARK: - Choice made while a download runs
@@ -719,7 +802,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
             let model = try await withTaskCancellationHandler {
                 try await task.value
             } onCancel: { task.cancel() }
-            GGUFCustomModelRegistry.register(model)
+            GGUFCustomModelRegistry.register(model, defaults: defaults)
             isVerifying = false
             refreshInstalledModels()
             return selectCustom(model)
@@ -838,6 +921,7 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
         isVerifying = false
         statusMessage = nil
         errorMessage = "Download failed\(option.map { " for \($0.title)" } ?? ""): \(error.localizedDescription)"
+        refreshInstalledModels()  // a failure that saved resume data leaves the entry paused
     }
 
     private func setVerifying(optionID: String?) {
@@ -1043,6 +1127,14 @@ extension GGUFDownloadManager: URLSessionDownloadDelegate {
             throw GGUFDownloadError.checksumMismatch
         }
     }
+}
+
+/// The bytes a delete gave back, for its row's "back for your songs" line.
+struct FreedSpace: Equatable {
+    let id = UUID()
+    let fileName: String
+    let title: String
+    let bytes: Int64
 }
 
 /// UserDefaults is thread-safe but not marked Sendable; the gate closures carry it in this.

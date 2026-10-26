@@ -185,7 +185,7 @@ struct GGUFDownloadCatalogTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -638,7 +638,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -675,7 +675,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -702,7 +702,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -727,7 +727,7 @@ struct GGUFDownloadIntegrityTests {
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let previousModel = Data("existing model".utf8)
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -757,7 +757,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let data = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(data.count),
             sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -1155,7 +1155,7 @@ struct GGUFDownloadCompletionTests {
         for url in [staging, resume, legacyResume] { try Data("partial".utf8).write(to: url) }
         let manager = try await sandbox.restoredManager()
         manager.select(e2b)
-        try #require(manager.catalogBytesOnDisk[e2b.fileName] == e2b.expectedBytes)
+        try #require(manager.bytesOnDisk[e2b.fileName] == e2b.expectedBytes)
 
         await manager.delete(e2b)
 
@@ -1165,9 +1165,11 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: sandbox.defaults) == nil)
         #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
         #expect(manager.installedModelFiles == [e4b.fileName])
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
         #expect(manager.statusMessage == "\(e2b.title) deleted.")
         #expect(manager.errorMessage == nil)
+        #expect(manager.freedSpace?.fileName == e2b.fileName)
+        #expect(manager.freedSpace?.bytes == e2b.expectedBytes)
 
         #expect(manager.selectedModelFileName == nil)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
@@ -1198,12 +1200,12 @@ struct GGUFDownloadCompletionTests {
         let manager = try await sandbox.restoredManager()
         manager.select(e4b)
         #expect(!manager.installedModelFiles.contains(e2b.fileName))
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == 3_427_878_784)
+        #expect(manager.bytesOnDisk[e2b.fileName] == 3_427_878_784)
 
         await manager.delete(e2b)
 
         #expect(!FileManager.default.fileExists(atPath: stale.path))
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
         #expect(manager.installedModelFiles == [e4b.fileName])
         #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
@@ -1285,7 +1287,7 @@ struct GGUFDownloadCompletionTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         try Data("keep".utf8).write(to: folder.appendingPathComponent("inside.txt"))
         let manager = try await sandbox.restoredManager()
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
 
         await manager.delete(e2b)
 
@@ -1301,7 +1303,7 @@ struct GGUFDownloadCompletionTests {
         defer { sandbox.tearDown() }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -1373,6 +1375,189 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
         manager.refreshInstalledModels()
         #expect(manager.installedModelFiles == [e2b.fileName])
+    }
+
+    // MARK: Pause, resume and cancel (model rows)
+
+    private static func resumeBlob(received: Int64) throws -> Data {
+        try PropertyListSerialization.data(
+            fromPropertyList: ["NSURLSessionResumeBytesReceived": NSNumber(value: received)], format: .binary, options: 0
+        )
+    }
+
+    private func row(_ option: GGUFDownloadOption, _ manager: GGUFDownloadManager) -> ModelRowContent {
+        ModelRowContent.catalog(option, facts: ModelRowContent.Facts(
+            bytesOnDisk: manager.bytesOnDisk[option.fileName],
+            isInstalled: manager.installedModelFiles.contains(option.fileName),
+            isSelected: manager.selectedModelFileName == option.fileName,
+            isActive: manager.activeDownloadID == option.id,
+            isVerifying: manager.isVerifying,
+            receivedBytes: manager.receivedBytes,
+            pausedBytes: manager.pausedBytes[option.fileName],
+            isDeleting: manager.deletingModelFileName == option.fileName,
+            freedBytes: manager.freedSpace?.fileName == option.fileName ? manager.freedSpace?.bytes : nil
+        ))
+    }
+
+    /// A saved resume blob is a paused download: its row offers Resume and Cancel with the
+    /// bytes it holds; Cancel removes only the downloader's files and the row reads Download.
+    @Test func pausedEntryShowsResumeAndCancelDiscardsOnlyDownloadArtifacts() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        let notes = sandbox.root.appendingPathComponent("\(e2b.fileName).notes")
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        for url in [staging, notes] { try Data("x".utf8).write(to: url) }
+        let manager = try await sandbox.restoredManager()
+
+        #expect(manager.pausedBytes == [e2b.fileName: 1_474_000_000])
+        let paused = row(e2b, manager)
+        #expect(paused.chip == .resume)
+        #expect(paused.column == .cancel)
+        #expect(paused.metadata == "Paused · 1.47 of 3.43 GB")
+        #expect(paused.accessibilityLabel == "Resume download of \(e2b.title)")
+
+        manager.cancelDownload(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(FileManager.default.fileExists(atPath: notes.path))
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.pausedBytes.isEmpty)
+        #expect(manager.statusMessage == "Download of \(e2b.title) cancelled.")
+        let rest = row(e2b, manager)
+        #expect(rest.chip == .download)
+        #expect(rest.column == .empty)
+        #expect(rest.line == .none)
+        #expect(rest.metadata == "Quick drafts · 3.43 GB · Recommended")
+    }
+
+    /// Resume continues from the saved bytes (the line does not restart from the ghost),
+    /// and Cancel while it runs stops it and returns the row to Download.
+    @Test func resumeStartsFromTheSavedBytesAndCancelStopsTheRunningDownload() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        let manager = try await sandbox.restoredManager()
+
+        manager.start(e2b)
+
+        #expect(manager.activeDownloadID == e2b.id)
+        #expect(manager.receivedBytes == 1_474_000_000)
+        let running = row(e2b, manager)
+        #expect(running.chip == .pause)
+        #expect(running.column == .cancel)
+        #expect(running.metadata == "1.47 of 3.43 GB · 43%")
+        #expect(running.line == .written(Double(1_474_000_000) / Double(e2b.expectedBytes)))
+
+        manager.cancelDownload(e2b)
+
+        #expect(manager.activeDownloadID == nil)
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+        #expect(manager.pausedBytes.isEmpty)
+        #expect(row(e2b, manager).chip == .download)
+    }
+
+    /// A completion the session delivers after Cancel is discarded, not published; a new
+    /// download of the entry lifts that.
+    @Test func completionDeliveredAfterCancelIsDiscarded() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", character: "",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+        manager.beginDownloadForTest(option)
+        let starting = ModelRowContent.catalog(option, facts: ModelRowContent.Facts(isActive: true))
+        #expect(starting.chip == .pause)
+        #expect(starting.line == .ghost)
+        #expect(starting.metadata == "Starting download…")
+
+        manager.cancelDownload(option)
+        #expect(manager.activeDownloadID == nil)
+
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+
+        manager.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(FileManager.default.fileExists(atPath: installed.path))
+    }
+
+    // MARK: Custom model delete
+
+    /// Delete on an imported model removes the app's copy and its registration and clears
+    /// the selection; the file the writer picked is never touched.
+    @Test func customDeleteRemovesOnlyTheAppsCopyNeverTheOriginal() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let picked = sandbox.root.deletingLastPathComponent()
+            .appendingPathComponent("picked-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: picked, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: picked) }
+        let original = picked.appendingPathComponent("Night Drive.gguf")
+        let bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0] + [UInt8](repeating: 7, count: 4_088))
+        try bytes.write(to: original)
+        let manager = try await sandbox.restoredManager()
+
+        #expect(await manager.importCustomModel(from: original))
+        let model = try #require(GGUFCustomModelRegistry.models(defaults: sandbox.defaults).first)
+        let copy = sandbox.root.appendingPathComponent(model.fileName)
+        #expect(model.displayName == "Night Drive")
+        #expect(manager.selectedModelFileName == model.fileName)
+        #expect(manager.bytesOnDisk[model.fileName] == Int64(bytes.count))
+        let selected = ModelRowContent.custom(model, facts: ModelRowContent.Facts(bytesOnDisk: Int64(bytes.count), isSelected: true))
+        #expect(selected.metadata == "In use · 4 KB on this device")
+        #expect(selected.chip == .selected)
+        #expect(selected.column == .trash)
+
+        await manager.deleteCustom(model)
+
+        #expect(manager.errorMessage == nil)
+        #expect(!FileManager.default.fileExists(atPath: copy.path))
+        #expect(try Data(contentsOf: original) == bytes)
+        #expect(GGUFCustomModelRegistry.models(defaults: sandbox.defaults).isEmpty)
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(GGUFModelSelection.isCleared(defaults: sandbox.defaults))
+        #expect(manager.bytesOnDisk[model.fileName] == nil)
+        #expect(manager.freedSpace?.fileName == model.fileName)
+        #expect(manager.freedSpace?.bytes == Int64(bytes.count))
+        #expect(manager.statusMessage == "Night Drive deleted.")
+    }
+
+    /// A custom entry whose file name is not a plain name in the models folder is refused.
+    @Test func customDeleteRefusesANameOutsideTheModelsFolder() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let outside = sandbox.root.deletingLastPathComponent().appendingPathComponent("outside-\(UUID().uuidString).gguf")
+        try Data("GGUF".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let model = GGUFCustomModel(id: "escape", displayName: "Escape", fileName: "../\(outside.lastPathComponent)")
+        GGUFCustomModelRegistry.register(model, defaults: sandbox.defaults)
+        let manager = try await sandbox.restoredManager()
+
+        await manager.deleteCustom(model)
+
+        #expect(FileManager.default.fileExists(atPath: outside.path))
+        #expect(GGUFCustomModelRegistry.contains(fileName: model.fileName, defaults: sandbox.defaults))
     }
 }
 

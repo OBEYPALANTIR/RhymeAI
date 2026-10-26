@@ -132,7 +132,7 @@ final class Writers_BlockUITests: XCTestCase {
         restored.lifetime = .keepAlways
         add(restored)
         model.tap()
-        XCTAssertTrue(app.staticTexts["Download paused. Tap Download to resume."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Download paused. Tap Resume to continue."].waitForExistence(timeout: 10))
     }
 
     /// Delete on an installed, selected catalog model asks first; confirming frees it, clears
@@ -153,7 +153,7 @@ final class Writers_BlockUITests: XCTestCase {
             app.scrollViews.firstMatch.swipeUp(velocity: .slow)
         }
         XCTAssertTrue(delete.isHittable)
-        XCTAssertTrue(row.label.contains("Selected"))
+        XCTAssertTrue(row.isSelected)
         func attach(_ name: String) {
             let shot = XCTAttachment(screenshot: app.screenshot())
             shot.name = name
@@ -165,14 +165,15 @@ final class Writers_BlockUITests: XCTestCase {
         delete.tap()
         let confirmation = app.alerts["Delete RhymeAI Gemma 4 E2B?"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
-        XCTAssertTrue(confirmation.staticTexts["Frees 3.43 GB on this device. You can download it again later."].exists)
+        XCTAssertTrue(confirmation.staticTexts.matching(NSPredicate(format: "label == %@", ModelRowsUITests.inUseMessage)).firstMatch.exists)
         attach("Delete confirmation")
         confirmation.buttons["Delete"].tap()
 
         XCTAssertTrue(app.staticTexts["RhymeAI Gemma 4 E2B deleted."].waitForExistence(timeout: 10))
         XCTAssertFalse(delete.exists)
         XCTAssertTrue(row.label.contains("Download"))
-        XCTAssertFalse(row.label.contains("Selected"))
+        XCTAssertFalse(row.isSelected)
+        XCTAssertEqual(row.value as? String, "3.43 GB back for your songs")
         attach("Row offers Download after delete")
     }
 

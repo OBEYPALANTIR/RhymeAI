@@ -66,6 +66,13 @@ enum SuggestionInkLineMotion {
         )
     }
 
+    /// One line on the same loop (the model row's indeterminate download): written tip
+    /// first over the whole write, held, then wiped.
+    static func singleLineProgress(elapsed: TimeInterval) -> CGFloat {
+        let wrapped = elapsed - (elapsed / loopPeriod).rounded(.down) * loopPeriod
+        return CGFloat(min(max(wrapped / writeDuration, 0), 1))
+    }
+
     /// The wave tiled along `width` at its fixed period, the last period cut at the edge.
     static func wavePoints(width: CGFloat, height: CGFloat = waveHeight) -> [CGPoint] {
         guard width > 0 else { return [] }
@@ -89,7 +96,8 @@ enum SuggestionInkLineMotion {
 }
 
 /// One scribbled line, `widthShare` of the space it is given, drawn tip first to `progress`.
-private struct ScribbleStroke: Shape {
+/// Also the model row's download line and delete strike.
+struct ScribbleStroke: Shape {
     var widthShare: CGFloat
     var progress: CGFloat
 
