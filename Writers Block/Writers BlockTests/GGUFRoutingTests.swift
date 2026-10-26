@@ -978,10 +978,7 @@ struct GGUFDownloadCompletionTests {
             let manager = GGUFDownloadManager(
                 configuration: .ephemeral, modelsRoot: root, defaults: defaults, totalRAMBytes: totalRAMBytes
             )
-            for _ in 0..<250 where manager.isRestoringDownloads {
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            try #require(!manager.isRestoringDownloads)
+            try #require(await GGUFDownloadCompletionTests.eventually { !manager.isRestoringDownloads })
             manager.refreshInstalledModels()
             return manager
         }
@@ -1381,14 +1378,15 @@ struct GGUFDownloadCompletionTests {
     /// on the session's delegate queue but must never happen on the Swift concurrency pool.
     /// There, tests running in parallel (CI) each block a pool thread and starve the very
     /// publish task they wait for, and the run hangs. So it runs on a GCD thread, and the wait
-    /// is bounded: a regression fails here after `timeout` instead of hanging the job.
+    /// is bounded: a regression fails here after `timeout` (generous, for a loaded runner)
+    /// instead of hanging the job.
     private static func deliverCompletion(
         _ manager: GGUFDownloadManager,
         staging: URL,
         directory: URL,
         option: GGUFDownloadOption,
         taskIdentifier: Int? = nil,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 120
     ) async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
             let once = ResumeOnce(continuation)
@@ -1421,6 +1419,19 @@ struct GGUFDownloadCompletionTests {
                 return continuation
             }?.resume(with: result)
         }
+    }
+
+    /// Waits for `condition` up to `timeout` of wall time. CI runs every suite in parallel on
+    /// a small runner, where main-actor and URLSession callbacks lag by many seconds (single
+    /// tests take minutes there), so the bound is generous and counted in time, not loop turns;
+    /// a condition that never holds still fails the test instead of hanging it.
+    static func eventually(timeout: TimeInterval = 90, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return true
     }
 
     // MARK: Pause, resume and cancel (model rows)
@@ -1593,8 +1604,7 @@ struct GGUFDownloadCompletionTests {
 
         manager.pauseDownload()
         manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
-        for _ in 0..<250 where manager.isPausing { try await Task.sleep(for: .milliseconds(20)) }
-        try #require(!manager.isPausing)
+        try #require(await Self.eventually { !manager.isPausing })
         #expect(manager.activeTransferIdentifier == nil)
 
         if completes {
@@ -1621,8 +1631,7 @@ struct GGUFDownloadCompletionTests {
         let transfer = try #require(manager.activeTransferIdentifier)
 
         manager.pauseDownload()
-        for _ in 0..<250 where manager.isPausing { try await Task.sleep(for: .milliseconds(20)) }
-        try #require(!manager.isPausing)
+        try #require(await Self.eventually { !manager.isPausing })
         manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
         #expect(!manager.isVerifying)
 
@@ -1702,13 +1711,9 @@ struct GGUFDownloadCompletionTests {
 
         #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
         #expect(manager.freedSpace[e4b.fileName]?.bytes == e4b.expectedBytes)
-        // Each line expires on its own clock; polled with a deadline, as a loaded runner can
-        // be slow to deliver the 4 s timer, and a line that never clears still fails here.
-        let deadline = Date().addingTimeInterval(GGUFDownloadManager.freedSpaceHold + 20)
-        while !manager.freedSpace.isEmpty, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(100))
-        }
-        #expect(manager.freedSpace.isEmpty)
+        // Each line expires on its own clock; polled with a deadline (a loaded runner can be
+        // slow to deliver the 4 s timer), so a line that never clears still fails here.
+        #expect(await Self.eventually { manager.freedSpace.isEmpty })
     }
 
     // MARK: Custom model delete
