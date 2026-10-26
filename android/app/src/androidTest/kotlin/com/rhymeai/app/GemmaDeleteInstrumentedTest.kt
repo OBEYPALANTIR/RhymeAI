@@ -161,7 +161,7 @@ class GemmaDeleteInstrumentedTest {
         val sha256 = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
         return GemmaDownload(
             label = label,
-            description = "test fixture",
+            character = "test fixture",
             fileName = file.name,
             url = "https://example.invalid/${file.name}",
             expectedBytes = file.length(),

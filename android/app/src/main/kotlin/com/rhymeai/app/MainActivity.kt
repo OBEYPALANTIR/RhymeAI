@@ -306,11 +306,17 @@ class MainActivity : ComponentActivity() {
                             gemmaDownloadError = viewModel.gemmaDownloadError,
                             gemmaLastDownloadAttempt = viewModel.gemmaLastDownloadAttempt,
                             gemmaDownloadRevision = viewModel.gemmaDownloadRevision,
+                            gemmaDownloadStarts = viewModel.gemmaDownloadStarts,
                             verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },
                             onDeleteDownloadedGemma = { viewModel.deleteDownloadedGemma(it) },
                             gemmaDeletingModel = viewModel.gemmaDeletingModel,
+                            onPauseGemmaDownload = viewModel::pauseGemmaDownload,
+                            onCancelGemmaDownload = viewModel::cancelGemmaDownload,
+                            onDeleteCustomLocalModel = viewModel::deleteCustomLocalModel,
+                            deletingCustomModelId = viewModel.deletingCustomModelId,
+                            localModelFreed = viewModel.localModelFreed,
                             localModelGenerating = viewModel.isLoading || viewModel.rewriteLoading ||
                                 viewModel.inspectorSynonymsLoading,
                             backup = BackupSectionState(

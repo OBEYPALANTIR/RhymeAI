@@ -15,11 +15,18 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLongArray
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal const val DOWNLOAD_BUFFER_BYTES = 8 * 1024 * 1024
 internal const val GEMMA_HUGGING_FACE_REVISION = "990bc8e01700f05d0cea805a66b43a7424a4b36b"
@@ -57,9 +64,15 @@ internal fun recommendedGemmaModel(totalRamBytes: Long): GemmaDownload {
 internal fun gemmaModelNeedsMoreMemory(model: GemmaDownload, totalRamBytes: Long): Boolean =
     model.fileName == GEMMA_DOWNLOADS[1].fileName && totalRamBytes < RAM_THRESHOLD_E4B_BYTES
 
+/** Lets a test hold a stopping run before its last checkpoint (null in the app). */
+internal object GemmaDownloadTestHooks {
+    @Volatile var beforeFinalCheckpoint: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
 internal data class GemmaDownload(
     val label: String,
-    val description: String,
+    /** The model's character in the writer's words, first in its row's metadata. */
+    val character: String,
     val fileName: String,
     val url: String,
     val expectedBytes: Long,
@@ -78,8 +91,8 @@ internal data class GemmaDownload(
 // - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
 internal val GEMMA_DOWNLOADS = listOf(
     GemmaDownload(
-        label = "RhymeAI Gemma E2B",
-        description = "Tuned for RhymeAI — best default for phones, 3.43 GB.",
+        label = "RhymeAI Gemma 4 E2B",
+        character = "Quick drafts",
         fileName = "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true",
         expectedBytes = 3_427_880_800L,
@@ -87,8 +100,8 @@ internal val GEMMA_DOWNLOADS = listOf(
         chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     ),
     GemmaDownload(
-        label = "RhymeAI Gemma E4B",
-        description = "Tuned for RhymeAI — higher quality, slower, 5.34 GB.",
+        label = "RhymeAI Gemma 4 E4B",
+        character = "Richer lines",
         fileName = "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
         url = "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/$GEMMA_HUGGING_FACE_REVISION/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true",
         expectedBytes = 5_335_292_800L,
@@ -96,11 +109,6 @@ internal val GEMMA_DOWNLOADS = listOf(
         chatTemplateSha256 = GEMMA4_RHYMEAI_V2_CHAT_TEMPLATE_SHA256
     )
 )
-
-internal fun formatDownloadProgress(progress: Float?): String {
-    if (progress == null || progress <= 0f) return "downloading..."
-    return "${String.format(Locale.US, "%.0f", progress * 100f)}%"
-}
 
 internal fun validateDownloadedGemma(model: GemmaDownload, file: File): String? {
     if (!file.exists()) return "${model.label} is not downloaded yet"
@@ -192,12 +200,29 @@ internal fun gemmaDownloadTempFile(cacheDir: File, model: GemmaDownload): File =
  * same name counts), plus the partial download and its resume state. Every artifact is
  * attempted; the ones still present afterwards are reported in one exception.
  */
-internal fun deleteInstalledGemma(model: GemmaDownload, filesDir: File, cacheDir: File) {
+internal fun deleteInstalledGemma(model: GemmaDownload, filesDir: File, cacheDir: File) =
+    deleteAll(listOf(File(filesDir, model.fileName)) + gemmaPartialFiles(model, cacheDir))
+
+/** Removes a paused or cancelled download's partial file and resume state; the installed file is never touched. */
+internal fun deleteGemmaPartial(model: GemmaDownload, cacheDir: File) = deleteAll(gemmaPartialFiles(model, cacheDir))
+
+private fun gemmaPartialFiles(model: GemmaDownload, cacheDir: File): List<File> {
     val tempFile = gemmaDownloadTempFile(cacheDir, model)
     val stateFile = gemmaDownloadStateFile(tempFile)
-    val remaining = listOf(File(filesDir, model.fileName), tempFile, stateFile, File(stateFile.parentFile, "${stateFile.name}.tmp"))
-        .filter { file -> file.exists() && !file.delete() }
+    return listOf(tempFile, stateFile, File(stateFile.parentFile, "${stateFile.name}.tmp"))
+}
+
+private fun deleteAll(files: List<File>) {
+    val remaining = files.filter { file -> file.exists() && !file.delete() }
     if (remaining.isNotEmpty()) throw IOException("Could not delete ${remaining.joinToString { it.name }}")
+}
+
+/** Bytes a paused download has kept for [model] (its resume state), or null when there is none to resume. */
+internal fun gemmaPartialBytes(model: GemmaDownload, cacheDir: File): Long? {
+    val tempFile = gemmaDownloadTempFile(cacheDir, model)
+    val stateFile = gemmaDownloadStateFile(tempFile)
+    if (!stateFile.isFile || !tempFile.isFile) return null
+    return loadDownloadState(stateFile, gemmaDownloadSegments(model.expectedBytes), model)?.sum()
 }
 
 internal suspend fun downloadGemmaToTemp(
@@ -249,7 +274,11 @@ internal suspend fun downloadGemmaToTemp(
         }.awaitAll()
         reporter.checkpoint(force = true)
     } catch (error: Exception) {
-        reporter.checkpoint(force = true)
+        // A pause cancels this scope; the last checkpoint still records every byte written.
+        withContext(NonCancellable) {
+            GemmaDownloadTestHooks.beforeFinalCheckpoint?.await()
+            reporter.checkpoint(force = true)
+        }
         throw error
     }
 
@@ -268,7 +297,8 @@ internal suspend fun downloadGemmaAndInstall(
     destinationFile: File,
     onProgress: suspend (Float) -> Unit,
     onVerifying: suspend () -> Unit = {},
-    connectionCount: Int = GEMMA_DOWNLOAD_CONNECTIONS
+    connectionCount: Int = GEMMA_DOWNLOAD_CONNECTIONS,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() }
 ) {
     if (hasGemmaDownloadState(tempFile) ||
         validateDownloadedGemmaIntegrity(model, tempFile) != null
@@ -284,12 +314,16 @@ internal suspend fun downloadGemmaAndInstall(
     validateDownloadedGemmaIntegrity(model, tempFile)?.let { validationError ->
         throw IllegalStateException(validationError)
     }
-    Files.move(
-        tempFile.toPath(),
-        destinationFile.toPath(),
-        StandardCopyOption.REPLACE_EXISTING,
-        StandardCopyOption.ATOMIC_MOVE
-    )
+    // A pause or cancel that lands while the file was checked must not install it.
+    unlessStopped {
+        Files.move(
+            tempFile.toPath(),
+            destinationFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+        true
+    }
 }
 
 private suspend fun downloadGemmaSegment(
@@ -299,10 +333,15 @@ private suspend fun downloadGemmaSegment(
     segmentIndex: Int,
     resumeBytes: Long,
     reporter: GemmaProgressReporter
-) {
-    if (resumeBytes >= segment.length) return
+): Unit = coroutineScope {
+    if (resumeBytes >= segment.length) return@coroutineScope
     val rangeStart = segment.start + resumeBytes
     val connection = openGemmaConnection(model, rangeStart, segment.endInclusive)
+    // A blocking read ignores cancellation; closing the connection ends it when the download is paused.
+    // Undispatched, so the closer is already waiting even if the pause comes before it is scheduled.
+    val closeOnCancel = launch(start = CoroutineStart.UNDISPATCHED) {
+        try { awaitCancellation() } finally { connection.disconnect() }
+    }
     try {
         val code = connection.responseCode
         if (code !in 200..299) {
@@ -324,6 +363,7 @@ private suspend fun downloadGemmaSegment(
             connection.inputStream.use { input ->
                 val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
                 while (copiedBytes < segment.length) {
+                    currentCoroutineContext().ensureActive()
                     val remaining = minOf(buffer.size.toLong(), segment.length - copiedBytes).toInt()
                     val read = input.read(buffer, 0, remaining)
                     if (read == -1) break
@@ -339,6 +379,7 @@ private suspend fun downloadGemmaSegment(
             )
         }
     } finally {
+        closeOnCancel.cancel()
         connection.disconnect()
     }
 }
@@ -459,11 +500,15 @@ private class GemmaProgressReporter(
  * example the previous model version under the same name) and returns the bytes freed.
  * A file that passes is never touched.
  */
-internal fun reclaimStaleInstalledGemma(model: GemmaDownload, destFile: File): Long {
+internal fun reclaimStaleInstalledGemma(
+    model: GemmaDownload,
+    destFile: File,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() }
+): Long {
     if (!destFile.isFile) return 0L
     if (validateDownloadedGemmaIntegrity(model, destFile) == null) return 0L
     val bytes = destFile.length()
-    return if (destFile.delete()) bytes else 0L
+    return if (unlessStopped { destFile.delete() }) bytes else 0L
 }
 
 /**
@@ -475,9 +520,10 @@ internal fun ensureEnoughSpaceForGemma(
     model: GemmaDownload,
     destFile: File,
     tempFile: File,
+    unlessStopped: (() -> Boolean) -> Boolean = { it() },
     usableSpace: (File) -> Long = File::getUsableSpace
 ) {
-    reclaimStaleInstalledGemma(model, destFile)
+    reclaimStaleInstalledGemma(model, destFile, unlessStopped)
     val segments = gemmaDownloadSegments(model.expectedBytes)
     val stateFile = gemmaDownloadStateFile(tempFile)
     val downloadedTempBytes = if (stateFile.isFile) {
@@ -494,6 +540,7 @@ internal fun ensureEnoughSpaceForGemma(
     }
 }
 
-internal fun formatFileSize(bytes: Long): String {
-    return "${String.format(Locale.US, "%.2f", bytes / 1_000_000_000.0)} GB"
-}
+internal fun formatFileSize(bytes: Long): String = "${formatGigabytes(bytes)} GB"
+
+/** The number [formatFileSize] prints, without its unit: "1.47" in "1.47 of 3.43 GB". */
+internal fun formatGigabytes(bytes: Long): String = String.format(Locale.US, "%.2f", bytes / 1_000_000_000.0)

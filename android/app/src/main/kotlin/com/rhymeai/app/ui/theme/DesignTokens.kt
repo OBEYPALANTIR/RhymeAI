@@ -86,6 +86,21 @@ object DesignTokens {
         const val recordingBarsFadeDistance = 0.30f
     }
 
+    /** Settings › local model rows: the golden split row (DESIGN.md, Settings). */
+    object ModelRow {
+        /** 55 × φ, the row's height at default text size. */
+        val height = 89.dp
+        /** The trailing action column: cancel, delete, or the delete spinner. */
+        val column = Rhythm.primary
+        val chipHeight = Rhythm.section
+        val glyph = 21.dp
+        /** The download wave: a φ step under the progress copy, one even wave 8 tall, 21 long. */
+        val waveGap = Rhythm.tight
+        val waveHeight = Rhythm.tight
+        val wavePeriod = Rhythm.standard
+        const val accessibilityFontScale = 1.5f
+    }
+
     object Sheet {
         val handleArea = 64.dp
         val handleWidth = 52.dp

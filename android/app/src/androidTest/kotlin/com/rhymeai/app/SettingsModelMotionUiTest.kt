@@ -54,12 +54,12 @@ class SettingsModelMotionUiTest {
             downloadProgress.value = 0.43f
         }
         savedModelButton().assertIsNotEnabled()
-        compose.onNodeWithText("43%").performScrollTo().assertIsDisplayed()
-        assertOneProgressIndicator()
+        compose.onNodeWithText("1.47 of 3.43 GB · 43%").performScrollTo().assertIsDisplayed()
+        // The download is a written line now; its row reports the share as its progress.
+        compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.43f, 0f..1f))).assertCountEquals(1)
 
         compose.runOnIdle { verifying.value = true }
-        compose.onNodeWithText("Verifying download...").performScrollTo().assertIsDisplayed()
-        assertOneProgressIndicator()
+        compose.onNodeWithText("Checking the file…").performScrollTo().assertIsDisplayed()
 
         compose.runOnIdle {
             downloading.value = null
@@ -178,11 +178,14 @@ class SettingsModelMotionUiTest {
     }
 
     /**
-     * The load action sits below the downloads list, off-screen on a phone. Scroll while the
-     * clock still advances: a scroll requested under a paused clock never settles.
+     * The load action sits below the downloads list, off-screen on a phone; scroll to it, then
+     * back up to Unload so both are on screen. Scroll while the clock still advances: a scroll
+     * requested under a paused clock never settles.
      */
     private fun scrollLoadActionIntoView() {
         compose.onNodeWithText("Choose Model File").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Unload Model").performScrollTo()
+        compose.onNodeWithText("Choose Model File").assertIsDisplayed()
     }
 
     private fun savedModelButton() =

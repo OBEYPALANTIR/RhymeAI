@@ -127,6 +127,10 @@ object SuggestionPlaceholderMotion {
             ((phase - FIRST_LINE_SHARE) / (1f - FIRST_LINE_SHARE)).coerceIn(0f, 1f)
     }
 
+    /** The one-line loop the model rows reuse: tip-first over [WRITE_MILLIS], held, wiped, repeated. */
+    fun singleLineProgress(elapsedMillis: Long): Float =
+        (Math.floorMod(elapsedMillis, PERIOD_MILLIS.toLong()) / WRITE_MILLIS.toFloat()).coerceIn(0f, 1f)
+
     /** The wave tiled from x = 0 to [width]: one wave every [period], the last cut at the edge. */
     fun wavePoints(width: Float, period: Float, height: Float): List<Offset> {
         val points = mutableListOf(Offset(0f, WAVE[0].second * height))
@@ -421,10 +425,7 @@ private fun ScribbleLine(ink: Color, widthFraction: Float, progress: () -> Float
             .fillMaxWidth(widthFraction)
             .height(SuggestionPlaceholderMotion.WAVE_HEIGHT_DP.dp)
             .drawWithCache {
-                val path = Path()
-                SuggestionPlaceholderMotion.wavePoints(size.width, SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), size.height).forEachIndexed { i, point ->
-                    if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
-                }
+                val path = wavePath(size.width, SuggestionPlaceholderMotion.WAVE_PERIOD_DP.dp.toPx(), size.height)
                 val measure = PathMeasure().apply { setPath(path, false) }
                 val drawn = Path()
                 val stroke = Stroke(width = SuggestionPlaceholderMotion.STROKE_WIDTH_DP.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -437,6 +438,13 @@ private fun ScribbleLine(ink: Color, widthFraction: Float, progress: () -> Float
                 }
             }
     )
+}
+
+/** [SuggestionPlaceholderMotion.wavePoints] joined into one stroke path. */
+internal fun wavePath(width: Float, period: Float, height: Float): Path = Path().apply {
+    SuggestionPlaceholderMotion.wavePoints(width, period, height).forEachIndexed { i, point ->
+        if (i == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
+    }
 }
 
 /** A pill filling the element: the ghost of the tonal "Use line" button. */

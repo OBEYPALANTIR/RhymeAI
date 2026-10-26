@@ -101,6 +101,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import android.os.SystemClock
+import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -152,11 +158,17 @@ internal fun SettingsDialog(
     gemmaDownloadError: String? = null,
     gemmaLastDownloadAttempt: GemmaDownload? = null,
     gemmaDownloadRevision: Int = 0,
+    gemmaDownloadStarts: Int = 0,
     verifiedGemmaFileNames: Set<String> = emptySet(),
     onStartGemmaDownload: (GemmaDownload) -> Unit = {},
     onUseDownloadedGemma: suspend (GemmaDownload) -> Boolean = { false },
     onDeleteDownloadedGemma: (GemmaDownload) -> Unit = {},
     gemmaDeletingModel: GemmaDownload? = null,
+    onPauseGemmaDownload: () -> Unit = {},
+    onCancelGemmaDownload: (GemmaDownload) -> Unit = {},
+    onDeleteCustomLocalModel: (String) -> Unit = {},
+    deletingCustomModelId: String? = null,
+    localModelFreed: com.rhymeai.app.LocalModelFreed? = null,
     // True while a suggestion, rewrite or synonym request is running on the local model.
     localModelGenerating: Boolean = false,
     // Backup
@@ -229,26 +241,50 @@ internal fun SettingsDialog(
     var copyError by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
-    var gemmaToDelete by remember { mutableStateOf<GemmaDownload?>(null) }
-    gemmaToDelete?.let { model ->
-        val installedBytes = remember(model) { File(context.filesDir, model.fileName).length() }
+    var deleteRequest by remember { mutableStateOf<ModelDeleteRequest?>(null) }
+    deleteRequest?.let { request ->
         AlertDialog(
-            onDismissRequest = { gemmaToDelete = null },
-            title = { Text("Delete ${model.label}?") },
-            text = { Text("Frees ${formatFileSize(installedBytes)} on this device. You can download it again later.") },
+            onDismissRequest = { deleteRequest = null },
+            containerColor = colorScheme.surfaceContainerHigh,
+            title = { Text("Delete ${request.title}?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Text(
+                    modelDeleteMessage(request.bytes, request.custom, request.inUse),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    gemmaToDelete = null
+                    deleteRequest = null
                     copyError = null // an older import error must not hide a delete failure
-                    onDeleteDownloadedGemma(model)
+                    request.confirm()
                 }) {
                     Text("Delete", color = colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { gemmaToDelete = null }) { Text("Cancel") }
+                TextButton(onClick = { deleteRequest = null }) { Text("Cancel") }
             }
         )
+    }
+
+    // The freed line holds for the toast lifetime from the moment the delete finished.
+    var visibleFreed by remember { mutableStateOf<com.rhymeai.app.LocalModelFreed?>(null) }
+    val view = LocalView.current
+    LaunchedEffect(localModelFreed) {
+        val freed = localModelFreed
+        visibleFreed = null
+        if (freed == null) return@LaunchedEffect
+        val shownMillis = SystemClock.uptimeMillis() - freed.atUptimeMillis
+        if (shownMillis >= MODEL_FREED_LINE_MILLIS) return@LaunchedEffect
+        if (shownMillis < 1_000L) {
+            @Suppress("DEPRECATION") // still delivered on API 36; the row has no other node to announce from
+            view.announceForAccessibility("${freed.label} deleted. ${formatFileSize(freed.bytes)} back for your songs.")
+        }
+        visibleFreed = freed
+        delay(MODEL_FREED_LINE_MILLIS - shownMillis)
+        visibleFreed = null
     }
 
     fun useDownloadedModel(model: GemmaDownload) {
@@ -569,52 +605,44 @@ internal fun SettingsDialog(
 
                             Spacer(Modifier.height(12.dp))
 
-                            if (savedLocalModels.isNotEmpty()) {
+                            val anyDeleting = gemmaDeletingModel != null || deletingCustomModelId != null
+                            // The rule every row action shared before: nothing loads, copies or deletes.
+                            val rowsIdle = !localModelLoading && !copyingFile && !anyDeleting
+                            val customModels = savedLocalModels.filter { it.isCustom }
+                            if (customModels.isNotEmpty()) {
                                 Text(
-                                    "Saved Models",
+                                    "Custom Models",
                                     fontSize = DesignTokens.Typography.caption,
                                     fontWeight = FontWeight.Medium,
                                     color = colorScheme.onSurfaceVariant
                                 )
-                                Spacer(Modifier.height(8.dp))
-                                savedLocalModels.forEach { model ->
+                                Spacer(Modifier.height(DesignTokens.Rhythm.tight))
+                                customModels.forEach { model ->
                                     key(model.id) {
-                                        val isSelected = model.id == selectedLocalModelId
-                                        val selectionFill by animateColorAsState(
-                                            targetValue = if (isSelected) colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent,
-                                            animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
-                                            label = "savedModelSelectionFill"
-                                        )
-                                        val selectionBorder by animateColorAsState(
-                                            targetValue = if (isSelected) colorScheme.primary else colorScheme.outlineVariant,
-                                            animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
-                                            label = "savedModelSelectionBorder"
-                                        )
-                                        OutlinedButton(
-                                            onClick = { onSelectSavedLocalModel(model.id) },
-                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                                            colors = ButtonDefaults.outlinedButtonColors(
-                                                containerColor = selectionFill,
-                                                disabledContainerColor = selectionFill
-                                            ),
-                                            border = BorderStroke(1.dp, selectionBorder)
-                                        ) {
-                                            Icon(
-                                                if (isSelected) Icons.Default.CheckCircle else Icons.Default.FileOpen,
-                                                null,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Text(
-                                                model.displayName,
-                                                modifier = Modifier.weight(1f).padding(start = 8.dp),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(if (isSelected) "Selected" else "Select", fontSize = 12.sp)
+                                        val bytes = remember(model.fileName, gemmaDownloadRevision) {
+                                            File(context.filesDir, model.fileName).length()
                                         }
-                                        Spacer(Modifier.height(8.dp))
+                                        val isSelected = model.id == selectedLocalModelId
+                                        ModelRow(
+                                            state = customModelRowState(
+                                                name = model.displayName,
+                                                fileBytes = bytes,
+                                                selected = isSelected,
+                                                deleting = deletingCustomModelId == model.id
+                                            ),
+                                            chipEnabled = rowsIdle && gemmaDownloadingModel == null,
+                                            columnEnabled = rowsIdle && !localModelGenerating,
+                                            // Selected and loaded: nothing to do. Selected but unloaded or failed: load it again.
+                                            onChip = { if (!isSelected || !localModelLoaded) onSelectSavedLocalModel(model.id) },
+                                            onColumn = {
+                                                deleteRequest = ModelDeleteRequest(model.displayName, bytes, custom = true, inUse = isSelected) {
+                                                    onDeleteCustomLocalModel(model.id)
+                                                }
+                                            },
+                                            mainTag = "customGGUF.${model.id}",
+                                            deleteTag = "customGGUFDelete.${model.id}"
+                                        )
+                                        Spacer(Modifier.height(DesignTokens.Rhythm.tight))
                                     }
                                 }
                             }
@@ -637,7 +665,8 @@ internal fun SettingsDialog(
                                             Text("Model loaded", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onTertiaryContainer)
                                             Text(
                                                 savedLocalModels.firstOrNull { it.id == selectedLocalModelId }
-                                                    ?.displayName ?: localModelPath.orEmpty().substringAfterLast("/"),
+                                                    ?.let { saved -> GEMMA_DOWNLOADS.firstOrNull { it.fileName == saved.fileName }?.label ?: saved.displayName }
+                                                    ?: localModelPath.orEmpty().substringAfterLast("/"),
                                                 fontSize = 12.sp,
                                                 color = colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                                                 maxLines = 1,
@@ -651,7 +680,7 @@ internal fun SettingsDialog(
                                     OutlinedButton(
                                         onClick = onUnloadLocalModel,
                                         enabled = loadedModelVisible,
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = DesignTokens.Touch.minTarget),
                                         shape = RoundedCornerShape(DesignTokens.Radius.lg)
                                     ) {
                                         Text("Unload Model")
@@ -677,134 +706,93 @@ internal fun SettingsDialog(
                             }
 
                             run {
-                                // Recommended model downloads
-                                Text("Recommended Downloads", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
+                                Spacer(Modifier.height(DesignTokens.Rhythm.related))
+                                Text("RhymeAI Gemma Downloads", fontSize = DesignTokens.Typography.caption, fontWeight = FontWeight.Medium, color = colorScheme.onSurfaceVariant)
+                                val noModelOnDevice = remember(gemmaDownloadRevision, customModels) {
+                                    customModels.isEmpty() && GEMMA_DOWNLOADS.none { File(context.filesDir, it.fileName).isFile }
+                                }
+                                if (noModelOnDevice) {
+                                    Spacer(Modifier.height(DesignTokens.Spacing.xs))
+                                    Text(MODEL_ROW_EMPTY_NUDGE, fontSize = DesignTokens.Typography.caption, lineHeight = 16.sp, color = colorScheme.onSurfaceVariant)
+                                }
+                                Spacer(Modifier.height(DesignTokens.Rhythm.tight))
 
                                 GEMMA_DOWNLOADS.forEach { model ->
-                                    val installedFile = File(context.filesDir, model.fileName)
-                                    val installedError = remember(gemmaDownloadRevision, model.fileName) {
-                                        validateDownloadedGemma(model, installedFile)
-                                    }
-                                    val isInstalled = installedError == null &&
-                                        model.fileName in verifiedGemmaFileNames
-                                    // Any file under the catalog name is deletable, including a stale
-                                    // version that fails the size check, so the user can reclaim it.
-                                    val isDeletable = remember(gemmaDownloadRevision, model.fileName) {
-                                        installedFile.isFile
-                                    }
-                                    val installedLabel = if (isInstalled) {
-                                        "Downloaded - ${formatFileSize(installedFile.length())}"
-                                    } else {
-                                        model.description
-                                    }
-                                    val isDownloadingThis = gemmaDownloadingModel?.fileName == model.fileName
-                                    val downloadFill by animateColorAsState(
-                                        targetValue = if (isDownloadingThis) colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent,
-                                        animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
-                                        label = "modelDownloadFill"
-                                    )
-                                    val isRecommended = model.fileName == recommendedModel.fileName
-                                    // Warn only when the model needs more RAM than this device has;
-                                    // downloading is still allowed.
-                                    val exceedsRam = gemmaModelNeedsMoreMemory(model, deviceTotalRamBytes)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                if (isInstalled) {
-                                                    useDownloadedModel(model)
-                                                } else {
-                                                    onStartGemmaDownload(model)
+                                    key(model.fileName) {
+                                        val installedFile = File(context.filesDir, model.fileName)
+                                        // Any file under the catalog name counts, a stale version included, so it can be reclaimed.
+                                        val fileBytes = remember(gemmaDownloadRevision, model.fileName) {
+                                            installedFile.takeIf { it.isFile }?.length()
+                                        }
+                                        val installedError = remember(gemmaDownloadRevision, model.fileName) {
+                                            validateDownloadedGemma(model, installedFile)
+                                        }
+                                        val isDownloadingThis = gemmaDownloadingModel?.fileName == model.fileName
+                                        // A paused or failed run keeps its resume state; the row offers Resume from it.
+                                        val pausedBytes = remember(gemmaDownloadRevision, model.fileName, isDownloadingThis) {
+                                            if (isDownloadingThis) null else gemmaPartialBytes(model, context.cacheDir)
+                                        }
+                                        val state = catalogModelRowState(
+                                            model = model,
+                                            fileBytes = fileBytes,
+                                            verified = installedError == null && model.fileName in verifiedGemmaFileNames,
+                                            selected = selectedLocalModelId == model.fileName,
+                                            recommended = model.fileName == recommendedModel.fileName,
+                                            needsMoreMemory = gemmaModelNeedsMoreMemory(model, deviceTotalRamBytes),
+                                            downloading = isDownloadingThis,
+                                            downloadProgress = gemmaDownloadProgress,
+                                            verifying = gemmaDownloadVerifying,
+                                            pausedBytes = pausedBytes,
+                                            deleting = gemmaDeletingModel?.fileName == model.fileName,
+                                            freedBytes = visibleFreed?.takeIf { it.fileName == model.fileName }?.bytes,
+                                            downloadRun = gemmaDownloadStarts
+                                        )
+                                        ModelRow(
+                                            state = state,
+                                            chipEnabled = when (state.kind) {
+                                                ModelRowKind.Starting, ModelRowKind.Downloading -> true
+                                                else -> rowsIdle && gemmaDownloadingModel == null
+                                            },
+                                            columnEnabled = when (state.column) {
+                                                ModelRowColumn.Cancel -> !anyDeleting
+                                                // Disabled, not hidden, while the local model is loading or generating.
+                                                ModelRowColumn.Trash -> rowsIdle && !localModelGenerating
+                                                else -> false
+                                            },
+                                            onChip = {
+                                                when (state.chip) {
+                                                    ModelRowChip.Download, ModelRowChip.Resume, ModelRowChip.Update -> onStartGemmaDownload(model)
+                                                    ModelRowChip.Pause -> onPauseGemmaDownload()
+                                                    ModelRowChip.Use -> useDownloadedModel(model)
+                                                    // Reloads the selection after Unload Model or a failed load.
+                                                    ModelRowChip.Selected -> if (!localModelLoaded) onSelectSavedLocalModel(model.fileName)
+                                                    null -> Unit
                                                 }
                                             },
-                                            enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
-                                            modifier = Modifier.weight(1f),
-                                            shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                                            colors = ButtonDefaults.outlinedButtonColors(
-                                                containerColor = downloadFill,
-                                                disabledContainerColor = downloadFill
-                                            )
-                                        ) {
-                                            // The model name and icon slot stay put as progress changes.
-                                            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
-                                                if (isDownloadingThis) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(16.dp),
-                                                        color = colorScheme.primary,
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                } else {
-                                                    Icon(
-                                                        if (isInstalled) Icons.Default.CheckCircle else Icons.Default.Download,
-                                                        null,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
+                                            onColumn = {
+                                                when (state.column) {
+                                                    ModelRowColumn.Cancel -> onCancelGemmaDownload(model)
+                                                    ModelRowColumn.Trash -> deleteRequest = ModelDeleteRequest(
+                                                        model.label,
+                                                        fileBytes ?: 0L,
+                                                        custom = false,
+                                                        inUse = selectedLocalModelId == model.fileName
+                                                    ) { onDeleteDownloadedGemma(model) }
+                                                    else -> Unit
                                                 }
-                                            }
-                                            Column(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .padding(start = 8.dp),
-                                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                ) {
-                                                    Text(model.label, fontWeight = FontWeight.Medium)
-                                                    if (isRecommended) {
-                                                        Text(
-                                                            "Recommended",
-                                                            fontSize = 12.sp,
-                                                            fontWeight = FontWeight.Medium,
-                                                            color = colorScheme.onSurfaceVariant,
-                                                            modifier = Modifier
-                                                                .background(
-                                                                    colorScheme.surfaceVariant,
-                                                                    RoundedCornerShape(4.dp)
-                                                                )
-                                                                .padding(horizontal = DesignTokens.Spacing.xs, vertical = 2.dp)
-                                                        )
-                                                    }
-                                                }
-                                                Text(
-                                                    when {
-                                                        isDownloadingThis && gemmaDownloadVerifying -> "Verifying download..."
-                                                        isDownloadingThis -> formatDownloadProgress(gemmaDownloadProgress)
-                                                        else -> installedLabel
-                                                    },
-                                                    fontSize = 12.sp,
-                                                    color = colorScheme.onSurfaceVariant
-                                                )
-                                                if (exceedsRam) {
-                                                    Text(
-                                                        "May be slow on this device — needs more memory",
-                                                        fontSize = 12.sp,
-                                                        color = colorScheme.error
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        if (isDeletable) {
-                                            // Disabled, not hidden, while this entry downloads or the
-                                            // local model is loading or generating.
-                                            IconButton(
-                                                onClick = { gemmaToDelete = model },
-                                                enabled = !isDownloadingThis && !localModelLoading &&
-                                                    !copyingFile && !localModelGenerating && gemmaDeletingModel == null,
-                                                colors = IconButtonDefaults.iconButtonColors(contentColor = colorScheme.error)
-                                            ) {
-                                                Icon(Icons.Default.Delete, contentDescription = "Delete ${model.label}")
-                                            }
-                                        }
+                                            },
+                                            mainTag = "gemmaDownload.${model.fileName}",
+                                            deleteTag = "gemmaDelete.${model.fileName}",
+                                            cancelTag = "gemmaCancel.${model.fileName}"
+                                        )
+                                        Spacer(Modifier.height(DesignTokens.Rhythm.tight))
                                     }
-                                    Spacer(Modifier.height(8.dp))
                                 }
 
                                 // Load model button
                                 Button(
                                     onClick = { filePicker.launch(arrayOf("*/*")) },
-                                    enabled = !localModelLoading && !copyingFile && gemmaDownloadingModel == null && gemmaDeletingModel == null,
+                                    enabled = rowsIdle && gemmaDownloadingModel == null,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                                     colors = ButtonDefaults.buttonColors(
@@ -1326,4 +1314,24 @@ private fun EditorToggleRow(
             colors = switchColors
         )
     }
+}
+
+/** How long a finished delete's "back for your songs" line stays, the toast lifetime. */
+private const val MODEL_FREED_LINE_MILLIS = 4_000L
+
+/** A confirmed Delete waiting on the dialog: what it frees and whether the model is in use. */
+private data class ModelDeleteRequest(
+    val title: String,
+    val bytes: Long,
+    val custom: Boolean,
+    val inUse: Boolean,
+    val confirm: () -> Unit
+)
+
+/** The delete confirmation's message, its size in medium weight; the in-use sentence only for the selected model. */
+internal fun modelDeleteMessage(bytes: Long, custom: Boolean, inUse: Boolean) = buildAnnotatedString {
+    append("Frees ")
+    withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append(formatFileSize(bytes)) }
+    append(" on this device. You can ${if (custom) "import" else "download"} it again later.")
+    if (inUse) append(" It's in use now; on-device suggestions stop until you choose another model.")
 }

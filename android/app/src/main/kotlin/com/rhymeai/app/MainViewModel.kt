@@ -67,13 +67,16 @@ import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -148,6 +151,9 @@ internal object SongOpenTestHooks {
 /** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
 /** Persisted when the selected local model was deleted: restore must not pick another one. */
 private const val NO_LOCAL_MODEL_SELECTION = ""
+
+/** A finished local-model delete: [bytes] given back by [fileName] at [atUptimeMillis]. */
+internal data class LocalModelFreed(val fileName: String, val label: String, val bytes: Long, val atUptimeMillis: Long)
 
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -2773,7 +2779,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSavedLocalModel(modelId: String) {
         val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
-        if (gemmaDeletingModel?.fileName == model.fileName) return
+        if (isDeletingLocalModelFile(model.fileName)) return
         modelChoiceRevision++
         val ticket = beginLocalModelChange()
         val generation = localModelValidationGeneration
@@ -2862,6 +2868,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var gemmaDownloadRevision by mutableStateOf(0)
         private set
+    /** Counts started runs, so a row's progress line restarts from each run's own bytes. */
+    var gemmaDownloadStarts by mutableStateOf(0)
+        private set
     var verifiedGemmaFileNames by mutableStateOf<Set<String>>(emptySet())
         private set
 
@@ -2907,7 +2916,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     internal fun startGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
-        if (gemmaDownloadingModel != null || gemmaDeletingModel?.fileName == model.fileName) return
+        if (gemmaDownloadingModel != null || isDeletingLocalModelFile(model.fileName)) return
+        gemmaDownloadStarts++
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
         gemmaDownloadVerifying = false
@@ -2915,8 +2925,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         gemmaLastDownloadAttempt = model
         val choiceRevisionAtStart = modelChoiceRevision
         val app = getApplication<android.app.Application>()
+        // A paused or cancelled run of this model may still be unwinding; never let two write its partial.
+        val previous = gemmaDownloadRuns[model.fileName]?.job
+        val run = GemmaRun()
+        gemmaDownloadRuns[model.fileName] = run
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // Undispatched and not cancellable while it waits: even a run paused before it was
+        // scheduled waits for the one before it, so the chain never breaks.
+        run.job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) { previous?.join() }
+            yield() // off the caller's thread before any file work; a stopped run ends here
             val destFile = java.io.File(app.filesDir, model.fileName)
             val tempFile = com.rhymeai.app.ui.components.gemmaDownloadTempFile(app.cacheDir, model)
             try {
@@ -2930,21 +2948,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(model, destFile, tempFile)
+                com.rhymeai.app.ui.components.ensureEnoughSpaceForGemma(
+                    model, destFile, tempFile, unlessStopped = run::unlessStopped
+                )
                 com.rhymeai.app.ui.components.downloadGemmaAndInstall(
                     model = model,
                     tempFile = tempFile,
                     destinationFile = destFile,
                     onProgress = { progress ->
                         withContext(Dispatchers.Main) {
-                            gemmaDownloadProgress = progress
+                            // A stopped run's last checkpoint still reports; only the live run moves the row.
+                            if (!run.stopped && gemmaDownloadRuns[model.fileName] === run) gemmaDownloadProgress = progress
                         }
                     },
                     onVerifying = {
                         withContext(Dispatchers.Main) {
                             gemmaDownloadVerifying = true
                         }
-                    }
+                    },
+                    unlessStopped = run::unlessStopped
                 )
 
                 withContext(Dispatchers.Main) {
@@ -2955,6 +2977,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     useDownloadedGemma(model, choiceRevisionAtStart)
                 }
             } catch (e: Exception) {
+                // Paused or cancelled: the caller already reset the row, and the partial stays for Resume.
+                if (!isActive) return@launch
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)
                 withContext(Dispatchers.Main) {
                     gemmaDownloadingModel = null
@@ -2964,6 +2988,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadRevision++
                     gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
                 }
+            }
+        }
+    }
+
+    /**
+     * One run per catalog file: the download, or the cancel that clears its partial. Each run
+     * waits for the one before it. A stopped run refuses its destructive steps (reclaiming a
+     * stale installed file, installing the finished one) under the same lock that stops it, so
+     * a pause or cancel the user saw take effect never deletes or installs a file afterwards.
+     */
+    private class GemmaRun {
+        var job: Job? = null
+        @Volatile var stopped = false
+            private set
+
+        fun stop() = synchronized(this) { stopped = true }
+
+        fun unlessStopped(step: () -> Boolean): Boolean = synchronized(this) {
+            if (stopped) throw CancellationException("Download stopped")
+            step()
+        }
+    }
+
+    private val gemmaDownloadRuns = mutableMapOf<String, GemmaRun>()
+
+    /**
+     * Stops the running download and keeps its partial file and resume state, so Resume (or
+     * an app restart) continues from the bytes already written. Refused while the finished
+     * file is being checked.
+     */
+    internal fun pauseGemmaDownload() {
+        val model = gemmaDownloadingModel ?: return
+        if (gemmaDownloadVerifying) return
+        val run = gemmaDownloadRuns[model.fileName]
+        run?.stop()
+        val job = run?.job
+        job?.cancel()
+        gemmaDownloadingModel = null
+        gemmaDownloadProgress = null
+        gemmaDownloadRevision++
+        // The row reads the kept bytes from the resume state, which the run writes as it stops.
+        viewModelScope.launch {
+            job?.join()
+            gemmaDownloadRevision++
+        }
+    }
+
+    /**
+     * Stops the running or paused download of [model] and removes its partial file and resume
+     * state. The installed file, a stale version included, is never touched.
+     */
+    internal fun cancelGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
+        val running = gemmaDownloadingModel?.fileName == model.fileName
+        if (running && gemmaDownloadVerifying) return
+        val app = getApplication<android.app.Application>()
+        val previous = gemmaDownloadRuns[model.fileName]
+        if (running) {
+            previous?.stop()
+            previous?.job?.cancel()
+            gemmaDownloadingModel = null
+            gemmaDownloadProgress = null
+        }
+        gemmaDownloadError = null
+        gemmaDownloadRevision++
+        val run = GemmaRun()
+        gemmaDownloadRuns[model.fileName] = run
+        run.job = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) { previous?.job?.join() }
+            try {
+                withContext(Dispatchers.IO) { com.rhymeai.app.ui.components.deleteGemmaPartial(model, app.cacheDir) }
+            } catch (error: java.io.IOException) {
+                gemmaLastDownloadAttempt = null
+                gemmaDownloadError = "Failed to cancel ${model.label}: ${error.message}"
+            } finally {
+                gemmaDownloadRevision++
             }
         }
     }
@@ -3024,6 +3123,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     internal var gemmaDeletingModel by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
         private set
 
+    /** The imported model being deleted, by its saved id; refused like [gemmaDeletingModel]. */
+    internal var deletingCustomModelId by mutableStateOf<String?>(null)
+        private set
+
+    /** Space the last finished delete gave back, for the row's "back for your songs" line. */
+    internal var localModelFreed by mutableStateOf<LocalModelFreed?>(null)
+        private set
+
+    private fun isDeletingLocalModelFile(fileName: String): Boolean =
+        gemmaDeletingModel?.fileName == fileName ||
+            savedLocalModels.any { it.id == deletingCustomModelId && it.fileName == fileName }
+
     /** Deletes started per catalog file; a download validated across one must not publish its selection. */
     private val gemmaDeleteCounts = mutableMapOf<String, Int>()
     private val savedLocalModelsWriteLock = Mutex()
@@ -3041,14 +3152,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * failure, including a persistence failure, reports on the download error row.
      */
     internal fun deleteDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload) {
-        if (gemmaDeletingModel != null || gemmaDownloadingModel?.fileName == model.fileName) return
+        if (isDeletingAnyLocalModel() || gemmaDownloadingModel?.fileName == model.fileName) return
         val app = getApplication<android.app.Application>()
-        val installedFile = java.io.File(app.filesDir, model.fileName)
         gemmaDeletingModel = model
         gemmaDeleteCounts[model.fileName] = (gemmaDeleteCounts[model.fileName] ?: 0) + 1
+        // A paused run may still be writing its last checkpoint; wait for it so nothing is left behind.
+        val download = gemmaDownloadRuns[model.fileName]?.job
+        deleteLocalModelFile(model.fileName, model.label, onFinished = { gemmaDeletingModel = null }) {
+            download?.join()
+            withContext(Dispatchers.IO) {
+                com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
+            }
+        }
+    }
+
+    /**
+     * Deletes the app's own copy of an imported model (the `custom-<uuid>.gguf` the import made
+     * in the app's files). The file the writer picked is never opened or touched. Selection,
+     * serialization and failure reporting are the same as [deleteDownloadedGemma].
+     */
+    internal fun deleteCustomLocalModel(modelId: String) {
+        if (isDeletingAnyLocalModel()) return
+        val model = savedLocalModels.firstOrNull { it.id == modelId && it.isCustom } ?: return
+        val filesDir = getApplication<android.app.Application>().filesDir
+        val copy = java.io.File(filesDir, model.fileName)
+        // Only a plain file of the app's own, never a catalog download under the same name.
+        if (copy.parentFile?.canonicalPath != filesDir.canonicalPath ||
+            com.rhymeai.app.ui.components.GEMMA_DOWNLOADS.any { it.fileName == model.fileName }
+        ) {
+            gemmaDownloadError = "Failed to delete ${model.displayName}: it is not an imported copy"
+            return
+        }
+        deletingCustomModelId = model.id
+        deleteLocalModelFile(model.fileName, model.displayName, onFinished = { deletingCustomModelId = null }) {
+            withContext(Dispatchers.IO) {
+                if (copy.exists() && !copy.delete()) throw java.io.IOException("Could not delete ${copy.name}")
+            }
+        }
+    }
+
+    private fun isDeletingAnyLocalModel() = gemmaDeletingModel != null || deletingCustomModelId != null
+
+    private fun deleteLocalModelFile(
+        fileName: String,
+        label: String,
+        onFinished: () -> Unit,
+        deleteFiles: suspend () -> Unit
+    ) {
+        val installedFile = java.io.File(getApplication<android.app.Application>().filesDir, fileName)
         gemmaDownloadError = null
+        localModelFreed = null
         // Only the saved selection counts: localModelPath also names a rejected selection attempt.
-        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName
+        val wasSelected = selectedSavedLocalModel()?.fileName == fileName
         val attempt: suspend () -> Unit = {
             try {
                 if (wasSelected) {
@@ -3060,24 +3215,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         selectedLocalModelId = null
                     }
                 }
+                val bytes = installedFile.length()
                 try {
-                    withContext(Dispatchers.IO) {
-                        com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
-                    }
+                    deleteFiles()
                 } finally {
                     // Whatever was removed, the rows and the saved list follow the disk.
                     gemmaDownloadRevision++
                     if (!installedFile.isFile) {
-                        verifiedGemmaFileNames -= model.fileName
-                        savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
+                        verifiedGemmaFileNames -= fileName
+                        savedLocalModels = savedLocalModels.filterNot { it.fileName == fileName }
                         persistSavedLocalModels()
                     }
                 }
+                if (bytes > 0L) {
+                    localModelFreed = LocalModelFreed(fileName, label, bytes, android.os.SystemClock.uptimeMillis())
+                }
             } catch (error: Exception) {
                 gemmaLastDownloadAttempt = null
-                gemmaDownloadError = "Failed to delete ${model.label}: ${error.message}"
+                gemmaDownloadError = "Failed to delete $label: ${error.message}"
             } finally {
-                gemmaDeletingModel = null
+                onFinished()
             }
         }
         val ticket = if (wasSelected) {
