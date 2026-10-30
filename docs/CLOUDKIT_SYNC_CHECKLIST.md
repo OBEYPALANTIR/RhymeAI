@@ -20,6 +20,42 @@ The script verifies:
 - CloudKit-backed SwiftData models do not use `@Attribute(.unique)`.
 - `TrashLifecycleTests` pass for duplicate active/trash rows and purge behavior.
 
+## CloudKit schema
+
+SwiftData's CloudKit mirroring creates a record type only when the first record
+of that type is pushed. The Development schema for
+`iCloud.ShaydeTree.Writers-Block` therefore holds only `CD_SongProject` (plus
+`Users`): no Debug build has ever pushed a `TrashedSongProject`,
+`SyncDeletionRecord`, `SyncRecordingDeletion` or `Recording`. Production has no
+record types at all, so TestFlight builds have never synced.
+
+To materialize the complete schema, launch a Debug build with
+`--initialize-cloudkit-schema` on a device signed into iCloud. The app runs
+`NSPersistentCloudKitContainer.initializeCloudKitSchema(options:)` against a
+throwaway store under the temporary directory (the real library is untouched),
+logs the result under subsystem `ShaydeTree.Writers-Block` / category `storage`,
+prints `CLOUDKIT_SCHEMA_INIT: ok` or `CLOUDKIT_SCHEMA_INIT: failed <error>` to
+stdout, removes the temporary store and continues the normal launch. Release
+builds do not contain the routine.
+
+- Xcode: Product > Scheme > Edit Scheme > Run > Arguments, add
+  `--initialize-cloudkit-schema`, run on the device, then remove the argument.
+- Command line, after installing the Debug build on the device:
+
+  ```sh
+  xcrun devicectl device process launch --device <udid> --console \
+    ShaydeTree.Writers-Block --initialize-cloudkit-schema
+  ```
+
+  (`--start-stopped` instead of `--console` to attach a debugger first.)
+
+Then open CloudKit Console, confirm the Development schema lists `CD_SongProject`,
+`CD_TrashedSongProject`, `CD_SyncDeletionRecord`, `CD_SyncRecordingDeletion` and
+`CD_Recording`, and use **Deploy Schema Changes** to promote Development to
+Production. Repeat after any `@Model` change that adds a type or attribute.
+`CloudKitSchemaInitializerTests` pins the entities and attributes the routine
+creates.
+
 ## Live Matrix
 
 Use stable test titles with timestamps so synced rows are easy to distinguish.

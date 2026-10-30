@@ -121,13 +121,16 @@ struct TrashLifecycleTests {
         context.insert(trashed)
         try context.save()
 
-        viewModel.restoreTrashedProject(trashed)
+        let returned = viewModel.restoreTrashedProject(trashed)
 
         let activeProjects = try Self.fetchProjects(context)
         let restored = try #require(activeProjects.first)
 
         #expect(activeProjects.count == 1)
         #expect(restored.id == "song-1")
+        // The Trash's "Restored … · Open" toast opens the song it is handed.
+        #expect(returned?.id == "song-1")
+        #expect(returned?.title == "Restored Draft")
         #expect(restored.title == "Restored Draft")
         #expect(restored.lyrics == "new lyrics")
         #expect(restored.theme == "clear signal")

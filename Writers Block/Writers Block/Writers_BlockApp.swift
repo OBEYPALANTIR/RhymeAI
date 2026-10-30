@@ -121,6 +121,9 @@ struct Writers_BlockApp: App {
 
     init() {
         RetiredPreferences.remove()
+        #if DEBUG
+        CloudKitSchemaInitializer.runIfRequested()
+        #endif
         let bootstrap = Self.makeModelContainer()
         _persistenceState = StateObject(
             wrappedValue: AppPersistenceState(
@@ -166,6 +169,7 @@ struct Writers_BlockApp: App {
             }
             .task {
                 UITestFlags.seedCustomGGUFModelIfRequested()
+                UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
             }
             .task {

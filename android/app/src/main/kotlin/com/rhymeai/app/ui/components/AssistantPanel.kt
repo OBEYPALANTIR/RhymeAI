@@ -201,6 +201,8 @@ fun AssistantPanel(
                 OutlinedTextField(
                     value = viewModel.theme,
                     onValueChange = { viewModel.onThemeChanged(it) },
+                    // The song that is leaving for another one takes no input.
+                    readOnly = viewModel.openingSong,
                     placeholder = { Text("What is this song about?", fontSize = DesignTokens.Typography.caption) },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -594,8 +596,7 @@ fun AssistantPanel(
                                     onKeep = { viewModel.keepAlternate(suggestedLine.text) },
                                     isKept = viewModel.songWorkspace.alternates.any { it.text == suggestedLine.text.trim() },
                                     onUse = {
-                                        viewModel.insertSuggestion(suggestedLine.text)
-                                        onSuggestionInserted()
+                                        if (viewModel.insertSuggestion(suggestedLine.text)) onSuggestionInserted()
                                     }
                                 )
                             }

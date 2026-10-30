@@ -1096,6 +1096,16 @@ class NewFeatureUiTest {
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithTag("lyricsEditor").fetchSemanticsNodes().isNotEmpty()
         }
+        // New Song focuses the title and raises the keyboard; measure once the actions have settled above it.
+        var last = composeRule.onNodeWithTag("unBlockAction").getUnclippedBoundsInRoot()
+        var stableFrames = 0
+        val deadline = System.currentTimeMillis() + 3_000
+        while (stableFrames < 3 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+            val now = composeRule.onNodeWithTag("unBlockAction").getUnclippedBoundsInRoot()
+            stableFrames = if (now == last) stableFrames + 1 else 0
+            last = now
+        }
     }
 
     private fun setEmulatorNetworkEnabled(enabled: Boolean) {

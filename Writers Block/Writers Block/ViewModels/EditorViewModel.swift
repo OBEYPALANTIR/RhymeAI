@@ -315,7 +315,12 @@ final class EditorViewModel: ObservableObject {
     @Published var title: String = ""
     @Published var lyrics: String = "" {
         didSet {
-            if lyrics != oldValue { clearInsertionFeedback() }
+            if lyrics != oldValue {
+                clearInsertionFeedback()
+                // A request answers the lyrics and cursor it was built from
+                // (Android cancels on text and selection changes too).
+                cancelSuggestions()
+            }
             scheduleDerivedStateRefresh()
         }
     }
@@ -332,6 +337,7 @@ final class EditorViewModel: ObservableObject {
     }
     @Published var cursorPosition: Int = 0 {
         didSet {
+            if cursorPosition != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
@@ -369,18 +375,30 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Rhyme Settings
 
-    @Published var rhymeType: RhymeType = .perfect
+    // Rhyme options shape the request, so changing one mid-stream drops it,
+    // as the Android setters do; lines already shown stay.
+    @Published var rhymeType: RhymeType = .perfect {
+        didSet {
+            if rhymeType != oldValue { cancelSuggestions() }
+        }
+    }
     @Published var rhymeScheme: RhymeScheme = .aabb {
         didSet {
+            if rhymeScheme != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
     @Published var customRhymeScheme: String = "" {
         didSet {
+            if customRhymeScheme != oldValue { cancelSuggestions() }
             scheduleDerivedStateRefresh()
         }
     }
-    @Published var rhymeComplexity: RhymeComplexity = .moderate
+    @Published var rhymeComplexity: RhymeComplexity = .moderate {
+        didSet {
+            if rhymeComplexity != oldValue { cancelSuggestions() }
+        }
+    }
     // These six are persisted to UserDefaults so the user's editor preferences
     // survive app restarts. Keys use an "editor." prefix to namespace them away
     // from provider/model keys. Whole Song Context defaults on (Android parity).
@@ -462,6 +480,16 @@ final class EditorViewModel: ObservableObject {
 
     @Published var currentProjectId: String?
     @Published var saveStatus: SaveStatus = .idle
+
+    /// One song opened or started in the editor. `newProject` and `loadProject`
+    /// issue a fresh token so the writing column can cross-fade once per open;
+    /// an unsaved song's first autosave keeps its token and does not re-fade.
+    struct EditorOpen: Hashable {
+        let id = UUID()
+        /// New Song moves focus to the title field; opening a saved song keeps its restored cursor.
+        let isNewSong: Bool
+    }
+    @Published private(set) var editorOpen = EditorOpen(isNewSong: false)
 
     @Published var companion = WritingCompanion()
     @Published var showNotebook = false
@@ -1570,6 +1598,7 @@ final class EditorViewModel: ObservableObject {
         theme = ""
         cursorPosition = 0
         currentProjectId = nil
+        editorOpen = EditorOpen(isNewSong: true)
         resetCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -1606,6 +1635,7 @@ final class EditorViewModel: ObservableObject {
         theme = project.theme
         cursorPosition = 0
         currentProjectId = project.id
+        editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -1649,9 +1679,11 @@ final class EditorViewModel: ObservableObject {
         return true
     }
 
+    /// Returns the restored song, which the Trash's toast can open, or nil
+    /// when the save failed and the song stays in Trash.
     @discardableResult
-    func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> Bool {
-        guard let context = modelContext else { return false }
+    func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> SongProject? {
+        guard let context = modelContext else { return nil }
         let restoredProject = trashedProject.restoredProject()
         removeExistingProjects(id: restoredProject.id, in: context)
         context.insert(restoredProject)
@@ -1661,10 +1693,10 @@ final class EditorViewModel: ObservableObject {
         } catch {
             context.rollback()
             errorMessage = "Couldn't restore this song. It remains in Trash."
-            return false
+            return nil
         }
         scheduleTrashPurge()
-        return true
+        return restoredProject
     }
 
     @discardableResult
@@ -2375,9 +2407,12 @@ final class EditorViewModel: ObservableObject {
     func keepAlternate(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard flushCurrentDraft() else { return }
+        // The notebook sheet shows only companionError, so a failed song save
+        // must be reported here or the sheet clears the unsaved line.
+        let notKept = "Could not keep this line because the song did not save. Try again."
+        guard flushCurrentDraft() else { companionError = notKept; return }
         if currentProjectId == nil, modelContext != nil { _ = ensureProjectForRecording() }
-        guard let id = currentProjectId else { return }
+        guard let id = currentProjectId else { companionError = notKept; return }
         var next = companion
         next.keep(trimmed)
         persistCompanion(next, id: id)

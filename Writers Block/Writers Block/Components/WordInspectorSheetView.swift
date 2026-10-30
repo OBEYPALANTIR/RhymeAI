@@ -148,24 +148,26 @@ struct WordInspectorSheetView: View {
                         Button(action: onRetrySynonyms) {
                             Label("Retry", systemImage: "arrow.clockwise")
                                 .font(.caption.weight(.semibold))
-                                // Taller hit area without growing the row: on
-                                // iPad's short sheet a 44pt row pushed the
-                                // error text below the fold.
-                                .padding(.vertical, RhymeAITokens.Spacing.sm)
+                                .frame(minHeight: RhymeAITokens.Touch.minimum)
                                 .contentShape(Rectangle())
-                                .padding(.vertical, -RhymeAITokens.Spacing.sm)
                         }
+                        // The 44pt hit area overhangs the row instead of
+                        // growing it: on iPad's short sheet a 44pt row pushed
+                        // the error text below the fold. Negative padding
+                        // inside the label shrank the audited frame to 14pt.
+                        .padding(.vertical, -RhymeAITokens.Spacing.md)
                     case .openSettings:
                         Button(action: onOpenSettings) {
                             Label("Settings", systemImage: "gearshape")
                                 .font(.caption.weight(.semibold))
-                                // Taller hit area without growing the row: on
-                                // iPad's short sheet a 44pt row pushed the
-                                // error text below the fold.
-                                .padding(.vertical, RhymeAITokens.Spacing.sm)
+                                .frame(minHeight: RhymeAITokens.Touch.minimum)
                                 .contentShape(Rectangle())
-                                .padding(.vertical, -RhymeAITokens.Spacing.sm)
                         }
+                        // The 44pt hit area overhangs the row instead of
+                        // growing it: on iPad's short sheet a 44pt row pushed
+                        // the error text below the fold. Negative padding
+                        // inside the label shrank the audited frame to 14pt.
+                        .padding(.vertical, -RhymeAITokens.Spacing.md)
                     }
                 }
             }

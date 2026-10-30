@@ -436,7 +436,7 @@ struct CloudPrivacyFlowTests {
             case .none, .streamError:
                 break
             case .consume:
-                // Using a line clears the list without cancelling the request.
+                // Using a line clears the list; the edit also drops the request.
                 viewModel.insertSuggestion(viewModel.suggestions[0].text)
                 #expect(viewModel.suggestions.isEmpty)
             case .stop:
@@ -467,6 +467,87 @@ struct CloudPrivacyFlowTests {
                 #expect(viewModel.suggestions.count == 1)
             }
         }
+    }
+
+    /// A request answers the lyrics, cursor and rhyme options it was built
+    /// from; changing any of them mid-stream drops the request, as Android
+    /// `cancelEditorAIWork` does, so stale lines never land under new settings.
+    @Test func editorAndRhymeOptionChangesCancelAnInFlightRequest() async throws {
+        enum Change: CaseIterable { case lyrics, cursor, rhymeType, rhymeScheme, customScheme, complexity, insert }
+        for change in Change.allCases {
+            let (defaults, suiteName) = Self.makeDefaults()
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            let keychain = InMemoryKeychainStore()
+            keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+            StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+            defer { StagedStreamURLProtocol.release(.finish) }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [StagedStreamURLProtocol.self]
+            let viewModel = EditorViewModel(
+                aiService: AIService(session: URLSession(configuration: configuration)),
+                keychainStore: keychain,
+                defaults: defaults
+            )
+            viewModel.saveProvider(.gemini)
+            viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+            viewModel.lyrics = "A first unfinished line"
+            viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+            viewModel.getSuggestions()
+            #expect(await Self.waitUntil { viewModel.suggestions.count == 1 }, "\(change): the first line streams in")
+            #expect(viewModel.isLoading)
+
+            switch change {
+            case .lyrics: viewModel.onLyricsChanged("A first unfinished line edited")
+            case .cursor: viewModel.cursorPosition = 0
+            case .rhymeType: viewModel.rhymeType = .near
+            case .rhymeScheme: viewModel.rhymeScheme = .abab
+            case .customScheme: viewModel.customRhymeScheme = "ABCB"
+            case .complexity: viewModel.rhymeComplexity = .complex
+            case .insert: viewModel.insertSuggestion(viewModel.suggestions[0].text)
+            }
+
+            #expect(!viewModel.isLoading, "\(change): the request is dropped at once")
+            #expect(viewModel.suggestionsRequestIDForTest() == nil, "\(change)")
+            StagedStreamURLProtocol.release(.finish)
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(viewModel.completedSuggestionsRequestID == nil, "\(change): a dropped request never completes")
+            #expect(viewModel.errorMessage == nil, "\(change)")
+        }
+    }
+
+    /// Known difference from Android (PARITY.md): only the published insertion point
+    /// cancels; a selection that grows from the same start leaves the request running.
+    @Test func growingASelectionFromTheSameStartKeepsTheRequest() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+        defer { StagedStreamURLProtocol.release(.finish) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StagedStreamURLProtocol.self]
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: URLSession(configuration: configuration)),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = 0
+        viewModel.selectedRange = NSRange(location: 0, length: 0)
+
+        viewModel.getSuggestions()
+        let requestID = try #require(viewModel.suggestionsRequestIDForTest())
+        #expect(await Self.waitUntil { viewModel.suggestions.count == 1 })
+
+        viewModel.selectedRange = NSRange(location: 0, length: 7)
+        #expect(viewModel.isLoading)
+
+        StagedStreamURLProtocol.release(.finish)
+        #expect(await Self.waitUntil { !viewModel.isLoading })
+        #expect(viewModel.completedSuggestionsRequestID == requestID)
     }
 
     private static func makeSession() -> URLSession {

@@ -61,6 +61,14 @@ class WritingCompanionUiTest {
         }
     }
 
+    @Test fun openingTheNotebookKeepsTheSelectionForKeepSelectedLyrics() {
+        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(0, 11))) }
+        composeRule.onNodeWithTag("songActionsMenuButton").performClick()
+        composeRule.onNodeWithText("Song Notebook").performClick()
+        composeRule.onNodeWithText("Keep selected lyrics").assertIsEnabled().performClick()
+        onMain { assertEquals(listOf("first lyric"), vm.songWorkspace.alternates.map { it.text }) }
+    }
+
     @Test fun localUnavailableDisablesSuggestionsAndLinksToSetup() {
         onMain {
             vm.onLyricsChanged(TextFieldValue("A quiet line"))

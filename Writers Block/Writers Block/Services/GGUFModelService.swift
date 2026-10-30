@@ -89,10 +89,14 @@ nonisolated enum GGUFModelCatalog {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+        // read(upToCount:) returns autoreleased chunks. Without a pool per chunk they all
+        // stay resident until this returns, which jetsams the app on a multi-GB model.
+        while try autoreleasepool(invoking: {
+            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
             try cancellationCheck()
             hasher.update(data: data)
-        }
+            return true
+        }) {}
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
@@ -114,6 +118,7 @@ nonisolated enum GGUFModelCatalog {
 
 nonisolated enum GGUFModelSelection {
     private static let key = "selectedGGUFModelFileName"
+    private static let clearedKey = "ggufModelSelectionCleared"
     private static let stateLock = NSRecursiveLock()
 
     // Filename and revision must be observed/mutated together across UI and runner actors.
@@ -170,6 +175,7 @@ nonisolated enum GGUFModelSelection {
             guard GGUFModelCatalog.descriptor(fileName: fileName) != nil
                     || GGUFCustomModelRegistry.contains(fileName: fileName, defaults: defaults) else { return }
             defaults.set(fileName, forKey: key)
+            defaults.removeObject(forKey: clearedKey)
             SynonymLocalRevision.advance(defaults: defaults)
         }
     }
@@ -181,10 +187,29 @@ nonisolated enum GGUFModelSelection {
         }
     }
 
+    /// True between `clearExplicitly` and the next `save`.
+    static func isCleared(defaults: UserDefaults = .standard) -> Bool {
+        withStateLock { defaults.bool(forKey: clearedKey) }
+    }
+
+    /// The user deleted the selected model: nothing is selected, and `preferredFileName`
+    /// stops falling back to another installed model until the next explicit choice.
+    static func clearExplicitly(defaults: UserDefaults = .standard) {
+        withStateLock {
+            defaults.removeObject(forKey: key)
+            defaults.set(true, forKey: clearedKey)
+            SynonymLocalRevision.advance(defaults: defaults)
+        }
+    }
+
+    /// An explicit choice is honoured as saved; the fallback never picks a catalog model the
+    /// device is short on memory for (`GGUFDownloadCatalog.needsMoreMemory`) and is off
+    /// after `clearExplicitly` (the selected model was deleted) until the next `save`.
     static func preferredFileName(
         in installedFileNames: [String],
         selectedFileName: String? = currentFileName,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        totalRAMBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> String? {
         let registered = Set(GGUFCustomModelRegistry.models(defaults: defaults).map(\.fileName))
         let catalog = GGUFModelCatalog.models.map(\.fileName)
@@ -193,20 +218,26 @@ nonisolated enum GGUFModelSelection {
                 (catalog.contains($0) || registered.contains($0))
         })
         if let selectedFileName, installed.contains(selectedFileName) { return selectedFileName }
-        if let catalogMatch = catalog.first(where: installed.contains) { return catalogMatch }
+        if isCleared(defaults: defaults) { return nil }
+        let fits = GGUFModelCatalog.models
+            .filter { !GGUFDownloadCatalog.needsMoreMemory($0, totalRAMBytes: totalRAMBytes) }
+            .map(\.fileName)
+        if let catalogMatch = fits.first(where: installed.contains) { return catalogMatch }
         return GGUFCustomModelRegistry.models(defaults: defaults)
             .first(where: { installed.contains($0.fileName) })?.fileName
     }
 
     static func resolvedModelURL(
         defaults: UserDefaults = .standard,
-        modelsDirectory: URL? = nil
+        modelsDirectory: URL? = nil,
+        totalRAMBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> URL? {
         guard let directory = modelsDirectory
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         guard let preferred = preferredFileName(
-            in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults
+            in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
+            totalRAMBytes: totalRAMBytes
         ) else { return nil }
         if preferred != currentFileName(defaults: defaults) { save(fileName: preferred, defaults: defaults) }
         return directory.appendingPathComponent(preferred)
@@ -285,6 +316,18 @@ nonisolated protocol LocalGGUFRunner: AnyObject, Sendable {
 
     /// Release native resources. Safe to call when not loaded.
     func unload() async
+
+    /// Runs `body` (the removal or replacement of the model file named `fileName`) on the
+    /// runner's own serial path, after releasing that model if it is the resident one, so
+    /// no load or generation overlaps the change on disk.
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws
+}
+
+extension LocalGGUFRunner {
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws {
+        await unload()
+        try body()
+    }
 }
 
 // MARK: - Factory
@@ -860,6 +903,13 @@ actor GGUFLlamaService: LocalGGUFRunner {
         releaseNative()
     }
 
+    func withExclusiveAccess(toModelFile fileName: String, _ body: @Sendable () throws -> Void) async throws {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        if loadedPath.map({ URL(fileURLWithPath: $0).lastPathComponent }) == fileName { releaseNative() }
+        try body()
+    }
+
     private func releaseNative() {
         if let ctx = context { llama_free(ctx) }
         if let m = model { llama_model_free(m) }
@@ -931,13 +981,15 @@ enum GGUFEngineChoice: String, CaseIterable {
         }
     }
 
-    static var current: GGUFEngineChoice {
-        let raw = UserDefaults.standard.string(forKey: "ggufEngineChoice") ?? ""
+    static var current: GGUFEngineChoice { current(defaults: .standard) }
+
+    static func current(defaults: UserDefaults) -> GGUFEngineChoice {
+        let raw = defaults.string(forKey: "ggufEngineChoice") ?? ""
         return GGUFEngineChoice(rawValue: raw) ?? .appleIntelligence
     }
 
-    func save() {
-        UserDefaults.standard.set(rawValue, forKey: "ggufEngineChoice")
-        SynonymLocalRevision.advance()
+    func save(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: "ggufEngineChoice")
+        SynonymLocalRevision.advance(defaults: defaults)
     }
 }

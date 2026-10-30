@@ -12,6 +12,17 @@ struct LyricsRewriteHighlight: Equatable {
 /// text storage, and the stock copy and cut would put it on the pasteboard as
 /// rich text.
 final class LyricsUITextView: UITextView {
+    /// Set when this view replaces a focused one (the writing column is
+    /// re-created per song open); it takes the focus as soon as it is on screen.
+    var resumesEditingOnAttach = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, resumesEditingOnAttach else { return }
+        resumesEditingOnAttach = false
+        becomeFirstResponder()
+    }
+
     override func copy(_ sender: Any?) {
         let copied = selectedTextRange.flatMap(text(in:))
         super.copy(sender)
@@ -41,10 +52,14 @@ struct LyricsTextView: UIViewRepresentable {
     var syllableColoringEnabled: Bool = false
     var isEditable: Bool = true
     var placeholder: String = "Start writing your lyrics here..."
+    /// The writing column is re-created for each song open (its cross-fade);
+    /// a focused editor stays focused across it, as the one text view did before.
+    var resumesEditingOnCreate: Bool = false
 
     func makeUIView(context: Context) -> UITextView {
         let textView = LyricsUITextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
+        textView.resumesEditingOnAttach = resumesEditingOnCreate
         Self.configureTypography(textView)
         textView.backgroundColor = .clear
         applyAppearance(to: textView)
@@ -102,7 +117,11 @@ struct LyricsTextView: UIViewRepresentable {
             highlight: activeHighlight,
             appearance: appearance
         ) {
-            context.coordinator.updateRewriteHighlight(textView, highlight: activeHighlight)
+            context.coordinator.updateRewriteHighlight(
+                textView,
+                highlight: activeHighlight,
+                animation: Self.highlightClearAnimation(for: context.transaction)
+            )
         }
         if context.coordinator.shouldKeepCursorVisible(
             textChanged: textChanged,
@@ -135,6 +154,17 @@ struct LyricsTextView: UIViewRepresentable {
 
     private var renderedText: String {
         displayText ?? text
+    }
+
+    /// The animation a highlight clear may fade on: the transaction's own, or
+    /// none when animations are disabled (Reduce Motion) or absent.
+    static func highlightClearAnimation(for transaction: Transaction) -> Animation? {
+        transaction.disablesAnimations ? nil : transaction.animation
+    }
+
+    /// Only a cleared "Use line" mark fades; the rewrite highlight clears in one frame.
+    static func fadesOnClear(previous: LyricsRewriteHighlight?, next: LyricsRewriteHighlight?) -> Bool {
+        next == nil && previous?.isInsertion == true
     }
 
     private var activeHighlight: LyricsRewriteHighlight? {
@@ -319,10 +349,14 @@ struct LyricsTextView: UIViewRepresentable {
             let changed = textChanged
                 || lastRewriteHighlight != highlight
                 || lastRewriteHighlightAppearance != appearance
+            clearedInsertionHighlight = LyricsTextView.fadesOnClear(previous: lastRewriteHighlight, next: highlight)
             lastRewriteHighlight = highlight
             lastRewriteHighlightAppearance = appearance
             return changed
         }
+
+        /// The update in progress removes the "Use line" mark; only that mark fades.
+        private var clearedInsertionHighlight = false
 
         func shouldKeepCursorVisible(
             textChanged: Bool,
@@ -650,10 +684,10 @@ struct LyricsTextView: UIViewRepresentable {
             scheduleKeepCursorVisible()
         }
 
-        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?) {
+        func updateRewriteHighlight(_ textView: UITextView, highlight: LyricsRewriteHighlight?, animation: Animation? = nil) {
             guard let rewriteHighlightView else { return }
             guard let highlight, highlight.range.length > 0 else {
-                rewriteHighlightView.configure(rects: [], isLoading: false, colors: nil)
+                rewriteHighlightView.clear(animation: clearedInsertionHighlight ? animation : nil)
                 return
             }
 
@@ -867,11 +901,44 @@ final class RewriteHighlightOverlayView: UIView {
     private(set) var isLoading = false
     private(set) var colors: RewriteHighlightColors?
 
+    /// Counts configurations so a fade's completion never erases a highlight
+    /// that replaced it meanwhile.
+    private var generation = 0
+
+    /// Runs the fade. Tests inject a driver that hands the changes and the
+    /// completion back, so the fade's states can be checked without a clock.
+    typealias FadeDriver = (_ animation: Animation, _ changes: @escaping () -> Void, _ completion: @escaping () -> Void) -> Void
+    var fadeDriver: FadeDriver = { animation, changes, completion in
+        UIView.animate(animation, changes: changes, completion: completion)
+    }
+
     func configure(rects: [CGRect], isLoading: Bool, colors: RewriteHighlightColors?) {
+        // A new highlight cancels a fade in progress.
+        generation += 1
+        layer.removeAllAnimations()
+        alpha = 1
         self.rects = rects
         self.isLoading = isLoading
         self.colors = colors
         setNeedsDisplay()
+    }
+
+    /// Clears the mark: in one frame, or, with the transaction's animation
+    /// (the "Use line" mark dries on `Motion.settle`), by fading its alpha on
+    /// that very animation and removing the rects when the fade completes.
+    func clear(animation: Animation?) {
+        guard let animation, !rects.isEmpty, alpha > 0 else {
+            configure(rects: [], isLoading: false, colors: nil)
+            return
+        }
+        generation += 1
+        let fading = generation
+        fadeDriver(animation, { [weak self] in
+            self?.alpha = 0
+        }, { [weak self] in
+            guard let self, self.generation == fading else { return }
+            self.configure(rects: [], isLoading: false, colors: nil)
+        })
     }
 
     override func draw(_ rect: CGRect) {

@@ -1,6 +1,10 @@
 package com.rhymeai.app.data.sync
 
 import com.rhymeai.app.data.recording.RecordingFiles
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.gms.common.api.Status
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
@@ -1751,6 +1755,45 @@ class BackupServiceTest {
         auth.next = DriveAuthorization.Unavailable
         assertEquals(SyncResult.NotConfigured, service.backUp(repository))
         assertEquals(0, drive.calls)
+    }
+
+    @Test
+    fun aRejectedSignInReportsGooglesReasonBeforeAnyDriveCall() = runBlocking<Unit> {
+        val expected = mapOf(
+            CommonStatusCodes.DEVELOPER_ERROR to SyncResult.AuthorizationFailed(
+                "Google rejected this build's signing certificate or OAuth setup. Check the Android OAuth client " +
+                    "(package com.rhymeai.app and this build's SHA-1) and the consent screen's drive.appdata scope.",
+                retryable = false
+            ),
+            CommonStatusCodes.CANCELED to SyncResult.AuthorizationFailed("Google sign-in was cancelled.", retryable = false),
+            CommonStatusCodes.NETWORK_ERROR to SyncResult.AuthorizationFailed(
+                "Couldn't reach Google — check your connection and try again.",
+                retryable = true
+            ),
+            CommonStatusCodes.INTERNAL_ERROR to SyncResult.AuthorizationFailed("Google sign-in failed (code 8).", retryable = false)
+        )
+        for ((statusCode, result) in expected) {
+            auth.next = driveAuthorizationFailure(statusCode)
+            assertEquals(result, service.backUp(repository))
+            assertEquals(ProbeResult.Failed(result), service.probe(repository))
+        }
+        assertEquals(0, drive.calls)
+    }
+
+    @Test
+    fun aFailureWithoutAStatusIsUnavailableOnlyWhenPlayServicesIsMissing() {
+        val error = IllegalStateException("boom")
+        assertEquals(DriveAuthorization.Unavailable, driveAuthorizationFailure(error, ConnectionResult.SERVICE_MISSING))
+        for (availability in listOf(ConnectionResult.SUCCESS, ConnectionResult.SERVICE_DISABLED, ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED)) {
+            assertEquals(
+                DriveAuthorization.Failed("Google sign-in failed (IllegalStateException).", retryable = false),
+                driveAuthorizationFailure(error, availability)
+            )
+        }
+        assertEquals(
+            driveAuthorizationFailure(CommonStatusCodes.NETWORK_ERROR),
+            driveAuthorizationFailure(ApiException(Status(CommonStatusCodes.NETWORK_ERROR)), ConnectionResult.SERVICE_MISSING)
+        )
     }
 
     @Test

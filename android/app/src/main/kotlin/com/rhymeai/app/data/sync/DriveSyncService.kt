@@ -2,9 +2,14 @@ package com.rhymeai.app.data.sync
 
 import android.app.PendingIntent
 import android.content.Context
+import android.util.Log
 import com.google.android.gms.auth.GoogleAuthUtil
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
@@ -77,6 +82,9 @@ sealed class SyncResult {
     /** Drive authorization is unavailable on this device. */
     data object NotConfigured : SyncResult()
 
+    /** Google refused or could not finish sign-in; [reason] is the sentence shown to the user. */
+    data class AuthorizationFailed(val reason: String, val retryable: Boolean) : SyncResult()
+
     /** A restore found no backup in Drive. */
     data object NoBackup : SyncResult()
 
@@ -109,6 +117,48 @@ sealed class DriveAuthorization {
     data class Granted(val accessToken: String) : DriveAuthorization()
     data class NeedsConsent(val pendingIntent: PendingIntent) : DriveAuthorization()
     data object Unavailable : DriveAuthorization()
+
+    /** Play Services answered with an error; [reason] is the sentence shown to the user. */
+    data class Failed(val reason: String, val retryable: Boolean) : DriveAuthorization()
+}
+
+const val DRIVE_SIGN_IN_CANCELLED = "Google sign-in was cancelled."
+
+const val DRIVE_SIGN_IN_NOT_GRANTED = "Google closed sign-in without granting access. If you didn't cancel it, " +
+    "this build's signing certificate or OAuth client is not registered: check the Android OAuth client " +
+    "(package com.rhymeai.app and this build's SHA-1) in the Google Cloud console."
+
+/**
+ * Why the consent screen finished with RESULT_CANCELED; [auth] is a fresh [DriveAuthorizer.authorize] taken
+ * right after it closed. Play Services also cancels when it refused the request (UNREGISTERED_ON_API_CONSOLE),
+ * so only its own status may say "cancelled"; [DriveAuthorization.Granted] is not a failure and never reaches here.
+ */
+fun consentDismissedFailure(auth: DriveAuthorization): DriveAuthorization.Failed = when (auth) {
+    is DriveAuthorization.Failed -> auth
+    is DriveAuthorization.Granted, is DriveAuthorization.NeedsConsent, DriveAuthorization.Unavailable ->
+        DriveAuthorization.Failed(DRIVE_SIGN_IN_NOT_GRANTED, retryable = false)
+}
+
+/** User-facing sentence for a Play Services status code; see docs/CLOUD_BACKUP_SETUP.md. */
+fun driveAuthorizationFailure(statusCode: Int): DriveAuthorization.Failed = when (statusCode) {
+    CommonStatusCodes.DEVELOPER_ERROR -> DriveAuthorization.Failed(
+        "Google rejected this build's signing certificate or OAuth setup. Check the Android OAuth client " +
+            "(package com.rhymeai.app and this build's SHA-1) and the consent screen's drive.appdata scope.",
+        retryable = false
+    )
+    CommonStatusCodes.CANCELED -> DriveAuthorization.Failed(DRIVE_SIGN_IN_CANCELLED, retryable = false)
+    CommonStatusCodes.NETWORK_ERROR -> DriveAuthorization.Failed(
+        "Couldn't reach Google — check your connection and try again.",
+        retryable = true
+    )
+    else -> DriveAuthorization.Failed("Google sign-in failed (code $statusCode).", retryable = false)
+}
+
+/** Classifies a failed authorization; [playServicesAvailability] is [GoogleApiAvailability]'s answer for this device. */
+fun driveAuthorizationFailure(error: Throwable, playServicesAvailability: Int): DriveAuthorization = when {
+    error is ApiException -> driveAuthorizationFailure(error.statusCode)
+    playServicesAvailability == ConnectionResult.SERVICE_MISSING -> DriveAuthorization.Unavailable
+    else -> DriveAuthorization.Failed("Google sign-in failed (${error.javaClass.simpleName}).", retryable = false)
 }
 
 /** Supplies a `drive.appdata` access token; the Play Services one is [PlayServicesDriveAuthorizer]. */
@@ -142,11 +192,20 @@ class PlayServicesDriveAuthorizer(
                     when {
                         result.hasResolution() && pendingIntent != null -> DriveAuthorization.NeedsConsent(pendingIntent)
                         token != null -> DriveAuthorization.Granted(token)
-                        else -> DriveAuthorization.Unavailable
+                        else -> {
+                            Log.w(TAG, "Drive authorization returned neither a consent intent nor a token")
+                            DriveAuthorization.Failed("Google sign-in failed (no access token).", retryable = false)
+                        }
                     }
                 )
             }
-            .addOnFailureListener { cont.resume(DriveAuthorization.Unavailable) }
+            .addOnFailureListener { error ->
+                val statusCode = (error as? ApiException)?.statusCode
+                Log.w(TAG, "Drive authorization failed: status=${statusCode ?: "none"} ${error.message}")
+                cont.resume(
+                    driveAuthorizationFailure(error, GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context))
+                )
+            }
     }
 
     override suspend fun forget(accessToken: String) {
@@ -156,6 +215,7 @@ class PlayServicesDriveAuthorizer(
     }
 
     private companion object {
+        const val TAG = "RhymeAI"
         val DRIVE_APPDATA_SCOPE = Scope("https://www.googleapis.com/auth/drive.appdata")
     }
 }
@@ -926,6 +986,7 @@ class DriveSyncService(
                 is DriveAuthorization.Granted -> auth.accessToken
                 is DriveAuthorization.NeedsConsent -> return@guarded ProbeResult.Failed(SyncResult.AuthorizationRequired(auth.pendingIntent))
                 DriveAuthorization.Unavailable -> return@guarded ProbeResult.Failed(SyncResult.NotConfigured)
+                is DriveAuthorization.Failed -> return@guarded ProbeResult.Failed(SyncResult.AuthorizationFailed(auth.reason, auth.retryable))
             }
             val remote = readRemote(token, repository).blob?.let(SyncMerger::resolve)
             val legacy = unmigratedLegacyFile(token) != null
@@ -966,6 +1027,7 @@ class DriveSyncService(
                     is DriveAuthorization.Granted -> auth.accessToken
                     is DriveAuthorization.NeedsConsent -> return@guarded SyncResult.AuthorizationRequired(auth.pendingIntent)
                     DriveAuthorization.Unavailable -> return@guarded SyncResult.NotConfigured
+                    is DriveAuthorization.Failed -> return@guarded SyncResult.AuthorizationFailed(auth.reason, auth.retryable)
                 }
                 // Only Restore may touch local recordings, so only it finishes an interrupted restore.
                 if (mode == Mode.RESTORE) RecordingFileStore.recoverInterruptedRestores(filesDir)

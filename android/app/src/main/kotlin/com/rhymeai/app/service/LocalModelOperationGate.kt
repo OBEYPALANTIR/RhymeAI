@@ -23,6 +23,9 @@ internal class LocalModelOperationGate {
 
     fun isCurrent(ticket: Ticket): Boolean = ticket.revision == revision
 
+    /** Runs [block] after any load or unload in flight, without superseding it. */
+    suspend fun serialized(block: suspend () -> Unit) = operationMutex.withLock { block() }
+
     fun launch(
         scope: CoroutineScope,
         ticket: Ticket,

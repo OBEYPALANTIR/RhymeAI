@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.calculateTargetValue
@@ -102,6 +103,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
@@ -112,6 +114,8 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -135,8 +139,11 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.paneTitle
@@ -201,7 +208,9 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -225,6 +234,23 @@ internal fun historyControlsVisible(
     editorActionsVisible: Boolean,
     isRecording: Boolean
 ): Boolean = editorActionsVisible && !isRecording
+
+/** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
+internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
+private var SemanticsPropertyReceiver.editorOpenSettleAlpha by EditorOpenSettleAlpha
+
+/** Opacity of the Use-line insertion highlight; 0 once the ink has dried. */
+internal val EditorInsertionHighlightAlpha = SemanticsPropertyKey<Float>("EditorInsertionHighlightAlpha")
+private var SemanticsPropertyReceiver.editorInsertionHighlightAlpha by EditorInsertionHighlightAlpha
+
+/**
+ * Song-open settle bookkeeping. Plain fields, written in the composition that first sees a new
+ * [MainViewModel.openRevision], so the first frame of the new song is already at alpha 0.
+ */
+private class SongOpenSettle(var revision: Int) {
+    var fadeRequest = 0
+    var startedRequest = 0
+}
 
 @Composable
 private fun rememberExportDocumentLauncher(
@@ -264,6 +290,52 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var micBusy by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val insertionSnackbarHostState = remember { SnackbarHostState() }
+
+    // Song-open settle: while the view model fetches another song (openingSong) the writing column
+    // fades out on the dismiss tier; when the new song's state lands (openRevision) it fades in on
+    // the state tier. Opacity only; the restored cursor and scroll are already underneath.
+    val songSettle = remember { SongOpenSettle(viewModel.openRevision) }
+    val songColumnAlpha = remember { Animatable(1f) }
+    val openingSong = viewModel.openingSong
+    LaunchedEffect(openingSong) {
+        if (!animationsEnabled) return@LaunchedEffect
+        if (openingSong) {
+            songColumnAlpha.animateTo(0f, tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing))
+        } else if (songSettle.fadeRequest == songSettle.startedRequest && songColumnAlpha.value < 1f) {
+            // The open ended without a new song (it failed); bring the column back.
+            songColumnAlpha.animateTo(1f, tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
+        }
+    }
+    val openRevision = viewModel.openRevision
+    if (songSettle.revision != openRevision) {
+        songSettle.revision = openRevision
+        if (animationsEnabled) songSettle.fadeRequest++
+    }
+    LaunchedEffect(songSettle.fadeRequest) {
+        if (songSettle.fadeRequest == 0) return@LaunchedEffect
+        songColumnAlpha.snapTo(0f)
+        songSettle.startedRequest = songSettle.fadeRequest
+        songColumnAlpha.animateTo(1f, tween(DesignTokens.Motion.standardMillis, easing = DesignTokens.Motion.standardEasing))
+    }
+    // Animations removed mid-flight: settle at the visible state at once.
+    LaunchedEffect(animationsEnabled) {
+        if (!animationsEnabled) {
+            songSettle.startedRequest = songSettle.fadeRequest
+            songColumnAlpha.snapTo(1f)
+        }
+    }
+
+    // New Song: the caret is already in the title once the blank page is up, for that open only.
+    val titleFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var newSongFocusedRevision by rememberSaveable { mutableIntStateOf(-1) }
+    LaunchedEffect(openRevision, viewModel.showProjectsDialog) {
+        if (openRevision != viewModel.newSongOpenRevision || openRevision == newSongFocusedRevision || viewModel.showProjectsDialog) return@LaunchedEffect
+        newSongFocusedRevision = openRevision
+        titleFocusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     val fullSheetHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
     val assistantSheetHandleHeightPx = with(density) { DesignTokens.Sheet.handleArea.toPx() }
     val assistantSheetCloseThresholdPx =
@@ -284,11 +356,29 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         if (result == SnackbarResult.ActionPerformed) viewModel.undoSuggestionInsertion(insertion.id)
         else viewModel.dismissSuggestionInsertion(insertion.id)
     }
+    val insertionHighlightAlpha = remember { Animatable(0f) }
+    val liveAnimationsEnabled by rememberUpdatedState(animationsEnabled)
     LaunchedEffect(insertion?.id, showBottomSheet, pendingAssistantSheet) {
         highlightedInsertionId = null
+        insertionHighlightAlpha.snapTo(0f)
         if (insertion == null || showBottomSheet || pendingAssistantSheet) return@LaunchedEffect
         highlightedInsertionId = insertion.id
-        delay(1_800)
+        insertionHighlightAlpha.snapTo(1f)
+        delay(2_000)
+        // The mark dries into the page on the settle spring instead of switching off; animations
+        // removed before or during the drying clear it at once, without restarting the hold.
+        if (liveAnimationsEnabled) {
+            coroutineScope {
+                val drying = launch { insertionHighlightAlpha.animateTo(0f, DesignTokens.Motion.settleSpring()) }
+                val removed = launch {
+                    snapshotFlow { liveAnimationsEnabled }.first { !it }
+                    drying.cancel()
+                }
+                drying.join()
+                removed.cancel()
+            }
+        }
+        insertionHighlightAlpha.snapTo(0f)
         highlightedInsertionId = null
     }
 
@@ -548,7 +638,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            viewModel.clearPendingRewriteSelection()
+            // The Song Notebook offers "Keep selected lyrics", so it keeps the selection it opened over.
+            if (!viewModel.showSongNotebook) viewModel.clearPendingRewriteSelection()
             if (modalOpen) {
                 focusManager.clearFocus(force = true)
             }
@@ -929,6 +1020,15 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("editorScrollContainer")
+                        .semantics { editorOpenSettleAlpha = songColumnAlpha.value }
+                        .graphicsLayer {
+                            // A fade-in that has not started yet holds the new song's first frame at 0.
+                            alpha = when {
+                                !animationsEnabled -> 1f
+                                songSettle.fadeRequest != songSettle.startedRequest -> 0f
+                                else -> songColumnAlpha.value
+                            }
+                        }
                         .verticalScroll(scrollState)
                         .padding(horizontal = DesignTokens.Editor.horizontalPadding)
                 ) {
@@ -943,6 +1043,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     BasicTextField(
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
+                        // The song that is leaving for another one takes no input.
+                        readOnly = viewModel.openingSong,
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -951,6 +1053,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("songTitleEditor")
+                            .focusRequester(titleFocusRequester)
                             .onPreviewKeyEvent {
                                 if (!isTitleSubmitKey(it.type, it.key, modified = it.isShiftPressed || it.isCtrlPressed || it.isAltPressed || it.isMetaPressed)) return@onPreviewKeyEvent false
                                 focusManager.moveFocus(FocusDirection.Down)
@@ -1105,20 +1208,24 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 }
                             },
                             onTextLayout = { lyricsTextLayout = it },
-                            readOnly = viewModel.hasActiveRewrite,
+                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong,
                             textStyle = lyricsTextStyle.copy(color = colorScheme.onBackground),
                             visualTransformation = analysisTransformation,
                             cursorBrush = SolidColor(colorScheme.primary),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("lyricsEditor")
+                                .semantics { editorInsertionHighlightAlpha = insertionHighlightAlpha.value }
                                 .drawWithCache {
-                                    val range = insertion?.takeIf { it.id == highlightedInsertionId }?.range
+                                    // Focus mode shows no highlight (board #4).
+                                    val range = if (focusMode) null else insertion?.takeIf { it.id == highlightedInsertionId }?.range
                                     val layout = lyricsTextLayout?.takeIf { it.layoutInput.text.text == viewModel.lyrics }
                                     val path = if (range != null && layout != null && range.min < range.max) {
                                         layout.getPathForRange(range.min, range.max.coerceAtMost(viewModel.lyrics.length))
                                     } else null
-                                    onDrawBehind { if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f)) }
+                                    onDrawBehind {
+                                        if (path != null) drawPath(path, colorScheme.onSurface.copy(alpha = 0.12f * insertionHighlightAlpha.value))
+                                    }
                                 }
                                 .rewriteLoadingHighlight(
                                     textLayoutResult = lyricsTextLayout,

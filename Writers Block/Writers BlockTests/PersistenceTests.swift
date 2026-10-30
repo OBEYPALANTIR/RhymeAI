@@ -161,6 +161,22 @@ struct PersistenceTests {
         #expect(try Self.fetchProjects(harness.context).map(\.lyrics) == ["line kept in the editor"])
     }
 
+    /// The notebook sheet clears its field when `companionError` stays nil, so a
+    /// keep that could not persist must report through that channel.
+    @MainActor
+    @Test func keepAlternateReportsAFailedSongSaveThroughTheNotebookError() throws {
+        let harness = try Self.makeHarness(saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) })
+        let viewModel = harness.viewModel
+        viewModel.showWelcome = false
+        viewModel.lyrics = "line kept in the editor"
+
+        viewModel.keepAlternate("a line for later")
+
+        #expect(viewModel.companion.alternates.isEmpty)
+        #expect(viewModel.saveStatus == .failed)
+        #expect(viewModel.companionError != nil)
+    }
+
     @MainActor
     @Test func importFailureKeepsEditorAndStoreUnchanged() throws {
         let harness = try Self.makeHarness(saveModelContext: { _ in throw CocoaError(.fileWriteUnknown) })

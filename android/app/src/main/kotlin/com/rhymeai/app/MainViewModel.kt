@@ -1,6 +1,7 @@
 package com.rhymeai.app
 
 import android.app.Application
+import com.rhymeai.app.ui.theme.DesignTokens
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -32,8 +33,11 @@ import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
 import com.rhymeai.app.data.sync.actionAfterAuthorization
+import com.rhymeai.app.data.sync.backupFailureReason
+import com.rhymeai.app.data.sync.consentDismissedFailure
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DamagedBackupException
+import com.rhymeai.app.data.sync.DriveAuthorization
 import com.rhymeai.app.data.sync.DriveAuthorizer
 import com.rhymeai.app.data.sync.DriveClient
 import com.rhymeai.app.data.sync.DriveSyncService
@@ -43,6 +47,7 @@ import com.rhymeai.app.data.sync.RealDriveClient
 import com.rhymeai.app.data.sync.SyncResult
 import com.rhymeai.app.data.sync.UnsupportedBackupVersionException
 import com.rhymeai.app.data.sync.recordingsAllowedForUpload
+import com.rhymeai.app.data.sync.resumesAfterConsent
 import com.rhymeai.app.data.sync.snapshotLocalRecordings
 import com.rhymeai.app.data.repository.EncryptedPrefsKeyStore
 import com.rhymeai.app.service.AIModel
@@ -52,6 +57,7 @@ import com.rhymeai.app.service.LocalModelService
 import com.rhymeai.app.service.LocalModelOperationGate
 import com.rhymeai.app.service.SyntheticGenerationCapture
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.EditHistory
 import com.rhymeai.app.util.RhymeMatches
@@ -69,6 +75,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -131,6 +138,21 @@ internal object DraftSaveTestHooks {
 
 internal object NewSongTestHooks {
     @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
+/** Lets a test hold an open after its settle beat, with the column faded, before the song swaps (null in the app). */
+internal object SongOpenTestHooks {
+    @Volatile var beforeSwap: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+}
+
+/** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
+/** Persisted when the selected local model was deleted: restore must not pick another one. */
+private const val NO_LOCAL_MODEL_SELECTION = ""
+
+internal object LocalModelTestHooks {
+    @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    @Volatile var beforeRegistrationSelectionWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
 /** Lets a test hold launch loading after the appearance is known (null in the app). */
@@ -225,12 +247,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupPrefs.getString(KEY_CLIENT_ID, null)
             ?: java.util.UUID.randomUUID().toString().also { backupPrefs.edit { putString(KEY_CLIENT_ID, it) } }
     }
+    private val driveAuthorizer: DriveAuthorizer = BackupTestHooks.authorizer
+        ?: PlayServicesDriveAuthorizer(application, BuildConfig.DRIVE_OAUTH_CLIENT_ID)
     private val driveSyncService = DriveSyncService(
         filesDir = application.filesDir,
         secureKeyStore = EncryptedPrefsKeyStore(application),
         driveClient = BackupTestHooks.driveClient ?: RealDriveClient(),
-        authorizer = BackupTestHooks.authorizer
-            ?: PlayServicesDriveAuthorizer(application, BuildConfig.DRIVE_OAUTH_CLIENT_ID),
+        authorizer = driveAuthorizer,
         clientId = { backupClientId }
     )
     private val localModelService = LocalModelService().also {
@@ -266,6 +289,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var suggestionInsertion by mutableStateOf<SuggestionInsertion?>(null)
         private set
     private var suggestionInsertionRevision = 0L
+    /** Bumped when a different song fills the editor (open, New Song, template, import) so the writing column fades in once; a first autosave does not bump it. */
+    var openRevision by mutableIntStateOf(0)
+        private set
+    /** True while another song is being fetched for an editor that is on screen; the writing column fades out meanwhile. */
+    var openingSong by mutableStateOf(false)
+        private set
+    /** The latest open request; an older request that wakes after its settle beat must not replace the editor. */
+    private var openRequest = 0
+    /** The [openRevision] New Song produced, so the editor puts the caret in the title for that open only. */
+    var newSongOpenRevision by mutableIntStateOf(-1)
+        private set
     var isLoading by mutableStateOf(false)
     /**
      * Counts suggestion requests that ended by themselves with at least one line;
@@ -353,6 +387,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var scriptedSuggestions by mutableStateOf<ScriptedSuggestionStream?>(null)
     val localReady: Boolean get() = localModelLoaded && !localModelLoading && localModelError == null
+    internal val localModelUnloadCount: Int get() = localModelService.unloadCount
     /** Suggest Next Line can run on the device: the local model is ready, or a scripted stream answers it. */
     val localSuggestionsReady: Boolean get() = localReady || scriptedSuggestions != null
     val localReadinessLabel: String get() = when {
@@ -444,6 +479,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun restoreDraftVersion(version: DraftVersion, onRestored: () -> Unit = {}) {
+        if (openingSong) return
         val id = currentProjectId ?: return
         if (notebookError != null || restoringDraft) return
         val currentTitle = title
@@ -456,6 +492,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 saveWorkspaceForActiveIdentity(id, preserved)
+                // The song may have started leaving for another one while the checkpoint saved.
+                if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
                 workspaces = workspaces + (id to preserved)
                 dismissRewrite()
@@ -588,7 +626,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inspectorWord, inspectorRange
     )
 
-    internal fun isCurrentAIContext(context: EditorAIContext) = context == editorAIContext()
+    internal fun isCurrentAIContext(context: EditorAIContext): Boolean {
+        val current = editorAIContext()
+        // The first autosave gives an unsaved draft its ID without changing what the
+        // request was built from; navigation to another song bumps the revisions instead.
+        return context == current || (context.projectId == null && context == current.copy(projectId = null))
+    }
 
     fun hasCloudAISharingConsent(provider: AIProvider, scope: CloudAISharingScope): Boolean =
         provider == AIProvider.LOCAL || "${provider.name}.${scope.name}" in cloudAIConsents
@@ -876,6 +919,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** The consent screen came back without approval (dismissed, or Google refused the request). */
+    fun cancelDriveAuthorization() {
+        syncPendingIntent = null
+        viewModelScope.launch {
+            // Play Services also returns RESULT_CANCELED when it refused the request (unregistered OAuth
+            // client), so ask it once more: its own status says "cancelled", anything else does not.
+            val auth = backupMutex.withLock { driveAuthorizer.authorize() }
+            if (auth is DriveAuthorization.Granted) {
+                // Disconnect may have landed while Play Services answered; then the saved action is dropped, not run.
+                if (resumesAfterConsent(isBackupConnected(), pendingAuthAction, BackupAction.Connect)) {
+                    retryAfterDriveAuthorization()
+                } else {
+                    pendingAuthAction = null
+                    pendingMigrationPassphrase = null
+                }
+                return@launch
+            }
+            // After process death there is no pending action; while disconnected only Connect shows the notice.
+            val fallback = if (isBackupConnected()) BackupAction.BackUp else BackupAction.Connect
+            val action = actionAfterAuthorization(pendingAuthAction, fallback)
+            pendingAuthAction = null
+            pendingMigrationPassphrase = null
+            val failure = consentDismissedFailure(auth)
+            handleBackupResult(SyncResult.AuthorizationFailed(failure.reason, failure.retryable), action, interactive = true)
+        }
+    }
+
     /** Debounced automatic backup after a change; waits out any backoff. */
     fun scheduleAutoBackup() = backupScheduler.schedule()
 
@@ -931,30 +1001,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 backupStatus = BackupStatus.Connected(lastBackupAt)
                 false
             }
-            SyncResult.NotConfigured -> {
-                backupStatus = BackupStatus.Failed("Google Drive is not available on this device.", lastBackupAt)
+            SyncResult.NotConfigured, SyncResult.CorruptRemote, SyncResult.UnsupportedVersion -> {
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
                 false
             }
-            SyncResult.CorruptRemote -> {
-                backupStatus = BackupStatus.Failed(BackupManifest.DAMAGED_MESSAGE, lastBackupAt)
-                false
+            is SyncResult.AuthorizationFailed -> {
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
+                result.retryable
             }
-            SyncResult.UnsupportedVersion -> {
-                backupStatus = BackupStatus.Failed(
-                    "This backup was made by a newer version of Writers Block. Update the app to use it.",
-                    lastBackupAt
-                )
-                false
-            }
-            is SyncResult.NetworkError -> {
-                backupStatus = BackupStatus.Failed("Backup failed: ${result.message}", lastBackupAt)
-                true
-            }
-            is SyncResult.UnknownError -> {
-                backupStatus = BackupStatus.Failed(
-                    "Backup failed: ${result.cause.message ?: "unexpected error"}",
-                    lastBackupAt
-                )
+            is SyncResult.NetworkError, is SyncResult.UnknownError -> {
+                backupStatus = BackupStatus.Failed(backupFailureReason(result), lastBackupAt)
                 true
             }
         }
@@ -1122,7 +1178,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (range.min < 0 || range.max > text.length || range.min >= range.max) return null
             val word = text.substring(range.min, range.max)
             if (word.length < 2) return null
-            if (word.any { !it.isLetter() && it != '\'' }) return null
+            if (word.any { !it.isLetter() && it !in LyricTokenizer.APOSTROPHES }) return null
             return word to range
         }
 
@@ -1637,6 +1693,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyRewrite() {
+        if (openingSong) return
         val preview = rewritePreview ?: return
         val range = rewriteRange ?: return
         val text = lyrics
@@ -1767,6 +1824,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyInspectorReplacement(replacement: String) {
+        if (openingSong) return
         val range = inspectorRange ?: return
         val text = lyrics
         if (range.min < 0 || range.max > text.length) {
@@ -1795,7 +1853,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingRewriteRange = null
     }
 
-    fun insertSuggestion(suggestion: String) {
+    /** Returns false when nothing was inserted (the song is leaving for another one). */
+    fun insertSuggestion(suggestion: String): Boolean {
+        if (openingSong) return false
         // Same placement the rhyme context was computed for: a blank cursor line is
         // filled, otherwise the suggestion becomes a new line after the cursor's line.
         val insertion = NextLinePlacement(lyrics, cursorPosition).inserting(suggestion)
@@ -1807,6 +1867,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         suggestions = emptyList()
         triggerAutoSave()
+        return true
     }
 
     fun dismissSuggestionInsertion(id: Long) {
@@ -1820,6 +1881,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSection(label: String) {
+        if (openingSong) return
         val insertion = SectionMap.insertHeader(lyrics, cursorPosition, label)
         pendingRewriteRange = null
         applyAtomicLyricsEdit(
@@ -1833,22 +1895,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newProject(onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
+        val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
-            // The draft is saved (the flush); the editor opens the new song at once, before the
-            // selection is stored, so nothing typed from here on is ever cleared by this New Song.
-            dismissRewrite()
-            title = ""
-            lyricsFieldValue = TextFieldValue("")
-            theme = ""
-            currentProjectId = null
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
             viewModelScope.launch {
                 try {
+                    // The drawer leaves with the tap; the blank page follows once the column has faded.
+                    showProjectsDialog = false
+                    if (!settleBeforeOpen(request)) return@launch
+                    // The draft is saved (the flush); the editor opens the new song at once, before the
+                    // selection is stored, so nothing typed from here on is ever cleared by this New Song.
+                    dismissRewrite()
+                    title = ""
+                    lyricsFieldValue = TextFieldValue("")
+                    theme = ""
+                    currentProjectId = null
+                    restoreEditorPosition()
+                    suggestions = emptyList()
+                    showStartMenu = false
+                    resetLyricsHistory()
+                    openingSong = false
+                    openRevision++
+                    newSongOpenRevision = openRevision
                     NewSongTestHooks.beforeSelectionSave?.await()
                     // Typing (or another song opened) since the editor cleared owns the stored
                     // selection now; the empty new song's selection is stored only if untouched.
@@ -1859,17 +1930,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
+                } finally {
+                    if (openRequest == request) openingSong = false
                 }
             }
         }
     }
 
+    /**
+     * Gives an on-screen editor the dismiss tier to fade its column out before another song replaces
+     * it, at the system animator scale; with animations removed there is nothing to wait for.
+     * The caller clears [openingSong] in the same frame it bumps [openRevision].
+     */
+    private suspend fun settleBeforeOpen(request: Int): Boolean {
+        if (showStartMenu) return true
+        openingSong = true
+        val animatorScale = animatorScaleNow()
+        // Waited in short steps so animations removed mid-beat release the editor at once.
+        val deadline = android.os.SystemClock.uptimeMillis() + (DesignTokens.Motion.dismissMillis * animatorScale).toLong()
+        while (android.os.SystemClock.uptimeMillis() < deadline && animatorScaleNow() > 0f && request == openRequest) delay(16)
+        SongOpenTestHooks.beforeSwap?.await()
+        // A newer open took over during the beat; it owns the editor and openingSong now.
+        return request == openRequest
+    }
+
+    private fun animatorScaleNow(): Float = android.provider.Settings.Global.getFloat(
+        getApplication<Application>().contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+    )
+
     fun loadProject(requestedProject: SongProject, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
+        val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
+            if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
             viewModelScope.launch {
                 try {
+                    showProjectsDialog = false
+                    if (!settleBeforeOpen(request)) return@launch
                     val project = repo.selectProject(requestedProject.id)
+                    // Overtaken while the song was read (Back, or another open): leave the editor alone.
+                    if (request != openRequest) return@launch
                     dismissRewrite()
                     title = project.title
                     lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -1877,12 +1979,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     currentProjectId = project.id
                     restoreEditorPosition()
                     suggestions = emptyList()
-                    showProjectsDialog = false
                     showStartMenu = false
                     resetLyricsHistory()
+                    // Cleared in the same frame the new song lands, so the fade-in starts from there.
+                    openingSong = false
+                    openRevision++
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open the song", error)
+                } finally {
+                    if (openRequest == request) openingSong = false
                 }
             }
         }
@@ -1923,18 +2029,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun restoreTrashedProject(id: String) {
+    fun restoreTrashedProject(id: String, onCommitted: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
+            var restored = false
             try {
                 val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
                     ?: return@launch reportMissingTrashProject()
                 projects = committed.projects
                 trashedProjects = committed.trashedProjects
+                restored = true
                 scheduleTrashPurge()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 persistenceError = trashFailureMessage("restore the song", error)
+            } finally {
+                onCommitted(restored)
             }
         }
     }
@@ -2097,30 +2207,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
+        val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
-            dismissRewrite()
-            val project = imported.copy(
-                id = java.util.UUID.randomUUID().toString(),
-                title = imported.title.ifBlank { "Imported Song" },
-                updatedAt = System.currentTimeMillis()
-            )
-            pendingProjectCreationIds.add(project.id)
-            projects = listOf(project) + projects
-            title = project.title
-            lyricsFieldValue = TextFieldValue(project.lyrics)
-            theme = project.theme
-            currentProjectId = project.id
-            restoreEditorPosition()
-            suggestions = emptyList()
-            showProjectsDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
+            if (request != openRequest) return@flushCurrentDraft
             viewModelScope.launch {
-                try {
-                    persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
-                    onReady()
-                } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                    reconcileFailedProjectSave(project, error)
+                showProjectsDialog = false
+                val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
+                if (!owned) return@launch
+                dismissRewrite()
+                val project = imported.copy(
+                    id = java.util.UUID.randomUUID().toString(),
+                    title = imported.title.ifBlank { "Imported Song" },
+                    updatedAt = System.currentTimeMillis()
+                )
+                pendingProjectCreationIds.add(project.id)
+                projects = listOf(project) + projects
+                title = project.title
+                lyricsFieldValue = TextFieldValue(project.lyrics)
+                theme = project.theme
+                currentProjectId = project.id
+                restoreEditorPosition()
+                suggestions = emptyList()
+                showStartMenu = false
+                resetLyricsHistory()
+                openRevision++
+                viewModelScope.launch {
+                    try {
+                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme)
+                        onReady()
+                    } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                        reconcileFailedProjectSave(project, error)
+                    }
                 }
             }
         }
@@ -2203,19 +2322,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyTemplate(name: String, templateTheme: String, templateLyrics: String, onReady: () -> Unit = {}) {
+        // The newest request owns the transition: an older one gives up its beat and must not leave the column faded.
+        val request = ++openRequest
+        openingSong = false
         flushCurrentDraft {
-            dismissRewrite()
-            title = "Untitled $name"
-            theme = templateTheme
-            lyricsFieldValue = TextFieldValue(templateLyrics)
-            currentProjectId = null
-            restoreEditorPosition()
-            showTemplatesDialog = false
-            showStartMenu = false
-            resetLyricsHistory()
-            triggerAutoSave()
+            if (request != openRequest) return@flushCurrentDraft
+            viewModelScope.launch {
+                showTemplatesDialog = false
+                val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
+                if (!owned) return@launch
+                dismissRewrite()
+                title = "Untitled $name"
+                theme = templateTheme
+                lyricsFieldValue = TextFieldValue(templateLyrics)
+                currentProjectId = null
+                restoreEditorPosition()
+                showStartMenu = false
+                resetLyricsHistory()
+                openRevision++
+                triggerAutoSave()
 
-            onReady()
+                onReady()
+            }
         }
     }
 
@@ -2324,6 +2452,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onTitleChanged(newTitle: String) {
+        // Nothing edits the song that is leaving for another one.
+        if (openingSong) return
         cancelEditorAIWork()
         title = newTitle
         triggerAutoSave()
@@ -2333,7 +2463,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         newValue: TextFieldValue,
         timestampMilliseconds: Long = android.os.SystemClock.uptimeMillis()
     ) {
-        if (hasActiveRewrite) return
+        if (hasActiveRewrite || openingSong) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
         if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
@@ -2376,16 +2506,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun undoLyrics() {
+        if (openingSong) return
         val previous = lyricsHistory.undo(lyricsFieldValue) ?: return
         applyHistoryState(previous)
     }
 
     fun redoLyrics() {
+        if (openingSong) return
         val next = lyricsHistory.redo(lyricsFieldValue) ?: return
         applyHistoryState(next)
     }
 
     private fun applyAtomicLyricsEdit(nextValue: TextFieldValue) {
+        if (openingSong) return
         cancelEditorAIWork()
         suggestionInsertion = null
         val safeValue = nextValue.withValidRanges()
@@ -2426,12 +2559,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onThemeChanged(newTheme: String) {
+        if (openingSong) return
         cancelEditorAIWork()
         theme = newTheme
         triggerAutoSave()
     }
 
     fun goToStartMenu(onReady: () -> Unit = {}) {
+        // Back cancels any open still waiting out its settle beat.
+        openRequest++
+        openingSong = false
         flushCurrentDraft { suggestionInsertion = null; showStartMenu = true; onReady() }
     }
 
@@ -2468,6 +2605,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: AIModel,
         keys: Map<AIProvider, String>
     ): Result<Unit> {
+        modelChoiceRevision++
         cancelEditorAIWork()
         return try {
             withContext(Dispatchers.IO) {
@@ -2490,6 +2628,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveProvider(provider: AIProvider) {
+        modelChoiceRevision++
         selectedProvider = provider
         // Auto-select first model for this provider
         val models = AIModel.modelsForProvider(provider)
@@ -2514,6 +2653,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveModel(model: AIModel) {
+        modelChoiceRevision++
         selectedModel = model
         viewModelScope.launch {
             repo.saveModelId(model.id)
@@ -2573,10 +2713,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (persisted != storedModels) {
             repo.saveLocalModels(persisted)
         }
-        selectedLocalModelId = repo.selectedLocalModelIdFlow.first()
-            ?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
-            ?: persisted.firstOrNull()?.id
-        repo.saveSelectedLocalModelId(selectedLocalModelId)
+        val storedSelection = repo.selectedLocalModelIdFlow.first()
+        // An explicit "none" (the selected model was deleted) never falls back to another model.
+        val cleared = storedSelection == NO_LOCAL_MODEL_SELECTION
+        selectedLocalModelId = storedSelection?.takeIf { selectedId -> persisted.any { it.id == selectedId } }
+            ?: persisted.firstOrNull()?.id?.takeUnless { cleared }
+        repo.saveSelectedLocalModelId(selectedLocalModelId ?: NO_LOCAL_MODEL_SELECTION.takeIf { cleared })
         if (selectedProvider == AIProvider.LOCAL) {
             selectedSavedLocalModel()?.let { model ->
                 loadLocalModel(java.io.File(filesDir, model.fileName).absolutePath)
@@ -2584,11 +2726,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Counts the user's provider and model selections, bumped as soon as one is asked for
+     * (before any validation lands), so a finished download knows whether a newer choice came
+     * in while it ran.
+     */
+    internal var modelChoiceRevision = 0L
+        private set
+
+    /** Adds the model to the saved list; with [select] it also becomes the active local model and provider. */
     fun registerAndSelectLocalModel(
         path: String,
         displayName: String,
         isCustom: Boolean,
-        verifiedCatalogSha256: String? = null
+        verifiedCatalogSha256: String? = null,
+        select: Boolean = true
     ) {
         val file = java.io.File(path)
         val model = SavedLocalModel(
@@ -2604,11 +2756,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         savedLocalModels = (savedLocalModels.filterNot { it.id == model.id } + model)
             .sortedBy { it.displayName.lowercase() }
-        selectedLocalModelId = model.id
         viewModelScope.launch {
-            repo.saveLocalModels(savedLocalModels)
-            repo.saveSelectedLocalModelId(model.id)
+            persistSavedLocalModels()
+            LocalModelTestHooks.beforeRegistrationSelectionWrite?.await()
+            // A delete may have cleared the selection meanwhile; its explicit none must stay.
+            savedLocalModelsWriteLock.withLock {
+                if (select && selectedLocalModelId == model.id) repo.saveSelectedLocalModelId(model.id)
+            }
         }
+        if (!select) return
+        selectedLocalModelId = model.id
         saveProvider(AIProvider.LOCAL)
         saveModel(AIModel.LOCAL_MODEL)
         loadLocalModel(file.absolutePath)
@@ -2616,6 +2773,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSavedLocalModel(modelId: String) {
         val model = savedLocalModels.firstOrNull { it.id == modelId } ?: return
+        if (gemmaDeletingModel?.fileName == model.fileName) return
+        modelChoiceRevision++
         val ticket = beginLocalModelChange()
         val generation = localModelValidationGeneration
         val file = java.io.File(getApplication<Application>().filesDir, model.fileName)
@@ -2632,6 +2791,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             localModelValidationJob = viewModelScope.launch {
                 var startedLoad = false
                 try {
+                    LocalModelTestHooks.beforeSavedModelValidation?.await()
                     val validationError = withContext(Dispatchers.IO) {
                         if (catalogModel == null) {
                             "Saved downloaded model is not in the trusted catalog."
@@ -2705,7 +2865,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var verifiedGemmaFileNames by mutableStateOf<Set<String>>(emptySet())
         private set
 
-    internal suspend fun useDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload): Boolean {
+    /**
+     * Installs a finished download. [choiceRevisionAtStart] is [modelChoiceRevision] when
+     * the download began; the model only takes over the selection when the user has not
+     * asked for another provider or model since. Null means the user asked to use it now,
+     * which is itself a choice that a download finishing later must not override.
+     */
+    internal suspend fun useDownloadedGemma(
+        model: com.rhymeai.app.ui.components.GemmaDownload,
+        choiceRevisionAtStart: Long? = null
+    ): Boolean {
+        if (gemmaDeletingModel?.fileName == model.fileName) return false
+        val deletesAtStart = gemmaDeleteCounts[model.fileName]
+        if (choiceRevisionAtStart == null) {
+            modelChoiceRevision++
+            LocalModelTestHooks.beforeUseValidation?.await()
+        }
         val destFile = java.io.File(getApplication<android.app.Application>().filesDir, model.fileName)
         val validationError = withContext(Dispatchers.IO) {
             com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile)
@@ -2715,35 +2890,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             verifiedGemmaFileNames -= model.fileName
             return false
         }
+        // A delete may have started, or started and finished, while the integrity check ran;
+        // never publish a selection for a file it removed.
+        if (gemmaDeletingModel?.fileName == model.fileName || gemmaDeleteCounts[model.fileName] != deletesAtStart) {
+            return false
+        }
         verifiedGemmaFileNames += model.fileName
         registerAndSelectLocalModel(
             path = destFile.absolutePath,
             displayName = model.label,
             isCustom = false,
-            verifiedCatalogSha256 = model.sha256
+            verifiedCatalogSha256 = model.sha256,
+            select = choiceRevisionAtStart == null || choiceRevisionAtStart == modelChoiceRevision
         )
         return true
     }
 
     internal fun startGemmaDownload(model: com.rhymeai.app.ui.components.GemmaDownload) {
-        if (gemmaDownloadingModel != null) return
+        if (gemmaDownloadingModel != null || gemmaDeletingModel?.fileName == model.fileName) return
         gemmaDownloadingModel = model
         gemmaDownloadProgress = 0f
         gemmaDownloadVerifying = false
         gemmaDownloadError = null
         gemmaLastDownloadAttempt = model
+        val choiceRevisionAtStart = modelChoiceRevision
         val app = getApplication<android.app.Application>()
 
         viewModelScope.launch(Dispatchers.IO) {
             val destFile = java.io.File(app.filesDir, model.fileName)
-            val tempFile = java.io.File(app.cacheDir, "${model.fileName}.download")
+            val tempFile = com.rhymeai.app.ui.components.gemmaDownloadTempFile(app.cacheDir, model)
             try {
                 if (com.rhymeai.app.ui.components.validateDownloadedGemmaIntegrity(model, destFile) == null) {
                     withContext(Dispatchers.Main) {
                         gemmaDownloadingModel = null
                         gemmaDownloadProgress = null
                         gemmaDownloadVerifying = false
-                        useDownloadedGemma(model)
+                        useDownloadedGemma(model, choiceRevisionAtStart)
                     }
                     return@launch
                 }
@@ -2770,7 +2952,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadProgress = null
                     gemmaDownloadVerifying = false
                     gemmaDownloadRevision++
-                    useDownloadedGemma(model)
+                    useDownloadedGemma(model, choiceRevisionAtStart)
                 }
             } catch (e: Exception) {
                 android.util.Log.w("RhymeAI", "Gemma download failed", e)
@@ -2778,6 +2960,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     gemmaDownloadingModel = null
                     gemmaDownloadProgress = null
                     gemmaDownloadVerifying = false
+                    // The attempt may have reclaimed a stale installed file; the rows re-read the disk.
+                    gemmaDownloadRevision++
                     gemmaDownloadError = "Failed to download ${model.label}: ${e.message}"
                 }
             }
@@ -2834,6 +3018,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onFailure = { error -> localModelError = error.message ?: "Failed to unload model" },
             onFinished = { localModelLoading = false }
         )
+    }
+
+    /** The catalog model being deleted; its row actions, download, use and select are refused meanwhile. */
+    internal var gemmaDeletingModel by mutableStateOf<com.rhymeai.app.ui.components.GemmaDownload?>(null)
+        private set
+
+    /** Deletes started per catalog file; a download validated across one must not publish its selection. */
+    private val gemmaDeleteCounts = mutableMapOf<String, Int>()
+    private val savedLocalModelsWriteLock = Mutex()
+
+    /** Writes the saved list as it stands when its turn comes, so an older queued write cannot restore a deleted entry. */
+    private suspend fun persistSavedLocalModels() =
+        savedLocalModelsWriteLock.withLock { repo.saveLocalModels(savedLocalModels) }
+
+    /**
+     * Deletes an installed catalog model together with its partial download and resume state.
+     * Every delete runs on the loader's serial path so it never overlaps a load or unload. The
+     * selected model is unloaded first, its selection is cleared and persisted as an explicit
+     * none, and no other model is picked in its place; a download finishing later does not
+     * re-select on its own. Bookkeeping follows the disk whatever the outcome, and every
+     * failure, including a persistence failure, reports on the download error row.
+     */
+    internal fun deleteDownloadedGemma(model: com.rhymeai.app.ui.components.GemmaDownload) {
+        if (gemmaDeletingModel != null || gemmaDownloadingModel?.fileName == model.fileName) return
+        val app = getApplication<android.app.Application>()
+        val installedFile = java.io.File(app.filesDir, model.fileName)
+        gemmaDeletingModel = model
+        gemmaDeleteCounts[model.fileName] = (gemmaDeleteCounts[model.fileName] ?: 0) + 1
+        gemmaDownloadError = null
+        // Only the saved selection counts: localModelPath also names a rejected selection attempt.
+        val wasSelected = selectedSavedLocalModel()?.fileName == model.fileName
+        val attempt: suspend () -> Unit = {
+            try {
+                if (wasSelected) {
+                    localModelService.unload()
+                    savedLocalModelsWriteLock.withLock {
+                        repo.saveSelectedLocalModelId(NO_LOCAL_MODEL_SELECTION)
+                        // Cleared only once both succeeded, so a failed attempt can be retried whole.
+                        localModelPath = null
+                        selectedLocalModelId = null
+                    }
+                }
+                try {
+                    withContext(Dispatchers.IO) {
+                        com.rhymeai.app.ui.components.deleteInstalledGemma(model, app.filesDir, app.cacheDir)
+                    }
+                } finally {
+                    // Whatever was removed, the rows and the saved list follow the disk.
+                    gemmaDownloadRevision++
+                    if (!installedFile.isFile) {
+                        verifiedGemmaFileNames -= model.fileName
+                        savedLocalModels = savedLocalModels.filterNot { it.fileName == model.fileName }
+                        persistSavedLocalModels()
+                    }
+                }
+            } catch (error: Exception) {
+                gemmaLastDownloadAttempt = null
+                gemmaDownloadError = "Failed to delete ${model.label}: ${error.message}"
+            } finally {
+                gemmaDeletingModel = null
+            }
+        }
+        val ticket = if (wasSelected) {
+            modelChoiceRevision++
+            beginLocalModelChange()
+        } else {
+            null
+        }
+        viewModelScope.launch {
+            // Queued behind any load or unload and never superseded: a newer selection waits for
+            // the delete to finish instead of abandoning it half way.
+            withContext(NonCancellable) { localModelOperations.serialized(attempt) }
+            if (ticket != null && localModelOperations.isCurrent(ticket)) localModelLoading = false
+        }
     }
 
     fun onBackground() {

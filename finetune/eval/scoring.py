@@ -58,15 +58,18 @@ SUBSTITUTIONS = [
     ("x", "ks"),
 ]
 
-# LyricTokenizer.wordPattern
-WORD_PATTERN = re.compile(r"[a-zA-Z']+")
+# LyricTokenizer.wordPattern: straight, U+2019 and U+02BC apostrophes keep a contraction whole.
+APOSTROPHES = "'\u2019\u02BC"
+WORD_PATTERN = re.compile(r"[a-zA-Z'\u2019\u02BC]+")
 
 _STRESS_SUFFIX = re.compile(r"[0-2]$")
 
 
 def normalize_word(word: str) -> str:
-    """ProsodyAnalyzer.normalizeWord: lowercase, keep [a-z'], trim apostrophes."""
-    kept = "".join(ch for ch in word.lower() if ("a" <= ch <= "z") or ch == "'")
+    """ProsodyAnalyzer.normalizeWord: lowercase, keep [a-z'] (curly apostrophes read as '), trim apostrophes."""
+    kept = "".join(
+        "'" if ch in APOSTROPHES else ch for ch in word.lower() if ("a" <= ch <= "z") or ch in APOSTROPHES
+    )
     return kept.strip("'")
 
 

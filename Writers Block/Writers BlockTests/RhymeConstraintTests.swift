@@ -35,6 +35,13 @@ struct RhymeConstraintTests {
         // Trailing punctuation-only tokens are skipped, not returned as empty words.
         #expect(RhymeConstraint.lineEndWord("carry me home —") == "home")
         #expect(RhymeConstraint.lineEndWord("— !!") == "")
+        // An unspaced dash or hyphen still ends on the last lexical word (Android `wordPattern`).
+        #expect(RhymeConstraint.lineEndWord("I wait through day—night") == "night")
+        #expect(RhymeConstraint.lineEndWord("I wait through day-night") == "night")
+        #expect(RhymeConstraint.lineEndWord("we know we’re") == "we're")
+        // A closing quote made of apostrophes is not a word.
+        #expect(RhymeConstraint.lineEndWord("carry me home '") == "home")
+        #expect(RhymeConstraint.lineEndWord("'carry me home’") == "home")
         #expect(RhymeConstraint.lineEndWord("") == "")
     }
 

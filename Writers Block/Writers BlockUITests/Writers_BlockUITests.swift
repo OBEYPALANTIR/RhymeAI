@@ -135,6 +135,47 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Download paused. Tap Download to resume."].waitForExistence(timeout: 10))
     }
 
+    /// Delete on an installed, selected catalog model asks first; confirming frees it, clears
+    /// the selection and leaves the row offering Download again.
+    @MainActor
+    func testDeletingAnInstalledModelAsksFirstThenOffersDownloadAgain() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = isolatedUITestApp(arguments: ["--ui-test-seed-prosody-song", "--ui-test-seed-installed-gguf-model"])
+        app.launch()
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        app.buttons["Local"].tap()
+        let row = app.buttons["gemmaDownload.gemma-4-e2b"]
+        let delete = app.buttons["gemmaDelete.gemma-4-e2b"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        for _ in 0..<8 where !delete.isHittable {
+            app.scrollViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(delete.isHittable)
+        XCTAssertTrue(row.label.contains("Selected"))
+        func attach(_ name: String) {
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = name
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+        attach("Installed model row with Delete")
+
+        delete.tap()
+        let confirmation = app.alerts["Delete RhymeAI Gemma 4 E2B?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirmation.staticTexts["Frees 3.43 GB on this device. You can download it again later."].exists)
+        attach("Delete confirmation")
+        confirmation.buttons["Delete"].tap()
+
+        XCTAssertTrue(app.staticTexts["RhymeAI Gemma 4 E2B deleted."].waitForExistence(timeout: 10))
+        XCTAssertFalse(delete.exists)
+        XCTAssertTrue(row.label.contains("Download"))
+        XCTAssertFalse(row.label.contains("Selected"))
+        attach("Row offers Download after delete")
+    }
+
     @MainActor
     func testLongDraftRestoresVisibleScrollAndCaretWhenSwitchingSongs() throws {
         let app = isolatedUITestApp()
@@ -167,6 +208,9 @@ final class Writers_BlockUITests: XCTestCase {
         XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
         XCTAssertNotNil(waitForStableFrame(of: lyrics, matching: { _ in !createNewSong.exists }))
         XCTAssertEqual(lyrics.value as? String, "", "Create New Song must open an empty draft")
+        // New Song puts the caret in the title; a writer who has moved on to
+        // the lyrics keeps that focus across the switch back, as before.
+        lyrics.tap()
         app.buttons["Open songs drawer"].tap()
         let savedSong = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Position proof")).firstMatch
         XCTAssertNotNil(waitForStableFrame(of: savedSong, matching: { _ in savedSong.isHittable }))
@@ -256,6 +300,56 @@ final class Writers_BlockUITests: XCTestCase {
         attachScreenshot(app, name: "drawer-after-immediate-create-tap")
         XCTAssertEqual(outcome, .completed, "Create New Song tapped right after opening must close the drawer")
         XCTAssertEqual(lyrics.value as? String, "", "Create New Song tapped right after opening must open an empty draft")
+    }
+
+    /// New Song lands with the caret in the title, so the first keystroke names
+    /// the song; opening a saved song keeps its restored cursor instead.
+    @MainActor
+    func testNewSongFocusesTheTitleFieldAndOpeningASongDoesNot() throws {
+        let app = isolatedUITestApp()
+        app.launch()
+        let newSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        XCTAssertTrue(newSong.waitForExistence(timeout: 5))
+        XCTAssertNotNil(waitForStableFrame(of: newSong, matching: { _ in newSong.isHittable }))
+        newSong.tap()
+        let title = app.textFields["songTitleEditor"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let titleFocused = {
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: title
+            )], timeout: 3)
+        }
+        XCTAssertEqual(titleFocused(), .completed, "New Song must move focus to the title field")
+        // The welcome-to-editor fade is still settling when focus lands; type as a writer would, a beat later.
+        sleep(1)
+        app.typeText("Paper Moon")
+        XCTAssertEqual(title.value as? String, "Paper Moon")
+        attachScreenshot(app, name: "new-song-title-focused")
+        let lyrics = app.textViews["lyricsEditor"]
+        lyrics.tap()
+        lyrics.typeText("We folded every promise twice")
+
+        app.buttons["Open songs drawer"].tap()
+        let createNewSong = app.buttons["Create New Song"]
+        XCTAssertNotNil(waitForStableFrame(of: createNewSong, matching: { _ in createNewSong.isHittable }))
+        createNewSong.tap()
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !createNewSong.exists }))
+        XCTAssertEqual(titleFocused(), .completed, "Create New Song from the drawer must focus the title too")
+        sleep(1)
+        app.typeText("x")
+        lyrics.tap()
+        lyrics.typeText("verse")
+        // The keyboard would cover the drawer's second row; put it away first.
+        app.scrollViews["lyricsScrollView"].swipeUp()
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        app.buttons["Open songs drawer"].tap()
+        let savedSong = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Paper Moon")).firstMatch
+        XCTAssertNotNil(waitForStableFrame(of: savedSong, matching: { _ in savedSong.isHittable }))
+        savedSong.tap()
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !savedSong.exists }))
+        XCTAssertEqual(title.value as? String, "Paper Moon")
+        XCTAssertFalse(title.value(forKey: "hasKeyboardFocus") as? Bool ?? false, "Opening a saved song must not move focus to the title")
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Opening a saved song must not raise the keyboard")
     }
 
     @MainActor
@@ -1190,6 +1284,19 @@ final class Writers_BlockUITests: XCTestCase {
         app.buttons["UI Trash Song"].tap()
         XCTAssertTrue(app.buttons["Restore"].isEnabled)
         XCTAssertTrue(app.buttons["Delete"].isEnabled)
+
+        // Restore says so: the row leaves, the Trash empties with its next-step
+        // caption, and the drawer's toast names the song with an Open action.
+        app.buttons["Restore"].tap()
+        XCTAssertTrue(app.staticTexts["Restored \u{201c}UI Trash Song\u{201d}"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No Songs in Trash"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Deleted songs stay here for 30 days."].exists)
+        XCTAssertFalse(app.buttons["UI Trash Song"].exists)
+        attachScreenshot(app, name: "trash-restored-toast")
+        app.buttons["Open"].tap()
+        let title = app.textFields["songTitleEditor"]
+        XCTAssertNotNil(waitForStableFrame(of: title, matching: { _ in !app.staticTexts["Trash"].exists }))
+        XCTAssertEqual(title.value as? String, "UI Trash Song")
     }
 
     @MainActor

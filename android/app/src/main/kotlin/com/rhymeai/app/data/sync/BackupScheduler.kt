@@ -117,3 +117,6 @@ class BackupScheduler(
 
 /** The action to retry once Google consent is granted; a missing one means "back up". */
 internal fun <T> actionAfterAuthorization(pending: T?, fallback: T): T = pending ?: fallback
+
+/** A consent answered after its screen closed resumes [pending] only while still connected, or when it is [connect] itself. */
+internal fun <T> resumesAfterConsent(connected: Boolean, pending: T?, connect: T): Boolean = connected || pending == connect

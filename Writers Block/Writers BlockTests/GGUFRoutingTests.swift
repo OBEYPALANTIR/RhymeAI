@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
+import XCTest
 @testable import Writers_Block
 
 // MARK: - Gemma prompt template
@@ -215,6 +216,30 @@ struct GGUFDownloadCatalogTests {
         #expect(try GGUFModelStorage.removeStaleArtifacts(for: option, in: directory, defaults: defaults) == 0)
     }
 
+    @Test func fileDigestMatchesCryptoKitAcrossChunkBoundaries() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Three 1 MiB chunks plus a short tail, so the loop crosses chunk boundaries and ends mid-chunk.
+        var bytes = Data(count: 3 * 1_048_576 + 17)
+        for index in bytes.indices { bytes[index] = UInt8(truncatingIfNeeded: index &* 31) }
+        let url = directory.appendingPathComponent("digest.gguf")
+        try bytes.write(to: url)
+        let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        #expect(try GGUFModelCatalog.fileSHA256(at: url) == expected)
+    }
+
+    /// Android's `gemmaModelNeedsMoreMemory`: only E4B, and only below 10 GiB of RAM.
+    @Test func onlyE4BNeedsMoreMemoryBelowTenGibibytes() {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let gib: UInt64 = 1 << 30
+        #expect(GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 8 * gib))
+        #expect(GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 10 * gib - 1))
+        #expect(!GGUFDownloadCatalog.needsMoreMemory(e4b, totalRAMBytes: 10 * gib))
+        #expect(!GGUFDownloadCatalog.needsMoreMemory(e2b, totalRAMBytes: 4 * gib))
+        #expect(GGUFDownloadCatalog.needsMoreMemoryMessage == "May be slow on this device — needs more memory")
+    }
+
     private func isolatedDefaults() -> (UserDefaults, String) {
         let suite = "gguf-verified-\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)
@@ -292,11 +317,67 @@ struct GGUFDownloadCatalogTests {
         }
     }
 
+    /// A paused download already holds its received bytes on the volume, so
+    /// resuming only needs room for the remainder plus the reserve.
+    @Test func resumeSpaceCheckCreditsTheBytesAlreadyDownloaded() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let received: Int64 = 2_000_000_000
+        try Self.resumeData(received: received).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        let remaining = e2b.expectedBytes - received + GGUFModelStorage.downloadReserveBytes
+
+        try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining - 1 }
+        }
+
+        // Without resume data the whole file is needed again.
+        try FileManager.default.removeItem(at: GGUFModelStorage.resumeDataURL(for: e2b, in: directory))
+        #expect(throws: (any Error).self) {
+            try GGUFModelStorage.prepareSpace(for: e2b, in: directory) { _ in remaining }
+        }
+    }
+
+    /// URLSession resume data in the shape current systems write: a keyed archive
+    /// whose root dictionary sits under the literal key "NSKeyedArchiveRootObjectKey".
+    private static func resumeData(received: Int64) -> Data {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: false)
+        let info: NSDictionary = [
+            "NSURLSessionResumeInfoVersion": 2,
+            "NSURLSessionResumeBytesReceived": NSNumber(value: received),
+            "NSURLSessionResumeInfoTempFileName": "CFNetworkDownload_test.tmp",
+        ]
+        archiver.encode(info, forKey: "NSKeyedArchiveRootObjectKey")
+        return archiver.encodedData
+    }
+
+    @Test func receivedBytesAreReadFromKeyedArchiveAndPlainPlistResumeData() throws {
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: Self.resumeData(received: 3_193_413)) == 3_193_413)
+        let plain = try PropertyListSerialization.data(
+            fromPropertyList: ["NSURLSessionResumeBytesReceived": NSNumber(value: 42)],
+            format: .binary,
+            options: 0
+        )
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: plain) == 42)
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: Data("not a plist".utf8)) == 0)
+        // An archive under Swift's own root key ("root") is not what URLSession writes.
+        let swiftRoot = try NSKeyedArchiver.archivedData(
+            withRootObject: ["NSURLSessionResumeBytesReceived": NSNumber(value: 7)],
+            requiringSecureCoding: false
+        )
+        #expect(GGUFModelStorage.receivedBytes(inResumeData: swiftRoot) == 7)
+    }
+
     @Test func preferredModelUsesCatalogOrder() {
+        // Own defaults: the standard domain may carry a cleared selection from a UI-test delete.
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
         let options = GGUFDownloadCatalog.options
         let preferred = GGUFModelSelection.preferredFileName(
             in: [options[1].fileName, options[0].fileName],
-            selectedFileName: nil
+            selectedFileName: nil,
+            defaults: defaults
         )
 
         #expect(preferred == options[0].fileName)
@@ -344,6 +425,41 @@ struct GGUFModelSelectionTests {
             GGUFModelSelection.preferredFileName(in: options.map(\.fileName))
                 == options[1].fileName
         )
+    }
+}
+
+// MARK: - Cleared selection routing
+
+/// Serialized: reads and writes the standard engine, selection and cleared-flag keys.
+@Suite(.serialized)
+@MainActor
+struct GGUFClearedChoiceRoutingTests {
+    @Test func synonymsStayOnTheNoModelErrorWhileGemmaIsChosenWithAClearedSelection() async throws {
+        let defaults = UserDefaults.standard
+        let originalEngine = defaults.string(forKey: "ggufEngineChoice")
+        let originalSelection = GGUFModelSelection.currentFileName
+        let originalCleared = GGUFModelSelection.isCleared()
+        defer {
+            if let originalEngine { defaults.set(originalEngine, forKey: "ggufEngineChoice") } else { defaults.removeObject(forKey: "ggufEngineChoice") }
+            if let originalSelection { GGUFModelSelection.save(fileName: originalSelection) } else { GGUFModelSelection.clear() }
+            if !originalCleared { defaults.removeObject(forKey: "ggufModelSelectionCleared") }
+        }
+        GGUFEngineChoice.gemma.save()
+        GGUFModelSelection.clearExplicitly()
+        #expect(AIService.gemmaChoiceCleared())
+        #expect(LocalReadiness.current().title == "Choose a model")
+
+        do {
+            _ = try await AIService().getSynonyms(provider: .local, apiKey: "", modelId: "local-model", word: "light", lineContext: "a quiet light")
+            Issue.record("Expected the no-model error")
+        } catch AIServiceError.localModelUnavailable(let reason) {
+            #expect(reason == AIService.noGGUFModelReason)
+        }
+
+        // Choosing Apple Intelligence lifts it; the cleared flag itself stays until a model is chosen.
+        GGUFEngineChoice.appleIntelligence.save()
+        #expect(!AIService.gemmaChoiceCleared())
+        #expect(GGUFModelSelection.isCleared())
     }
 }
 
@@ -551,6 +667,33 @@ struct GGUFDownloadIntegrityTests {
         #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    @Test func gatedInstallPublishesThroughTheRunner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let destination = directory.appendingPathComponent(option.fileName)
+        let suite = "gguf-gated-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try Data(valid.dropLast()).write(to: staging)
+        await #expect(throws: (any Error).self) {
+            try await GGUFDownloadManager.installDownloadGated(from: staging, in: directory, option: option, defaults: defaults)
+        }
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        try valid.write(to: staging)
+        try await GGUFDownloadManager.installDownloadGated(from: staging, in: directory, option: option, defaults: defaults)
+        #expect(try Data(contentsOf: destination) == valid)
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults)?.sha256 == option.sha256)
     }
 
     @Test func filesystemFailurePreservesValidatedStagingForRetry() throws {
@@ -797,5 +940,477 @@ struct GGUFSelectionCaptureTests {
         #expect(captured.selection.fileName == a.fileName)
         #expect(captured.selection == GGUFModelSelection.snapshot(defaults: defaults))
         #expect(captured.file == (try GGUFModelFileIdentity.read(at: file.path)))
+    }
+}
+
+/// Completion through the manager, each test on its own temporary models root and
+/// defaults, with both catalog artifacts installed and verified there so `select` can
+/// run: the download selects itself only while the choice revision it started under is
+/// still current; a completion with no live snapshot (a manager that restored after a
+/// relaunch) installs without selecting.
+@MainActor
+struct GGUFDownloadCompletionTests {
+    private struct Sandbox {
+        let root: URL
+        let defaults: UserDefaults
+        let suite: String
+
+        init() throws {
+            suite = "gguf-completion-\(UUID().uuidString)"
+            defaults = try #require(UserDefaults(suiteName: suite))
+            root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+
+        func install(_ options: [GGUFDownloadOption]) throws {
+            for option in options {
+                let installed = root.appendingPathComponent(option.fileName)
+                #expect(FileManager.default.createFile(atPath: installed.path, contents: Data("GGUF".utf8)))
+                let handle = try FileHandle(forWritingTo: installed)
+                try handle.truncate(atOffset: UInt64(option.expectedBytes))
+                try handle.close()
+                GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: installed, defaults: defaults)
+            }
+        }
+
+        @MainActor
+        func restoredManager(totalRAMBytes: UInt64 = 16 << 30) async throws -> GGUFDownloadManager {
+            let manager = GGUFDownloadManager(
+                configuration: .ephemeral, modelsRoot: root, defaults: defaults, totalRAMBytes: totalRAMBytes
+            )
+            for _ in 0..<250 where manager.isRestoringDownloads {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(!manager.isRestoringDownloads)
+            manager.refreshInstalledModels()
+            return manager
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+    }
+
+    /// On a device short on memory for E4B (an 8 GB iPad), its download is installed but
+    /// never selected on its own; choosing it stays explicit and carries Android's warning.
+    @Test func completionKeepsAModelTheDeviceIsShortOnMemoryForInstalledButUnselected() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager(totalRAMBytes: 8 << 30)
+        manager.select(e2b)
+
+        manager.beginDownloadForTest(e4b)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.installedModelFiles.contains(e4b.fileName))
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        #expect(manager.statusMessage == "\(e4b.title) downloaded but not selected. May be slow on this device — needs more memory.")
+
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(manager.statusMessage == "\(e4b.title) selected. May be slow on this device — needs more memory.")
+
+        // A choice made while it ran still carries the warning.
+        manager.select(e2b)
+        manager.beginDownloadForTest(e4b)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.statusMessage == "\(e4b.title) downloaded. May be slow on this device — needs more memory.")
+
+        // E2B is never gated, and a device with enough memory selects E4B on completion.
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
+        #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
+        let roomy = try await sandbox.restoredManager(totalRAMBytes: 16 << 30)
+        roomy.beginDownloadForTest(e4b)
+        #expect(roomy.finishForTest(e4b))
+        #expect(roomy.statusMessage == "\(e4b.title) downloaded and selected.")
+    }
+
+    /// With E4B the only installed model and nothing chosen, neither the manager's refresh
+    /// nor runtime resolution falls back to it on a device short on memory; an explicit
+    /// saved choice of E4B is still honoured.
+    @Test func fallbackNeverPicksAModelTheDeviceIsShortOnMemoryFor() async throws {
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let small: UInt64 = 8 << 30
+        let roomy: UInt64 = 16 << 30
+
+        let manager = try await sandbox.restoredManager(totalRAMBytes: small)
+        #expect(manager.selectedModelFileName == nil)
+        manager.beginDownloadForTest(e4b)
+        #expect(!manager.finishForTest(e4b))
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(manager.statusMessage == "\(e4b.title) downloaded but not selected. May be slow on this device — needs more memory.")
+
+        #expect(GGUFModelSelection.preferredFileName(
+            in: [e4b.fileName], selectedFileName: nil, defaults: sandbox.defaults, totalRAMBytes: small
+        ) == nil)
+        #expect(GGUFModelSelection.preferredFileName(
+            in: [e4b.fileName], selectedFileName: nil, defaults: sandbox.defaults, totalRAMBytes: roomy
+        ) == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(
+            defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: small
+        ) == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+
+        // The user's explicit choice is kept, on refresh and at runtime.
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        manager.refreshInstalledModels()
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(
+            defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: small
+        )?.lastPathComponent == e4b.fileName)
+        #expect(try await sandbox.restoredManager(totalRAMBytes: roomy).selectedModelFileName == e4b.fileName)
+    }
+
+    @Test func completionSelectsTheDownloadUnlessAChoiceWasMadeWhileItRan() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
+        try #require(manager.installedModelFiles == [e2b.fileName, e4b.fileName])
+
+        // Nothing chosen while it ran: the download is selected and persisted.
+        manager.selectEngine(.appleIntelligence)
+        manager.select(e4b)
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .gemma)
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        #expect(GGUFEngineChoice.current(defaults: sandbox.defaults) == .gemma)
+        #expect(manager.statusMessage == "\(e2b.title) downloaded and selected.")
+
+        // An engine chosen while it ran stays.
+        manager.beginDownloadForTest(e2b)
+        manager.selectEngine(.appleIntelligence)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.engineChoice == .appleIntelligence)
+        #expect(GGUFEngineChoice.current(defaults: sandbox.defaults) == .appleIntelligence)
+        #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+
+        // Another model chosen while it ran stays, in memory and on disk.
+        manager.beginDownloadForTest(e2b)
+        manager.select(e4b)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
+
+        // Switching away and back is still a choice made while it ran.
+        manager.beginDownloadForTest(e2b)
+        manager.select(e2b)
+        manager.select(e4b)
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.selectedModelFileName == e4b.fileName)
+
+        // The snapshot is consumed, so the next download starts clean.
+        manager.beginDownloadForTest(e2b)
+        #expect(manager.finishForTest(e2b))
+        #expect(manager.selectedModelFileName == e2b.fileName)
+    }
+
+    /// A download the system finished for a manager that did not start it (restored
+    /// after a relaunch) has no snapshot: it is installed, not selected.
+    @Test func completionWithoutALiveSnapshotInstallsWithoutSelecting() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
+        manager.select(e4b)
+        manager.selectEngine(.appleIntelligence)
+
+        #expect(!manager.finishForTest(e2b))
+        #expect(manager.installedModelFiles.contains(e2b.fileName))
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(manager.engineChoice == .appleIntelligence)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
+        #expect(manager.statusMessage == "\(e2b.title) downloaded.")
+    }
+
+    /// Delete removes the file, its staging and resume artifacts and the verified marker.
+    /// Deleting the selected model leaves nothing selected: neither the manager's refresh nor
+    /// runtime resolution takes up the other installed model, until the next explicit choice.
+    @Test func deleteRemovesArtifactsAndMarkerAndClearsTheSelectionWithoutFallback() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        let legacyResume = sandbox.root.appendingPathComponent("\(e2b.fileName).resume")
+        for url in [staging, resume, legacyResume] { try Data("partial".utf8).write(to: url) }
+        let manager = try await sandbox.restoredManager()
+        manager.select(e2b)
+        try #require(manager.catalogBytesOnDisk[e2b.fileName] == e2b.expectedBytes)
+
+        await manager.delete(e2b)
+
+        for url in [sandbox.root.appendingPathComponent(e2b.fileName), staging, resume, legacyResume] {
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: sandbox.defaults) == nil)
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.statusMessage == "\(e2b.title) deleted.")
+        #expect(manager.errorMessage == nil)
+
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        manager.refreshInstalledModels()
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root) == nil)
+        #expect(try await sandbox.restoredManager().selectedModelFileName == nil)
+
+        // The next explicit choice turns the fallback back on.
+        manager.select(e4b)
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root)?.lastPathComponent == e4b.fileName)
+    }
+
+    /// A same-name file of the wrong size (a previous version) is not installed, but Delete
+    /// still offers and removes it; another model's selection is untouched.
+    @Test func staleSameNameFileIsDeletableAndKeepsAnotherSelection() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let stale = sandbox.root.appendingPathComponent(e2b.fileName)
+        #expect(FileManager.default.createFile(atPath: stale.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: stale)
+        try handle.truncate(atOffset: 3_427_878_784)
+        try handle.close()
+        let manager = try await sandbox.restoredManager()
+        manager.select(e4b)
+        #expect(!manager.installedModelFiles.contains(e2b.fileName))
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == 3_427_878_784)
+
+        await manager.delete(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.selectedModelFileName == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
+        #expect(manager.errorMessage == nil)
+    }
+
+    /// The persisted selection can name a stale file while the manager shows the verified
+    /// fallback; deleting that file still clears the selection, and nothing is taken up.
+    @Test func deletingAStaleFileThatIsThePersistedSelectionClearsIt() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let stale = sandbox.root.appendingPathComponent(e2b.fileName)
+        #expect(FileManager.default.createFile(atPath: stale.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: stale)
+        try handle.truncate(atOffset: 3_427_878_784)
+        try handle.close()
+        GGUFModelSelection.save(fileName: e2b.fileName, defaults: sandbox.defaults)
+        let manager = try await sandbox.restoredManager()
+        try #require(manager.selectedModelFileName == e4b.fileName)
+        try #require(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+
+        await manager.delete(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root) == nil)
+        #expect(AIService.gemmaChoiceCleared(engineChoice: .gemma, cleared: GGUFModelSelection.isCleared(defaults: sandbox.defaults)))
+        #expect(!AIService.gemmaChoiceCleared(engineChoice: .appleIntelligence, cleared: true))
+    }
+
+    /// Only this entry's artifacts go: a similarly named file, a resume blob of another
+    /// entry and a custom import stay.
+    @Test func deleteLeavesSimilarlyNamedFilesAlone() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b])
+        let kept = [
+            sandbox.root.appendingPathComponent("\(e2b.fileName).backup.gguf"),
+            sandbox.root.appendingPathComponent("\(e2b.fileName).notes.resume"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-personal.gguf"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-personal.part"),
+            sandbox.root.appendingPathComponent("custom-notes.txt"),
+            GGUFModelStorage.resumeDataURL(for: e4b, in: sandbox.root),
+        ]
+        let removed = [
+            sandbox.root.appendingPathComponent("\(e2b.fileName).download"),
+            sandbox.root.appendingPathComponent("\(e2b.id).segment-0.part"),
+            sandbox.root.appendingPathComponent("\(e2b.fileName).resume"),
+            GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root),
+        ]
+        for url in kept + removed { try Data("x".utf8).write(to: url) }
+        // A directory under an artifact name is never removed.
+        let folder = sandbox.root.appendingPathComponent("\(e2b.id).segment-1.part", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let manager = try await sandbox.restoredManager()
+
+        await manager.delete(e2b)
+
+        #expect(manager.errorMessage == nil)
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+        for url in kept { #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
+        for url in removed + [sandbox.root.appendingPathComponent(e2b.fileName)] {
+            #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)")
+        }
+    }
+
+    /// A directory under the catalog name is neither offered for deletion nor removed.
+    @Test func directoryUnderTheModelNameIsNeitherDeletableNorRemoved() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let folder = sandbox.root.appendingPathComponent(e2b.fileName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: folder.appendingPathComponent("inside.txt"))
+        let manager = try await sandbox.restoredManager()
+        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+
+        await manager.delete(e2b)
+
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("inside.txt").path))
+        #expect(manager.errorMessage == nil)
+    }
+
+    /// A completion the system delivers after the entry was deleted (a background download
+    /// that finished while the app was away, even across a relaunch) is discarded, not
+    /// republished, until a download of that entry begins again.
+    @Test func completionDeliveredAfterADeleteIsDiscarded() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+
+        // Nothing deleted: the completion installs.
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try Data(contentsOf: installed) == valid)
+
+        await manager.delete(option)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: sandbox.defaults) == nil)
+
+        // The app was terminated before the callback: a fresh manager still discards it.
+        let relaunched = try await sandbox.restoredManager()
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+
+        // A download of the entry beginning is a fresh intent; the next completion installs.
+        relaunched.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try Data(contentsOf: installed) == valid)
+    }
+
+    @Test func artifactNamesFollowTheDownloaderGrammar() {
+        let e2b = GGUFDownloadCatalog.options[0]
+        for name in ["\(e2b.fileName).download", "\(e2b.fileName).resume", "\(e2b.fileName).059e73281d764ba0.resume",
+                     "\(e2b.id).segment-0.part", "\(e2b.id).segment-12.resume"] {
+            #expect(GGUFModelStorage.isDownloadArtifactName(name, of: e2b), "\(name)")
+        }
+        for name in [e2b.fileName, "\(e2b.fileName).notes.resume", "\(e2b.fileName).059e73281d764ba.resume",
+                     "\(e2b.fileName).backup.gguf", "\(e2b.id).segment-personal.part", "\(e2b.id).segment-.part",
+                     "\(e2b.id).segment-1.gguf", GGUFDownloadCatalog.options[1].fileName] {
+            #expect(!GGUFModelStorage.isDownloadArtifactName(name, of: e2b), "\(name)")
+        }
+    }
+
+    @Test func deleteFailureIsReportedAndKeepsTheModel() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sandbox.root.path)
+            sandbox.tearDown()
+        }
+        try sandbox.install([e2b])
+        let manager = try await sandbox.restoredManager()
+        manager.select(e2b)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: sandbox.root.path)
+
+        await manager.delete(e2b)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sandbox.root.path)
+        #expect(manager.errorMessage?.hasPrefix("Could not delete \(e2b.title):") == true)
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e2b.fileName).path))
+        // The model is still there, so its selection comes back.
+        #expect(manager.selectedModelFileName == e2b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
+        manager.refreshInstalledModels()
+        #expect(manager.installedModelFiles == [e2b.fileName])
+    }
+}
+
+// MARK: - Hash loop memory bound
+
+/// XCTest on purpose: the bundle runs its XCTest cases serially and finishes them before the
+/// Swift Testing run starts, so no other test's allocations land in this measurement.
+final class GGUFHashMemoryTests: XCTestCase {
+    /// Each hashed chunk must leave memory before the next is read. Holding them all kept a
+    /// whole multi-GB model resident during verification and the app was jetsammed.
+    func testHashingALargeFileKeepsOnlyOneChunkResident() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-memory-\(UUID().uuidString).gguf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data("GGUF".utf8)))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 1 << 30) // 1 GiB, sparse: reads return zero pages without touching disk.
+        try handle.close()
+
+        // Sampled once per chunk from inside the hash loop, so a pool around the whole loop
+        // (drained only on return) still shows the growth.
+        let baseline = try physicalFootprint()
+        var peak = baseline
+        _ = try GGUFModelCatalog.fileSHA256(at: url, cancellationCheck: { peak = max(peak, try physicalFootprint()) })
+        let grownBy = peak - baseline
+        // Measured: about 3 MiB with the per-chunk pool, 1103 MiB without it.
+        XCTAssertLessThan(grownBy, 256 * 1_048_576, "hashing grew the footprint by \(grownBy / 1_048_576) MiB")
+    }
+
+    private func physicalFootprint() throws -> Int64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS)
+        return Int64(info.phys_footprint)
     }
 }

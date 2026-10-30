@@ -82,7 +82,7 @@ fun SongNotebookSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                                 Text(alternate.text)
                                 FlowRow {
                                     TextButton(onClick = { clipboard.setText(AnnotatedString(alternate.text)) }) { Text("Copy") }
-                                    TextButton(onClick = { viewModel.insertSuggestion(alternate.text); onDismiss() }) { Text("Insert at cursor") }
+                                    TextButton(onClick = { if (viewModel.insertSuggestion(alternate.text)) onDismiss() }) { Text("Insert at cursor") }
                                     TextButton(onClick = { removing = alternate }) { Text("Remove") }
                                 }
                             }

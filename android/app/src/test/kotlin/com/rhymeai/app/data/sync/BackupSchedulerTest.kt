@@ -150,4 +150,12 @@ class BackupSchedulerTest {
         assertEquals("restore", actionAfterAuthorization("restore", "backup"))
         assertEquals("backup", actionAfterAuthorization(null, "backup"))
     }
+
+    @Test
+    fun aLateConsentResumesOnlyWhileConnectedOrWhenConnecting() {
+        assertTrue(resumesAfterConsent(connected = true, pending = "restore", connect = "connect"))
+        assertTrue(resumesAfterConsent(connected = false, pending = "connect", connect = "connect"))
+        assertFalse(resumesAfterConsent(connected = false, pending = "restore", connect = "connect"))
+        assertFalse(resumesAfterConsent(connected = false, pending = null, connect = "connect"))
+    }
 }

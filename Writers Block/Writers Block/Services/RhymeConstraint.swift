@@ -10,14 +10,15 @@ import Foundation
 /// implementation.
 nonisolated enum RhymeConstraint {
 
-    /// Last word of a line with punctuation/quotes stripped, lowercased.
-    /// Skips trailing tokens that are pure punctuation (em-dashes, ellipses).
+    /// Last lexical word of a line, lowercased, as Android `wordPattern` finds
+    /// it, so punctuation attached to the word ("day—night", "line—") is not
+    /// part of it. A match that is only apostrophes (a closing quote) is skipped.
     static func lineEndWord(_ line: String) -> String {
-        for token in line.split(whereSeparator: \.isWhitespace).reversed() {
-            let normalized = ProsodyAnalyzer.normalizeWord(String(token))
-            if !normalized.isEmpty {
-                return normalized
-            }
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        for match in LyricRegex.word.matches(in: line, range: range).reversed() {
+            let normalized = ProsodyAnalyzer.normalizeWord(nsLine.substring(with: match.range))
+            if !normalized.isEmpty { return normalized }
         }
         return ""
     }

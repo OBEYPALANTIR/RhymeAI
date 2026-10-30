@@ -190,7 +190,7 @@ struct SongRecordingsView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -258,6 +258,7 @@ struct SongRecordingsView: View {
                 }
             }
         }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: recordingFolders.isEmpty)
         .alert("Recording Error", isPresented: Binding(
             get: { viewModel.voiceMemoService.lastError != nil },
             set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
@@ -518,17 +519,29 @@ struct SongRecordingsView: View {
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
     }
 
-    private func emptyState(systemImage: String, title: String) -> some View {
+    /// Glyph and text in the appearance's secondary ink (not the system grey),
+    /// with a caption naming the next step; it fades in on the state tier when
+    /// the list empties under the writer.
+    private func emptyState(systemImage: String, title: String, caption: String? = nil) -> some View {
         VStack(spacing: RhymeAITokens.Spacing.sm) {
             Image(systemName: systemImage)
                 .font(.title2)
-                .foregroundStyle(.secondary.opacity(0.7))
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(appearance.palette.secondaryInk)
+            VStack(spacing: RhymeAITokens.Spacing.xxs) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                if let caption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, RhymeAITokens.Touch.minimum)
+        .transition(.opacity)
     }
 
 }

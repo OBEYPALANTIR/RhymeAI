@@ -327,6 +327,27 @@ class GemmaDownloadsTest {
     }
 
     @Test
+    fun deleteInstalledGemmaRemovesAStaleFileAndEveryDownloadArtifact() {
+        val filesDir = tempDir()
+        val cacheDir = tempDir()
+        val model = tinyGemma(expectedBytes = 24)
+        // Stale version under the catalog name: wrong size, so it is not "installed" but must still go.
+        val installed = File(filesDir, model.fileName).apply { writeBytes(ByteArray(20)) }
+        val temp = gemmaDownloadTempFile(cacheDir, model).apply { writeBytes(ByteArray(8)) }
+        val state = gemmaDownloadStateFile(temp).apply { writeBytes(ByteArray(4)) }
+        val stagingState = File(cacheDir, "${state.name}.tmp").apply { writeBytes(ByteArray(2)) }
+        val unrelated = File(filesDir, "custom-keep.gguf").apply { writeBytes(ByteArray(3)) }
+
+        deleteInstalledGemma(model, filesDir, cacheDir)
+
+        listOf(installed, temp, state, stagingState).forEach { assertFalse(it.path, it.exists()) }
+        assertTrue(unrelated.exists())
+
+        // Nothing on disk is not a failure.
+        deleteInstalledGemma(model, filesDir, cacheDir)
+    }
+
+    @Test
     fun upgradeSpaceCheckCountsTheReclaimedStaleModel() {
         val dir = tempDir()
         val model = tinyGemma(expectedBytes = 1_000L)

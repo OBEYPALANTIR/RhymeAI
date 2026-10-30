@@ -77,7 +77,10 @@ struct ProjectsDrawerView: View {
     private struct UndoToast: Identifiable {
         let id = UUID()
         let message: String
-        let undo: () -> Void
+        /// A leading glyph in the success colour at the save indicator's 80%, e.g. the Restore tick.
+        var systemImage: String? = nil
+        var actionLabel = "Undo"
+        let action: (() -> Void)?
     }
 
     nonisolated private struct RecordingFolder: Identifiable, Sendable {
@@ -86,9 +89,9 @@ struct ProjectsDrawerView: View {
         let items: [RecordingItem]
     }
 
-    private func showUndoToast(_ message: String, undo: @escaping () -> Void) {
+    private func showUndoToast(_ message: String, systemImage: String? = nil, actionLabel: String = "Undo", undo: (() -> Void)?) {
         withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
-            undoToast = UndoToast(message: message, undo: undo)
+            undoToast = UndoToast(message: message, systemImage: systemImage, actionLabel: actionLabel, action: undo)
         }
     }
 
@@ -106,23 +109,31 @@ struct ProjectsDrawerView: View {
 
     private func undoToastView(_ toast: UndoToast) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
+            if let systemImage = toast.systemImage {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(appearance.palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
+                    .accessibilityHidden(true)
+            }
             Text(toast.message)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
             Spacer(minLength: RhymeAITokens.Spacing.sm)
-            Button {
-                withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
-                    toast.undo()
-                    undoToast = nil
+            if let action = toast.action {
+                Button {
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                        action()
+                        undoToast = nil
+                    }
+                } label: {
+                    Text(toast.actionLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(appearance.palette.action)
+                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
                 }
-            } label: {
-                Text("Undo")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(appearance.palette.action)
-                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                .buttonStyle(.rhymePress)
             }
-            .buttonStyle(.rhymePress)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.lg)
         .padding(.vertical, RhymeAITokens.Spacing.sm)
@@ -246,6 +257,16 @@ struct ProjectsDrawerView: View {
                 TrashBinView(onDismiss: {
                     withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
                         trashBinPresented = false
+                    }
+                }, onRestored: { restored in
+                    if restored.count == 1, let song = restored.first {
+                        let title = song.title.isEmpty ? "Untitled Song" : song.title
+                        showUndoToast("Restored \u{201c}\(title)\u{201d}", systemImage: "checkmark", actionLabel: "Open") {
+                            viewModel.loadProject(song)
+                            dismissAfterNavigation()
+                        }
+                    } else {
+                        showUndoToast("\(restored.count) songs restored", systemImage: "checkmark", undo: nil)
                     }
                 })
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
@@ -395,7 +416,7 @@ struct ProjectsDrawerView: View {
             ScrollView {
                 LazyVStack(spacing: RhymeAITokens.Spacing.sm) {
                     if projects.isEmpty {
-                        emptyState(systemImage: "music.note", title: "No saved songs yet.")
+                        emptyState(systemImage: "music.note", title: "No saved songs yet.", caption: "Create New Song starts a blank page.")
                     } else if filteredProjects.isEmpty {
                         emptyState(systemImage: "magnifyingglass", title: "No songs match your search.")
                     } else {
@@ -405,6 +426,7 @@ struct ProjectsDrawerView: View {
                     }
                 }
                 .padding(.bottom, RhymeAITokens.Spacing.sm)
+                .rhymeAnimation(RhymeAITokens.Motion.state, value: projects.isEmpty)
             }
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {
@@ -472,7 +494,7 @@ struct ProjectsDrawerView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -547,6 +569,7 @@ struct ProjectsDrawerView: View {
                 }
             }
         }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: recordingFolders.isEmpty)
         .alert("Recording Error", isPresented: Binding(
             get: { viewModel.voiceMemoService.lastError != nil },
             set: { if !$0 { viewModel.voiceMemoService.lastError = nil } }
@@ -866,17 +889,29 @@ struct ProjectsDrawerView: View {
         .padding(.trailing, RhymeAITokens.Spacing.xs)
     }
 
-    private func emptyState(systemImage: String, title: String) -> some View {
+    /// Glyph and text in the appearance's secondary ink (not the system grey),
+    /// with a caption naming the next step; it fades in on the state tier when
+    /// a list empties under the writer.
+    private func emptyState(systemImage: String, title: String, caption: String? = nil) -> some View {
         VStack(spacing: RhymeAITokens.Spacing.sm) {
             Image(systemName: systemImage)
                 .font(.title2)
-                .foregroundStyle(.secondary.opacity(0.7))
-            Text(title)
-                .font(.subheadline)
                 .foregroundStyle(appearance.palette.secondaryInk)
+            VStack(spacing: RhymeAITokens.Spacing.xxs) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                if let caption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, RhymeAITokens.Touch.minimum)
+        .transition(.opacity)
     }
 
     private func closeDrawer() {

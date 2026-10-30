@@ -18,6 +18,8 @@ struct TrashBinView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var onDismiss: (() -> Void)? = nil
+    /// The songs a Restore put back, so the drawer can confirm it.
+    var onRestored: (([SongProject]) -> Void)? = nil
 
     private enum TrashTab: String, CaseIterable {
         case projects = "Songs"
@@ -78,18 +80,25 @@ struct TrashBinView: View {
                     .padding(.horizontal, RhymeAITokens.Spacing.md)
                     .padding(.top, RhymeAITokens.Spacing.sm)
 
+                    // The list stays mounted so its last row can leave on the
+                    // dismiss tier; the empty state fades in over it on the
+                    // state tier. A tab switch stays instant.
                     if activeTab == .projects {
-                        if trashedProjects.isEmpty {
-                            emptyState
-                        } else {
+                        ZStack {
                             trashList
+                            if trashedProjects.isEmpty {
+                                emptyState.transition(.opacity)
+                            }
                         }
+                        .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedProjects.isEmpty)
                     } else {
-                        if trashedMemos.isEmpty {
-                            recordingsEmptyState
-                        } else {
+                        ZStack {
                             recordingsTrashList
+                            if trashedMemos.isEmpty {
+                                recordingsEmptyState.transition(.opacity)
+                            }
                         }
+                        .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedMemos.isEmpty)
                     }
                 }
                 .frame(maxWidth: contentMaxWidth)
@@ -141,11 +150,15 @@ struct TrashBinView: View {
 
             Spacer()
 
-            Image(systemName: "square.grid.2x2")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(appearance.palette.secondaryInk)
-                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                .accessibilityHidden(true)
+            // Decorative on the compact layout only: on an iPad Pro 12.9 the
+            // accessibility audit reads the hidden grid glyph as text ("88").
+            if horizontalSizeClass != .regular {
+                Image(systemName: "square.grid.2x2")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.md)
@@ -159,16 +172,22 @@ struct TrashBinView: View {
     private var trashList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                selectionHeader
+                if !trashedProjects.isEmpty {
+                    selectionHeader.transition(.opacity)
+                }
 
                 ForEach(trashedProjects, id: \.id) { project in
                     trashRow(project)
+                        // A restored or deleted row leaves on the dismiss tier
+                        // while the rows below close the gap on the standard spring.
+                        .transition(reduceMotion ? .opacity : .opacity.animation(RhymeAITokens.Motion.dismiss))
                 }
             }
             .padding(.top, RhymeAITokens.Spacing.sm)
             .padding(.bottom, RhymeAITokens.Spacing.xxl)
         }
         .scrollContentBackground(.hidden)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: trashIds)
     }
 
     private var selectionHeader: some View {
@@ -243,7 +262,12 @@ struct TrashBinView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Songs in Trash", systemImage: "trash")
+            Label {
+                Text("No Songs in Trash")
+            } icon: {
+                // Secondary ink at 100%, not the system grey.
+                Image(systemName: "trash").foregroundStyle(appearance.palette.secondaryInk)
+            }
         } description: {
             Text("Deleted songs stay here for 30 days.")
         }
@@ -256,7 +280,11 @@ struct TrashBinView: View {
 
     private var recordingsEmptyState: some View {
         ContentUnavailableView {
-            Label("No Recordings in Trash", systemImage: "mic.slash")
+            Label {
+                Text("No Recordings in Trash")
+            } icon: {
+                Image(systemName: "mic.slash").foregroundStyle(appearance.palette.secondaryInk)
+            }
         } description: {
             Text("Deleted recordings stay here for 30 days.")
         }
@@ -268,16 +296,20 @@ struct TrashBinView: View {
     private var recordingsTrashList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                selectionHeader
+                if !trashedMemos.isEmpty {
+                    selectionHeader.transition(.opacity)
+                }
 
                 ForEach(trashedMemos) { memo in
                     trashRecordingRow(memo)
+                        .transition(reduceMotion ? .opacity : .opacity.animation(RhymeAITokens.Motion.dismiss))
                 }
             }
             .padding(.top, RhymeAITokens.Spacing.sm)
             .padding(.bottom, RhymeAITokens.Spacing.xxl)
         }
         .scrollContentBackground(.hidden)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: trashedMemos.map(\.id))
     }
 
     private func trashRecordingRow(_ memo: TrashedVoiceMemo) -> some View {
@@ -402,8 +434,8 @@ struct TrashBinView: View {
 
     private func restoreSelected() {
         if activeTab == .projects {
-            let projects = selectedProjects
-            projects.forEach { _ = viewModel.restoreTrashedProject($0) }
+            let restored = selectedProjects.compactMap { viewModel.restoreTrashedProject($0) }
+            if !restored.isEmpty { onRestored?(restored) }
         } else {
             selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
             reloadTrashedMemos()

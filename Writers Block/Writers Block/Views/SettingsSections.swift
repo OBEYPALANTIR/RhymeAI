@@ -143,8 +143,10 @@ struct SettingsLocalModelSection: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var customModelImporterPresented = false
     @State private var customImportError: String?
+    @State private var modelToDelete: GGUFDownloadOption?
 
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
+    @ObservedObject private var inferenceStatus = LocalInferenceStatus.shared
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -153,7 +155,9 @@ struct SettingsLocalModelSection: View {
             localStatusRow
 
             if GGUFModelService.isEngineAvailable {
-                if !ggufDownloadManager.installedModelFiles.isEmpty {
+                // Also while Gemma stays chosen with nothing installed (its model was deleted),
+                // so Apple Intelligence can still be picked.
+                if !ggufDownloadManager.installedModelFiles.isEmpty || ggufDownloadManager.engineChoice == .gemma {
                     enginePickerRow
                 }
 
@@ -199,6 +203,20 @@ struct SettingsLocalModelSection: View {
                     .accessibilityIdentifier("gemmaUnavailableMessage")
             }
         }
+        .alert(
+            Text("Delete \(modelToDelete?.title ?? "")?"),
+            isPresented: Binding(get: { modelToDelete != nil }, set: { if !$0 { modelToDelete = nil } }),
+            presenting: modelToDelete
+        ) { option in
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                viewModel.cancelEditorAIWork()
+                Task { await ggufDownloadManager.delete(option) }
+            }
+        } message: { option in
+            let bytes = ggufDownloadManager.catalogBytesOnDisk[option.fileName] ?? 0
+            Text("Frees \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) on this device. You can download it again later.")
+        }
     }
 
     private var customModelSelector: some View {
@@ -227,7 +245,8 @@ struct SettingsLocalModelSection: View {
             .accessibilityIdentifier("importCustomGGUFModel")
             if let customImportError { Text(customImportError).foregroundStyle(appearance.palette.error) }
         }
-        .disabled(ggufDownloadManager.activeDownloadID != nil || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying)
+        .disabled(ggufDownloadManager.activeDownloadID != nil || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
+                  ggufDownloadManager.deletingModelFileName != nil)
         .fileImporter(isPresented: $customModelImporterPresented, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
@@ -296,6 +315,7 @@ struct SettingsLocalModelSection: View {
         let isDownloaded = ggufDownloadManager.installedModelFiles.contains(option.fileName)
         let isSelected = ggufDownloadManager.selectedModelFileName == option.fileName
         let isDownloading = ggufDownloadManager.activeDownloadID == option.id
+        let isOnDisk = ggufDownloadManager.catalogBytesOnDisk[option.fileName] != nil
 
         return Button {
             if isDownloading {
@@ -358,14 +378,39 @@ struct SettingsLocalModelSection: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Room for the overlaid Delete control (44pt tall over the 16pt padding).
+            .padding(.bottom, isOnDisk ? RhymeAITokens.Touch.minimum - RhymeAITokens.Spacing.md : 0)
             .padding(RhymeAITokens.Spacing.md)
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
-                  ggufDownloadManager.isVerifying ||
+                  ggufDownloadManager.isVerifying || ggufDownloadManager.deletingModelFileName != nil ||
                   (ggufDownloadManager.activeDownloadID != nil && !isDownloading))
         .accessibilityIdentifier("gemmaDownload.\(option.id)")
+        // A stale same-name file (previous version) is not installed but is still deletable.
+        // Laid over the card instead of beside it, so the title keeps its width on narrow screens.
+        .overlay(alignment: .bottomTrailing) {
+            if isOnDisk {
+                Button {
+                    modelToDelete = option
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(appearance.palette.error)
+                        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.rhymePress)
+                // Off while this entry downloads (cancel that first) or a local model is loading or generating.
+                .disabled(isDownloading || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
+                          ggufDownloadManager.deletingModelFileName != nil || inferenceStatus.loadingCount > 0 || viewModel.isLoading || viewModel.rewriteLoading)
+                .accessibilityLabel("Delete \(option.title)")
+                .accessibilityIdentifier("gemmaDelete.\(option.id)")
+                .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            }
+        }
     }
 
     private func downloadActionTitle(isDownloaded: Bool, isSelected: Bool, isDownloading: Bool) -> String {
@@ -646,17 +691,56 @@ struct SettingsCloudBackupSection: View {
     /// "Last backed up 2 minutes ago · Google Drive"; refreshed while visible.
     private var providerStatusRow: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Label(providerStatusText(now: context.date), systemImage: providerStatusIcon)
-                .font(.caption)
-                .foregroundStyle(isFailed ? appearance.palette.error : appearance.palette.secondaryInk)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("backupProviderStatus")
+            let text = providerStatusText(now: context.date)
+            Label {
+                Text(text)
+            } icon: {
+                Image(systemName: providerStatusIcon)
+                    // "just now" wears the success colour at the save indicator's 80%; the text stays in ink.
+                    .foregroundStyle(providerStatusIconColor(now: context.date))
+                    .symbolEffect(.rotate, isActive: isBackingUp && !reduceMotion)
+            }
+            .font(.caption)
+            .foregroundStyle(isFailed ? appearance.palette.error : appearance.palette.secondaryInk)
+            .fixedSize(horizontal: false, vertical: true)
+            // Text and glyph cross-fade in place on the state tier instead of swapping in one frame.
+            .contentTransition(.opacity)
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: text)
+            .accessibilityIdentifier("backupProviderStatus")
         }
     }
 
     private var isFailed: Bool {
         if case .failed = viewModel.backupStatus { return true }
         return false
+    }
+
+    private var isBackingUp: Bool {
+        if case .backingUp = viewModel.backupStatus { return true }
+        return false
+    }
+
+    /// True while the row reads "Last backed up just now".
+    static func isJustBackedUp(_ lastBackupAt: Date?, now: Date) -> Bool {
+        guard let lastBackupAt else { return false }
+        return now.timeIntervalSince(lastBackupAt) < 60
+    }
+
+    private func providerStatusIconColor(now: Date) -> Color {
+        Self.providerStatusIconColor(viewModel.backupStatus, now: now, palette: appearance.palette)
+    }
+
+    /// The status glyph's colour: error while failed, the success colour at
+    /// the save indicator's 80% while "just now", otherwise secondary ink.
+    static func providerStatusIconColor(_ status: BackupStatus, now: Date, palette: AppAppearancePalette) -> Color {
+        switch status {
+        case .failed:
+            return palette.error
+        case .connected(let last) where isJustBackedUp(last, now: now):
+            return palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity)
+        case .connected, .notConnected, .pending, .backingUp:
+            return palette.secondaryInk
+        }
     }
 
     private func providerStatusText(now: Date) -> String {
@@ -676,7 +760,7 @@ struct SettingsCloudBackupSection: View {
 
     private func lastBackedUp(_ date: Date?, now: Date) -> String {
         guard let date else { return "Not backed up yet" }
-        guard now.timeIntervalSince(date) >= 60 else { return "Last backed up just now" }
+        guard !Self.isJustBackedUp(date, now: now) else { return "Last backed up just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return "Last backed up \(formatter.localizedString(for: date, relativeTo: now))"

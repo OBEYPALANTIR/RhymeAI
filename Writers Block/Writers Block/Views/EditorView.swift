@@ -7,7 +7,8 @@ func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
     "\(wordCount)w · \(syllableCount)s"
 }
 
-private enum EditorViewConstants {
+/// Shared with the drawer toast and the Backup row, which mirror the save indicator's 80%.
+enum EditorViewConstants {
     enum UnBlockChrome {
         static let expandedButtonWidth: CGFloat = 136
         static let expandedWordmarkWidth: CGFloat = 76
@@ -50,6 +51,11 @@ private enum EditorViewConstants {
         static let savedStatusOpacity: Double = 0.8
         static let disabledExportOpacity: Double = 0.4
         static let enabledExportOpacity: Double = 1.0
+    }
+
+    enum InsertionHighlight {
+        /// How long "Use line" keeps its mark before it dries into the page (PARITY: Android holds the same).
+        static let holdDuration: TimeInterval = 2.0
     }
 
     enum ControlChrome {
@@ -123,6 +129,13 @@ struct EditorView: View {
     @State private var fileExporterPresented: Bool = false
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
+    /// The song open whose title field holds focus. Keyed by the open token
+    /// because SwiftUI does not learn that the lyrics text view took the focus:
+    /// a stale value never matches the next open's re-created title field.
+    @FocusState private var titleFocusedOpen: EditorViewModel.EditorOpen?
+    /// The New Song open whose title focus has already been granted, so a
+    /// re-created editor does not raise the keyboard again.
+    @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
     @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
     // UnBlock collapses into a pencil circle while the mic is recording.
     @State private var unblockWordmarkOpacity: Double = EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
@@ -177,9 +190,12 @@ struct EditorView: View {
         }
         .task(id: viewModel.insertionFeedbackID) {
             guard viewModel.insertionFeedbackID != nil else { return }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(EditorViewConstants.InsertionHighlight.holdDuration))
             guard !Task.isCancelled else { return }
-            viewModel.clearInsertionHighlight()
+            // The mark fades on the settle tier like ink drying; Reduce Motion clears it in one frame.
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
+                viewModel.clearInsertionHighlight()
+            }
             try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 28 : 6))
             guard !Task.isCancelled else { return }
             viewModel.clearInsertionFeedback()
@@ -821,6 +837,7 @@ struct EditorView: View {
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
+                    .focused($titleFocusedOpen, equals: viewModel.editorOpen)
                     .onChange(of: viewModel.title) {
                         viewModel.triggerAutoSave()
                     }
@@ -834,6 +851,35 @@ struct EditorView: View {
             }
             .frame(maxWidth: RhymeAITokens.Layout.editorMaxWidth)
             .frame(maxWidth: .infinity)
+            // A song opening cross-fades the writing column in place: the old
+            // page leaves on the dismiss tier, the new one arrives on the state
+            // tier, opacity only. Reduce Motion keeps the one-frame swap.
+            .id(viewModel.editorOpen)
+            .transition(reduceMotion ? .identity : .asymmetric(
+                insertion: .opacity.animation(RhymeAITokens.Motion.state),
+                removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
+            ))
+        }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
+        // New Song: once the drawer or welcome has left, the caret is already
+        // in the title, so the first keystroke is the song's name.
+        .task(id: viewModel.editorOpen) {
+            let open = viewModel.editorOpen
+            guard open.isNewSong, focusedNewSongOpen != open else { return }
+            try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+            // The field may still be arriving with the welcome-to-editor fade;
+            // ask again until the focus system reports it. A cancelled attempt
+            // (the layout branch replacing this view) stays retryable.
+            for _ in 0..<4 {
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
+                titleFocusedOpen = open
+                try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
+                if titleFocusedOpen == open {
+                    focusedNewSongOpen = open
+                    return
+                }
+            }
         }
         .scrollPosition($writingScrollPosition)
         .onScrollGeometryChange(for: Double.self) { geometry in
@@ -905,7 +951,8 @@ struct EditorView: View {
             bottomOverlayHeight: selectionAvoidanceInset,
             rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
             syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
-            isEditable: !viewModel.hasActiveRewrite
+            isEditable: !viewModel.hasActiveRewrite,
+            resumesEditingOnCreate: lyricsEditorIsFocused
         )
         .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
         .padding(.horizontal, editorSidePadding)

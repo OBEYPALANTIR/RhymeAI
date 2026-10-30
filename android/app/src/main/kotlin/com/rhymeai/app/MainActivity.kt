@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                     if (result.resultCode == Activity.RESULT_OK) {
                         viewModel.retryAfterDriveAuthorization()
                     } else {
-                        viewModel.syncPendingIntent = null
+                        viewModel.cancelDriveAuthorization()
                     }
                 }
 
@@ -238,7 +238,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDeleteProject = { id, onCommitted -> viewModel.moveProjectToTrash(id, onCommitted) },
-                            onRestoreProject = { viewModel.restoreTrashedProject(it) },
+                            onRestoreProject = { id, onCommitted -> viewModel.restoreTrashedProject(id, onCommitted) },
                             onPermanentlyDeleteProject = { viewModel.permanentlyDeleteTrashedProject(it) },
                             onPurgeExpiredTrash = { viewModel.purgeExpiredTrashedProjects() },
                             onRecordingPurgeIncomplete = viewModel::reportRecordingPurgeFailure,
@@ -309,6 +309,10 @@ class MainActivity : ComponentActivity() {
                             verifiedGemmaFileNames = viewModel.verifiedGemmaFileNames,
                             onStartGemmaDownload = { viewModel.startGemmaDownload(it) },
                             onUseDownloadedGemma = { viewModel.useDownloadedGemma(it) },
+                            onDeleteDownloadedGemma = { viewModel.deleteDownloadedGemma(it) },
+                            gemmaDeletingModel = viewModel.gemmaDeletingModel,
+                            localModelGenerating = viewModel.isLoading || viewModel.rewriteLoading ||
+                                viewModel.inspectorSynonymsLoading,
                             backup = BackupSectionState(
                                 status = viewModel.backupStatus,
                                 notice = viewModel.backupNotice,
