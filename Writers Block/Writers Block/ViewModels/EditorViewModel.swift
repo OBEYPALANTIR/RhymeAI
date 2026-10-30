@@ -454,8 +454,9 @@ final class EditorViewModel: ObservableObject {
         guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
         let word = ns.substring(with: range)
         guard word.count >= 2 else { return nil }
+        // Smart Punctuation types "don't" as U+2019; the lookups fold it (`normalizeWord`).
         for ch in word {
-            if !ch.isLetter, ch != "'" { return nil }
+            if !ch.isLetter, !"'\u{2019}\u{02BC}".contains(ch) { return nil }
         }
         return (word, range)
     }
