@@ -260,6 +260,19 @@ enum GGUFModelStorage {
         directory.appendingPathComponent("\(option.fileName).\(option.sha256.prefix(16)).resume")
     }
 
+    /// A file under `option`'s name that cannot pass load-time validation, judged from
+    /// metadata alone: its size no longer matches the catalog entry, or its marker was
+    /// written for exactly this file and records another artifact's SHA-256.
+    nonisolated static func isStaleArtifact(
+        _ identity: GGUFModelFileIdentity,
+        of option: GGUFDownloadOption,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard identity.size == option.expectedBytes else { return true }
+        let marker = GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults)
+        return marker.map { $0.describes(identity) && $0.sha256 != option.sha256 } ?? false
+    }
+
     /// Removes what a previous version of `option` left under the same name: an installed
     /// file whose size no longer matches the catalog entry, or whose marker records another
     /// artifact's SHA-256 (neither can pass load-time validation), and resume data keyed to
@@ -273,14 +286,11 @@ enum GGUFModelStorage {
         let fileManager = FileManager.default
         var freedBytes: Int64 = 0
         let installedURL = directory.appendingPathComponent(option.fileName)
-        if let identity = try? GGUFModelFileIdentity.read(at: installedURL.path) {
-            let marker = GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: defaults)
-            let markedAsOtherArtifact = marker.map { $0.describes(identity) && $0.sha256 != option.sha256 } ?? false
-            if identity.size != option.expectedBytes || markedAsOtherArtifact {
-                try fileManager.removeItem(at: installedURL)
-                GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
-                freedBytes += identity.size
-            }
+        if let identity = try? GGUFModelFileIdentity.read(at: installedURL.path),
+           isStaleArtifact(identity, of: option, defaults: defaults) {
+            try fileManager.removeItem(at: installedURL)
+            GGUFVerifiedArtifactStore.remove(fileName: option.fileName, defaults: defaults)
+            freedBytes += identity.size
         }
         let currentResumeName = resumeDataURL(for: option, in: directory).lastPathComponent
         for url in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {

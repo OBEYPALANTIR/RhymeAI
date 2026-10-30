@@ -178,6 +178,42 @@ struct GGUFDownloadCatalogTests {
         #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: defaults) == nil)
     }
 
+    /// The runtime resolver agrees with Settings: a previous version left under a catalog
+    /// name is never handed to the loader, which would hash it and fail on every request.
+    @Test func resolverSkipsAPreviousVersionLeftUnderTheCatalogName() throws {
+        let directory = try makeModelsDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let v21SHA256 = "4cfffebcb0b96e154d963de5d90ed63962d0bcd9e77ab9fec38314257870e6a5"
+        let installed = directory.appendingPathComponent(e2b.fileName)
+        func resolved() -> String? {
+            GGUFModelSelection.resolvedModelURL(
+                defaults: defaults, modelsDirectory: directory, totalRAMBytes: 16 << 30
+            )?.lastPathComponent
+        }
+        try writeSparseFile(installed, bytes: e2b.expectedBytes)
+        GGUFModelSelection.save(fileName: e2b.fileName, defaults: defaults)
+
+        // Unmarked (installed before markers) or marked as the current artifact: used.
+        #expect(resolved() == e2b.fileName)
+        GGUFVerifiedArtifactStore.record(sha256: e2b.sha256, at: installed, defaults: defaults)
+        #expect(resolved() == e2b.fileName)
+
+        // Marked as v2.1 for exactly this file, or the wrong size: skipped.
+        GGUFVerifiedArtifactStore.record(sha256: v21SHA256, at: installed, defaults: defaults)
+        #expect(resolved() == nil)
+        try writeSparseFile(installed, bytes: e2b.expectedBytes - 1)
+        #expect(resolved() == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: defaults) == e2b.fileName)
+
+        // The fallback takes a usable model instead.
+        try writeSparseFile(directory.appendingPathComponent(e4b.fileName), bytes: e4b.expectedBytes)
+        #expect(resolved() == e4b.fileName)
+    }
+
     @Test func verifiedMarkerIsTrustedOnlyForTheFileItWasWrittenFor() throws {
         let directory = try makeModelsDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
