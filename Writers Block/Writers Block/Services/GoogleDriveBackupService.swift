@@ -862,6 +862,16 @@ final class BackupService {
     /// Every raw object per Drive name: a race can leave more than one (finding 9).
     private typealias RemoteFiles = [String: [DriveAppDataFile]]
 
+    /// Drive caps each appProperties entry at 124 bytes of key plus value, and one over the cap
+    /// fails the whole upload. A long display name is left out, as on Android; the manifest
+    /// stays authoritative. The other properties are kept whatever their size: verifying and
+    /// deleting the object (`intact`, `deleteRemoteRecordingsCoveredByDeletions`) need them.
+    static func recordingAppProperties(_ entry: SyncRecording) -> [String: String] {
+        var properties = ["id": entry.id, "projectId": entry.projectId, "sha256": entry.sha256, "bytes": String(entry.bytes)]
+        if ("fileName" + entry.fileName).utf8.count <= 124 { properties["fileName"] = entry.fileName }
+        return properties
+    }
+
     /// The object under a name whose properties carry this hash and size, if any.
     private static func intact(_ remote: RemoteFiles, _ name: String, sha256: String, bytes: Int64) -> DriveAppDataFile? {
         remote[name]?.first { $0.appProperties?["sha256"] == sha256 && $0.appProperties?["bytes"] == String(bytes) }
@@ -1273,7 +1283,7 @@ final class BackupService {
                 if listed.contains(entry.id) { missing.append(entry.fileName) }
                 continue
             }
-            let properties = ["id": entry.id, "projectId": entry.projectId, "fileName": entry.fileName, "sha256": entry.sha256, "bytes": String(entry.bytes)]
+            let properties = Self.recordingAppProperties(entry)
             // A40: an existing object's content is never changed.
             let uploaded = try await driveClient.uploadNewFile(named: entry.driveName, mimeType: "application/octet-stream", content: audio, appProperties: properties, accessToken: accessToken)
             if let checksum = uploaded.sha256Checksum, checksum.lowercased() != entry.sha256 {
