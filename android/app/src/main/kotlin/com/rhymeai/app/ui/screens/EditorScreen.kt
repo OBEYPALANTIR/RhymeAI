@@ -608,6 +608,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     val modalOpen = recordingsProjectId != null || viewModel.showSongNotebook || viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
+        viewModel.showOneLiners ||
         viewModel.showExportSheet ||
         viewModel.showInspector
     val rewriteReviewVisible = viewModel.hasActiveRewrite &&
@@ -745,7 +746,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 actions = {
-                    if (!focusMode) IconButton(
+                    // Below a standard phone width the bar cannot fit another action beside the save
+                    // indicator, so One Liners moves into Song actions there.
+                    val oneLinersInBar = configuration.screenWidthDp >= 360
+                    if (!focusMode && oneLinersInBar) IconButton(
                         onClick = { viewModel.showOneLiners = true },
                         enabled = !viewModel.hasActiveRewrite,
                         modifier = Modifier.testTag("oneLinersButton")
@@ -772,6 +776,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             expanded = songActionsExpanded,
                             onDismissRequest = { songActionsExpanded = false }
                         ) {
+                            if (!oneLinersInBar) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.editor_open_one_liners)) },
+                                    onClick = {
+                                        songActionsExpanded = false
+                                        viewModel.showOneLiners = true
+                                    },
+                                    modifier = Modifier.testTag("oneLinersMenuItem")
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Insert section") },
                                 onClick = {

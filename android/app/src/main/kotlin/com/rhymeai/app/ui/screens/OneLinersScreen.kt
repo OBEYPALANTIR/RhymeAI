@@ -579,6 +579,7 @@ private fun OneLinerCaptureSheet(
                         onClickLabel = "Close",
                         onClick = onDismiss
                     )
+                    .semantics { contentDescription = "Close one liner sheet" }
             )
             Surface(
                 modifier = Modifier.align(Alignment.BottomCenter).statusBarsPadding()
@@ -597,13 +598,19 @@ private fun OneLinerCaptureSheet(
                         .testTag("oneLinerCaptureSheet"),
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
                 ) {
-                    Column {
-                        Text(if (isEdit) "Edit one liner" else "New one liner", fontWeight = FontWeight.SemiBold, fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
-                        Text(
-                            if (isEdit) "Change the words. A recorded take stays as it was." else "Lands in One Liners. Pick a song later, or never.",
-                            fontSize = DesignTokens.Typography.caption,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                    Row(verticalAlignment = Alignment.Top) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (isEdit) "Edit one liner" else "New one liner", fontWeight = FontWeight.SemiBold, fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
+                            Text(
+                                if (isEdit) "Change the words. A recorded take stays as it was." else "Lands in One Liners. Pick a song later, or never.",
+                                fontSize = DesignTokens.Typography.caption,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        // The sheet has no drag handle, so closing is a visible 48 dp control too.
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(DesignTokens.Touch.minTarget)) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
                     }
                     TextField(
                         value = text,
