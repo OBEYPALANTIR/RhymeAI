@@ -493,12 +493,16 @@ struct LyricsTextView: NSViewRepresentable {
             }
         }
 
-        /// Keeps the caret or selection clear of the rewrite bar that overlays
-        /// the bottom of the editor; the enclosing ScrollView does the moving.
+        /// Keeps the caret or selection in view and clear of the rewrite bar
+        /// that overlays the bottom of the editor; the enclosing ScrollView
+        /// does the moving. A Mac has no keyboard to wait for, so this runs
+        /// whenever the editor has focus.
         private func keepCursorVisible(_ textView: NSTextView) {
             guard textView.window?.firstResponder === textView else { return }
+            // The editor grows in SwiftUI's next layout pass; settle it first so
+            // the new last line is inside the scrollable content.
+            textView.window?.contentView?.layoutSubtreeIfNeeded()
             let selected = textView.selectedRange()
-            guard parent.bottomOverlayHeight > 0 || selected.length > 0 else { return }
             let caretRange = selected.length > 0 ? selected : NSRange(location: selected.location, length: 0)
             let rects = segmentRects(in: textView, range: caretRange, caretFallback: true)
             guard let first = rects.first else { return }
