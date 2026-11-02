@@ -36,6 +36,8 @@ struct OneLinersStore {
     var moveItem: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }
     /// Called after a line goes to Trash, so its expiry gets scheduled.
     var onTrashed: () -> Void = {}
+    /// Where the widgets' snapshot is written after every saved change; nil writes none.
+    var snapshotURL: URL? = OneLinersSnapshot.defaultURL
 
     /// Beside the voice-memos root, outside any song's folder.
     nonisolated static var defaultAudioRoot: URL {
@@ -307,6 +309,25 @@ struct OneLinersStore {
         }
     }
 
+    /// The count, the newest lines and the appearance, as the widgets show them.
+    func snapshot() throws -> OneLinersSnapshot {
+        var newest = FetchDescriptor<OneLiner>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        newest.fetchLimit = OneLinersSnapshot.lineLimit
+        return OneLinersSnapshot(
+            count: try context.fetchCount(FetchDescriptor<OneLiner>()),
+            lines: try context.fetch(newest).map {
+                OneLinersSnapshot.Line(id: $0.id, text: $0.text, createdAt: $0.createdAt, hasAudio: $0.audioFileName != nil)
+            },
+            appearance: AppAppearanceStyle.resolve(UserDefaults.standard.string(forKey: AppAppearanceStyle.storageKey)).rawValue
+        )
+    }
+
+    /// Keeps the widgets current. A failure here never fails the change that called it.
+    func publishSnapshot() {
+        guard let snapshotURL, let snapshot = try? snapshot() else { return }
+        try? snapshot.publish(to: snapshotURL)
+    }
+
     private func save() throws {
         do {
             try saveContext(context)
@@ -314,5 +335,6 @@ struct OneLinersStore {
             context.rollback()
             throw error
         }
+        publishSnapshot()
     }
 }
