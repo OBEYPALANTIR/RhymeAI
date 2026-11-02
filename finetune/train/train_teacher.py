@@ -124,9 +124,27 @@ def main():
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--deadline", type=float, required=True)
+    parser.add_argument("--resume", help="Explicit durable Trainer checkpoint from this output directory")
+    parser.add_argument("--smoke-steps", type=int, default=0,
+                        help="Stop and checkpoint after this step, retaining the full one-epoch scheduler horizon")
+    parser.add_argument("--skip-generation", action="store_true",
+                        help="Save adapter only; quality gates must be run separately on exported GGUFs")
     args = parser.parse_args()
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=False)
+    if args.smoke_steps and args.smoke_steps < 10:
+        parser.error("Smoke requires at least ten optimizer steps")
+    if args.resume:
+        checkpoint = Path(args.resume).resolve()
+        if checkpoint.parent != (out / "checkpoints").resolve() or not (checkpoint / "trainer_state.json").is_file():
+            parser.error("Resume must name an existing checkpoint under this output directory")
+        previous = json.loads((out / "dataset-manifest.json").read_text())
+        if previous != json.loads((Path(args.data) / "manifest.json").read_text()):
+            parser.error("Resume dataset manifest changed")
+        old_environment = json.loads((out / "environment.json").read_text())
+        if old_environment["script_sha256"] != sha(__file__):
+            parser.error("Resume trainer source changed")
+    else:
+        out.mkdir(parents=True, exist_ok=False)
     started = time.time()
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -148,6 +166,11 @@ def main():
         if total_memory < 22_000_000_000:
             raise RuntimeError("This pilot requires at least 22 GB GPU memory")
         batch_size = 2 if total_memory >= 35_000_000_000 else 1
+        recipe = {"base": BASE, "revision": REVISION, "epochs": 1, "lr": 2e-5,
+                  "batch_size": batch_size, "grad_accum": 16 // batch_size, "seed": 3407}
+        if args.resume and json.loads((out / "recipe.json").read_text()) != recipe:
+            raise RuntimeError("Resume recipe/batch changed; select the original GPU class")
+        write_json(out / "recipe.json", recipe)
         training_args = TrainingArguments(output_dir=str(out / "checkpoints"),
             num_train_epochs=1, per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=1, gradient_accumulation_steps=16 // batch_size,
@@ -185,7 +208,13 @@ def main():
         write_json(out / "environment.json", {"versions": versions,
                    "gpu": torch.cuda.get_device_name(0), "gpu_memory_bytes": total_memory,
                    "cuda": torch.version.cuda, "script_sha256": sha(__file__)})
+        first = datasets["train"][0]
+        decoded = tokenizer.decode([v for v in first["labels"] if v != -100], skip_special_tokens=False)
+        (out / "supervised-row-0.txt").write_text(decoded)
+        print("SUPERVISED_ROW_0", decoded, flush=True)
         print("TOKEN_AUDIT", json.dumps(token_audit), flush=True)
+        if args.resume and old_environment["versions"] != versions:
+            raise RuntimeError("Resume package versions changed")
         quantization = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                          bnb_4bit_use_double_quant=True,
                                          bnb_4bit_compute_dtype=torch.bfloat16)
@@ -251,19 +280,31 @@ def main():
 
         status["status"] = "baseline_evaluation"
         write_json(out / "status.json", status)
-        with model.disable_adapter():
-            baseline = generate_arm("stock")
-        write_json(out / "baseline-summary.json", baseline)
+        if not args.skip_generation:
+            if args.resume and (out / "baseline-summary.json").is_file():
+                baseline = json.loads((out / "baseline-summary.json").read_text())
+            else:
+                with model.disable_adapter():
+                    baseline = generate_arm("stock")
+                write_json(out / "baseline-summary.json", baseline)
         model.config.use_cache = False
         model.config.text_config.use_cache = False
         train_started = time.time()
+        resumed_step = json.loads((Path(args.resume) / "trainer_state.json").read_text())["global_step"] if args.resume else 0
         stop_reason = None
 
         class Monitor(TrainerCallback):
+            def on_train_begin(self, training_args, state, control, **kwargs):
+                horizon = {"max_steps": state.max_steps}
+                path = out / "scheduler-horizon.json"
+                if args.resume and json.loads(path.read_text()) != horizon:
+                    raise RuntimeError("Resume scheduler horizon changed")
+                write_json(path, horizon)
+
             def on_step_end(self, training_args, state, control, **kwargs):
                 nonlocal stop_reason
                 elapsed = time.time() - train_started
-                if state.global_step == 10:
+                if state.global_step == 10 and not args.resume:
                     current = adapter_hash()
                     if current == initial_adapter_hash:
                         raise RuntimeError("Optimizer steps did not change trainable weights")
@@ -271,7 +312,7 @@ def main():
                                "initial_sha256": initial_adapter_hash, "updated_sha256": current})
                     control.should_save = True
                 if state.global_step >= 10 and state.global_step % 10 == 0:
-                    remaining = elapsed / state.global_step * (state.max_steps - state.global_step)
+                    remaining = elapsed / max(1, state.global_step - resumed_step) * (state.max_steps - state.global_step)
                     status.update(status="training", global_step=state.global_step,
                                   max_steps=state.max_steps, train_elapsed_s=elapsed,
                                   projected_remaining_s=remaining,
@@ -282,6 +323,8 @@ def main():
                         stop_reason = "projected_over_budget"
                 if time.time() > args.deadline - 1800:
                     stop_reason = "deadline_reserve"
+                if args.smoke_steps and state.global_step >= args.smoke_steps:
+                    stop_reason = "smoke_checkpoint"
                 if stop_reason:
                     control.should_training_stop = True
                     control.should_save = True
@@ -305,7 +348,7 @@ def main():
                    "total_parameters": sum(p.numel() for p in model.parameters()), "batch_size": batch_size})
         del probe, loss
         torch.cuda.empty_cache()
-        stats = trainer.train()
+        stats = trainer.train(resume_from_checkpoint=args.resume or None)
         model.save_pretrained(out / "adapter", safe_serialization=True)
         tokenizer.save_pretrained(out / "adapter")
         trainer.save_state()
@@ -313,11 +356,20 @@ def main():
         if trained_hash == initial_adapter_hash:
             raise RuntimeError("Saved model is unchanged")
         eval_metrics = trainer.evaluate()
+        if not math.isfinite(eval_metrics["eval_loss"]):
+            raise RuntimeError("Non-finite validation loss")
         write_json(out / "metrics.json", {"train": stats.metrics, "validation": eval_metrics,
                    "global_step": trainer.state.global_step, "stop_reason": stop_reason,
                    "initial_adapter_sha256": initial_adapter_hash, "final_trainable_sha256": trained_hash})
         if stop_reason:
             status.update(status="partial_checkpoint_saved", stop_reason=stop_reason)
+            if stop_reason == "smoke_checkpoint":
+                write_json(out / "smoke.json", {"passed": True, "global_step": trainer.state.global_step,
+                           "checkpoint": str(out / "checkpoints" / ("checkpoint-%d" % trainer.state.global_step)),
+                           "scheduler_horizon_steps": trainer.state.max_steps,
+                           "validation_loss": eval_metrics["eval_loss"], "script_sha256": sha(__file__)})
+        elif args.skip_generation:
+            status.update(status="trained_adapter_pending_quality_gates", global_step=trainer.state.global_step)
         else:
             # Reload the saved adapter into the same pinned base before inference.
             model.load_adapter(str(out / "adapter"), adapter_name="saved_reload", is_trainable=False)
