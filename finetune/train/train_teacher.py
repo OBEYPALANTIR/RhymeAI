@@ -119,6 +119,24 @@ def structural_score(text, task, prompt):
     return bool(lines) and not controls
 
 
+def validate_resume_checkpoint(out, resume):
+    """Reject partial saves before Trainer can silently restart an optimizer."""
+    checkpoint = Path(resume).resolve()
+    if checkpoint.parent != (Path(out) / "checkpoints").resolve():
+        raise ValueError("Resume must name this run's checkpoint")
+    required = ("trainer_state.json", "training_args.bin", "optimizer.pt", "scheduler.pt",
+                "rng_state.pth", "adapter_config.json", "adapter_model.safetensors")
+    for name in required:
+        path = checkpoint / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError("Incomplete resume checkpoint: " + name)
+    state = json.loads((checkpoint / "trainer_state.json").read_text())
+    horizon = json.loads((Path(out) / "scheduler-horizon.json").read_text())
+    if state["global_step"] <= 0 or state["max_steps"] != horizon["max_steps"]:
+        raise ValueError("Resume checkpoint scheduler state differs")
+    return checkpoint
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
@@ -134,9 +152,10 @@ def main():
     if args.smoke_steps and args.smoke_steps < 10:
         parser.error("Smoke requires at least ten optimizer steps")
     if args.resume:
-        checkpoint = Path(args.resume).resolve()
-        if checkpoint.parent != (out / "checkpoints").resolve() or not (checkpoint / "trainer_state.json").is_file():
-            parser.error("Resume must name an existing checkpoint under this output directory")
+        try:
+            checkpoint = validate_resume_checkpoint(out, args.resume)
+        except (ValueError, OSError, KeyError) as error:
+            parser.error(str(error))
         previous = json.loads((out / "dataset-manifest.json").read_text())
         if previous != json.loads((Path(args.data) / "manifest.json").read_text()):
             parser.error("Resume dataset manifest changed")

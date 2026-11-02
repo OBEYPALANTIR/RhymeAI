@@ -120,10 +120,14 @@ import threading
 from google.colab import runtime
 def release_at_deadline():
     try:
-        drive.flush_and_unmount()
+        drive.flush_and_unmount(timeout_ms=30000)
     finally:
         runtime.unassign()
-watchdog = threading.Timer(max(1, DEADLINE - time.time()), release_at_deadline)
+# Hard release is independent: a blocked soft flush cannot delay this call.
+hard_watchdog = threading.Timer(max(1, DEADLINE - time.time()), runtime.unassign)
+hard_watchdog.daemon = True
+hard_watchdog.start()
+watchdog = threading.Timer(max(1, DEADLINE - time.time() - 60), release_at_deadline)
 watchdog.daemon = True
 watchdog.start()
 try:
@@ -132,9 +136,9 @@ try:
     source = PERSIST / 'source'
     if source.exists():
         assert (source / 'provenance.json').read_bytes() == (ROOT / 'provenance.json').read_bytes()
-    assert (source / 'train_teacher.py').read_bytes() == (ROOT / 'train_teacher.py').read_bytes()
-    for name in ['manifest.json', 'train.jsonl', 'validation.jsonl', 'test.jsonl']:
-        assert (source / 'data' / name).read_bytes() == (ROOT / 'data' / name).read_bytes()
+        assert (source / 'train_teacher.py').read_bytes() == (ROOT / 'train_teacher.py').read_bytes()
+        for name in ['manifest.json', 'train.jsonl', 'validation.jsonl', 'test.jsonl']:
+            assert (source / 'data' / name).read_bytes() == (ROOT / 'data' / name).read_bytes()
     else:
         source.mkdir()
         for name in ['train_teacher.py', 'provenance.json']:
@@ -187,11 +191,10 @@ for name in ['trainer_state.json', 'optimizer.pt', 'scheduler.pt', 'rng_state.pt
 run_training(['--resume', RESUME_CHECKPOINT])
 print((PERSIST / 'run/status.json').read_text())
 # Save/flush first, then release only this owned runtime.
-try:
-    drive.flush_and_unmount()
-finally:
-    watchdog.cancel()
-    runtime.unassign()
+release_at_deadline()
+# Keep the hard deadline armed until unassign has returned.
+watchdog.cancel()
+hard_watchdog.cancel()
 '''
     cells = [{'cell_type': 'markdown', 'metadata': {}, 'source': ['# Private RhymeAI Gemma 4 12B training\n',
         'Select a fresh A100 runtime. GPU compatibility and training are NOT RUN.\n',
