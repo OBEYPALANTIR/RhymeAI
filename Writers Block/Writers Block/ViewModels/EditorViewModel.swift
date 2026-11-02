@@ -2049,6 +2049,8 @@ final class EditorViewModel: ObservableObject {
             // Duration-based sleep — manual Double→UInt64 nanosecond math overflows
             // for far-future dates and would fire the purge immediately.
             try? await Task.sleep(for: .seconds(delay))
+            // A cancelled timer was replaced; it must not clear the newer one.
+            guard !Task.isCancelled else { return }
             self?.trashSchedulerTask = nil
             self?.purgeExpiredTrashedProjects()
         }
