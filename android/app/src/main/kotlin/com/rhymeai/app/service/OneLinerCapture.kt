@@ -4,12 +4,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.rhymeai.app.data.model.OneLiner
+import com.rhymeai.app.data.repository.OneLinerSaveFailure
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 const val FINISH_ONE_LINER_FIRST = "Finish this one liner first. Save it or close it, then try again."
-const val RECOVERED_TAKE_NOTICE = "Your last take wasn't saved. It's here: save it, or close to let it go."
+const val SAVE_FAILED_NOTICE = "Couldn't save this line. It's still here, so try again."
 
-/** One open capture sheet: its words and its take outlive the sheet's composition. */
+/** One open capture sheet: its words, its take and its save outlive the sheet's composition. */
 class OneLinerCaptureSession(val mode: Mode, val recorder: OneLinerRecorder = OneLinerRecorder()) {
     /** Record opens with the mic hot; Type and Edit open with the keyboard. */
     sealed interface Mode {
@@ -22,6 +26,8 @@ class OneLinerCaptureSession(val mode: Mode, val recorder: OneLinerRecorder = On
     /** The field's words when the current take started; the transcript follows them. */
     var textBeforeTake by mutableStateOf("")
     var saveError by mutableStateOf<String?>(null)
+    var saving by mutableStateOf(false)
+        internal set
     /** The transcript already put into [text], so a recreated sheet does not put it in twice. */
     var appliedTranscript = ""
     /** The opening action (mic or keyboard) already ran; a recreated sheet does not run it again. */
@@ -29,10 +35,11 @@ class OneLinerCaptureSession(val mode: Mode, val recorder: OneLinerRecorder = On
 }
 
 /**
- * The capture the One Liners screen shows, held by the ViewModel so recreating the activity
- * keeps the words and the take. Only an explicit close discards the take; a save just ends it.
+ * The capture the One Liners screen shows, held by the ViewModel (its [scope] is the
+ * ViewModel's) so recreating the activity keeps the words, the take and a save in progress.
+ * The sheet only observes it. Only an explicit close discards the take.
  */
-class OneLinerCaptures(private val leftoverTake: () -> File? = { null }) {
+class OneLinerCaptures(private val scope: CoroutineScope) {
     var current by mutableStateOf<OneLinerCaptureSession?>(null)
         private set
 
@@ -42,24 +49,43 @@ class OneLinerCaptures(private val leftoverTake: () -> File? = { null }) {
             it.recorder.notice = FINISH_ONE_LINER_FIRST
             return false
         }
-        val session = OneLinerCaptureSession(mode)
-        // A finished take an earlier capture left (the app closed before Save) is offered again.
-        if (mode !is OneLinerCaptureSession.Mode.Edit) leftoverTake()?.let {
-            session.recorder.recover(it)
-            session.recorder.notice = RECOVERED_TAKE_NOTICE
-        }
-        current = session
+        current = OneLinerCaptureSession(mode)
         return true
     }
 
-    /** Closed without saving: the take is not kept. */
+    /** Closed without saving: the take is not kept. A save in progress finishes first. */
     fun dismiss() {
-        current?.recorder?.discard()
+        val session = current ?: return
+        if (session.saving) return
+        session.recorder.discard()
         current = null
     }
 
-    /** Saved: the take now belongs to its line. */
-    fun saved() {
-        current = null
+    /**
+     * Saves the open capture through [persist]. Success closes it; a failure keeps the
+     * words and the take (from wherever the failed save left it) for another try.
+     */
+    fun save(persist: suspend (text: String, take: File?, durationMs: Long) -> Unit) {
+        val session = current ?: return
+        if (session.saving) return
+        val recorder = session.recorder
+        // The audio failed to write: stay open so the notice is read before saving words alone.
+        if (recorder.isRecording && !recorder.stop()) return
+        if (session.text.isBlank() && (session.mode is OneLinerCaptureSession.Mode.Edit || recorder.takeFile == null)) return
+        session.saving = true
+        session.saveError = null
+        scope.launch {
+            try {
+                persist(session.text.trim(), recorder.takeFile, recorder.takeDurationMs)
+                if (current === session) current = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                (error as? OneLinerSaveFailure)?.takeNowAt?.let(recorder::takeMoved)
+                session.saveError = SAVE_FAILED_NOTICE
+            } finally {
+                session.saving = false
+            }
+        }
     }
 }

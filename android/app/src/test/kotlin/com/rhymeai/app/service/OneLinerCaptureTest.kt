@@ -1,7 +1,15 @@
 package com.rhymeai.app.service
 
 import com.rhymeai.app.data.model.OneLiner
+import com.rhymeai.app.data.repository.OneLinerSaveFailure
 import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,66 +20,123 @@ import kotlin.test.assertTrue
 
 class OneLinerCaptureTest {
     private val directory = kotlin.io.path.createTempDirectory("rhymeai-capture").toFile()
-    private val leftover = File(directory, "left.wav").apply { writeText("take") }
+    private val take = File(directory, "take.wav").apply { writeText("the only copy") }
 
     @AfterTest
     fun cleanUp() {
         directory.deleteRecursively()
-        MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER)
-        MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
     }
 
-    @Test
-    fun anOpenCaptureIsNeverReplacedAndSaysSo() {
-        val captures = OneLinerCaptures()
-        assertTrue(captures.open(OneLinerCaptureSession.Mode.Type))
-        val open = captures.current!!
-        open.text = "half a line"
+    private fun capturesWithTake(scope: CoroutineScope, mode: OneLinerCaptureSession.Mode = OneLinerCaptureSession.Mode.Record): OneLinerCaptures =
+        OneLinerCaptures(scope).apply {
+            open(mode)
+            current!!.recorder.takeMoved(take)
+            current!!.text = "half a line"
+        }
 
-        assertFalse(captures.open(OneLinerCaptureSession.Mode.Record))
+    @Test
+    fun anOpenCaptureIsNeverReplacedAndSaysSo() = runBlocking {
+        val captures = capturesWithTake(this)
+        val open = captures.current!!
+
+        assertFalse(captures.open(OneLinerCaptureSession.Mode.Type))
         assertSame(open, captures.current)
         assertEquals("half a line", captures.current!!.text)
         assertEquals(FINISH_ONE_LINER_FIRST, open.recorder.notice)
     }
 
     @Test
-    fun onlyAnExplicitCloseDiscardsTheTake() {
-        val captures = OneLinerCaptures { leftover }
-        captures.open(OneLinerCaptureSession.Mode.Record)
-        val session = captures.current!!
-        assertEquals(leftover, session.recorder.takeFile)
-        assertEquals(RECOVERED_TAKE_NOTICE, session.recorder.notice)
+    fun aRecreatedSheetPicksUpTheSameWordsAndTake() = runBlocking {
+        val captures = capturesWithTake(this)
+        // The first sheet holds the session, then goes away with its activity (nothing runs on its disposal).
+        var sheet: OneLinerCaptureSession? = captures.current
+        val recorder = sheet!!.recorder
+        sheet = null
+        assertNull(sheet)
 
-        // A recreated sheet reads the same session: the take and words are still there.
-        assertSame(session, captures.current)
-        assertTrue(leftover.exists())
+        val recreated = captures.current!!
+        assertSame(recorder, recreated.recorder)
+        assertEquals("half a line", recreated.text)
+        assertEquals(take, recreated.recorder.takeFile)
+        assertTrue(take.exists())
+    }
+
+    @Test
+    fun aSaveFinishesWhenTheScreenThatAskedForItIsGone() = runBlocking {
+        val captures = capturesWithTake(this)
+        val screen = CoroutineScope(Job())
+        val gate = CompletableDeferred<Unit>()
+        var persisted: Triple<String, File?, Long>? = null
+        captures.save { text, file, durationMs -> gate.await(); persisted = Triple(text, file, durationMs) }
+        yield()
+        assertTrue(captures.current!!.saving)
+        screen.cancel() // the activity is recreated mid-save
+
+        gate.complete(Unit)
+        yield()
+        assertEquals("half a line", persisted!!.first)
+        assertEquals(take, persisted!!.second)
+        assertNull(captures.current)
+    }
+
+    @Test
+    fun aFailedSaveKeepsTheWordsAndTheTakeWhereItIsNow() = runBlocking {
+        val captures = capturesWithTake(this)
+        val putBack = File(directory, "put-back.wav")
+        captures.save { _, _, _ -> throw OneLinerSaveFailure(IOException("disk full"), putBack) }
+        yield()
+
+        val session = captures.current!!
+        assertFalse(session.saving)
+        assertEquals(SAVE_FAILED_NOTICE, session.saveError)
+        assertEquals(putBack, session.recorder.takeFile)
+        assertEquals("half a line", session.text)
+    }
+
+    @Test
+    fun onlyAnExplicitCloseDiscardsTheTakeAndNeverMidSave() = runBlocking {
+        val captures = capturesWithTake(this)
+        val gate = CompletableDeferred<Unit>()
+        captures.save { _, _, _ -> gate.await(); throw IOException("disk full") }
+        yield()
+        captures.dismiss()
+        assertTrue(take.exists())
+        gate.complete(Unit)
+        yield()
 
         captures.dismiss()
         assertNull(captures.current)
-        assertFalse(leftover.exists())
+        assertFalse(take.exists())
     }
 
     @Test
-    fun aSavedCaptureKeepsItsTakeAndEditsAreNotOfferedOne() {
-        val captures = OneLinerCaptures { leftover }
-        captures.open(OneLinerCaptureSession.Mode.Type)
-        captures.saved()
-        assertNull(captures.current)
-        assertTrue(leftover.exists())
-
+    fun anEditSavesItsWordsWithoutATake() = runBlocking {
+        val captures = OneLinerCaptures(this)
         captures.open(OneLinerCaptureSession.Mode.Edit(OneLiner(text = "Coffee gone cold")))
-        assertNull(captures.current!!.recorder.takeFile)
         assertEquals("Coffee gone cold", captures.current!!.text)
+        var saved: String? = null
+        captures.save { text, file, _ -> assertNull(file); saved = text }
+        yield()
+        assertEquals("Coffee gone cold", saved)
+        assertNull(captures.current)
     }
 
     @Test
-    fun theMicrophoneHasOneOwnerAtATime() {
-        assertTrue(MicrophoneOwner.claim(MicrophoneOwner.Owner.SONG_MEMO))
-        assertFalse(MicrophoneOwner.claim(MicrophoneOwner.Owner.ONE_LINER))
-        MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER) // not the owner: no effect
-        assertEquals(MicrophoneOwner.Owner.SONG_MEMO, MicrophoneOwner.current)
-        MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
-        assertTrue(MicrophoneOwner.claim(MicrophoneOwner.Owner.ONE_LINER))
-        assertFalse(MicrophoneOwner.claim(MicrophoneOwner.Owner.SONG_MEMO))
+    fun theMicrophoneBelongsToOneRecorderInstance() {
+        val firstMemo = Any()
+        val secondMemo = Any()
+        val line = Any()
+        try {
+            assertTrue(MicrophoneOwner.claim(firstMemo))
+            assertTrue(MicrophoneOwner.claim(firstMemo))
+            assertFalse(MicrophoneOwner.claim(secondMemo))
+            assertFalse(MicrophoneOwner.claim(line))
+            MicrophoneOwner.release(secondMemo) // not the owner: no effect
+            assertSame(firstMemo, MicrophoneOwner.current)
+            MicrophoneOwner.release(firstMemo)
+            assertTrue(MicrophoneOwner.claim(line))
+        } finally {
+            listOf(firstMemo, secondMemo, line).forEach(MicrophoneOwner::release)
+        }
     }
 }

@@ -2,25 +2,23 @@ package com.rhymeai.app.service
 
 /**
  * One recorder holds the microphone at a time, from the moment it starts opening it until it
- * has stopped: a song memo and a one liner can never record together, even when both start
- * at once.
+ * has stopped: song memos and one liners never record together, even when both start at once.
+ * The owner is the recorder instance itself, so one recorder can never release another's claim.
  */
 object MicrophoneOwner {
-    enum class Owner { SONG_MEMO, ONE_LINER }
-
-    @Volatile var current: Owner? = null
+    @Volatile var current: Any? = null
         private set
 
-    /** False when the other recorder holds the microphone. */
+    /** False when another recorder holds the microphone. */
     @Synchronized
-    fun claim(owner: Owner): Boolean {
-        if (current != null && current != owner) return false
+    fun claim(owner: Any): Boolean {
+        if (current != null && current !== owner) return false
         current = owner
         return true
     }
 
     @Synchronized
-    fun release(owner: Owner) {
-        if (current == owner) current = null
+    fun release(owner: Any) {
+        if (current === owner) current = null
     }
 }

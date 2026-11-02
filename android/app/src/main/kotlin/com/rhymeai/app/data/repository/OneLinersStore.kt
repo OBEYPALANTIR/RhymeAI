@@ -15,6 +15,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -71,6 +72,9 @@ class OneLinersStore internal constructor(
 
         fun snapshotFile(context: Context) = File(context.filesDir, "one-liners-widget.json")
 
+        /** One snapshot writer for the whole app, however many stores (activities) exist. */
+        private val snapshotLock = Mutex()
+
         /** Case-insensitive substring match; a blank query keeps everything. */
         fun filter(lines: List<OneLiner>, query: String): List<OneLiner> {
             val q = query.trim()
@@ -125,7 +129,6 @@ class OneLinersStore internal constructor(
      * delete's check and its file removal.
      */
     private val fileTransitions = Mutex()
-    private val snapshotLock = Mutex()
 
     private data class Pool(val lines: List<OneLiner>, val trash: List<TrashedOneLiner>)
 
@@ -152,23 +155,27 @@ class OneLinersStore internal constructor(
      * holds it.
      */
     suspend fun add(text: String, take: File? = null, audioDurationMs: Long = 0L, now: Long = System.currentTimeMillis()): OneLiner =
-        fileTransitions.withLock { addLocked(text, take, audioDurationMs, now) }
+        // Not cancellable: the take's move and its row either both land or the take goes back.
+        fileTransitions.withLock { withContext(NonCancellable) { addLocked(text, take, audioDurationMs, now) } }
 
     private suspend fun addLocked(text: String, take: File?, audioDurationMs: Long, now: Long): OneLiner {
         val adopted = take?.let { audioFile(it.name) }
-        if (take != null && adopted != null) withContext(Dispatchers.IO) {
-            audioRoot.mkdirs()
-            // A retry after a failed move back finds the take already in place.
-            if (take.canonicalPath != adopted.canonicalPath) moveFile(take, adopted)
-        }
         val line = OneLiner(createdAt = now, audioFileName = adopted?.name, audioDurationMs = audioDurationMs).withText(text)
         try {
+            if (take != null && adopted != null) withContext(Dispatchers.IO) {
+                audioRoot.mkdirs()
+                // A retry after a failed move back finds the take already in place.
+                if (take.canonicalPath != adopted.canonicalPath) moveFile(take, adopted)
+            }
             change { pool -> pool.copy(lines = pool.lines + line) to line }
         } catch (error: Exception) {
             if (take == null || adopted == null) throw error
-            if (take.canonicalPath == adopted.canonicalPath) throw OneLinerSaveFailure(error, adopted)
             val takeNowAt = withContext(Dispatchers.IO) {
-                runCatching { moveFile(adopted, take); take }.getOrDefault(adopted)
+                when {
+                    take.canonicalPath == adopted.canonicalPath -> adopted
+                    !adopted.exists() -> take // the move itself failed: the take never left
+                    else -> runCatching { moveFile(adopted, take); take }.getOrDefault(adopted)
+                }
             }
             throw OneLinerSaveFailure(error, takeNowAt)
         }
@@ -277,24 +284,6 @@ class OneLinersStore internal constructor(
         }
     }
 
-    /**
-     * A finished take a capture left in pending (the app was closed or killed before Save),
-     * newest first, so the next capture can offer it instead of losing it. A take still being
-     * written has no complete WAV header and is not offered.
-     */
-    // shortcut: lists and reads a few headers on the caller's thread (pending holds a handful of files at most).
-    fun recoverablePendingTake(now: Long = System.currentTimeMillis()): File? =
-        pendingRoot.listFiles().orEmpty()
-            .filter { now - it.lastModified() <= ABANDONED_TAKE_AGE_MILLIS && isFinishedWav(it) }
-            .maxByOrNull { it.lastModified() }
-
-    private fun isFinishedWav(file: File): Boolean = runCatching {
-        val header = ByteArray(44)
-        val read = file.inputStream().use { it.read(header) }
-        val dataBytes = java.nio.ByteBuffer.wrap(header, 40, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
-        read == 44 && String(header, 0, 4) == "RIFF" && dataBytes > 0 && dataBytes.toLong() == file.length() - 44
-    }.getOrDefault(false)
-
     /** Marks the line used inside another store write (the song's), so both land or neither does. */
     internal fun markUsedIn(prefs: MutablePreferences, id: String, projectId: String) {
         val pool = read(prefs)
@@ -338,7 +327,7 @@ class OneLinersStore internal constructor(
         runCatching {
             withContext(Dispatchers.IO) {
                 file.parentFile?.mkdirs()
-                val temp = File(file.parentFile, file.name + ".tmp")
+                val temp = File(file.parentFile, "${file.name}.${java.util.UUID.randomUUID()}.tmp")
                 temp.writeText(json.encodeToString(snapshot))
                 Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             }

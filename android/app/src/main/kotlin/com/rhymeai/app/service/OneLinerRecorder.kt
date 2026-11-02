@@ -79,12 +79,12 @@ class OneLinerRecorder {
     /** Starts a take writing to [file]. The caller holds RECORD_AUDIO. False when the mic could not open. */
     fun start(file: File, context: Context): Boolean {
         if (isRecording) return true
-        if (!MicrophoneOwner.claim(MicrophoneOwner.Owner.ONE_LINER)) {
+        if (!MicrophoneOwner.claim(this)) {
             notice = MEMO_RECORDING_NOTICE
             return false
         }
         if (!open(file, context)) {
-            MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER)
+            MicrophoneOwner.release(this)
             return false
         }
         return true
@@ -159,7 +159,7 @@ class OneLinerRecorder {
         feedSource = null
         main.postDelayed({ releaseRecognizer(ending.first, ending.second) }, 1_500)
         isRecording = false
-        MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER)
+        MicrophoneOwner.release(this)
         levels = List(LEVEL_COUNT) { 0f }
         takeDurationMs = bytesWritten * 1000L / (SAMPLE_RATE * 2)
         if (writeFailed || inputFailed || !finished) {
@@ -171,12 +171,6 @@ class OneLinerRecorder {
         return true
     }
 
-    /** Offers a finished take a closed capture left behind, as this capture's take. */
-    fun recover(take: File) {
-        if (isRecording) return
-        takeFile = take
-        takeDurationMs = maxOf(0L, take.length() - WAV_HEADER_BYTES) * 1000L / (SAMPLE_RATE * 2)
-    }
 
     /** A save moved the take (adopted, or put back after a failed save). */
     fun takeMoved(to: File) {

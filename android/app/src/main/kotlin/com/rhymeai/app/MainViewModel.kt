@@ -394,7 +394,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The One Liners screen was opened from the songs drawer, so its back returns there. */
     var oneLinersOpenedFromDrawer by mutableStateOf(false)
     /** The open capture sheet's words and take; they outlive an activity recreation. */
-    val oneLinerCaptures = com.rhymeai.app.service.OneLinerCaptures { oneLinersStore.recoverablePendingTake() }
+    val oneLinerCaptures = com.rhymeai.app.service.OneLinerCaptures(viewModelScope)
+
+    /** Saves the open capture in the ViewModel's scope, so a recreated activity never cuts a save short. */
+    fun saveOneLinerCapture() = oneLinerCaptures.save { text, take, durationMs ->
+        when (val mode = oneLinerCaptures.current?.mode) {
+            is com.rhymeai.app.service.OneLinerCaptureSession.Mode.Edit -> updateOneLinerText(mode.line.id, text)
+            else -> saveOneLiner(text, take, durationMs)
+        }
+    }
     /** A widget, tile or link asked for this; the One Liners screen (or an open capture) takes it. */
     var pendingOneLinerAction by mutableStateOf<com.rhymeai.app.ui.navigation.OneLinerAction?>(null)
 
@@ -424,7 +432,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * undoable edit, saved right away), otherwise as its new last line. The line stays in the
      * pool, marked used. Returns the message to show.
      */
-    suspend fun sendOneLinerToSong(line: com.rhymeai.app.data.model.OneLiner, project: SongProject): String {
+    /** Runs in the ViewModel's scope (never the screen's), then reports the message to show. */
+    fun sendOneLinerToSong(line: com.rhymeai.app.data.model.OneLiner, project: SongProject, onResult: (String) -> Unit) {
+        viewModelScope.launch { onResult(sendOneLinerNow(line, project)) }
+    }
+
+    private suspend fun sendOneLinerNow(line: com.rhymeai.app.data.model.OneLiner, project: SongProject): String {
         val text = line.text.trim()
         if (text.isEmpty()) return "Transcribe or type the words first."
         return try {
@@ -437,24 +450,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     oneLinersStore.markUsed(line.id, line.usedInProjectId)
                     return notSaved
                 }
-                // Saved right away and awaited: on failure the insertion and the marker are put back.
+                // Saved right away and awaited: on failure or cancellation the insertion and the
+                // marker are put back, and the edits the cancelled autosave held are saved again.
                 autoSaveJob?.cancel()
                 val savedTitle = title
                 val savedLyrics = lyrics
                 val savedTheme = theme
+                var saved = false
+                suspend fun putBack() = withContext(kotlinx.coroutines.NonCancellable) {
+                    if (currentProjectId == project.id && lyrics == savedLyrics) undoLyrics()
+                    runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
+                }
                 try {
                     persistActiveProjectSnapshot(
                         stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
                             updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
                         savedTitle, savedLyrics, savedTheme
                     )
+                    saved = true
                 } catch (cancelled: CancellationException) {
+                    putBack()
                     throw cancelled
                 } catch (_: Exception) {
-                    if (currentProjectId == project.id && lyrics == savedLyrics) undoLyrics()
-                    runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
-                    triggerAutoSave()
+                    putBack()
                     return notSaved
+                } finally {
+                    if (!saved) triggerAutoSave()
                 }
             } else {
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
