@@ -1,6 +1,7 @@
 package com.rhymeai.app
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -55,9 +56,21 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
+    /** `writersblock://one-liners/...` from the widget, the Quick Settings tile or a link. */
+    private fun handleOneLinerLink(intent: Intent?) {
+        com.rhymeai.app.ui.navigation.OneLinerAction.parse(intent?.dataString)?.let(mainViewModel::requestOneLinerAction)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOneLinerLink(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen().setKeepOnScreenCondition { !mainViewModel.initialized }
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleOneLinerLink(intent)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 if (PronunciationDictionary.shared.wordCount == 0) {
@@ -151,6 +164,7 @@ class MainActivity : ComponentActivity() {
                     val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
                     val navModifier =
                         if (
+                            viewModel.showOneLiners ||
                             viewModel.showProjectsDialog ||
                             viewModel.showTemplatesDialog ||
                             viewModel.showSettingsDialog
@@ -255,7 +269,27 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDismiss = { viewModel.showProjectsDialog = false },
-                            service = viewModel.voiceMemoService
+                            service = viewModel.voiceMemoService,
+                            oneLiners = viewModel.oneLiners,
+                            trashedOneLiners = viewModel.trashedOneLiners,
+                            onOpenOneLiners = {
+                                viewModel.oneLinersOpenedFromDrawer = true
+                                viewModel.showOneLiners = true
+                            },
+                            onRestoreOneLiner = viewModel::restoreOneLiner,
+                            onDeleteOneLinerForever = viewModel::permanentlyDeleteOneLiner
+                        )
+                    }
+
+                    if (viewModel.showOneLiners) {
+                        com.rhymeai.app.ui.screens.OneLinersScreen(
+                            viewModel = viewModel,
+                            onBack = {
+                                viewModel.showOneLiners = false
+                                // Opened from the songs drawer: back returns there.
+                                if (viewModel.oneLinersOpenedFromDrawer) viewModel.showProjectsDialog = true
+                                viewModel.oneLinersOpenedFromDrawer = false
+                            }
                         )
                     }
 

@@ -120,6 +120,9 @@ fun statusWarningColor(isDark: Boolean): Color = if (isDark) WarningDark else Wa
 
 fun statusErrorColor(isDark: Boolean): Color = if (isDark) ErrorDark else ErrorLight
 
+/** The recording accent: the mic while a take records (One Liners). */
+fun recordingAccentColor(isDark: Boolean): Color = if (isDark) Color(0xFFFF8A80) else Color(0xFFB3261E)
+
 fun editorWordCountColor(isDark: Boolean): Color = syllableColor(1, isDark)
 
 fun editorSyllableCountColor(isDark: Boolean): Color = syllableColor(4, isDark)

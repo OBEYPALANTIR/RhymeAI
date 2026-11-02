@@ -30,6 +30,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density"
             android:theme="@style/Theme.RhymeAI.Splash">
@@ -37,6 +38,39 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- writersblock://one-liners/record|type|open: the widget, the tile and links. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="writersblock" android:host="one-liners" />
+            </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".widget.OneLinersWidgetReceiver"
+            android:exported="true"
+            android:label="One Liners">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/one_liners_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".service.OneLinerTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_one_liner_mic"
+            android:label="@string/one_liners_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
     </application>
 </manifest>

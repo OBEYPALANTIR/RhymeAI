@@ -104,13 +104,19 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.R
+import com.rhymeai.app.data.model.OneLiner
 import com.rhymeai.app.data.model.SongProject
+import com.rhymeai.app.data.model.TrashedOneLiner
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
@@ -151,7 +157,12 @@ fun ProjectsDrawer(
     onRecordingPurgeIncomplete: () -> Unit,
     onImportProject: (SongProject) -> Unit,
     onDismiss: () -> Unit,
-    service: VoiceMemoService? = null
+    service: VoiceMemoService? = null,
+    oneLiners: List<OneLiner> = emptyList(),
+    trashedOneLiners: List<TrashedOneLiner> = emptyList(),
+    onOpenOneLiners: (() -> Unit)? = null,
+    onRestoreOneLiner: suspend (String) -> Boolean = { false },
+    onDeleteOneLinerForever: suspend (String) -> Boolean = { false }
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val configuration = LocalConfiguration.current
@@ -409,6 +420,14 @@ fun ProjectsDrawer(
                                 Text("Create New Song", fontWeight = FontWeight.Medium)
                             }
 
+                            if (onOpenOneLiners != null) {
+                                OneLinersDrawerCard(
+                                    oneLiners = oneLiners,
+                                    onClick = { closeDrawer(onSelection = onOpenOneLiners) },
+                                    modifier = Modifier.padding(top = DesignTokens.Spacing.md)
+                                )
+                            }
+
                             Spacer(Modifier.height(DesignTokens.Spacing.md))
                             LazyColumn(
                                 modifier = Modifier
@@ -543,7 +562,10 @@ fun ProjectsDrawer(
                     onDismiss = ::closeTrashBin,
                     service = service,
                     projects = projects,
-                    snackbarHostState = snackbarHostState
+                    snackbarHostState = snackbarHostState,
+                    trashedOneLiners = trashedOneLiners,
+                    onRestoreOneLiner = onRestoreOneLiner,
+                    onDeleteOneLinerForever = onDeleteOneLinerForever
                 )
             }
 
@@ -931,7 +953,10 @@ private fun TrashBinPage(
     onDismiss: () -> Unit,
     service: VoiceMemoService?,
     projects: List<SongProject>,
-    snackbarHostState: SnackbarHostState
+    snackbarHostState: SnackbarHostState,
+    trashedOneLiners: List<TrashedOneLiner>,
+    onRestoreOneLiner: suspend (String) -> Boolean,
+    onDeleteOneLinerForever: suspend (String) -> Boolean
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -952,9 +977,15 @@ private fun TrashBinPage(
     } else {
         this
     }
-    // 0 = Projects, 1 = Recordings
+    // 0 = Projects, 1 = Recordings, 2 = One Liners
     var selectedTrashTab by remember { mutableStateOf(0) }
     val isProjectsTab = selectedTrashTab == 0
+    val isOneLinersTab = selectedTrashTab == 2
+    val trashedLineIds = remember(trashedOneLiners) { trashedOneLiners.map { it.line.id } }
+    var selectedLineIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(trashedLineIds) { selectedLineIds = selectedLineIds.intersect(trashedLineIds.toSet()) }
+    var sawTrashedLines by remember { mutableStateOf(trashedOneLiners.isNotEmpty()) }
+    LaunchedEffect(trashedOneLiners.isNotEmpty()) { if (trashedOneLiners.isNotEmpty()) sawTrashedLines = true }
 
     val sortedTrashedProjects = remember(trashedProjects) {
         trashedProjects.sortedByDescending { it.deletedAt }
@@ -1021,10 +1052,16 @@ private fun TrashBinPage(
         }
     }
 
-    val selectedCount = if (isProjectsTab) selectedIds.size else selectedMemoPaths.size
+    val selectedCount = when {
+        isProjectsTab -> selectedIds.size
+        isOneLinersTab -> selectedLineIds.size
+        else -> selectedMemoPaths.size
+    }
     val hasSelection = selectedCount > 0
     val allSelected = if (isProjectsTab) {
         sortedTrashedProjects.isNotEmpty() && selectedIds.containsAll(trashIds)
+    } else if (isOneLinersTab) {
+        trashedLineIds.isNotEmpty() && selectedLineIds.containsAll(trashedLineIds)
     } else {
         memoPaths.isNotEmpty() && selectedMemoPaths.containsAll(memoPaths)
     }
@@ -1051,6 +1088,17 @@ private fun TrashBinPage(
     }
 
     fun restoreSelected() {
+        if (isOneLinersTab) {
+            val ids = selectedLineIds.toList()
+            selectedLineIds = emptySet()
+            scope.launch {
+                val failed = ids.count { id -> runCatching { onRestoreOneLiner(id) }.getOrDefault(false).not() }
+                if (failed > 0) trashActionError = "$failed line(s) could not be restored and are still in Trash. Try again."
+                else if (ids.size == 1) snackbarHostState.showSnackbar("Line restored", duration = SnackbarDuration.Short)
+                else snackbarHostState.showSnackbar("${ids.size} lines restored", duration = SnackbarDuration.Short)
+            }
+            return
+        }
         if (isProjectsTab) {
             val requested = sortedTrashedProjects.filter { it.project.id in selectedIds }.map { it.project }
             // The confirmation names only the songs whose restore committed.
@@ -1086,6 +1134,15 @@ private fun TrashBinPage(
     }
 
     fun deleteSelectedForever() {
+        if (isOneLinersTab) {
+            val ids = selectedLineIds.toList()
+            selectedLineIds = emptySet()
+            scope.launch {
+                val failed = ids.count { id -> runCatching { onDeleteOneLinerForever(id) }.getOrDefault(false).not() }
+                if (failed > 0) trashActionError = "$failed line(s) could not be deleted and are still in Trash. Try again."
+            }
+            return
+        }
         if (isProjectsTab) {
             val idsToDelete = selectedIds.toList()
             idsToDelete.forEach(onPermanentlyDeleteProject)
@@ -1115,7 +1172,7 @@ private fun TrashBinPage(
                 TrashTopBar(onDismiss = onDismiss)
 
                 SlidingSegmentedControl(
-                    labels = listOf("Projects", "Recordings"),
+                    labels = listOf("Projects", "Recordings", "One Liners"),
                     selectedIndex = selectedTrashTab,
                     onSelect = { selectedTrashTab = it },
                     modifier = Modifier
@@ -1180,6 +1237,63 @@ private fun TrashBinPage(
                                         trashedProject = trashedProject,
                                         selected = trashedProject.project.id in selectedIds,
                                         onToggle = { toggleSelection(trashedProject.project.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (isOneLinersTab) {
+                    val noLines = trashedOneLiners.isEmpty()
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = if (noLines) PaddingValues(0.dp) else PaddingValues(
+                            start = DesignTokens.Spacing.lg,
+                            top = DesignTokens.Spacing.md,
+                            end = DesignTokens.Spacing.lg,
+                            bottom = contentBottomPadding
+                        )
+                    ) {
+                        if (noLines) {
+                            item(key = "empty") {
+                                EmptyDrawerState(
+                                    icon = { Icon(Icons.Default.FormatQuote, contentDescription = null) },
+                                    text = "No one liners in the Trash Bin.",
+                                    caption = "Deleted lines stay here for 30 days.",
+                                    animateIn = sawTrashedLines
+                                )
+                            }
+                        } else {
+                            item {
+                                TrashSelectionHeaderRow(
+                                    selected = allSelected,
+                                    onToggle = {
+                                        selectedLineIds = if (allSelected) emptySet() else trashedLineIds.toSet()
+                                    }
+                                )
+                            }
+                            item {
+                                Text(
+                                    "Deleted lines stay here for 30 days.",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colorScheme.onSurface,
+                                    modifier = Modifier.padding(
+                                        top = DesignTokens.Spacing.xl,
+                                        bottom = DesignTokens.Spacing.sm
+                                    )
+                                )
+                            }
+                            items(trashedOneLiners, key = { it.line.id }) { trashed ->
+                                Box(Modifier.trashRowMotion(this)) {
+                                    TrashOneLinerSelectableRow(
+                                        trashed = trashed,
+                                        selected = trashed.line.id in selectedLineIds,
+                                        onToggle = {
+                                            val id = trashed.line.id
+                                            selectedLineIds = if (id in selectedLineIds) selectedLineIds - id else selectedLineIds + id
+                                        }
                                     )
                                 }
                             }
@@ -1301,7 +1415,11 @@ private fun TrashBinPage(
     }
 
     if (confirmPermanentDelete) {
-        val itemNoun = if (isProjectsTab) "song" else "recording"
+        val itemNoun = when {
+            isProjectsTab -> "song"
+            isOneLinersTab -> "line"
+            else -> "recording"
+        }
         AlertDialog(
             onDismissRequest = { confirmPermanentDelete = false },
             title = { Text("Delete forever?") },
@@ -1497,6 +1615,90 @@ private fun TrashProjectSelectableRow(
         }
 
         SelectionCircle(selected = selected)
+    }
+}
+
+@Composable
+private fun TrashOneLinerSelectableRow(
+    trashed: TrashedOneLiner,
+    selected: Boolean,
+    onToggle: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .toggleable(value = selected, role = Role.Checkbox, onValueChange = { onToggle() })
+            .padding(vertical = DesignTokens.Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)) {
+            Text(
+                trashed.line.text.ifEmpty { "Voice line" },
+                fontSize = 17.sp,
+                fontStyle = if (trashed.line.text.isEmpty()) FontStyle.Italic else FontStyle.Normal,
+                color = colorScheme.onSurface,
+                maxLines = 2
+            )
+            Text(
+                trashRemainingLabel(trashed.deleteAfter),
+                fontSize = DesignTokens.Typography.caption,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+        SelectionCircle(selected = selected)
+    }
+}
+
+/** The songs drawer's entry to One Liners, under Create New Song. */
+@Composable
+private fun OneLinersDrawerCard(oneLiners: List<OneLiner>, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val colorScheme = MaterialTheme.colorScheme
+    val count = if (oneLiners.size == 1) "1 line" else "${oneLiners.size} lines"
+    val subtitle = oneLiners.firstOrNull()?.let { "$count · ${it.text.ifEmpty { "Voice line" }}" }
+        ?: "$count · Catch a line before it slips away."
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = DesignTokens.Touch.minTarget)
+            .semantics { contentDescription = "One Liners, $subtitle" },
+        shape = RoundedCornerShape(DesignTokens.Radius.lg),
+        color = colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, colorScheme.outline)
+    ) {
+        Row(
+            modifier = Modifier.padding(DesignTokens.Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(DesignTokens.Touch.minTarget)
+                    .background(colorScheme.surface, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.FormatQuote, contentDescription = null, tint = colorScheme.onSurfaceVariant)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("One Liners", fontWeight = FontWeight.SemiBold, color = colorScheme.onSurface)
+                Text(
+                    subtitle,
+                    fontSize = DesignTokens.Typography.caption,
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

@@ -126,7 +126,7 @@ class ProjectRepository internal constructor(
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
-        private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
+        internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
@@ -414,6 +414,36 @@ class ProjectRepository internal constructor(
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
             committed = TrashTransition(nextActive, nextTrash)
+        }
+        committed
+    }
+
+    /**
+     * Adds [line] as the song's new last line (a one liner sent to a song that is not open in
+     * the editor). [inSameWrite] stores whatever must land with it (the line's used marker):
+     * if it throws, nothing is stored. Null when the song is no longer active.
+     */
+    suspend fun appendLineToProject(
+        id: String,
+        line: String,
+        now: Long,
+        inSameWrite: (MutablePreferences) -> Unit = {}
+    ): List<SongProject>? = projectSaveMutex.withLock {
+        var committed: List<SongProject>? = null
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val project = active.firstOrNull { it.id == id } ?: return@edit
+            val updated = project.copy(
+                lyrics = OneLinersStore.appendingLine(line, project.lyrics),
+                updatedAt = now,
+                precedenceRepaired = false // an edit beats a repair (A37)
+            )
+            val next = active.map { if (it.id == id) updated else it }
+            inSameWrite(prefs)
+            prefs[PROJECTS_KEY] = json.encodeToString(next)
+            // The editor's saved draft of this song follows, so reopening it shows the line.
+            if (prefs[CURRENT_PROJECT_ID_KEY] == id) prefs[CURRENT_LYRICS_KEY] = updated.lyrics
+            committed = next
         }
         committed
     }
