@@ -381,6 +381,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var restoringDraft by mutableStateOf(false)
         private set
     val recentProject: SongProject? get() = projects.maxByOrNull { it.updatedAt }
+
+    // One Liners: a pool of stray lines beside the songs. The widget snapshot follows every change.
+    val oneLinersStore = com.rhymeai.app.data.repository.OneLinersStore(application) {
+        com.rhymeai.app.widget.OneLinersWidget.refresh(application)
+    }
+    var oneLiners by mutableStateOf<List<com.rhymeai.app.data.model.OneLiner>>(emptyList())
+        private set
+    var trashedOneLiners by mutableStateOf<List<com.rhymeai.app.data.model.TrashedOneLiner>>(emptyList())
+        private set
+    var showOneLiners by mutableStateOf(false)
+    /** The One Liners screen was opened from the songs drawer, so its back returns there. */
+    var oneLinersOpenedFromDrawer by mutableStateOf(false)
+    /** A widget, tile or link asked for this; the One Liners screen (or an open capture) takes it. */
+    var pendingOneLinerAction by mutableStateOf<com.rhymeai.app.ui.navigation.OneLinerAction?>(null)
+
+    fun requestOneLinerAction(action: com.rhymeai.app.ui.navigation.OneLinerAction) {
+        pendingOneLinerAction = action
+        showOneLiners = true
+    }
+
+    /** Saves a capture; throws (with the take's place) so the sheet keeps the words and the take. */
+    suspend fun saveOneLiner(text: String, take: java.io.File?, audioDurationMs: Long) {
+        oneLinersStore.add(text, take, audioDurationMs)
+    }
+
+    suspend fun updateOneLinerText(id: String, text: String) {
+        oneLinersStore.updateText(id, text)
+    }
+
+    suspend fun trashOneLiner(id: String): Boolean =
+        (oneLinersStore.trash(id) != null).also { scheduleTrashPurge() }
+
+    suspend fun restoreOneLiner(id: String): Boolean = oneLinersStore.restore(id) != null
+
+    suspend fun permanentlyDeleteOneLiner(id: String): Boolean = oneLinersStore.permanentlyDelete(id)
+
+    /**
+     * Puts the line into the song: at the editor's cursor when that song is the open one (one
+     * undoable edit, saved right away), otherwise as its new last line. The line stays in the
+     * pool, marked used. Returns the message to show.
+     */
+    suspend fun sendOneLinerToSong(line: com.rhymeai.app.data.model.OneLiner, project: SongProject): String {
+        val text = line.text.trim()
+        if (text.isEmpty()) return "Transcribe or type the words first."
+        return try {
+            if (!showStartMenu && currentProjectId == project.id) {
+                // The marker is saved first: if that fails, nothing went into the song.
+                oneLinersStore.markUsed(line.id, project.id) ?: return "This line is no longer in One Liners."
+                if (!insertSuggestion(text)) {
+                    oneLinersStore.markUsed(line.id, line.usedInProjectId)
+                    return "Couldn't add the line to the open song. Try again in a moment."
+                }
+                flushCurrentDraft()
+            } else {
+                val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
+                    ?: return "That song is no longer in your library."
+                // The song is the editor's (behind the start menu): its buffer follows the stored song.
+                if (currentProjectId == project.id) songs.firstOrNull { it.id == project.id }?.let {
+                    lyricsFieldValue = TextFieldValue(it.lyrics)
+                    resetLyricsHistory()
+                }
+            }
+            "Sent to “${project.title.ifEmpty { "Untitled Song" }}”"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: com.rhymeai.app.data.repository.OneLinerHasNoWordsException) {
+            "Transcribe or type the words first."
+        } catch (_: Exception) {
+            "Couldn't send this line. Try again."
+        }
+    }
     /**
      * Debug builds only: answers Suggest Next Line for UI tests and emulator QA
      * (see [ScriptedSuggestionStream]). Null in normal use.
@@ -1339,6 +1410,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceError = corruptLibraryMessage(error)
                 }
             }
+            fun oneLinersFailed(error: Exception) {
+                persistenceError = (error as? CorruptLibraryException)?.let(::corruptLibraryMessage)
+                    ?: "One Liners could not be opened. Your songs are still available."
+            }
+            launch {
+                try {
+                    oneLinersStore.reconcileAudioFiles()
+                    oneLinersStore.publishSnapshot()
+                    oneLinersStore.linesFlow.collect { oneLiners = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    oneLinersFailed(error)
+                }
+            }
+            launch {
+                try {
+                    oneLinersStore.trashFlow.collect { trashedOneLiners = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    oneLinersFailed(error)
+                }
+            }
             // Trashed recordings have their own expiry clock and live outside the
             // preferences store; rescan it whenever the recording Trash changes.
             launch {
@@ -1529,6 +1624,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 repo.saveAppearance(appearance)
+                oneLinersStore.publishSnapshot() // the widget follows the appearance
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -2128,6 +2224,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {
                 false
             }
+            // One liners expire alongside the songs; a failure leaves them for the next purge.
+            try {
+                oneLinersStore.purgeExpired(now)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+            }
             persistenceError = when {
                 songPurgeError != null -> {
                     val reason = if (songPurgeError is CorruptLibraryException)
@@ -2182,7 +2285,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // comes first. Already-expired recordings are being purged by the
             // launch in purgeExpiredTrashedProjects, so only future expiries count.
             val nextMemoExpiry = voiceMemoService.nextTrashedMemoExpiry()?.takeIf { it > now }
-            val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry).minOrNull()
+            val nextOneLinerExpiry = runCatching { oneLinersStore.nextExpiry(now) }.getOrNull()
+            val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry, nextOneLinerExpiry).minOrNull()
                 ?: return@launch
             scheduledTrashPurgeAt = nextDeleteAfter
             delay((nextDeleteAfter - now).coerceAtLeast(0L))

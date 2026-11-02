@@ -202,6 +202,7 @@ class VoiceMemoService(private val context: Context) {
      */
     suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) { synchronized(recorderLock) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
+        check(!OneLinerRecorder.isCapturing) { "A one liner is recording" }
 
         // Ensure the directory exists; surface storage failures to the caller.
         val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)

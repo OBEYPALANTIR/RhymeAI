@@ -2,6 +2,10 @@
 <resources>
     <string name="app_name">Writers Block</string>
 
+    <!-- One Liners -->
+    <string name="one_liners_tile_label">Record a line</string>
+    <string name="one_liners_widget_description">Your newest one liners, with Record and Type.</string>
+
     <!-- Editor top bar -->
     <string name="editor_saving">Saving…</string>
     <string name="editor_saved">Saved</string>
