@@ -1,6 +1,8 @@
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 import SwiftData
 import CloudKit
@@ -141,8 +143,10 @@ struct Writers_BlockApp: App {
         sharedModelContainer = bootstrap.container
     }
 
+    static let editorWindowID = "editor"
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Self.editorWindowID) {
             Group {
                 if let sharedModelContainer {
                     ContentView()
@@ -369,20 +373,25 @@ private struct AppEnvironmentModifier: ViewModifier {
 /// editor's buttons use.
 private struct MacAppCommands: Commands {
     @ObservedObject var viewModel: EditorViewModel
+    @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.unblockAction) private var unblockAction
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Song") { viewModel.newProject() }
-                .keyboardShortcut("n")
+            Button("New Song") {
+                showEditorWindow()
+                viewModel.newProject()
+            }
+            .keyboardShortcut("n")
         }
         CommandGroup(replacing: .saveItem) {
             Button("Save") { viewModel.flushCurrentDraft(checkpoint: true) }
                 .keyboardShortcut("s")
         }
         CommandMenu("Song") {
-            Button("UnBlock") { viewModel.getSuggestions() }
+            Button("UnBlock") { unblockAction?.perform() }
                 .keyboardShortcut("u", modifiers: [.command, .shift])
-                .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
+                .disabled(unblockAction == nil || viewModel.lyrics.isEmpty || viewModel.isLoading)
             Button("Cancel Generation") {
                 viewModel.cancelSuggestions()
                 viewModel.dismissRewrite()
@@ -394,6 +403,21 @@ private struct MacAppCommands: Commands {
                 Button(action.label) { viewModel.requestRewrite(action) }
                     .disabled(viewModel.selectedRange.length == 0 || viewModel.hasActiveRewrite)
             }
+        }
+    }
+
+    /// The editor is one window on the shared view model: bring it back if it
+    /// is open or minimized, and open it again only after it was closed.
+    private func showEditorWindow() {
+        let editor = NSApp.windows.first { window in
+            window.identifier?.rawValue.hasPrefix(Writers_BlockApp.editorWindowID) == true
+                && (window.isVisible || window.isMiniaturized)
+        }
+        if let editor {
+            if editor.isMiniaturized { editor.deminiaturize(nil) }
+            editor.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(id: Writers_BlockApp.editorWindowID)
         }
     }
 }

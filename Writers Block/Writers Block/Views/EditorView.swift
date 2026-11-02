@@ -97,6 +97,20 @@ enum EditorViewConstants {
     }
 }
 
+/// A menu bar action run by the focused editor window. Equal per editor, so
+/// the closure is not re-published on every update.
+struct EditorMenuAction: Equatable {
+    let editorID: UUID
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.editorID == rhs.editorID }
+}
+
+extension FocusedValues {
+    /// The menu bar's Song › UnBlock for the focused editor window.
+    @Entry var unblockAction: EditorMenuAction?
+}
+
 /// The tablet assistant's two places: the writer's show/hide choice for the
 /// inline column, and the bottom panel used below the side-column width.
 struct TabletAssistantVisibility: Equatable {
@@ -148,6 +162,7 @@ struct EditorView: View {
     @State private var unblockCollapsed: Bool = false
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
+    @State private var menuActionID = UUID()
     /// Starts unbounded so a full-screen iPad never flashes the single column.
     @State private var windowWidth: CGFloat = .infinity
 
@@ -162,6 +177,7 @@ struct EditorView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { windowWidth = $0 }
+        .focusedSceneValue(\.unblockAction, EditorMenuAction(editorID: menuActionID, perform: showAssistantAndGetSuggestions))
         .onChange(of: usesSideColumns, initial: true) { _, sideColumns in
             guard sideColumns else { return }
             // The sheet belongs to the single-column width. Drop a pending
@@ -715,6 +731,20 @@ struct EditorView: View {
         } else {
             presentAssistantSheet()
         }
+    }
+
+    /// Song › UnBlock: bring the assistant into view where this width puts it
+    /// (side column or bottom panel, leaving Focus), then ask for lines.
+    private func showAssistantAndGetSuggestions() {
+        if isFocusMode {
+            withRhymeAnimation(nil, reduceMotion: reduceMotion) { isFocusMode = false }
+        }
+        if usesSideColumns {
+            if !inlineAssistantVisible { presentAssistant() }
+        } else if !viewModel.showAssistantSheet {
+            presentAssistantSheet()
+        }
+        viewModel.getSuggestions()
     }
 
     private func hideInlineAssistant() {
