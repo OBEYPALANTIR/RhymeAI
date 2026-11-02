@@ -16,6 +16,17 @@ struct OneLinerIntentsTests {
         return try ModelContainer(for: schema, configurations: [configuration])
     }
 
+    /// Points the Type intent's snapshot at a temporary file for one test.
+    private static func useTemporarySnapshot() -> (url: URL, restore: () -> Void) {
+        let original = TypeOneLinerIntent.snapshotURL
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("intent-snapshot-\(UUID().uuidString).json")
+        TypeOneLinerIntent.snapshotURL = { url }
+        return (url, {
+            TypeOneLinerIntent.snapshotURL = original
+            try? FileManager.default.removeItem(at: url)
+        })
+    }
+
     @Test
     func typeIntentSavesTheLineWithoutTheApp() async throws {
         // Given
@@ -23,6 +34,8 @@ struct OneLinerIntentsTests {
         let original = TypeOneLinerIntent.container
         TypeOneLinerIntent.container = { container }
         defer { TypeOneLinerIntent.container = original }
+        let snapshot = Self.useTemporarySnapshot()
+        defer { snapshot.restore() }
 
         // When
         _ = try await TypeOneLinerIntent(text: "  Found the Lord in a gas station bathroom \n").perform()
@@ -32,6 +45,7 @@ struct OneLinerIntentsTests {
         #expect(lines.map(\.text) == ["Found the Lord in a gas station bathroom"])
         #expect(lines.first?.syllableCount == 10)
         #expect(lines.first?.audioFileName == nil)
+        #expect(OneLinersSnapshot.read(from: snapshot.url)?.lines.first?.text == "Found the Lord in a gas station bathroom")
     }
 
     @Test
@@ -52,6 +66,8 @@ struct OneLinerIntentsTests {
         let original = TypeOneLinerIntent.container
         TypeOneLinerIntent.container = { container }
         defer { TypeOneLinerIntent.container = original }
+        let snapshot = Self.useTemporarySnapshot()
+        defer { snapshot.restore() }
 
         // When
         await #expect(throws: (any Error).self) {
@@ -78,8 +94,9 @@ struct OneLinerIntentsTests {
         _ = try await OpenOneLinersIntent().perform()
         #expect(router.take([.open]) == .open)
 
-        router.isRecording = true
-        defer { router.isRecording = false }
+        let owner = UUID()
+        router.beginRecording(owner)
+        defer { router.endRecording(owner) }
         _ = try await StopOneLinerRecordingIntent().perform()
         #expect(router.take([.stopRecording]) == .stopRecording)
     }
@@ -103,13 +120,97 @@ struct OneLinerIntentsTests {
     }
 
     @Test
-    func pendingActionsOpenTheRightCapture() {
-        #expect(OneLinersRoute(action: .record)?.capture?.id == "record")
-        #expect(OneLinersRoute(action: .type)?.capture?.id == "type")
-        let open = OneLinersRoute(action: .open)
-        #expect(open != nil)
-        #expect(open?.capture == nil)
-        #expect(OneLinersRoute(action: .stopRecording) == nil)
+    func aSecondRequestWhileACaptureIsOpenNeverReplacesIt() {
+        // Nothing up: the root presents the screen; once it is up, the screen opens the capture.
+        #expect(OneLinerRouter.handler(for: .record, screenPresented: false, captureOpen: false) == .root)
+        #expect(OneLinerRouter.handler(for: .record, screenPresented: true, captureOpen: false) == .screen)
+        #expect(OneLinerRouter.handler(for: .open, screenPresented: true, captureOpen: false) == .screen)
+        // A capture open anywhere takes every request, so neither the root nor the screen replaces it.
+        for action in [OneLinerPendingAction.record, .type, .open, .stopRecording] {
+            #expect(OneLinerRouter.handler(for: action, screenPresented: true, captureOpen: true) == .capture)
+            #expect(OneLinerRouter.handler(for: action, screenPresented: false, captureOpen: true) == .capture)
+        }
+        // A Stop with no capture open waits for none.
+        #expect(OneLinerRouter.handler(for: .stopRecording, screenPresented: false, captureOpen: false) == nil)
+
+        let router = OneLinerRouter()
+        let capture = UUID()
+        router.captureAppeared(capture)
+        router.request(.record)
+        #expect(router.handler(screenPresented: true) == .capture)
+        #expect(ContentView.oneLinersCoverStep(
+            handler: router.handler(screenPresented: true), restoreOfferShown: false, sheetShown: false
+        ) == .none)
+        router.captureDisappeared(capture)
+        #expect(router.handler(screenPresented: true) == .screen)
+    }
+
+    @Test
+    func theRootPresentsOnlyWhenNothingBlocksIt() {
+        #expect(ContentView.oneLinersCoverStep(handler: .root, restoreOfferShown: false, sheetShown: false) == .present)
+        #expect(ContentView.oneLinersCoverStep(handler: .root, restoreOfferShown: false, sheetShown: true) == .closeSheetsFirst)
+        #expect(ContentView.oneLinersCoverStep(handler: .root, restoreOfferShown: true, sheetShown: true) == .wait)
+        #expect(ContentView.oneLinersCoverStep(handler: .screen, restoreOfferShown: false, sheetShown: false) == .none)
+        #expect(ContentView.oneLinersCoverStep(handler: nil, restoreOfferShown: false, sheetShown: false) == .none)
+
+        // The root does not take the request, so it is still there for the screen once it appears.
+        let router = OneLinerRouter()
+        router.request(.type)
+        #expect(router.handler(screenPresented: false) == .root)
+        #expect(router.pending == .type)
+        #expect(router.take([.record, .type, .open]) == .type)
+    }
+
+    @Test
+    func onlyTheRecordingOwnerEndsItsRecording() {
+        let router = OneLinerRouter()
+        let recording = UUID()
+        router.beginRecording(recording)
+        router.request(.stopRecording)
+
+        // Another recorder's teardown (a Type sheet closing) changes nothing.
+        router.endRecording(UUID())
+        #expect(router.isRecording)
+        #expect(router.recordingOwner == recording)
+        #expect(router.pending == .stopRecording)
+
+        // The owner's end clears it, and the Stop that was waiting for that take.
+        router.endRecording(recording)
+        #expect(!router.isRecording)
+        #expect(router.pending == nil)
+    }
+
+    @Test
+    func aLongTranscriptStaysWellUnderTheActivityLimit() throws {
+        let transcript = String(repeating: "Found the Lord in a gas station bathroom ", count: 125).prefix(5_000)
+        #expect(transcript.count == 5_000)
+        let levels = (0..<OneLinerRecorder.levelCount).map { Float($0) / 7 }
+        let state = OneLinerLiveActivity.contentState(phase: .recording, transcript: String(transcript), levels: levels)
+
+        #expect(try JSONEncoder().encode(state).count < 1_024)
+        #expect(state.transcript.hasSuffix(transcript.suffix(200)), "The newest words are kept")
+        #expect(state.transcript.hasPrefix("…"))
+
+        // Wide characters are bounded by bytes, not characters.
+        let wide = OneLinerLiveActivity.contentState(phase: .recording, transcript: String(repeating: "🎤", count: 5_000), levels: [])
+        #expect(try JSONEncoder().encode(wide).count < 1_024)
+
+        let short = OneLinerLiveActivity.contentState(phase: .saved, transcript: "Half a heart", levels: [0.123_456])
+        #expect(short.transcript == "Half a heart")
+        #expect(short.levels == [0.12])
+    }
+
+    @Test
+    func theLibraryStaysInApplicationSupport() {
+        let schema = Schema([OneLiner.self, TrashedOneLiner.self])
+        for configuration in [
+            ModelContainerBootstrap.cloudKitConfiguration(schema: schema),
+            ModelContainerBootstrap.localConfiguration(schema: schema),
+        ] {
+            let path = configuration.url.path
+            #expect(path.contains("/Library/Application Support/"), "\(path)")
+            #expect(!path.contains("/Shared/AppGroup/"), "\(path)")
+        }
     }
 
     @Test

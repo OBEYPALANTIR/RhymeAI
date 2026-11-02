@@ -7,6 +7,10 @@ import Testing
 struct OneLinersStoreTests {
     private struct SaveFailed: Error {}
 
+    /// Snapshots these tests cause go to a temporary file, never the App Group.
+    private static let snapshotURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("one-liners-store-tests-snapshot.json")
+
     private static func makeContainer() throws -> ModelContainer {
         let schema = Schema([
             SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self,
@@ -19,7 +23,7 @@ struct OneLinersStoreTests {
     /// A store over its own temporary audio folder, removed by the caller.
     private static func makeStore(_ container: ModelContainer) throws -> OneLinersStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("one-liners-\(UUID().uuidString)", isDirectory: true)
-        let store = OneLinersStore(context: container.mainContext, audioRoot: root)
+        let store = OneLinersStore(context: container.mainContext, audioRoot: root, snapshotURL: Self.snapshotURL)
         try FileManager.default.createDirectory(at: store.pendingRoot, withIntermediateDirectories: true)
         return store
     }
@@ -53,7 +57,7 @@ struct OneLinersStoreTests {
     func addSearchTrashAndRestore() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         try store.add(text: "Found the Lord in a gas station bathroom", now: start)
         try store.add(text: "  Every mile marker says your name \n", now: start.addingTimeInterval(60))
@@ -91,7 +95,7 @@ struct OneLinersStoreTests {
     func savingCachesProsodyForTheLine() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
 
         // When
         let line = try store.add(text: "Found the Lord in a gas station bathroom")
@@ -193,7 +197,7 @@ struct OneLinersStoreTests {
     func aFailedTrashOrEditKeepsTheLineAsItWas() throws {
         // Given
         let container = try Self.makeContainer()
-        var store = OneLinersStore(context: container.mainContext)
+        var store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let line = try store.add(text: "Found the Lord in a gas station bathroom")
         store.saveContext = { _ in throw SaveFailed() }
 
@@ -243,7 +247,7 @@ struct OneLinersStoreTests {
     func sendingToAClosedSongAppendsALastLineAndMarksItUsed() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let song = SongProject(title: "Night Train", lyrics: "Left the porch light on for no one")
         container.mainContext.insert(song)
         let line = try store.add(text: "Every mile marker says your name")
@@ -263,7 +267,7 @@ struct OneLinersStoreTests {
     func aFailedSendToAClosedSongChangesNeitherTheSongNorTheLine() throws {
         // Given
         let container = try Self.makeContainer()
-        var store = OneLinersStore(context: container.mainContext)
+        var store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let song = SongProject(title: "Night Train", lyrics: "first")
         container.mainContext.insert(song)
         let line = try store.add(text: "second")
@@ -281,7 +285,7 @@ struct OneLinersStoreTests {
     func anAudioOnlyLineHasNoWordsToSend() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let song = SongProject(title: "Night Train", lyrics: "first")
         container.mainContext.insert(song)
         let line = try store.add(text: "", audioDuration: 4)
@@ -298,7 +302,7 @@ struct OneLinersStoreTests {
     func sendingToTheOpenSongInsertsAtTheCursorAndSavesTheSong() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let song = SongProject(title: "Night Train", lyrics: "first line\nlast line")
         container.mainContext.insert(song)
         try container.mainContext.save()
@@ -324,7 +328,7 @@ struct OneLinersStoreTests {
     func aFailedSaveOfTheOpenSongPutsTheSongAndTheMarkerBack() throws {
         // Given
         let container = try Self.makeContainer()
-        let store = OneLinersStore(context: container.mainContext)
+        let store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         let song = SongProject(title: "Night Train", lyrics: "first line\nlast line")
         container.mainContext.insert(song)
         try container.mainContext.save()
@@ -360,7 +364,7 @@ struct OneLinersStoreTests {
         let container = try Self.makeContainer()
         let editor = EditorViewModel()
         editor.modelContext = container.mainContext
-        var store = OneLinersStore(context: container.mainContext)
+        var store = OneLinersStore(context: container.mainContext, snapshotURL: Self.snapshotURL)
         store.onTrashed = { editor.scheduleTrashPurge() }
         let line = try store.add(text: "Half a heart still beats on time")
         #expect(!editor.hasScheduledTrashPurge)
