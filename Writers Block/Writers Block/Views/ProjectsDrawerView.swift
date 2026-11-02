@@ -32,6 +32,8 @@ struct ProjectsDrawerView: View {
     @State private var isClosing = false
     @State private var undoToast: UndoToast?
     @State private var trashBinPresented = false
+    @State private var oneLinersPresented = false
+    @Query(sort: \OneLiner.createdAt, order: .reverse) private var oneLiners: [OneLiner]
     @State private var activeTab: DrawerTab = .songs
     // Recordings folders refresh when the Recordings tab is shown and after delete/rename.
     @State private var recordingFolders: [RecordingFolder] = []
@@ -245,13 +247,13 @@ struct ProjectsDrawerView: View {
                         // Push-style reveal: while the trash screen slides in from
                         // the right, the drawer slides toward the left like a
                         // navigation push instead of sitting still under an overlay.
-                        .offset(x: drawerVisible ? (trashBinPresented ? -drawerWidth * 0.3 : 0) : -drawerWidth)
+                        .offset(x: drawerVisible ? (coveringScreenPresented ? -drawerWidth * 0.3 : 0) : -drawerWidth)
                 }
             }
             .ignoresSafeArea()
             // The Trash screen covers the drawer; keep VoiceOver from reaching
             // the drawer's controls beneath it.
-            .accessibilityHidden(trashBinPresented)
+            .accessibilityHidden(coveringScreenPresented)
 
             if trashBinPresented {
                 TrashBinView(onDismiss: {
@@ -271,6 +273,10 @@ struct ProjectsDrawerView: View {
                 })
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
                 .zIndex(2)
+            }
+
+            if oneLinersPresented {
+                oneLinersScreen
             }
 
             if let toast = undoToast {
@@ -301,6 +307,22 @@ struct ProjectsDrawerView: View {
         }
     }
 
+    /// The Trash or One Liners screen covers the drawer.
+    private var coveringScreenPresented: Bool {
+        trashBinPresented || oneLinersPresented
+    }
+
+    /// Slides in over the drawer the way the Trash screen does.
+    private var oneLinersScreen: some View {
+        OneLinersView(onDismiss: {
+            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                oneLinersPresented = false
+            }
+        })
+        .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+        .zIndex(2)
+    }
+
     /// Full width on compact; on regular width a leading side panel on the
     /// golden split, with the scrim over the rest of the window.
     private func overlayPanelWidth(for windowWidth: CGFloat) -> CGFloat {
@@ -317,6 +339,11 @@ struct ProjectsDrawerView: View {
                     bottomInset: proxy.safeAreaInsets.bottom
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityHidden(oneLinersPresented)
+
+                if oneLinersPresented {
+                    oneLinersScreen
+                }
 
                 if let toast = undoToast {
                     undoToastView(toast)
@@ -407,6 +434,9 @@ struct ProjectsDrawerView: View {
             .buttonStyle(.rhymePress)
             .padding(.top, RhymeAITokens.Spacing.md)
 
+            oneLinersEntry
+                .padding(.top, RhymeAITokens.Spacing.sm)
+
             Text("Recent Songs")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(appearance.palette.secondaryInk)
@@ -475,6 +505,56 @@ struct ProjectsDrawerView: View {
                     .padding(.top, RhymeAITokens.Spacing.xs)
             }
         }
+    }
+
+    private var oneLinersEntry: some View {
+        Button {
+            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                undoToast = nil
+            }
+            withRhymeAnimation(RhymeAITokens.Motion.presentation, reduceMotion: reduceMotion) {
+                oneLinersPresented = true
+            }
+        } label: {
+            HStack(spacing: RhymeAITokens.Rhythm.related) {
+                Image(systemName: "text.quote")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                    .background(appearance.palette.surface, in: Circle())
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                    Text("One Liners")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(appearance.palette.primaryInk)
+                    Text(oneLinersSubtitle)
+                        .font(.footnote)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .padding(.vertical, RhymeAITokens.Spacing.sm)
+            .frame(minHeight: RhymeAITokens.Touch.comfortable)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens your one liners")
+    }
+
+    private var oneLinersSubtitle: String {
+        let count = OneLinersView.lineCountText(oneLiners.count)
+        guard let newest = oneLiners.first else { return "\(count) · Catch a line before it slips away." }
+        return "\(count) · \(newest.text.isEmpty ? "Voice line" : newest.text)"
     }
 
     // MARK: - Recordings Tab
@@ -987,5 +1067,5 @@ private struct PlayPauseButton: View {
 #Preview {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }
