@@ -1,6 +1,14 @@
 import Foundation
 import SwiftData
 
+/// A save that failed after its take was adopted. `takeNowAt` is where the take
+/// really is now (back in pending, or still in place when the move back failed),
+/// so a retry adopts it from there.
+struct OneLinerSaveFailure: Error {
+    let underlying: Error
+    let takeNowAt: URL?
+}
+
 enum OneLinersStoreError: LocalizedError, Equatable {
     /// An audio-only line has no words to put into a song.
     case noWords
@@ -23,8 +31,11 @@ enum OneLinersStoreError: LocalizedError, Equatable {
 struct OneLinersStore {
     let context: ModelContext
     var audioRoot: URL = OneLinersStore.defaultAudioRoot
-    /// Tests swap this to make a save fail.
+    /// Tests swap these to make a save or a file move fail.
     var saveContext: (ModelContext) throws -> Void = { try $0.save() }
+    var moveItem: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }
+    /// Called after a line goes to Trash, so its expiry gets scheduled.
+    var onTrashed: () -> Void = {}
 
     /// Beside the voice-memos root, outside any song's folder.
     nonisolated static var defaultAudioRoot: URL {
@@ -32,11 +43,20 @@ struct OneLinersStore {
     }
 
     static let pendingFolderName = "pending"
+    static let deletingFolderName = "deleting"
     /// A take older than this in `pendingRoot` was left by an app that closed mid-capture.
     static let abandonedTakeAge: TimeInterval = 24 * 60 * 60
+    /// Audio no row names is removed only once it is this old, so a line still on
+    /// its way down from iCloud keeps its take.
+    static let orphanAudioAge: TimeInterval = 7 * 24 * 60 * 60
 
     var pendingRoot: URL {
         audioRoot.appendingPathComponent(Self.pendingFolderName, isDirectory: true)
+    }
+
+    /// Audio set aside by a delete until the row's removal is saved.
+    var deletingRoot: URL {
+        audioRoot.appendingPathComponent(Self.deletingFolderName, isDirectory: true)
     }
 
     func audioURL(fileName: String) -> URL {
@@ -60,15 +80,19 @@ struct OneLinersStore {
     }
 
     /// Saves a new line. A take is moved from its pending place into `audioRoot`
-    /// first; if the save fails it is moved back, so the caller still holds it.
+    /// first; if the save fails it is moved back and the failure says where the take
+    /// is, so the caller still holds it.
     @discardableResult
     func add(text: String, take: URL? = nil, audioDuration: Double = 0, now: Date = Date()) throws -> OneLiner {
-        let fileManager = FileManager.default
         var fileName: String?
         if let take {
             let name = take.lastPathComponent
-            try fileManager.createDirectory(at: audioRoot, withIntermediateDirectories: true)
-            try fileManager.moveItem(at: take, to: audioURL(fileName: name))
+            let destination = audioURL(fileName: name)
+            try FileManager.default.createDirectory(at: audioRoot, withIntermediateDirectories: true)
+            // A retry after a failed move back finds the take already in place.
+            if take.standardizedFileURL != destination.standardizedFileURL {
+                try moveItem(take, destination)
+            }
             fileName = name
         }
         let line = OneLiner(
@@ -81,8 +105,19 @@ struct OneLinersStore {
         do {
             try save()
         } catch {
-            if let take, let fileName { try? fileManager.moveItem(at: audioURL(fileName: fileName), to: take) }
-            throw error
+            guard let take, let fileName else { throw error }
+            let adopted = audioURL(fileName: fileName)
+            guard take.standardizedFileURL != adopted.standardizedFileURL else {
+                throw OneLinerSaveFailure(underlying: error, takeNowAt: adopted)
+            }
+            let takeNowAt: URL
+            do {
+                try moveItem(adopted, take)
+                takeNowAt = take
+            } catch {
+                takeNowAt = adopted  // still in place; a retry adopts it from here
+            }
+            throw OneLinerSaveFailure(underlying: error, takeNowAt: takeNowAt)
         }
         return line
     }
@@ -111,6 +146,7 @@ struct OneLinersStore {
         context.insert(trashed)
         context.delete(line)
         try save()
+        onTrashed()
         return trashed
     }
 
@@ -127,14 +163,30 @@ struct OneLinersStore {
         return line
     }
 
-    /// The audio goes first, unless another row still uses it; when the file cannot
-    /// be removed the row stays, so the delete can be tried again.
+    /// The audio is set aside first (unless another row still uses it), the row is
+    /// removed, and only once that is saved does the set-aside file go. A failed save
+    /// puts the file back beside the row it still belongs to.
     func permanentlyDelete(_ trashed: TrashedOneLiner) throws {
+        var staged: (original: URL, aside: URL)?
         if let fileName = trashed.audioFileName, try !isAudioReferenced(fileName, besides: trashed) {
-            try removeIfPresent(audioURL(fileName: fileName))
+            let original = audioURL(fileName: fileName)
+            if FileManager.default.fileExists(atPath: original.path) {
+                let aside = deletingRoot.appendingPathComponent(fileName, isDirectory: false)
+                try FileManager.default.createDirectory(at: deletingRoot, withIntermediateDirectories: true)
+                try removeIfPresent(aside)
+                try moveItem(original, aside)
+                staged = (original, aside)
+            }
         }
         context.delete(trashed)
-        try save()
+        do {
+            try save()
+        } catch {
+            if let staged { try? moveItem(staged.aside, staged.original) }
+            throw error
+        }
+        // A leftover here is removed by the next reconcile.
+        if let staged { try? FileManager.default.removeItem(at: staged.aside) }
     }
 
     func purgeExpired(now: Date = Date()) throws {
@@ -152,26 +204,36 @@ struct OneLinersStore {
         return (try? context.fetch(descriptor).first)?.deleteAfter
     }
 
-    /// Removes audio no row names any more (a line deleted on another device, or a
-    /// removal that failed), and takes an app left pending for over a day.
+    /// Run at launch. Removes audio no row names once it is a week old (a line deleted
+    /// on another device, or a delete interrupted after its save), and takes an app
+    /// left pending for over a day. The age rule keeps the take of a line iCloud has
+    /// not delivered yet, as after an account change while the store fills again.
     func reconcileAudioFiles(now: Date = Date()) throws {
-        let fileManager = FileManager.default
         let lines = try context.fetch(FetchDescriptor<OneLiner>())
         let trashed = try context.fetch(FetchDescriptor<TrashedOneLiner>())
         let referenced = Set(lines.compactMap(\.audioFileName) + trashed.compactMap(\.audioFileName))
-        let files = (try? fileManager.contentsOfDirectory(at: audioRoot, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-        // No rows at all beside files means the store was emptied (an iCloud account
-        // change resets it before downloading again): keep everything.
-        if !(lines.isEmpty && trashed.isEmpty) {
-            for file in files where file.lastPathComponent != Self.pendingFolderName && !referenced.contains(file.lastPathComponent) {
-                try? fileManager.removeItem(at: file)
-            }
+        let folders: Set<String> = [Self.pendingFolderName, Self.deletingFolderName]
+        for file in Self.files(in: audioRoot) where !folders.contains(file.lastPathComponent) && !referenced.contains(file.lastPathComponent) {
+            Self.remove(file, ifOlderThan: Self.orphanAudioAge, now: now)
         }
-        let pending = (try? fileManager.contentsOfDirectory(at: pendingRoot, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        for take in pending {
-            let modified = try? take.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            if let modified, now.timeIntervalSince(modified) > Self.abandonedTakeAge { try? fileManager.removeItem(at: take) }
+        for file in Self.files(in: deletingRoot) {
+            Self.remove(file, ifOlderThan: Self.orphanAudioAge, now: now)
         }
+        for take in Self.files(in: pendingRoot) {
+            Self.remove(take, ifOlderThan: Self.abandonedTakeAge, now: now)
+        }
+    }
+
+    private static func files(in folder: URL) -> [URL] {
+        (try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles
+        )) ?? []
+    }
+
+    private static func remove(_ file: URL, ifOlderThan age: TimeInterval, now: Date) {
+        guard let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+              now.timeIntervalSince(modified) > age else { return }
+        try? FileManager.default.removeItem(at: file)
     }
 
     func markUsed(_ line: OneLiner, projectId: String) throws {
@@ -192,18 +254,21 @@ struct OneLinersStore {
         let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw OneLinersStoreError.noWords }
         let previousMarker = line.usedInProjectId
+        let previous = (project.lyrics, project.updatedAt, project.precedenceRepaired)
         if let editor, editor.currentProjectId == project.id {
             // The marker is saved first: if that fails, nothing went into the song.
             try markUsed(line, projectId: project.id)
             editor.insertSuggestion(text)
             guard editor.flushCurrentDraft() else {
+                // The failed draft save already wrote the song's loaded values, so the
+                // song and the marker are put back explicitly before saving again.
                 editor.undoLyrics()
+                (project.lyrics, project.updatedAt, project.precedenceRepaired) = previous
                 line.usedInProjectId = previousMarker
-                try? save()
+                try save()
                 throw OneLinersStoreError.songNotSaved
             }
         } else {
-            let previous = (project.lyrics, project.updatedAt, project.precedenceRepaired)
             line.usedInProjectId = project.id
             project.lyrics = Self.appendingLine(text, to: project.lyrics)
             project.updatedAt = Date()

@@ -35,6 +35,20 @@ struct OneLinersStoreTests {
         FileManager.default.fileExists(atPath: url.path)
     }
 
+    private static func age(_ url: URL, by interval: TimeInterval) throws {
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-interval)], ofItemAtPath: url.path)
+    }
+
+    /// What another context on the same container reads: only what was saved.
+    private static func savedSong(_ id: String, in container: ModelContainer) throws -> SongProject? {
+        try ModelContext(container).fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })).first
+    }
+
+    /// Lets a test fail the editor's saves after the song is open.
+    private final class SaveSwitch {
+        var fails = false
+    }
+
     @Test
     func addSearchTrashAndRestore() throws {
         // Given
@@ -130,14 +144,49 @@ struct OneLinersStoreTests {
         let take = try Self.pendingTake(store)
 
         // When
-        #expect(throws: SaveFailed.self) {
+        let failure = #expect(throws: OneLinerSaveFailure.self) {
             try store.add(text: "Half a heart still beats on time", take: take, audioDuration: 3)
         }
 
         // Then: the take is back where the capture sheet holds it, and no row was made
+        #expect(failure?.takeNowAt == take)
         #expect(Self.exists(take))
         #expect(!Self.exists(store.audioURL(fileName: take.lastPathComponent)))
         #expect(try container.mainContext.fetch(FetchDescriptor<OneLiner>()).isEmpty)
+    }
+
+    @Test
+    func aFailedMoveBackReportsWhereTheTakeIsAndARetryAdoptsIt() throws {
+        // Given: the save fails, and so does moving the take back to pending
+        let container = try Self.makeContainer()
+        var store = try Self.makeStore(container)
+        defer { try? FileManager.default.removeItem(at: store.audioRoot) }
+        let take = try Self.pendingTake(store, "stranded.m4a")
+        var moves = 0
+        store.moveItem = { from, to in
+            moves += 1
+            if moves > 1 { throw SaveFailed() }
+            try FileManager.default.moveItem(at: from, to: to)
+        }
+        store.saveContext = { _ in throw SaveFailed() }
+
+        // When
+        let failure = #expect(throws: OneLinerSaveFailure.self) {
+            try store.add(text: "kept", take: take, audioDuration: 2)
+        }
+
+        // Then
+        let adopted = store.audioURL(fileName: "stranded.m4a")
+        #expect(failure?.takeNowAt == adopted)
+        #expect(Self.exists(adopted))
+
+        // When: the retry starts from where the take really is
+        store.saveContext = { try $0.save() }
+        let line = try store.add(text: "kept", take: try #require(failure?.takeNowAt), audioDuration: 2)
+
+        // Then
+        #expect(line.audioFileName == "stranded.m4a")
+        #expect(Self.exists(adopted))
     }
 
     @Test
@@ -262,15 +311,65 @@ struct OneLinersStoreTests {
         // When
         try store.sendToSong(line, project: song, editor: editor)
 
-        // Then: in the editor and in the saved song, without waiting for autosave
+        // Then: in the editor and in the saved store, without waiting for autosave
         #expect(editor.lyrics == "first line\nmiddle line\nlast line")
-        let songId = song.id
-        let saved = try #require(try container.mainContext.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == songId })).first)
-        #expect(saved.lyrics == "first line\nmiddle line\nlast line")
+        #expect(try Self.savedSong(song.id, in: container)?.lyrics == "first line\nmiddle line\nlast line")
         #expect(line.usedInProjectId == song.id)
         // One undoable edit, like an inserted suggestion.
         editor.undoLyrics()
         #expect(editor.lyrics == "first line\nlast line")
+    }
+
+    @Test
+    func aFailedSaveOfTheOpenSongPutsTheSongAndTheMarkerBack() throws {
+        // Given
+        let container = try Self.makeContainer()
+        let store = OneLinersStore(context: container.mainContext)
+        let song = SongProject(title: "Night Train", lyrics: "first line\nlast line")
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        let saves = SaveSwitch()
+        let editor = EditorViewModel(saveModelContext: { context in
+            if saves.fails { throw SaveFailed() }
+            try context.save()
+        })
+        editor.modelContext = container.mainContext
+        editor.loadProject(song)
+        editor.cursorPosition = ("first line" as NSString).length
+        let line = try store.add(text: "middle line")
+        let snapshot = (song.lyrics, song.updatedAt, song.precedenceRepaired)
+        saves.fails = true
+
+        // When
+        #expect(throws: OneLinersStoreError.songNotSaved) {
+            try store.sendToSong(line, project: song, editor: editor)
+        }
+
+        // Then: the store holds the song as it was, and the line is not marked used
+        let saved = try #require(try Self.savedSong(song.id, in: container))
+        #expect((saved.lyrics, saved.updatedAt, saved.precedenceRepaired) == snapshot)
+        let lineId = line.id
+        let savedLine = try #require(try ModelContext(container).fetch(FetchDescriptor<OneLiner>(predicate: #Predicate { $0.id == lineId })).first)
+        #expect(savedLine.usedInProjectId == nil)
+        #expect(editor.lyrics == "first line\nlast line")
+    }
+
+    @Test
+    func trashingALineSchedulesTheTrashPurge() throws {
+        // Given
+        let container = try Self.makeContainer()
+        let editor = EditorViewModel()
+        editor.modelContext = container.mainContext
+        var store = OneLinersStore(context: container.mainContext)
+        store.onTrashed = { editor.scheduleTrashPurge() }
+        let line = try store.add(text: "Half a heart still beats on time")
+        #expect(!editor.hasScheduledTrashPurge)
+
+        // When
+        try store.trash(line)
+
+        // Then
+        #expect(editor.hasScheduledTrashPurge)
     }
 
     @Test
@@ -304,40 +403,58 @@ struct OneLinersStoreTests {
     }
 
     @Test
-    func reconcileRemovesAudioNoRowNamesAndAbandonedTakes() throws {
+    func aFailedPermanentDeleteKeepsTheRowAndItsAudio() throws {
+        // Given
+        let container = try Self.makeContainer()
+        var store = try Self.makeStore(container)
+        defer { try? FileManager.default.removeItem(at: store.audioRoot) }
+        let line = try store.add(text: "kept", take: try Self.pendingTake(store, "kept.m4a"), audioDuration: 2)
+        let trashed = try store.trash(line)
+        let audio = store.audioURL(fileName: "kept.m4a")
+        store.saveContext = { _ in throw SaveFailed() }
+
+        // When
+        #expect(throws: SaveFailed.self) { try store.permanentlyDelete(trashed) }
+
+        // Then: still restorable, with its take
+        #expect(Self.exists(audio))
+        #expect(try container.mainContext.fetch(FetchDescriptor<TrashedOneLiner>()).count == 1)
+
+        // When
+        store.saveContext = { try $0.save() }
+        try store.permanentlyDelete(trashed)
+
+        // Then: the set-aside copy goes once the row's removal is saved
+        #expect(!Self.exists(audio))
+        #expect(!Self.exists(store.deletingRoot.appendingPathComponent("kept.m4a")))
+    }
+
+    @Test
+    func reconcileRemovesOnlyWeekOldAudioNoRowNamesAndDayOldTakes() throws {
         // Given
         let container = try Self.makeContainer()
         let store = try Self.makeStore(container)
         defer { try? FileManager.default.removeItem(at: store.audioRoot) }
-        let orphan = store.audioURL(fileName: "deleted-elsewhere.m4a")
-        try Data("take".utf8).write(to: orphan)
-        let oldTake = try Self.pendingTake(store, "left-behind.m4a")
-
-        // When: an empty store (as after an iCloud account change) keeps every file
-        try store.reconcileAudioFiles()
-
-        // Then
-        #expect(Self.exists(orphan))
-
-        // Given
         try store.add(text: "kept", take: try Self.pendingTake(store, "kept.m4a"))
-        let trashed = try store.add(text: "trashed", take: try Self.pendingTake(store, "trashed.m4a"))
-        try store.trash(trashed)
+        try Self.age(store.audioURL(fileName: "kept.m4a"), by: 30 * 24 * 60 * 60)
+        let fresh = store.audioURL(fileName: "still-syncing.m4a")
+        try Data("take".utf8).write(to: fresh)
+        let old = store.audioURL(fileName: "deleted-elsewhere.m4a")
+        try Data("take".utf8).write(to: old)
+        try Self.age(old, by: 8 * 24 * 60 * 60)
+        let recordingNow = try Self.pendingTake(store, "recording-now.m4a")
+        let abandoned = try Self.pendingTake(store, "left-behind.m4a")
+        try Self.age(abandoned, by: 2 * 24 * 60 * 60)
 
         // When
-        try store.reconcileAudioFiles(now: Date().addingTimeInterval(OneLinersStore.abandonedTakeAge + 60))
-
-        // Then
-        #expect(!Self.exists(orphan))
-        #expect(Self.exists(store.audioURL(fileName: "kept.m4a")))
-        #expect(Self.exists(store.audioURL(fileName: "trashed.m4a")))
-        #expect(!Self.exists(oldTake))
-
-        // When: a take being recorded now is younger than a day
-        let current = try Self.pendingTake(store, "current.m4a")
         try store.reconcileAudioFiles()
 
         // Then
-        #expect(Self.exists(current))
+        #expect(Self.exists(store.audioURL(fileName: "kept.m4a")))
+        #expect(Self.exists(fresh))
+        #expect(!Self.exists(old))
+        #expect(Self.exists(recordingNow))
+        #expect(!Self.exists(abandoned))
     }
+
 }

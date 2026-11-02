@@ -79,8 +79,14 @@ final class OneLinersUITests: XCTestCase {
         attach(app, "7-capture-record")
         stop.tap()
         app.buttons["Save"].tap()
-        XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5))
+        let play = app.buttons["Play take"]
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
         attach(app, "8-list-with-take")
+        play.tap()
+        XCTAssertTrue(app.buttons["Stop take"].waitForExistence(timeout: 5))
+        attach(app, "9-playing")
+        app.buttons["Stop take"].tap()
+        XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5))
     }
 
     @MainActor

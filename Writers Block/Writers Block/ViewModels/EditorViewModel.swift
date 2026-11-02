@@ -2024,7 +2024,11 @@ final class EditorViewModel: ObservableObject {
         try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: recordingId, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
     }
 
-    private func scheduleTrashPurge() {
+    /// True while a timer waits for the next Trash expiry.
+    var hasScheduledTrashPurge: Bool { trashSchedulerTask != nil }
+
+    /// Also called after a one liner goes to Trash, so its expiry gets a timer.
+    func scheduleTrashPurge() {
         trashSchedulerTask?.cancel()
         guard let context = modelContext else { return }
         normalizeTrashDeadlines(in: context)

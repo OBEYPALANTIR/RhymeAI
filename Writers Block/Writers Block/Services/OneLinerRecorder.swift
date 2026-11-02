@@ -40,6 +40,18 @@ final class OneLinerRecorder {
     /// The file a start is creating, known before the engine runs so a failed or
     /// cancelled start can remove it.
     @ObservationIgnored private var pendingURL: URL?
+    /// The latest start's session activation, which also undoes itself when that
+    /// start was cancelled. A new start waits for it, so an old cleanup can never
+    /// deactivate the newer start's session.
+    @ObservationIgnored private var pendingActivation: Task<Bool, Never>?
+    /// This recorder's start activated the session and has not given it back.
+    @ObservationIgnored private var sessionHeld = false
+    /// Set on the audio thread the moment a write fails; read by `stop()` so a take
+    /// that lost audio is never handed on, even before the main-actor notice runs.
+    @ObservationIgnored private var writeFailed = OSAllocatedUnfairLock(initialState: false)
+
+    /// True while any capture holds or is claiming the microphone; one-liner playback waits for it.
+    static private(set) var isCapturing = false
 
     init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared) {
         self.sessionTransitions = sessionTransitions
@@ -55,11 +67,17 @@ final class OneLinerRecorder {
         generation &+= 1
         let owner = generation
         isStarting = true
+        Self.isCapturing = true
         notice = nil
+        OneLinerPlayer.stopAll()
+        // An earlier cancelled start finishes undoing its activation first.
+        if let previous = pendingActivation { _ = await previous.value }
+        guard owner == generation else { return false }
 
         guard await Self.microphoneGranted() else {
             guard owner == generation else { return false }
             isStarting = false
+            Self.isCapturing = false
             notice = "Microphone access is off. Turn it on in Settings, or type the line."
             return false
         }
@@ -67,14 +85,25 @@ final class OneLinerRecorder {
         let recognizer = await Self.onDeviceRecognizer()
         guard owner == generation else { return false }
 
-        let activation: Result<Void, Error> = await withCheckedContinuation { continuation in
-            sessionTransitions.activateRecording { continuation.resume(returning: $0) }
+        let transitions = sessionTransitions
+        let activation = Task { [weak self] () -> Bool in
+            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                transitions.activateRecording { continuation.resume(returning: $0) }
+            }
+            guard case .success = result else { return false }
+            // Cancelled meanwhile: give the session back before any newer start activates.
+            guard let self, owner == self.generation else {
+                transitions.deactivate()
+                return false
+            }
+            // From here a stop or discard gives the session back (tearDown).
+            self.sessionHeld = true
+            return true
         }
-        guard owner == generation else {
-            if case .success = activation { sessionTransitions.deactivate() }
-            return false
-        }
-        guard case .success = activation else { return failToStart() }
+        pendingActivation = activation
+        let activated = await activation.value
+        guard owner == generation else { return false }
+        guard activated else { return failToStart() }
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -115,11 +144,13 @@ final class OneLinerRecorder {
             notice = "Live transcription isn't available on this device. The audio is still saved."
         }
 
+        writeFailed = OSAllocatedUnfairLock(initialState: false)
         Self.installTap(
             on: input,
             format: format,
             file: file,
             request: request,
+            failed: writeFailed,
             level: { [weak self] level in
                 Task { @MainActor [weak self] in self?.pushLevel(level) }
             },
@@ -146,17 +177,30 @@ final class OneLinerRecorder {
         return true
     }
 
-    /// Stops the take (or cancels a start) and returns its length in seconds;
-    /// the file stays at `fileURL`.
+    /// Stops the take (or cancels a start); the file stays at `fileURL` and its length
+    /// in `takeDuration`. Returns false when audio failed to write: the take is then
+    /// removed and `notice` says so.
     @discardableResult
-    func stop() -> Double {
+    func stop() -> Bool {
         generation &+= 1
+        let wasRecording = isRecording
         if isRecording, let startedAt {
             takeDuration = Date().timeIntervalSince(startedAt)
         }
         tearDown()
-        return takeDuration
+        guard wasRecording, writeFailed.withLock({ $0 }) else { return true }
+        removeTakeFiles()
+        takeDuration = 0
+        notice = Self.writeFailureNotice
+        return false
     }
+
+    /// Points the take at where a failed save left it, so a retry adopts it from there.
+    func takeMoved(to url: URL) {
+        fileURL = url
+    }
+
+    static let writeFailureNotice = "Recording stopped because the audio couldn't be saved. The words so far are kept."
 
     /// Stops or cancels, and removes the take's file.
     func discard() {
@@ -167,7 +211,6 @@ final class OneLinerRecorder {
     }
 
     private func tearDown() {
-        let wasActive = engine != nil
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -181,9 +224,13 @@ final class OneLinerRecorder {
         interruptionObserver = nil
         isStarting = false
         isRecording = false
+        Self.isCapturing = false
         startedAt = nil
         levels = Array(repeating: 0, count: Self.levelCount)
-        if wasActive { sessionTransitions.deactivate() }
+        if sessionHeld {
+            sessionHeld = false
+            sessionTransitions.deactivate()
+        }
     }
 
     private func removeTakeFiles() {
@@ -198,7 +245,6 @@ final class OneLinerRecorder {
     private func failToStart() -> Bool {
         tearDown()
         removeTakeFiles()
-        sessionTransitions.deactivate()
         notice = "Couldn't start recording. Check the microphone and try again."
         return false
     }
@@ -211,7 +257,7 @@ final class OneLinerRecorder {
         tearDown()
         removeTakeFiles()
         takeDuration = 0
-        notice = "Recording stopped because the audio couldn't be saved. The words so far are kept."
+        notice = Self.writeFailureNotice
     }
 
     /// A call, Siri or another app took the microphone: the take ends where it was.
@@ -243,10 +289,10 @@ final class OneLinerRecorder {
         format: AVAudioFormat,
         file: AVAudioFile?,
         request: SFSpeechAudioBufferRecognitionRequest?,
+        failed: OSAllocatedUnfairLock<Bool>,
         level: @escaping @Sendable (Float) -> Void,
         writeFailed: @escaping @Sendable () -> Void
     ) {
-        let failed = OSAllocatedUnfairLock(initialState: false)
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             guard !failed.withLock({ $0 }) else { return }
             do {
@@ -310,18 +356,32 @@ final class OneLinerPlayer {
         self.sessionTransitions = sessionTransitions
     }
 
-    func toggle(_ url: URL) {
+    /// The player that last started, so a recording can silence it first.
+    private static weak var current: OneLinerPlayer?
+
+    /// Stops any one-liner take playing, before a microphone is opened.
+    static func stopAll() {
+        current?.stop()
+    }
+
+    /// Plays or stops the take. Refuses (returning false) while a voice memo or a
+    /// one-liner capture is recording, so a take never plays into the microphone.
+    @discardableResult
+    func toggle(_ url: URL, memoRecording: Bool) -> Bool {
         if playingURL == url {
             stop()
-            return
+            return true
         }
+        guard !memoRecording, !OneLinerRecorder.isCapturing else { return false }
         stop()
+        Self.current = self
         revision &+= 1
         let owner = revision
         playingURL = url
         sessionTransitions.activatePlayback { [weak self] result in
             Task { @MainActor [weak self] in self?.begin(url, owner: owner, activation: result) }
         }
+        return true
     }
 
     func stop() {
