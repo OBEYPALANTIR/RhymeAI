@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -117,6 +119,14 @@ class OneLinersStore internal constructor(
     suspend fun all(): List<OneLiner> = linesFlow.first()
     suspend fun trashed(): List<TrashedOneLiner> = trashFlow.first()
 
+    /**
+     * Every change that moves or deletes a take together with its row (add, restore, delete
+     * forever, purge, reconcile) runs under this lock, so a restore can never land between a
+     * delete's check and its file removal.
+     */
+    private val fileTransitions = Mutex()
+    private val snapshotLock = Mutex()
+
     private data class Pool(val lines: List<OneLiner>, val trash: List<TrashedOneLiner>)
 
     private fun read(prefs: Preferences) =
@@ -125,18 +135,14 @@ class OneLinersStore internal constructor(
     /** One read-modify-write; [block] returns null to store nothing. */
     private suspend fun <T : Any> change(block: (Pool) -> Pair<Pool, T>?): T? {
         var result: T? = null
-        var committed: Pool? = null
-        var appearance: String? = null
         dataStore.edit { prefs ->
             val (next, value) = block(read(prefs)) ?: return@edit
             beforeCommit()
             prefs[LINES_KEY] = json.encodeToString(next.lines)
             prefs[TRASH_KEY] = json.encodeToString(next.trash)
-            appearance = prefs[ProjectRepository.APP_APPEARANCE_KEY]
-            committed = next
             result = value
         }
-        committed?.let { publishSnapshot(it.lines, appearance) }
+        if (result != null) publishSnapshot()
         return result
     }
 
@@ -145,7 +151,10 @@ class OneLinersStore internal constructor(
      * save fails it is moved back and the failure says where the take is, so the caller still
      * holds it.
      */
-    suspend fun add(text: String, take: File? = null, audioDurationMs: Long = 0L, now: Long = System.currentTimeMillis()): OneLiner {
+    suspend fun add(text: String, take: File? = null, audioDurationMs: Long = 0L, now: Long = System.currentTimeMillis()): OneLiner =
+        fileTransitions.withLock { addLocked(text, take, audioDurationMs, now) }
+
+    private suspend fun addLocked(text: String, take: File?, audioDurationMs: Long, now: Long): OneLiner {
         val adopted = take?.let { audioFile(it.name) }
         if (take != null && adopted != null) withContext(Dispatchers.IO) {
             audioRoot.mkdirs()
@@ -181,9 +190,11 @@ class OneLinersStore internal constructor(
     }
 
     /** Restores the line and drops every Trash copy of it. */
-    suspend fun restore(id: String): OneLiner? = change { pool ->
-        val line = pool.trash.firstOrNull { it.line.id == id }?.line ?: return@change null
-        Pool(pool.lines.filterNot { it.id == id } + line, pool.trash.filterNot { it.line.id == id }) to line
+    suspend fun restore(id: String): OneLiner? = fileTransitions.withLock {
+        change { pool ->
+            val line = pool.trash.firstOrNull { it.line.id == id }?.line ?: return@change null
+            Pool(pool.lines.filterNot { it.id == id } + line, pool.trash.filterNot { it.line.id == id }) to line
+        }
     }
 
     /**
@@ -191,7 +202,15 @@ class OneLinersStore internal constructor(
      * and only once that is stored does the set-aside file go. A failed save puts the file
      * back beside the row it still belongs to.
      */
-    suspend fun permanentlyDelete(id: String): Boolean {
+    suspend fun permanentlyDelete(id: String): Boolean = fileTransitions.withLock { deleteLocked(id) }
+
+    private fun stillDeletable(pool: Pool, id: String, fileName: String?): Boolean =
+        pool.lines.none { it.id == id } && pool.trash.any { it.line.id == id } && (
+            fileName == null || (pool.lines.none { it.audioFileName == fileName } &&
+                pool.trash.none { it.line.id != id && it.line.audioFileName == fileName })
+            )
+
+    private suspend fun deleteLocked(id: String): Boolean {
         val pool = read(dataStore.data.first())
         val trashed = pool.trash.firstOrNull { it.line.id == id } ?: return false
         val fileName = trashed.line.audioFileName
@@ -208,21 +227,27 @@ class OneLinersStore internal constructor(
             moveFile(original, aside)
             true
         }
-        try {
-            change { current -> current.copy(trash = current.trash.filterNot { it.line.id == id }) to Unit }
+        val removed = try {
+            change { current ->
+                // Re-checked inside the write: if the line came back meanwhile, nothing is removed.
+                if (!stillDeletable(current, id, if (staged) fileName else null)) return@change null
+                current.copy(trash = current.trash.filterNot { it.line.id == id }) to Unit
+            } != null
         } catch (error: Exception) {
             if (staged) withContext(Dispatchers.IO) { runCatching { moveFile(aside!!, original!!) } }
             throw error
+        }
+        if (!removed) {
+            if (staged) withContext(Dispatchers.IO) { runCatching { moveFile(aside!!, original!!) } }
+            return false
         }
         // A leftover here is removed by the next reconcile.
         if (staged) withContext(Dispatchers.IO) { aside!!.delete() }
         return true
     }
 
-    suspend fun purgeExpired(now: Long = System.currentTimeMillis()): List<String> {
-        val expired = trashed().filter { it.deleteAfter <= now }.map { it.line.id }.distinct()
-        expired.forEach { permanentlyDelete(it) }
-        return expired
+    suspend fun purgeExpired(now: Long = System.currentTimeMillis()): List<String> = fileTransitions.withLock {
+        trashed().filter { it.deleteAfter <= now }.map { it.line.id }.distinct().filter { deleteLocked(it) }
     }
 
     /** The next time a Trash copy expires, for the Trash scheduler. */
@@ -234,7 +259,7 @@ class OneLinersStore internal constructor(
      * (a delete that stopped before its save) goes back; other set-aside files go after a
      * week, and pending takes an app left behind after a day.
      */
-    suspend fun reconcileAudioFiles(now: Long = System.currentTimeMillis()) {
+    suspend fun reconcileAudioFiles(now: Long = System.currentTimeMillis()): Unit = fileTransitions.withLock {
         val pool = read(dataStore.data.first())
         val referenced = (pool.lines.mapNotNull { it.audioFileName } + pool.trash.mapNotNull { it.line.audioFileName }).toSet()
         withContext(Dispatchers.IO) {
@@ -251,6 +276,24 @@ class OneLinersStore internal constructor(
             }
         }
     }
+
+    /**
+     * A finished take a capture left in pending (the app was closed or killed before Save),
+     * newest first, so the next capture can offer it instead of losing it. A take still being
+     * written has no complete WAV header and is not offered.
+     */
+    // shortcut: lists and reads a few headers on the caller's thread (pending holds a handful of files at most).
+    fun recoverablePendingTake(now: Long = System.currentTimeMillis()): File? =
+        pendingRoot.listFiles().orEmpty()
+            .filter { now - it.lastModified() <= ABANDONED_TAKE_AGE_MILLIS && isFinishedWav(it) }
+            .maxByOrNull { it.lastModified() }
+
+    private fun isFinishedWav(file: File): Boolean = runCatching {
+        val header = ByteArray(44)
+        val read = file.inputStream().use { it.read(header) }
+        val dataBytes = java.nio.ByteBuffer.wrap(header, 40, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+        read == 44 && String(header, 0, 4) == "RIFF" && dataBytes > 0 && dataBytes.toLong() == file.length() - 44
+    }.getOrDefault(false)
 
     /** Marks the line used inside another store write (the song's), so both land or neither does. */
     internal fun markUsedIn(prefs: MutablePreferences, id: String, projectId: String) {
@@ -276,16 +319,16 @@ class OneLinersStore internal constructor(
         return songs.appendLineToProject(projectId, line.text.trim(), now) { prefs -> markUsedIn(prefs, id, projectId) }
     }
 
-    /** Refreshes the widget snapshot (also after an appearance change). */
-    suspend fun publishSnapshot() {
-        val prefs = runCatching { dataStore.data.first() }.getOrNull() ?: return
-        val lines = runCatching { read(prefs).lines }.getOrNull() ?: return
-        publishSnapshot(lines, prefs[ProjectRepository.APP_APPEARANCE_KEY])
-    }
-
-    /** A failure here never fails the change that called it. */
-    private suspend fun publishSnapshot(lines: List<OneLiner>, appearance: String?) {
-        val file = snapshotFile ?: return
+    /**
+     * Refreshes the widget snapshot from the stored pool (after every change, and after an
+     * appearance change). One writer at a time, reading the latest pool, so an older pool is
+     * never published last. A failure here never fails the change that called it.
+     */
+    suspend fun publishSnapshot(): Unit = snapshotLock.withLock {
+        val file = snapshotFile ?: return@withLock
+        val prefs = runCatching { dataStore.data.first() }.getOrNull() ?: return@withLock
+        val lines = runCatching { read(prefs).lines }.getOrNull() ?: return@withLock
+        val appearance = prefs[ProjectRepository.APP_APPEARANCE_KEY]
         val newest = lines.sortedByDescending { it.createdAt }.take(OneLinersSnapshot.LINE_LIMIT)
         val snapshot = OneLinersSnapshot(
             count = lines.size,
@@ -297,7 +340,7 @@ class OneLinersStore internal constructor(
                 file.parentFile?.mkdirs()
                 val temp = File(file.parentFile, file.name + ".tmp")
                 temp.writeText(json.encodeToString(snapshot))
-                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             }
             onSnapshot()
         }

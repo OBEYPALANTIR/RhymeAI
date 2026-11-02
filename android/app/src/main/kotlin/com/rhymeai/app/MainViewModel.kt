@@ -393,6 +393,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showOneLiners by mutableStateOf(false)
     /** The One Liners screen was opened from the songs drawer, so its back returns there. */
     var oneLinersOpenedFromDrawer by mutableStateOf(false)
+    /** The open capture sheet's words and take; they outlive an activity recreation. */
+    val oneLinerCaptures = com.rhymeai.app.service.OneLinerCaptures { oneLinersStore.recoverablePendingTake() }
     /** A widget, tile or link asked for this; the One Liners screen (or an open capture) takes it. */
     var pendingOneLinerAction by mutableStateOf<com.rhymeai.app.ui.navigation.OneLinerAction?>(null)
 
@@ -427,13 +429,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isEmpty()) return "Transcribe or type the words first."
         return try {
             if (!showStartMenu && currentProjectId == project.id) {
+                val notSaved = "Couldn't add the line to the open song. Try again in a moment."
+                val stored = projects.firstOrNull { it.id == project.id } ?: return notSaved
                 // The marker is saved first: if that fails, nothing went into the song.
                 oneLinersStore.markUsed(line.id, project.id) ?: return "This line is no longer in One Liners."
                 if (!insertSuggestion(text)) {
                     oneLinersStore.markUsed(line.id, line.usedInProjectId)
-                    return "Couldn't add the line to the open song. Try again in a moment."
+                    return notSaved
                 }
-                flushCurrentDraft()
+                // Saved right away and awaited: on failure the insertion and the marker are put back.
+                autoSaveJob?.cancel()
+                val savedTitle = title
+                val savedLyrics = lyrics
+                val savedTheme = theme
+                try {
+                    persistActiveProjectSnapshot(
+                        stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
+                            updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
+                        savedTitle, savedLyrics, savedTheme
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (currentProjectId == project.id && lyrics == savedLyrics) undoLyrics()
+                    runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
+                    triggerAutoSave()
+                    return notSaved
+                }
             } else {
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
                     ?: return "That song is no longer in your library."
@@ -2752,6 +2774,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = null
             voiceMemoService.release()
+            // The take stays in pending, finished, for the next capture to offer.
+            oneLinerCaptures.current?.recorder?.stop()
             super.onCleared()
         }
     }

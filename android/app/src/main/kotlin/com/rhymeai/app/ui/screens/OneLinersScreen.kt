@@ -66,7 +66,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -99,6 +98,9 @@ import com.rhymeai.app.data.model.OneLiner
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.OneLinerSaveFailure
 import com.rhymeai.app.data.repository.OneLinersStore
+import com.rhymeai.app.service.MicrophoneOwner
+import com.rhymeai.app.service.OneLinerCaptureSession
+import com.rhymeai.app.service.OneLinerCaptureSession.Mode as CaptureMode
 import com.rhymeai.app.service.OneLinerPlayer
 import com.rhymeai.app.service.OneLinerRecorder
 import com.rhymeai.app.service.VoiceMemoService
@@ -110,14 +112,6 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Record opens with the mic hot; Type and Edit open with the keyboard. */
-private sealed interface CaptureMode {
-    data object Record : CaptureMode
-    data object Type : CaptureMode
-    data class Edit(val line: OneLiner) : CaptureMode
-}
-
-const val FINISH_ONE_LINER_FIRST = "Finish this one liner first. Save it or close it, then try again."
 
 /** The One Liners pool: newest first, search, send to a song, trash, and Record / Type capture. */
 @Composable
@@ -128,9 +122,8 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val player = remember { OneLinerPlayer() }
     DisposableEffect(player) { onDispose { player.stop() } }
     var query by remember { mutableStateOf("") }
-    var capture by remember { mutableStateOf<CaptureMode?>(null) }
+    val captures = viewModel.oneLinerCaptures
     var sendingLine by remember { mutableStateOf<OneLiner?>(null) }
-    var finishFirstRequests by remember { mutableIntStateOf(0) }
     val lines = viewModel.oneLiners
     val filtered = remember(lines, query) { OneLinersStore.filter(lines, query) }
     val titles = remember(viewModel.projects) { viewModel.projects.associate { it.id to it.title.ifEmpty { "Untitled Song" } } }
@@ -143,18 +136,17 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     fun openCapture(mode: CaptureMode) {
         player.stop()
         viewModel.voiceMemoService.stopPlayback()
-        capture = mode
+        captures.open(mode)
     }
 
     // A widget, tile or link: an open capture is never replaced, it says so instead.
     LaunchedEffect(viewModel.pendingOneLinerAction) {
         val action = viewModel.pendingOneLinerAction ?: return@LaunchedEffect
         viewModel.pendingOneLinerAction = null
-        when {
-            capture != null -> if (action != OneLinerAction.OPEN) finishFirstRequests++
-            action == OneLinerAction.RECORD -> openCapture(CaptureMode.Record)
-            action == OneLinerAction.TYPE -> openCapture(CaptureMode.Type)
-            else -> Unit
+        when (action) {
+            OneLinerAction.RECORD -> if (captures.current == null) openCapture(CaptureMode.Record) else captures.open(CaptureMode.Record)
+            OneLinerAction.TYPE -> if (captures.current == null) openCapture(CaptureMode.Type) else captures.open(CaptureMode.Type)
+            OneLinerAction.OPEN -> Unit
         }
     }
 
@@ -171,7 +163,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    BackHandler(enabled = capture == null && sendingLine == null, onBack = onBack)
+    BackHandler(enabled = captures.current == null && sendingLine == null, onBack = onBack)
 
     Surface(
         modifier = Modifier.fillMaxSize().appWritingSurface().testTag("oneLinersScreen"),
@@ -268,17 +260,18 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    capture?.let { mode ->
+    captures.current?.let { session ->
         OneLinerCaptureSheet(
-            mode = mode,
-            microphoneBusy = viewModel.voiceMemoService.isRecording,
+            session = session,
+            microphoneBusy = viewModel.voiceMemoService.isRecording || MicrophoneOwner.current == MicrophoneOwner.Owner.SONG_MEMO,
             pendingRoot = viewModel.oneLinersStore.pendingRoot,
-            finishFirstRequests = finishFirstRequests,
             onSave = { text, take, durationMs ->
+                val mode = session.mode
                 if (mode is CaptureMode.Edit) viewModel.updateOneLinerText(mode.line.id, text)
                 else viewModel.saveOneLiner(text, take, durationMs)
+                captures.saved()
             },
-            onDismiss = { capture = null }
+            onDismiss = captures::dismiss
         )
     }
 
@@ -465,33 +458,32 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OneLinerCaptureSheet(
-    mode: CaptureMode,
+    session: OneLinerCaptureSession,
     microphoneBusy: Boolean,
     pendingRoot: File,
-    finishFirstRequests: Int,
     onSave: suspend (text: String, take: File?, durationMs: Long) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val recorder = remember { OneLinerRecorder(context.applicationContext) }
+    val mode = session.mode
+    val recorder = session.recorder
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     var fieldFocused by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf((mode as? CaptureMode.Edit)?.line?.text.orEmpty()) }
-    // The field's words when the current take started; the transcript follows them.
-    var textBeforeTake by remember { mutableStateOf("") }
-    var saveError by remember { mutableStateOf<String?>(null) }
+    // Words, take and errors live in the session (the ViewModel's), so a recreated activity keeps them.
+    var text by session::text
+    var textBeforeTake by session::textBeforeTake
+    var saveError by session::saveError
     var saving by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf(false) }
     val isEdit = mode is CaptureMode.Edit
     val canRecord = !isEdit && !microphoneBusy
     val canSave = !saving && (text.isNotBlank() || (!isEdit && (recorder.takeFile != null || recorder.isRecording)))
 
     fun startTake() {
         textBeforeTake = text.trim()
-        if (!recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"))) focusRequester.requestFocus()
+        if (!recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"), context.applicationContext)) focusRequester.requestFocus()
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -516,8 +508,6 @@ private fun OneLinerCaptureSheet(
         scope.launch {
             try {
                 onSave(text.trim(), recorder.takeFile, recorder.takeDurationMs)
-                saved = true
-                onDismiss()
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -532,19 +522,21 @@ private fun OneLinerCaptureSheet(
 
     LaunchedEffect(recorder.transcript) {
         val heard = recorder.transcript
-        if (heard.isNotEmpty()) text = if (textBeforeTake.isEmpty()) heard else "$textBeforeTake $heard"
+        if (heard.isEmpty() || heard == session.appliedTranscript) return@LaunchedEffect
+        session.appliedTranscript = heard
+        text = if (textBeforeTake.isEmpty()) heard else "$textBeforeTake $heard"
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(session) {
+        // Once per capture: a sheet recreated with the activity keeps its take and does not reopen the mic.
+        if (session.opened) return@LaunchedEffect
+        session.opened = true
         when {
-            mode is CaptureMode.Record && !microphoneBusy -> requestTake()
+            mode is CaptureMode.Record && !microphoneBusy && recorder.takeFile == null -> requestTake()
             else -> {
-                if (mode is CaptureMode.Record) recorder.notice = "A voice memo is recording. Stop it to record here, or type the line."
+                if (mode is CaptureMode.Record && microphoneBusy) recorder.notice = OneLinerRecorder.MEMO_RECORDING_NOTICE
                 focusRequester.requestFocus()
             }
         }
-    }
-    LaunchedEffect(finishFirstRequests) {
-        if (finishFirstRequests > 0) recorder.notice = FINISH_ONE_LINER_FIRST
     }
     // Leaving the app ends the take where it is, so the microphone never runs on in the background.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -555,11 +547,8 @@ private fun OneLinerCaptureSheet(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            // Closed without saving: the take is not kept.
-            if (!saved) recorder.discard()
-        }
+        // Only an explicit close discards the take (see OneLinerCaptures), never a disposal.
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     ModalBottomSheet(
