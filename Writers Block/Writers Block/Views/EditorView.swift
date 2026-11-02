@@ -348,7 +348,10 @@ struct EditorView: View {
                 VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                     topBar
                     editorScrollView
-                        .padding(.bottom, iPadEditorBottomClearance)
+                        // Content margins, not padding: padding clipped the page at the
+                        // button line so text vanished under a hard edge instead of
+                        // scrolling beneath the floating actions.
+                        .contentMargins(.bottom, iPadEditorBottomClearance)
                 }
                 .safeAreaInset(edge: .bottom, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                     rewriteAccessoryBar
@@ -396,7 +399,7 @@ struct EditorView: View {
             VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 topBar
                 editorScrollView
-                    .padding(.bottom, iPhoneEditorBottomClearance)
+                    .contentMargins(.bottom, iPhoneEditorBottomClearance)
             }
             .allowsHitTesting(!assistantSheetIsActive)
             .accessibilityHidden(assistantSheetIsActive)
