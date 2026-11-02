@@ -11,6 +11,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,6 +29,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -169,9 +173,21 @@ class MainActivity : ComponentActivity() {
 
                     // Determine start destination
                     val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
+                    // Rises over the editor like the iOS full-screen cover; a bare `if` popped it in with no motion.
+                    // While it slides away it is inert and silent, and nothing beneath comes back until it is gone.
+                    val oneLinersVisibility = remember { MutableTransitionState(viewModel.showOneLiners) }
+                    oneLinersVisibility.targetState = viewModel.showOneLiners
+                    val oneLinersShown = oneLinersVisibility.currentState || oneLinersVisibility.targetState
+                    LaunchedEffect(oneLinersVisibility.isIdle, oneLinersVisibility.currentState) {
+                        // Opened from the songs drawer: back returns there, once the screen has left.
+                        if (oneLinersVisibility.isIdle && !oneLinersVisibility.currentState && viewModel.oneLinersOpenedFromDrawer) {
+                            viewModel.oneLinersOpenedFromDrawer = false
+                            viewModel.showProjectsDialog = true
+                        }
+                    }
                     val navModifier =
                         if (
-                            viewModel.showOneLiners ||
+                            oneLinersShown ||
                             viewModel.showProjectsDialog ||
                             viewModel.showTemplatesDialog ||
                             viewModel.showSettingsDialog
@@ -288,23 +304,30 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // Rises over the editor like the iOS full-screen cover; a bare `if` popped it in with no motion.
                     AnimatedVisibility(
-                        visible = viewModel.showOneLiners,
+                        visibleState = oneLinersVisibility,
                         enter = fadeIn(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) +
                             slideInVertically(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) { it },
                         exit = fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
                             slideOutVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) { it }
                     ) {
-                        com.rhymeai.app.ui.screens.OneLinersScreen(
-                            viewModel = viewModel,
-                            onBack = {
-                                viewModel.showOneLiners = false
-                                // Opened from the songs drawer: back returns there.
-                                if (viewModel.oneLinersOpenedFromDrawer) viewModel.showProjectsDialog = true
-                                viewModel.oneLinersOpenedFromDrawer = false
+                        val leaving = !oneLinersVisibility.targetState
+                        Box(if (leaving) Modifier.clearAndSetSemantics {} else Modifier) {
+                            com.rhymeai.app.ui.screens.OneLinersScreen(
+                                viewModel = viewModel,
+                                onBack = { viewModel.showOneLiners = false }
+                            )
+                            if (leaving) {
+                                // A tap on the outgoing Record control would start a take nobody can see.
+                                Box(
+                                    Modifier.matchParentSize().clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = {}
+                                    )
+                                )
                             }
-                        )
+                        }
                     }
 
                     if (viewModel.showTemplatesDialog) {
