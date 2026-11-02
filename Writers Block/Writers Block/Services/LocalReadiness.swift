@@ -30,7 +30,7 @@ struct LocalReadiness {
         if AIService.gemmaChoiceCleared() {
             return LocalReadiness(title: "Choose a model", detail: "Download a local model to use UnBlock on this device.", canGenerate: false)
         }
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, *) {
             switch SystemLanguageModel.default.availability {
             case .available:
                 return LocalReadiness(title: "Ready", detail: "Apple Intelligence · on this device", canGenerate: true)

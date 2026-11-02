@@ -1,6 +1,10 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
 func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
@@ -93,6 +97,20 @@ enum EditorViewConstants {
     }
 }
 
+/// A menu bar action run by the focused editor window. Equal per editor, so
+/// the closure is not re-published on every update.
+struct EditorMenuAction: Equatable {
+    let editorID: UUID
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.editorID == rhs.editorID }
+}
+
+extension FocusedValues {
+    /// The menu bar's Song › UnBlock for the focused editor window.
+    @Entry var unblockAction: EditorMenuAction?
+}
+
 /// The tablet assistant's two places: the writer's show/hide choice for the
 /// inline column, and the bottom panel used below the side-column width.
 struct TabletAssistantVisibility: Equatable {
@@ -144,6 +162,7 @@ struct EditorView: View {
     @State private var unblockCollapsed: Bool = false
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
+    @State private var menuActionID = UUID()
     /// Starts unbounded so a full-screen iPad never flashes the single column.
     @State private var windowWidth: CGFloat = .infinity
 
@@ -158,6 +177,7 @@ struct EditorView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { windowWidth = $0 }
+        .focusedSceneValue(\.unblockAction, EditorMenuAction(editorID: menuActionID, perform: showAssistantAndGetSuggestions))
         .onChange(of: usesSideColumns, initial: true) { _, sideColumns in
             guard sideColumns else { return }
             // The sheet belongs to the single-column width. Drop a pending
@@ -196,7 +216,7 @@ struct EditorView: View {
             withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 viewModel.clearInsertionHighlight()
             }
-            try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 28 : 6))
+            try? await Task.sleep(for: .seconds(Self.isVoiceOverRunning ? 28 : 6))
             guard !Task.isCancelled else { return }
             viewModel.clearInsertionFeedback()
         }
@@ -336,7 +356,19 @@ struct EditorView: View {
     }
 
     private func dismissKeyboard() {
+        #if canImport(UIKit)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #else
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        #endif
+    }
+
+    private static var isVoiceOverRunning: Bool {
+        #if canImport(UIKit)
+        UIAccessibility.isVoiceOverRunning
+        #else
+        NSWorkspace.shared.isVoiceOverEnabled
+        #endif
     }
 
     // MARK: - iPad Layout (split view)
@@ -422,6 +454,7 @@ struct EditorView: View {
     /// compact layout and the regular layout below the side-column width.
     private func trackingAssistantSheet(_ content: some View) -> some View {
         content
+            #if canImport(UIKit)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
                 if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                     keyboardHeight = frame.height
@@ -432,6 +465,7 @@ struct EditorView: View {
                 keyboardIsVisible = false
                 keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
             }
+            #endif
             .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
                 if isPresented {
                     assistantSheetLifecycleTask?.cancel()
@@ -697,6 +731,20 @@ struct EditorView: View {
         } else {
             presentAssistantSheet()
         }
+    }
+
+    /// Song › UnBlock: bring the assistant into view where this width puts it
+    /// (side column or bottom panel, leaving Focus), then ask for lines.
+    private func showAssistantAndGetSuggestions() {
+        if isFocusMode {
+            withRhymeAnimation(nil, reduceMotion: reduceMotion) { isFocusMode = false }
+        }
+        if usesSideColumns {
+            if !inlineAssistantVisible { presentAssistant() }
+        } else if !viewModel.showAssistantSheet {
+            presentAssistantSheet()
+        }
+        viewModel.getSuggestions()
     }
 
     private func hideInlineAssistant() {

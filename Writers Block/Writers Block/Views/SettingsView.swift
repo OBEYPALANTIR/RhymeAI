@@ -77,7 +77,7 @@ struct SettingsView: View {
                 // iPadOS draws toolbar buttons on a shared glass capsule, which
                 // failed the contrast audit on hardware. Without it, Done is the
                 // action colour on the canvas toolbar, the pair used across the app.
-                if #available(iOS 26.0, *) {
+                if #available(iOS 26.0, macOS 26.0, *) {
                     ToolbarItem(placement: .cancellationAction) { doneButton }
                         .sharedBackgroundVisibility(.hidden)
                 } else {
