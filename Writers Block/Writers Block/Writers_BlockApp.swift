@@ -171,6 +171,7 @@ struct Writers_BlockApp: App {
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
+                // Launch only: the week-old rule keeps takes of lines still syncing.
                 reconcileOneLinerAudio()
             }
             .task {
@@ -182,8 +183,6 @@ struct Writers_BlockApp: App {
             // iCloud delivered changes: new or removed recordings get their files.
             .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
                 Task { await viewModel.reconcileRecordings() }
-                // A line deleted on another device leaves its audio here.
-                reconcileOneLinerAudio()
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {

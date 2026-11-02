@@ -27,7 +27,11 @@ struct OneLinersView: View {
     }
 
     private var palette: AppAppearancePalette { appearance.palette }
-    private var store: OneLinersStore { OneLinersStore(context: modelContext) }
+    private var store: OneLinersStore {
+        var store = OneLinersStore(context: modelContext)
+        store.onTrashed = { [viewModel] in viewModel.scheduleTrashPurge() }
+        return store
+    }
     private var filteredLines: [OneLiner] { OneLinersStore.filter(lines, query: searchText) }
 
     private var projectTitles: [String: String] {
@@ -261,11 +265,11 @@ struct OneLinersView: View {
                 .foregroundStyle(palette.secondaryInk)
             }
             .contentShape(Rectangle())
-            .onTapGesture { capture = .edit(line) }
+            .onTapGesture { openCapture(.edit(line)) }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint("Edits the words")
-            .accessibilityAction { capture = .edit(line) }
+            .accessibilityAction { openCapture(.edit(line)) }
 
             if let fileName = line.audioFileName {
                 playButton(store.audioURL(fileName: fileName))
@@ -277,7 +281,9 @@ struct OneLinersView: View {
         let isPlaying = player.playingURL == url
         return Button {
             if !isPlaying { viewModel.voiceMemoService.stopPlayback() }
-            player.toggle(url)
+            if !player.toggle(url, memoRecording: viewModel.voiceMemoService.isRecording) {
+                showToast(Toast(message: "Finish recording first"))
+            }
         } label: {
             Image(systemName: isPlaying ? "stop.fill" : "play.fill")
                 .font(.body.weight(.medium))
@@ -318,7 +324,7 @@ struct OneLinersView: View {
     private var floatingActions: some View {
         HStack(spacing: RhymeAITokens.Rhythm.related) {
             Button {
-                capture = .type
+                openCapture(.type)
             } label: {
                 Image(systemName: "keyboard")
                     .font(.title3.weight(.medium))
@@ -332,7 +338,7 @@ struct OneLinersView: View {
 
             Button {
                 viewModel.voiceMemoService.stopPlayback()
-                capture = .record
+                openCapture(.record)
             } label: {
                 HStack(spacing: RhymeAITokens.Rhythm.related) {
                     Image(systemName: "mic.fill")
@@ -350,6 +356,12 @@ struct OneLinersView: View {
         }
         .padding(.trailing, RhymeAITokens.Rhythm.standard)
         .padding(.bottom, RhymeAITokens.Rhythm.related)
+    }
+
+    /// A take playing would reach the microphone, so playback stops before any capture opens.
+    private func openCapture(_ mode: OneLinerCaptureMode) {
+        player.stop()
+        capture = mode
     }
 
     // MARK: - Send to song

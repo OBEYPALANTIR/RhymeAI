@@ -478,6 +478,7 @@ final class VoiceMemoService {
     // MARK: - Record
 
     func startRecording(projectId: String) async {
+        OneLinerPlayer.stopAll()  // a one-liner take must not play into the memo
         audioIntentRevision &+= 1
         let permissionRevision = audioIntentRevision
         #if DEBUG
