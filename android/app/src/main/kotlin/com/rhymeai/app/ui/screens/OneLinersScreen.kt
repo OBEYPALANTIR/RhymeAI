@@ -6,10 +6,18 @@ import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +31,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -30,6 +40,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +55,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,7 +73,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -69,6 +81,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,11 +94,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -105,10 +122,12 @@ import com.rhymeai.app.service.OneLinerRecorder
 import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.recordingAccentColor
 import java.io.File
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 
@@ -165,7 +184,9 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     BackHandler(enabled = captures.current == null && sendingLine == null, onBack = onBack)
 
     Surface(
-        modifier = Modifier.fillMaxSize().appWritingSurface().testTag("oneLinersScreen"),
+        // The capture sheet is in this window now, so the screen under it leaves the accessibility tree itself.
+        modifier = Modifier.fillMaxSize().appWritingSurface().testTag("oneLinersScreen")
+            .then(if (captures.current != null) Modifier.clearAndSetSemantics {} else Modifier),
         color = Color.Transparent,
         contentColor = colorScheme.onSurface
     ) {
@@ -453,7 +474,7 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun OneLinerCaptureSheet(
     session: OneLinerCaptureSession,
@@ -470,6 +491,9 @@ private fun OneLinerCaptureSheet(
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     var fieldFocused by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val windowInfo = LocalWindowInfo.current
+    val imeVisible = rememberUpdatedState(WindowInsets.isImeVisible)
     // Words, take and errors live in the session (the ViewModel's), so a recreated activity keeps them.
     var text by session::text
     var textBeforeTake by session::textBeforeTake
@@ -513,7 +537,15 @@ private fun OneLinerCaptureSheet(
             mode is CaptureMode.Record && !microphoneBusy && recorder.takeFile == null -> requestTake()
             else -> {
                 if (mode is CaptureMode.Record && microphoneBusy) recorder.notice = OneLinerRecorder.MEMO_RECORDING_NOTICE
+                // Type opens ready to write, even on a cold start from the widget: the IME only
+                // attaches to a focused window, and a show() during the sheet's entrance can be dropped.
+                snapshotFlow { windowInfo.isWindowFocused }.first { it }
                 focusRequester.requestFocus()
+                repeat(3) {
+                    if (imeVisible.value) return@LaunchedEffect
+                    keyboard?.show()
+                    delay(100)
+                }
             }
         }
     }
@@ -530,75 +562,99 @@ private fun OneLinerCaptureSheet(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        modifier = Modifier.statusBarsPadding(),
-        contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom) }
-    ) {
-        Column(
-            Modifier.fillMaxWidth().imePadding()
-                .padding(horizontal = DesignTokens.Rhythm.standard)
-                .padding(bottom = DesignTokens.Rhythm.related)
-                .testTag("oneLinerCaptureSheet"),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
-        ) {
-            Column {
-                Text(if (isEdit) "Edit one liner" else "New one liner", fontWeight = FontWeight.SemiBold, fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
-                Text(
-                    if (isEdit) "Change the words. A recorded take stays as it was." else "Lands in One Liners. Pick a song later, or never.",
-                    fontSize = DesignTokens.Typography.caption,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
-            TextField(
-                value = text,
-                onValueChange = { text = it; saveError = null },
-                placeholder = { Text("Say it or type it") },
-                textStyle = MaterialTheme.typography.headlineSmall,
-                minLines = 2,
-                maxLines = 6,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = colorScheme.outline,
-                    unfocusedIndicatorColor = colorScheme.outlineVariant
-                ),
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
-                    .onFocusChanged { fieldFocused = it.isFocused }
-                    .testTag("oneLinerField")
+    // Drawn in the activity window, not ModalBottomSheet's dialog window: there the IME inset
+    // jumps after the keyboard settles, here adjustResize + edge-to-edge move it with the keyboard frame by frame.
+    BackHandler(onBack = onDismiss)
+    val sheetMillis = if (LocalAnimationsEnabled.current) DesignTokens.Motion.sheetPresentMillis else 0
+    val presented = remember { MutableTransitionState(false).apply { targetState = true } }
+    AnimatedVisibility(visibleState = presented, enter = EnterTransition.None, exit = ExitTransition.None) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier.fillMaxSize()
+                    .animateEnterExit(enter = fadeIn(tween(sheetMillis)))
+                    .background(BottomSheetDefaults.ScrimColor)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClickLabel = "Close",
+                        onClick = onDismiss
+                    )
             )
-            if (recorder.isRecording) RecordingRow(recorder)
-            (saveError ?: recorder.notice)?.let { notice ->
-                Text(
-                    notice,
-                    fontSize = DesignTokens.Typography.caption,
-                    color = if (saveError != null) colorScheme.error else colorScheme.onSurfaceVariant
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
-                RoundButton(if (fieldFocused) "Hide keyboard" else "Switch to keyboard", onClick = {
-                    if (fieldFocused) focusManager.clearFocus() else focusRequester.requestFocus()
-                }) { Icon(Icons.Default.Keyboard, contentDescription = null) }
-                val accent = recordingAccentColor(colorScheme.isDarkScheme())
-                if (recorder.isRecording) {
-                    RoundButton("Stop recording", border = accent, onClick = { recorder.stop() }) {
-                        Box(Modifier.size(18.dp).background(accent, RoundedCornerShape(4.dp)))
-                    }
-                } else if (recorder.takeFile == null && canRecord) {
-                    RoundButton("Record", onClick = ::requestTake) { Icon(Icons.Default.Mic, contentDescription = null) }
-                }
-                Spacer(Modifier.weight(1f))
-                Surface(
-                    onClick = ::save,
-                    enabled = canSave,
-                    shape = RoundedCornerShape(DesignTokens.Radius.pill),
-                    color = colorScheme.primary.copy(alpha = if (canSave) 1f else 0.4f),
-                    contentColor = colorScheme.onPrimary,
-                    modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).statusBarsPadding()
+                    .animateEnterExit(enter = slideInVertically(tween(sheetMillis, easing = DesignTokens.Motion.emphasizedEasing)) { it })
+                    .widthIn(max = BottomSheetDefaults.SheetMaxWidth).fillMaxWidth()
+                    .semantics { paneTitle = if (isEdit) "Edit one liner" else "New one liner" },
+                shape = BottomSheetDefaults.ExpandedShape,
+                color = BottomSheetDefaults.ContainerColor
+            ) {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                        .padding(top = DesignTokens.Rhythm.standard)
+                        .padding(horizontal = DesignTokens.Rhythm.standard)
+                        .padding(bottom = DesignTokens.Rhythm.related)
+                        .testTag("oneLinerCaptureSheet"),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
                 ) {
-                    Box(Modifier.padding(horizontal = DesignTokens.Rhythm.section, vertical = DesignTokens.Rhythm.related), contentAlignment = Alignment.Center) {
-                        Text("Save", fontWeight = FontWeight.SemiBold)
+                    Column {
+                        Text(if (isEdit) "Edit one liner" else "New one liner", fontWeight = FontWeight.SemiBold, fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
+                        Text(
+                            if (isEdit) "Change the words. A recorded take stays as it was." else "Lands in One Liners. Pick a song later, or never.",
+                            fontSize = DesignTokens.Typography.caption,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextField(
+                        value = text,
+                        onValueChange = { text = it; saveError = null },
+                        placeholder = { Text("Say it or type it") },
+                        textStyle = MaterialTheme.typography.headlineSmall,
+                        minLines = 2,
+                        maxLines = 6,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedIndicatorColor = colorScheme.outline,
+                            unfocusedIndicatorColor = colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                            .onFocusChanged { fieldFocused = it.isFocused }
+                            .testTag("oneLinerField")
+                    )
+                    if (recorder.isRecording) RecordingRow(recorder)
+                    (saveError ?: recorder.notice)?.let { notice ->
+                        Text(
+                            notice,
+                            fontSize = DesignTokens.Typography.caption,
+                            color = if (saveError != null) colorScheme.error else colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
+                        RoundButton(if (fieldFocused) "Hide keyboard" else "Switch to keyboard", onClick = {
+                            if (fieldFocused) focusManager.clearFocus() else focusRequester.requestFocus()
+                        }) { Icon(Icons.Default.Keyboard, contentDescription = null) }
+                        val accent = recordingAccentColor(colorScheme.isDarkScheme())
+                        if (recorder.isRecording) {
+                            RoundButton("Stop recording", border = accent, onClick = { recorder.stop() }) {
+                                Box(Modifier.size(18.dp).background(accent, RoundedCornerShape(4.dp)))
+                            }
+                        } else if (recorder.takeFile == null && canRecord) {
+                            RoundButton("Record", onClick = ::requestTake) { Icon(Icons.Default.Mic, contentDescription = null) }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Surface(
+                            onClick = ::save,
+                            enabled = canSave,
+                            shape = RoundedCornerShape(DesignTokens.Radius.pill),
+                            color = colorScheme.primary.copy(alpha = if (canSave) 1f else 0.4f),
+                            contentColor = colorScheme.onPrimary,
+                            modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)
+                        ) {
+                            Box(Modifier.padding(horizontal = DesignTokens.Rhythm.section, vertical = DesignTokens.Rhythm.related), contentAlignment = Alignment.Center) {
+                                Text("Save", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
             }

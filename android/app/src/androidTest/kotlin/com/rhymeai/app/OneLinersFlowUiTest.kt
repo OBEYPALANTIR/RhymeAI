@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -63,5 +65,21 @@ class OneLinersFlowUiTest {
         val saved = runBlocking { store!!.all().single { it.text == line } }
         composeRule.onNodeWithText(saved.prosodyBadge).assertIsDisplayed()
         assertEquals("sea", saved.prosodyBadge.substringAfter("· "))
+    }
+
+    @Test
+    fun welcomeTypeOpensTheSheetWithTheKeyboardUp() {
+        composeRule.onNodeWithContentDescription("Type a one liner").performClick()
+        composeRule.onNodeWithTag("oneLinerCaptureSheet").assertIsDisplayed()
+        // No second tap: the keyboard comes up with the sheet.
+        composeRule.waitUntil(5_000) { imeVisible() }
+    }
+
+    private fun imeVisible(): Boolean {
+        var visible = false
+        scenario!!.onActivity {
+            visible = ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        return visible
     }
 }
