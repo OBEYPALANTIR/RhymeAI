@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,25 +24,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.rhymeai.app.R
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
+import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.appWritingSurface
 
@@ -51,7 +59,8 @@ fun WelcomeScreen(
     onLoadSong: () -> Unit,
     onTemplates: () -> Unit,
     recentSongTitle: String? = null,
-    onContinue: () -> Unit = {}
+    onContinue: () -> Unit = {},
+    onOneLiners: (OneLinerAction) -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -149,6 +158,15 @@ fun WelcomeScreen(
                     subtitle = "Start with a structured layout",
                     onClick = onTemplates
                 )
+                WelcomeCard(
+                    icon = Icons.Default.FormatQuote,
+                    title = "One Liners",
+                    subtitle = "Catch a line before it goes",
+                    onClick = { onOneLiners(OneLinerAction.OPEN) }
+                ) {
+                    WelcomeCardAction(Icons.Default.Mic, "Record", "Record a one liner") { onOneLiners(OneLinerAction.RECORD) }
+                    WelcomeCardAction(Icons.Default.Keyboard, "Type", "Type a one liner") { onOneLiners(OneLinerAction.TYPE) }
+                }
             }
         }
     }
@@ -159,7 +177,8 @@ private fun WelcomeCard(
     icon: ImageVector,
     title: String,
     subtitle: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    actions: (@Composable RowScope.() -> Unit)? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -174,37 +193,60 @@ private fun WelcomeCard(
         ),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.lg),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = colorScheme.primary,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(Modifier.width(DesignTokens.Spacing.lg))
-            Column(
+        Column {
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("welcomeCardText"),
-                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                    .fillMaxWidth()
+                    .padding(horizontal = DesignTokens.Spacing.lg, vertical = DesignTokens.Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    title,
-                    fontWeight = FontWeight.Medium,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colorScheme.onSurface
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
                 )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colorScheme.onSurfaceVariant
+                Spacer(Modifier.width(DesignTokens.Spacing.lg))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("welcomeCardText"),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+                ) {
+                    Text(
+                        title,
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (actions != null) {
+                // Lines up under the title, past the icon.
+                Row(
+                    modifier = Modifier.padding(
+                        start = DesignTokens.Spacing.lg + 28.dp,
+                        end = DesignTokens.Spacing.lg,
+                        bottom = DesignTokens.Spacing.sm
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
+                    content = actions
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun WelcomeCardAction(icon: ImageVector, label: String, description: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.semantics { contentDescription = description }) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(DesignTokens.Spacing.sm))
+        Text(label)
     }
 }

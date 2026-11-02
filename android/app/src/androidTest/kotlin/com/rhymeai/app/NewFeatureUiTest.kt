@@ -344,7 +344,7 @@ class NewFeatureUiTest {
         )
         val expectedCardCount = if (
             composeRule.onAllNodesWithText("Return to your writing").fetchSemanticsNodes().isEmpty()
-        ) 3 else 4
+        ) 4 else 5
         textContainers.assertCountEquals(expectedCardCount)
         val textContainerBounds = List(expectedCardCount) { index ->
             textContainers[index].getUnclippedBoundsInRoot()
