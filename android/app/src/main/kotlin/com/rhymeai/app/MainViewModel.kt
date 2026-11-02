@@ -450,6 +450,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     oneLinersStore.markUsed(line.id, line.usedInProjectId)
                     return notSaved
                 }
+                val insertion = lyricsHistory.revision
                 // Saved right away and awaited: on failure or cancellation the insertion and the
                 // marker are put back, and the edits the cancelled autosave held are saved again.
                 autoSaveJob?.cancel()
@@ -458,7 +459,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val savedTheme = theme
                 var saved = false
                 suspend fun putBack() = withContext(kotlinx.coroutines.NonCancellable) {
-                    if (currentProjectId == project.id && lyrics == savedLyrics) undoLyrics()
+                    // Only this insertion is undone, and only while it is the latest edit.
+                    if (currentProjectId == project.id && !openingSong) {
+                        lyricsHistory.undoIfLatest(insertion, lyricsFieldValue)?.let(::applyHistoryState)
+                    }
                     runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
                 }
                 try {
@@ -2795,7 +2799,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = null
             voiceMemoService.release()
-            // The take stays in pending, finished, for the next capture to offer.
+            // Stopping finishes the take's file; with the capture gone it is cleared with the other abandoned pending takes.
             oneLinerCaptures.current?.recorder?.stop()
             super.onCleared()
         }

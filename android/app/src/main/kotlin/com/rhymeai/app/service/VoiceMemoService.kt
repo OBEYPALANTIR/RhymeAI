@@ -227,34 +227,37 @@ class VoiceMemoService(private val context: Context) {
         }
         duringStartForTest?.invoke()
 
-        if (!MicrophoneOwner.claim(this@VoiceMemoService)) {
+        // Every failure after the claim (construction included) releases it.
+        val rec = MicrophoneOwner.claimWhileStarting(this@VoiceMemoService) {
+            var created: MediaRecorder? = null
+            try {
+                val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    MediaRecorder(context)
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaRecorder()
+                }
+                created = started
+                started.setAudioSource(MediaRecorder.AudioSource.MIC)
+                started.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                started.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                started.setAudioEncodingBitRate(128_000)
+                started.setAudioSamplingRate(44_100)
+                started.setOutputFile(file.absolutePath)
+                started.prepare()
+                started.start()
+                started
+            } catch (e: Exception) {
+                // Release immediately on failure — never leave an orphaned handle.
+                created?.let { runCatching { it.stop() }; it.release() }
+                if (file.exists()) file.delete()
+                throw e
+            }
+        }
+        if (rec == null) {
             markerFor(file).delete()
             file.delete()
             throw IllegalStateException("A one liner is recording")
-        }
-        val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(context)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
-        }
-
-        try {
-            rec.setAudioSource(MediaRecorder.AudioSource.MIC)
-            rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            rec.setAudioEncodingBitRate(128_000)
-            rec.setAudioSamplingRate(44_100)
-            rec.setOutputFile(file.absolutePath)
-            rec.prepare()
-            rec.start()
-        } catch (e: Exception) {
-            // Release immediately on failure — never leave an orphaned handle.
-            runCatching { rec.stop() }
-            rec.release()
-            MicrophoneOwner.release(this@VoiceMemoService)
-            if (file.exists()) file.delete()
-            throw e
         }
 
         recorder = rec
@@ -1098,6 +1101,8 @@ class VoiceMemoService(private val context: Context) {
     fun release() {
         cancelRecording()
         stopPlayback()
+        // Whatever state a failed start left, this service never keeps the microphone past its life.
+        MicrophoneOwner.release(this)
     }
 
     // ---------------------------------------------------------------------------
