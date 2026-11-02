@@ -17,6 +17,8 @@
 	<string>$(GOOGLE_DRIVE_OAUTH_REVERSED_CLIENT_ID)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record melody ideas for your songs.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turn a spoken one liner into text on this device as you say it.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
