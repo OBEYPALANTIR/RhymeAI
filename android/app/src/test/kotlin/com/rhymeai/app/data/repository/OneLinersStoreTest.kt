@@ -250,7 +250,11 @@ class OneLinersStoreTest {
 
     @Test
     fun concurrentChangesLeaveTheLatestPoolAsValidJson() = withStore {
-        coroutineScope { (1..20).map { async(Dispatchers.IO) { store.add("Line $it", now = it.toLong()) } }.awaitAll() }
+        // Two stores (two activities) share the pool and the widget's file.
+        val other = OneLinersStore(dataStore, store.audioRoot, snapshotFile)
+        coroutineScope {
+            (1..20).map { async(Dispatchers.IO) { (if (it % 2 == 0) store else other).add("Line $it", now = it.toLong()) } }.awaitAll()
+        }
         // No republish: whatever change published last read the final pool.
         val snapshot = Json.decodeFromString<OneLinersSnapshot>(snapshotFile.readText())
         assertEquals(20, snapshot.count)

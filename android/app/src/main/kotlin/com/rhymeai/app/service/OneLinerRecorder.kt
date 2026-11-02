@@ -79,15 +79,10 @@ class OneLinerRecorder {
     /** Starts a take writing to [file]. The caller holds RECORD_AUDIO. False when the mic could not open. */
     fun start(file: File, context: Context): Boolean {
         if (isRecording) return true
-        if (!MicrophoneOwner.claim(this)) {
-            notice = MEMO_RECORDING_NOTICE
-            return false
-        }
-        if (!open(file, context)) {
-            MicrophoneOwner.release(this)
-            return false
-        }
-        return true
+        val opened = MicrophoneOwner.claimWhileStarting(this) { open(file, context) }
+        if (opened == null) notice = MEMO_RECORDING_NOTICE
+        if (opened != true) MicrophoneOwner.release(this)
+        return opened == true
     }
 
     @SuppressLint("MissingPermission")
@@ -245,7 +240,11 @@ class OneLinerRecorder {
             notice = NO_SPEECH_NOTICE
             return null
         }
-        val (read, write) = ParcelFileDescriptor.createPipe()
+        val (read, write) = runCatching { ParcelFileDescriptor.createPipe() }.getOrNull() ?: run {
+            created.destroy()
+            notice = NO_SPEECH_NOTICE
+            return null
+        }
         runCatching { Os.fcntlInt(write.fileDescriptor, OsConstants.F_SETFL, OsConstants.O_NONBLOCK) }
         created.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(partialResults: Bundle?) = show(partialResults, commit = false)

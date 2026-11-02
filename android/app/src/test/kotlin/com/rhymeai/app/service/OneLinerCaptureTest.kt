@@ -7,7 +7,9 @@ import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlin.test.AfterTest
@@ -64,13 +66,19 @@ class OneLinerCaptureTest {
     @Test
     fun aSaveFinishesWhenTheScreenThatAskedForItIsGone() = runBlocking {
         val captures = capturesWithTake(this)
-        val screen = CoroutineScope(Job())
+        val screen = CoroutineScope(Job() + coroutineContext[kotlin.coroutines.ContinuationInterceptor]!!)
         val gate = CompletableDeferred<Unit>()
         var persisted: Triple<String, File?, Long>? = null
-        captures.save { text, file, durationMs -> gate.await(); persisted = Triple(text, file, durationMs) }
+        // The sheet asks for the save from its own scope and stays there until it goes away.
+        val sheet = screen.launch {
+            captures.save { text, file, durationMs -> gate.await(); persisted = Triple(text, file, durationMs) }
+            awaitCancellation()
+        }
         yield()
         assertTrue(captures.current!!.saving)
         screen.cancel() // the activity is recreated mid-save
+        sheet.join()
+        assertTrue(sheet.isCancelled)
 
         gate.complete(Unit)
         yield()
@@ -83,13 +91,15 @@ class OneLinerCaptureTest {
     fun aFailedSaveKeepsTheWordsAndTheTakeWhereItIsNow() = runBlocking {
         val captures = capturesWithTake(this)
         val putBack = File(directory, "put-back.wav")
-        captures.save { _, _, _ -> throw OneLinerSaveFailure(IOException("disk full"), putBack) }
+        // The store moved the take, then could not move it home: it says where the take is now.
+        captures.save { _, file, _ -> file!!.renameTo(putBack); throw OneLinerSaveFailure(IOException("disk full"), putBack) }
         yield()
 
         val session = captures.current!!
         assertFalse(session.saving)
         assertEquals(SAVE_FAILED_NOTICE, session.saveError)
         assertEquals(putBack, session.recorder.takeFile)
+        assertEquals("the only copy", session.recorder.takeFile!!.readText())
         assertEquals("half a line", session.text)
     }
 
@@ -137,6 +147,25 @@ class OneLinerCaptureTest {
             assertTrue(MicrophoneOwner.claim(line))
         } finally {
             listOf(firstMemo, secondMemo, line).forEach(MicrophoneOwner::release)
+        }
+    }
+
+    @Test
+    fun aStartThatFailsAfterClaimingLeavesTheMicrophoneFree() {
+        val memo = Any()
+        val other = Any()
+        try {
+            kotlin.test.assertFailsWith<IllegalStateException> {
+                MicrophoneOwner.claimWhileStarting(memo) { error("MediaRecorder could not be created") }
+            }
+            assertNull(MicrophoneOwner.current)
+            assertEquals("started", MicrophoneOwner.claimWhileStarting(other) { "started" })
+            var ran = false
+            assertNull(MicrophoneOwner.claimWhileStarting(memo) { ran = true; "never" })
+            assertFalse(ran)
+            assertSame(other, MicrophoneOwner.current)
+        } finally {
+            listOf(memo, other).forEach(MicrophoneOwner::release)
         }
     }
 }

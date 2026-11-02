@@ -17,6 +17,20 @@ object MicrophoneOwner {
         return true
     }
 
+    /**
+     * Claims for [owner] while [start] opens the microphone; any throw from [start] releases
+     * the claim. Null (and [start] never runs) when another recorder holds the microphone.
+     */
+    inline fun <T : Any> claimWhileStarting(owner: Any, start: () -> T): T? {
+        if (!claim(owner)) return null
+        return try {
+            start()
+        } catch (error: Throwable) {
+            release(owner)
+            throw error
+        }
+    }
+
     @Synchronized
     fun release(owner: Any) {
         if (current === owner) current = null
