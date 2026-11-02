@@ -219,6 +219,52 @@ final class OneLinersUITests: XCTestCase {
     }
 
     @MainActor
+    func testWelcomeTypeActionOpensTheCaptureFocused() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+
+        let type = app.buttons["welcomeTypeOneLiner"]
+        XCTAssertTrue(type.waitForExistence(timeout: 8))
+        type.tap()
+
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        XCTAssertTrue(focused.waitForExistence(timeout: 5), "The field has the keyboard with no tap")
+        XCTAssertEqual(focused.placeholderValue, "Say it or type it")
+        XCTAssertFalse(app.buttons["Stop recording"].exists, "Type does not record")
+        attach(app, "welcome-type")
+        app.typeText("Straight from the welcome screen")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Straight from the welcome screen"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testWelcomeRecordActionOpensTheCaptureRecording() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+
+        let record = app.buttons["welcomeRecordOneLiner"]
+        XCTAssertTrue(record.waitForExistence(timeout: 8))
+        record.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<2 {
+            let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "OK"])).firstMatch
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+        }
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        let stop = app.buttons["Stop recording"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8), "The sheet opens already recording")
+        Thread.sleep(forTimeInterval: 1)
+        attach(app, "welcome-record")
+        stop.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5), "The take lands in One Liners")
+    }
+
+    @MainActor
     func testEditorToolbarButtonOpensOneLiners() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-in-memory-store"]

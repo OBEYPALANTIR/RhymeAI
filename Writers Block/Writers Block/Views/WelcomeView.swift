@@ -124,14 +124,57 @@ struct WelcomeView: View {
             icon: "text.quote",
             title: "One Liners",
             subtitle: "Catch a line before it goes",
-            compact: usesHorizontalCards
-        ) {
-            OneLinerRouter.shared.request(.open)
-        }
+            compact: usesHorizontalCards,
+            action: { OneLinerRouter.shared.request(.open) },
+            actions: { OneLinerQuickActions() }
+        )
     }
 }
 
-private struct WelcomeCard: View {
+/// Record and Type straight from the first screen, styled like the One Liners screen's floating actions.
+private struct OneLinerQuickActions: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: RhymeAITokens.Rhythm.related) { pills }
+            VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) { pills }
+        }
+    }
+
+    @ViewBuilder
+    private var pills: some View {
+        Button {
+            OneLinerRouter.shared.request(.record)
+        } label: {
+            Label("Record", systemImage: "mic.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, RhymeAITokens.Spacing.md)
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                .appearanceActionSurface(cornerRadius: RhymeAITokens.Touch.minimum / 2)
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel("Record a one liner")
+        .accessibilityIdentifier("welcomeRecordOneLiner")
+
+        Button {
+            OneLinerRouter.shared.request(.type)
+        } label: {
+            Label("Type", systemImage: "keyboard")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(appearance.palette.primaryInk)
+                .padding(.horizontal, RhymeAITokens.Spacing.md)
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
+                .background(appearance.palette.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(appearance.palette.outline, lineWidth: 1))
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel("Type a one liner")
+        .accessibilityIdentifier("welcomeTypeOneLiner")
+    }
+}
+
+private struct WelcomeCard<Actions: View>: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let icon: String
@@ -139,67 +182,96 @@ private struct WelcomeCard: View {
     let subtitle: String
     var compact: Bool = false
     let action: () -> Void
+    /// Buttons of their own below the card's row, so they are not nested in the card's button.
+    @ViewBuilder var actions: Actions
 
     var body: some View {
-        Button(action: action) {
-            Group {
-                if compact {
-                    // Vertical card layout for iPad horizontal arrangement
-                    VStack(spacing: RhymeAITokens.Spacing.sm) {
-                        Image(systemName: icon)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(appearance.palette.action)
-                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
-
-                        VStack(spacing: RhymeAITokens.Spacing.xs) {
-                            Text(title)
-                                .font(.headline)
-                                .foregroundStyle(appearance.palette.primaryInk)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(subtitle)
-                                .font(.caption)
-                                .foregroundStyle(appearance.palette.secondaryInk)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(RhymeAITokens.Spacing.md)
-                } else {
-                    // Horizontal card layout for iPhone
-                    HStack(spacing: RhymeAITokens.Spacing.lg) {
-                        Image(systemName: icon)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(appearance.palette.action)
-                            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
-
-                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                            Text(title)
-                                .font(.headline)
-                                .foregroundStyle(appearance.palette.primaryInk)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(subtitle)
-                                .font(.caption)
-                                .foregroundStyle(appearance.palette.secondaryInk)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(1)
-
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(appearance.palette.secondaryInk)
-                            .frame(width: RhymeAITokens.Spacing.lg, height: RhymeAITokens.Spacing.lg)
-                    }
-                    .padding(RhymeAITokens.Spacing.lg)
+        if Actions.self == EmptyView.self {
+            Button(action: action) {
+                row
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+            }
+            .buttonStyle(.rhymePress)
+        } else {
+            VStack(alignment: compact ? .center : .leading, spacing: 0) {
+                Button(action: action) {
+                    row.contentShape(Rectangle())
                 }
+                .buttonStyle(.rhymePress)
+
+                actions
+                    // Under the title and subtitle: past the icon on the row layout.
+                    .padding(.leading, compact ? 0 : RhymeAITokens.Spacing.lg * 2 + RhymeAITokens.Touch.minimum)
+                    .padding(.horizontal, compact ? RhymeAITokens.Spacing.md : 0)
+                    .padding(.bottom, compact ? RhymeAITokens.Spacing.md : RhymeAITokens.Spacing.lg)
             }
             .frame(minHeight: RhymeAITokens.Touch.minimum)
             .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
         }
-        .buttonStyle(.rhymePress)
+    }
+
+    private var row: some View {
+        Group {
+            if compact {
+                // Vertical card layout for iPad horizontal arrangement
+                VStack(spacing: RhymeAITokens.Spacing.sm) {
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(appearance.palette.action)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+
+                    VStack(spacing: RhymeAITokens.Spacing.xs) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(appearance.palette.primaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(RhymeAITokens.Spacing.md)
+            } else {
+                // Horizontal card layout for iPhone
+                HStack(spacing: RhymeAITokens.Spacing.lg) {
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(appearance.palette.action)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(appearance.palette.primaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .frame(width: RhymeAITokens.Spacing.lg, height: RhymeAITokens.Spacing.lg)
+                }
+                .padding(RhymeAITokens.Spacing.lg)
+            }
+        }
+    }
+}
+
+extension WelcomeCard where Actions == EmptyView {
+    init(icon: String, title: String, subtitle: String, compact: Bool = false, action: @escaping () -> Void) {
+        self.init(icon: icon, title: title, subtitle: subtitle, compact: compact, action: action, actions: { EmptyView() })
     }
 }
 
