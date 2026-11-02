@@ -163,9 +163,15 @@ struct FloatingMicButton: View {
         // Permission denied alert lives here so the mic button is self-contained.
         .alert("Microphone Access Denied", isPresented: Bindable(service).permissionDenied) {
             Button("Open Settings") {
+                #if canImport(UIKit)
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
+                #else
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+                #endif
             }
             Button("Cancel", role: .cancel) {}
         } message: {

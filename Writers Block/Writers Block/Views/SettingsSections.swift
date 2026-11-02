@@ -775,6 +775,12 @@ struct SettingsCloudBackupSection: View {
         }
     }
 
+    #if canImport(UIKit)
+    private static let iCloudSettingsURLString = UIApplication.openSettingsURLString
+    #else
+    private static let iCloudSettingsURLString = "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane"
+    #endif
+
     @ViewBuilder
     private var cloudSyncStatusRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
@@ -784,7 +790,7 @@ struct SettingsCloudBackupSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("iCloudSyncStatus")
             if persistenceState.cloudSyncStatus == .noAccount,
-               let settings = URL(string: UIApplication.openSettingsURLString) {
+               let settings = URL(string: Self.iCloudSettingsURLString) {
                 Button("Open Settings") { openURL(settings) }
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("iCloudOpenSettings")

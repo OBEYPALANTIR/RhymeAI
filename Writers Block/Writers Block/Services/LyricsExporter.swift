@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 enum LyricsExporter {
     private static let jsonEncoder: JSONEncoder = {
@@ -68,38 +72,36 @@ enum LyricsExporter {
         let marginY: CGFloat = 54
         let maxWidth = pageWidth - marginX * 2
 
-        let titleFont = UIFont(descriptor: UIFontDescriptor(name: "Times-Bold", size: 22), size: 22)
-        let themeFont = UIFont(descriptor: UIFontDescriptor(name: "Times-Italic", size: 11), size: 11)
-        let bodyFont = UIFont(descriptor: UIFontDescriptor(name: "Times-Roman", size: 12), size: 12)
-        let sectionFont = UIFont(descriptor: UIFontDescriptor(name: "Times-Bold", size: 12), size: 12)
+        let titleFont = pdfFont("Times-Bold", size: 22)
+        let themeFont = pdfFont("Times-Italic", size: 11)
+        let bodyFont = pdfFont("Times-Roman", size: 12)
+        let sectionFont = pdfFont("Times-Bold", size: 12)
 
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: titleFont,
-            .foregroundColor: UIColor(white: 0.07, alpha: 1)
+            .foregroundColor: PlatformColor(white: 0.07, alpha: 1)
         ]
         let themeAttrs: [NSAttributedString.Key: Any] = [
             .font: themeFont,
-            .foregroundColor: UIColor(white: 0.4, alpha: 1)
+            .foregroundColor: PlatformColor(white: 0.4, alpha: 1)
         ]
         let bodyAttrs: [NSAttributedString.Key: Any] = [
             .font: bodyFont,
-            .foregroundColor: UIColor(white: 0.07, alpha: 1)
+            .foregroundColor: PlatformColor(white: 0.07, alpha: 1)
         ]
         let sectionAttrs: [NSAttributedString.Key: Any] = [
             .font: sectionFont,
-            .foregroundColor: UIColor(white: 0.2, alpha: 1)
+            .foregroundColor: PlatformColor(white: 0.2, alpha: 1)
         ]
 
         let lineHeight: CGFloat = 18
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
-
-        return renderer.pdfData { ctx in
-            ctx.beginPage()
+        return renderPDF(pageSize: CGSize(width: pageWidth, height: pageHeight)) { beginPage in
+            beginPage()
             var y = marginY
 
             let titleString = (project.title.isEmpty ? "Untitled" : project.title) as NSString
             titleString.draw(at: CGPoint(x: marginX, y: y), withAttributes: titleAttrs)
-            y += titleFont.lineHeight + 6
+            y += Self.lineHeight(of: titleFont) + 6
 
             if !project.theme.isEmpty {
                 let themeString = "Theme: \(project.theme)" as NSString
@@ -122,7 +124,7 @@ enum LyricsExporter {
             for raw in project.lyrics.components(separatedBy: "\n") {
                 let line = trimmingTrailingHorizontalWhitespace(raw)
                 if y > pageHeight - marginY {
-                    ctx.beginPage()
+                    beginPage()
                     y = marginY
                 }
                 if line.isEmpty {
@@ -141,13 +143,13 @@ enum LyricsExporter {
                 let height = max(layout.usedRect(for: container).height, lineHeight)
                 // Keep ordinary lyric lines together; paginate oversized lines by their rendered fragments.
                 if height <= pageHeight - marginY * 2 && y + height > pageHeight - marginY {
-                    ctx.beginPage()
+                    beginPage()
                     y = marginY
                 }
                 var drawnHeight: CGFloat = 0
                 layout.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, range, _ in
                     if y + rect.height > pageHeight - marginY {
-                        ctx.beginPage()
+                        beginPage()
                         y = marginY
                     }
                     layout.drawGlyphs(forGlyphRange: range, at: CGPoint(x: marginX, y: y - rect.minY))
@@ -158,6 +160,51 @@ enum LyricsExporter {
             }
         }
     }
+
+    #if canImport(UIKit)
+    private static func pdfFont(_ name: String, size: CGFloat) -> UIFont {
+        UIFont(descriptor: UIFontDescriptor(name: name, size: size), size: size)
+    }
+
+    private static func lineHeight(of font: UIFont) -> CGFloat { font.lineHeight }
+
+    private static func renderPDF(pageSize: CGSize, draw: (_ beginPage: @escaping () -> Void) -> Void) -> Data {
+        UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize)).pdfData { ctx in
+            draw { ctx.beginPage() }
+        }
+    }
+    #else
+    private static func pdfFont(_ name: String, size: CGFloat) -> NSFont {
+        NSFont(name: name, size: size) ?? .systemFont(ofSize: size)
+    }
+
+    private static func lineHeight(of font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading)
+    }
+
+    /// The AppKit counterpart of `UIGraphicsPDFRenderer`: top-left origin pages,
+    /// so the same drawing code lays out both platforms' PDFs.
+    private static func renderPDF(pageSize: CGSize, draw: (_ beginPage: @escaping () -> Void) -> Void) -> Data {
+        let data = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return Data() }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        var pageOpen = false
+        draw {
+            if pageOpen { context.endPDFPage() }
+            context.beginPDFPage(nil)
+            context.translateBy(x: 0, y: pageSize.height)
+            context.scaleBy(x: 1, y: -1)
+            pageOpen = true
+        }
+        if pageOpen { context.endPDFPage() }
+        context.closePDF()
+        NSGraphicsContext.restoreGraphicsState()
+        return data as Data
+    }
+    #endif
 
     private static func trimmingTrailingHorizontalWhitespace(_ value: String) -> String {
         var end = value.endIndex

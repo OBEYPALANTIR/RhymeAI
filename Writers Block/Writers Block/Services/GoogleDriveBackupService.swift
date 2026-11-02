@@ -2,7 +2,11 @@ import AuthenticationServices
 import CryptoKit
 import Foundation
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 enum BackupError: Error, Equatable {
     case notConfigured
@@ -450,10 +454,14 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if canImport(UIKit)
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        #else
+        NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        #endif
     }
 
     private func authorize(clientID: String, redirectScheme: String) async throws -> OAuthToken {

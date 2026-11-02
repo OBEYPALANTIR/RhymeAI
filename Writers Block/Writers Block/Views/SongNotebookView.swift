@@ -68,7 +68,7 @@ struct SongNotebookView: View {
                                         } label: {
                                             actionLabel("Insert")
                                         }
-                                        Button { UIPasteboard.general.string = alternate.text } label: {
+                                        Button { copyToPasteboard(alternate.text) } label: {
                                             actionLabel("Copy")
                                         }
                                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
@@ -152,4 +152,13 @@ struct SongNotebookView: View {
             .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
             .contentShape(Rectangle())
     }
+}
+
+private func copyToPasteboard(_ text: String) {
+    #if canImport(UIKit)
+    UIPasteboard.general.string = text
+    #else
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    #endif
 }

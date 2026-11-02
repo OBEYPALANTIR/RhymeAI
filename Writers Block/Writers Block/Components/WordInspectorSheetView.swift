@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 struct WordInspectorSheetView: View {
     @Environment(\.appAppearanceStyle) private var appearance
@@ -287,9 +291,14 @@ private struct ChipButton: View {
     private static let verticalPadding: CGFloat = 6
 
     private func copy() {
+        #if canImport(UIKit)
         UIPasteboard.general.string = label
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(label, forType: .string)
+        #endif
         copyFlash = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { copyFlash = false }
     }
