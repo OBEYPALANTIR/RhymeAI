@@ -323,18 +323,26 @@ class NewFeatureUiTest {
         // When
         relaunchActivity()
 
-        // Then
-        listOf("New Song", "Load Song", "Song Templates").forEach { title ->
+        // Then: the page scrolls at this size, so each target is brought into view before it is checked.
+        listOf("New Song", "Load Song", "Song Templates", "One Liners").forEach { title ->
             composeRule.onNodeWithText(title)
+                .performScrollTo()
                 .assertIsDisplayed()
                 .assertHasClickAction()
         }
         listOf(
             "Start with a blank canvas",
             "Continue where you left off",
-            "Start with a structured layout"
+            "Start with a structured layout",
+            "Catch a line before it goes"
         ).forEach { subtitle ->
-            composeRule.onNodeWithText(subtitle).assertIsDisplayed()
+            composeRule.onNodeWithText(subtitle).performScrollTo().assertIsDisplayed()
+        }
+        listOf("Record a one liner", "Type a one liner").forEach { action ->
+            composeRule.onNodeWithContentDescription(action)
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertHasClickAction()
         }
 
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
@@ -347,7 +355,7 @@ class NewFeatureUiTest {
         ) 4 else 5
         textContainers.assertCountEquals(expectedCardCount)
         val textContainerBounds = List(expectedCardCount) { index ->
-            textContainers[index].getUnclippedBoundsInRoot()
+            textContainers[index].performScrollTo().getUnclippedBoundsInRoot()
         }
         textContainerBounds.forEachIndexed { index, bounds ->
             assertTrue(
