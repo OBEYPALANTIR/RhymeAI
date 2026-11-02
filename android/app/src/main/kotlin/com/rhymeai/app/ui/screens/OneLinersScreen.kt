@@ -96,7 +96,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.data.model.OneLiner
 import com.rhymeai.app.data.model.SongProject
-import com.rhymeai.app.data.repository.OneLinerSaveFailure
 import com.rhymeai.app.data.repository.OneLinersStore
 import com.rhymeai.app.service.MicrophoneOwner
 import com.rhymeai.app.service.OneLinerCaptureSession
@@ -263,14 +262,11 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     captures.current?.let { session ->
         OneLinerCaptureSheet(
             session = session,
-            microphoneBusy = viewModel.voiceMemoService.isRecording || MicrophoneOwner.current == MicrophoneOwner.Owner.SONG_MEMO,
+            // Busy when any other recorder holds the microphone (a song memo, starting or recording).
+            microphoneBusy = viewModel.voiceMemoService.isRecording ||
+                MicrophoneOwner.current.let { it != null && it !== session.recorder },
             pendingRoot = viewModel.oneLinersStore.pendingRoot,
-            onSave = { text, take, durationMs ->
-                val mode = session.mode
-                if (mode is CaptureMode.Edit) viewModel.updateOneLinerText(mode.line.id, text)
-                else viewModel.saveOneLiner(text, take, durationMs)
-                captures.saved()
-            },
+            onSave = viewModel::saveOneLinerCapture,
             onDismiss = captures::dismiss
         )
     }
@@ -281,7 +277,9 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             isOpenInEditor = { !viewModel.showStartMenu && viewModel.currentProjectId == it.id },
             onPick = { project ->
                 sendingLine = null
-                scope.launch { snackbarHostState.showSnackbar(viewModel.sendOneLinerToSong(line, project), duration = SnackbarDuration.Short) }
+                viewModel.sendOneLinerToSong(line, project) { message ->
+                    scope.launch { snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short) }
+                }
             },
             onDismiss = { sendingLine = null }
         )
@@ -461,7 +459,7 @@ private fun OneLinerCaptureSheet(
     session: OneLinerCaptureSession,
     microphoneBusy: Boolean,
     pendingRoot: File,
-    onSave: suspend (text: String, take: File?, durationMs: Long) -> Unit,
+    onSave: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -476,7 +474,7 @@ private fun OneLinerCaptureSheet(
     var text by session::text
     var textBeforeTake by session::textBeforeTake
     var saveError by session::saveError
-    var saving by remember { mutableStateOf(false) }
+    val saving = session.saving
     val isEdit = mode is CaptureMode.Edit
     val canRecord = !isEdit && !microphoneBusy
     val canSave = !saving && (text.isNotBlank() || (!isEdit && (recorder.takeFile != null || recorder.isRecording)))
@@ -498,27 +496,8 @@ private fun OneLinerCaptureSheet(
         else permission.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    fun save() {
-        // The audio failed to write: stay open so the notice is read before saving words alone.
-        if (saving) return
-        if (recorder.isRecording && !recorder.stop()) return
-        if (text.isBlank() && (isEdit || recorder.takeFile == null)) return
-        saving = true
-        saveError = null
-        scope.launch {
-            try {
-                onSave(text.trim(), recorder.takeFile, recorder.takeDurationMs)
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                // The sheet, the words and the take stay for another try, from wherever the take now is.
-                (error as? OneLinerSaveFailure)?.takeNowAt?.let(recorder::takeMoved)
-                saveError = "Couldn't save this line. It's still here, so try again."
-            } finally {
-                saving = false
-            }
-        }
-    }
+    // The save runs in the ViewModel (see OneLinerCaptures.save): the sheet only shows its state.
+    fun save() = onSave()
 
     LaunchedEffect(recorder.transcript) {
         val heard = recorder.transcript

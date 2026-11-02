@@ -227,7 +227,7 @@ class VoiceMemoService(private val context: Context) {
         }
         duringStartForTest?.invoke()
 
-        if (!MicrophoneOwner.claim(MicrophoneOwner.Owner.SONG_MEMO)) {
+        if (!MicrophoneOwner.claim(this@VoiceMemoService)) {
             markerFor(file).delete()
             file.delete()
             throw IllegalStateException("A one liner is recording")
@@ -252,7 +252,7 @@ class VoiceMemoService(private val context: Context) {
             // Release immediately on failure — never leave an orphaned handle.
             runCatching { rec.stop() }
             rec.release()
-            MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
+            MicrophoneOwner.release(this@VoiceMemoService)
             if (file.exists()) file.delete()
             throw e
         }
@@ -317,7 +317,7 @@ class VoiceMemoService(private val context: Context) {
                     rec.release()
                 }
             }
-            MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
+            MicrophoneOwner.release(this@VoiceMemoService)
             file
         }
         finishTake(file, stopError)
@@ -647,7 +647,7 @@ class VoiceMemoService(private val context: Context) {
             runCatching { rec.stop() }
             rec.release()
         }
-        MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
+        MicrophoneOwner.release(this@VoiceMemoService)
         file?.let { markerFor(it).delete() }
         file?.delete()
     }

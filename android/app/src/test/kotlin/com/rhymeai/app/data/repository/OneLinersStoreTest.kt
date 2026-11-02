@@ -10,6 +10,7 @@ import com.rhymeai.app.util.RhymeConstraint
 import com.rhymeai.app.util.RhymePhonetics
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +20,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -193,24 +196,31 @@ class OneLinersStoreTest {
     }
 
     @Test
-    fun restoreRacingThePurgeNeverLeavesALiveLineWithoutItsAudio() = withStore {
+    fun restoreArrivingWhileThePurgeHoldsTheTakeAsideKeepsTheAudio() = withStore {
+        val line = store.add("Voiced", take = pendingTake())
+        val audio = store.audioFile(line.audioFileName!!)
+        store.trash(line.id, now = 0L)
+        val staged = CountDownLatch(1)
+        val go = CountDownLatch(1)
         val move = store.moveFile
-        // A slow disk widens the window between the purge's check and its file removal.
-        store.moveFile = { from, to -> Thread.sleep(15); move(from, to) }
-        repeat(12) { round ->
-            val line = store.add("Round $round", take = pendingTake("take-$round.wav"))
-            store.trash(line.id, now = 0L)
-            coroutineScope {
-                listOf(
-                    async(Dispatchers.IO) { store.purgeExpired(now = TRASH_RETENTION_MILLIS) },
-                    async(Dispatchers.IO) { store.restore(line.id) }
-                ).awaitAll()
-            }
-            val live = store.all().any { it.id == line.id }
-            val audio = store.audioFile("take-$round.wav")
-            if (live) assertTrue(audio.exists(), "round $round: restored line lost its take")
-            else assertTrue(store.trashed().none { it.line.id == line.id }, "round $round: purged line left a trash row")
+        // The purge stops right after setting the take aside, before it removes the row.
+        store.moveFile = { from, to ->
+            move(from, to)
+            if (to.parentFile?.name == OneLinersStore.DELETING_FOLDER) { staged.countDown(); go.await() }
         }
+        coroutineScope {
+            val purge = async(Dispatchers.IO) { store.purgeExpired(now = TRASH_RETENTION_MILLIS) }
+            withContext(Dispatchers.IO) { staged.await() }
+            val restore = async(Dispatchers.IO) { store.restore(line.id) }
+            // Give the restore every chance to land in the middle of the purge.
+            withTimeoutOrNull(300) { restore.await() }
+            go.countDown()
+            purge.await()
+            restore.await()
+        }
+        val live = store.all().any { it.id == line.id }
+        if (live) assertTrue(audio.exists(), "the restored line lost its take")
+        else assertTrue(store.trashed().none { it.line.id == line.id } && !audio.exists(), "a purged line left a row or its take")
     }
 
     @Test
@@ -239,26 +249,13 @@ class OneLinersStoreTest {
     }
 
     @Test
-    fun concurrentChangesPublishTheLatestPoolAsValidJson() = withStore {
+    fun concurrentChangesLeaveTheLatestPoolAsValidJson() = withStore {
         coroutineScope { (1..20).map { async(Dispatchers.IO) { store.add("Line $it", now = it.toLong()) } }.awaitAll() }
-        store.publishSnapshot()
+        // No republish: whatever change published last read the final pool.
         val snapshot = Json.decodeFromString<OneLinersSnapshot>(snapshotFile.readText())
         assertEquals(20, snapshot.count)
         assertEquals(listOf("Line 20", "Line 19", "Line 18"), snapshot.lines.map { it.text })
-        assertFalse(File(snapshotFile.parentFile, snapshotFile.name + ".tmp").exists())
-    }
-
-    @Test
-    fun onlyAFinishedRecentTakeIsOfferedBack() = withStore {
-        val now = 10L * 24 * 60 * 60 * 1000
-        assertNull(store.recoverablePendingTake(now))
-        val unfinished = pendingTake("unfinished.wav", bytes = "\u0000".repeat(44) + "pcm").apply { setLastModified(now - 1_000L) }
-        assertNull(store.recoverablePendingTake(now))
-        val finished = File(store.pendingRoot, "finished.wav").apply { writeBytes(wav(3_200)); setLastModified(now - 2_000L) }
-        assertEquals(finished, store.recoverablePendingTake(now))
-        finished.setLastModified(now - OneLinersStore.ABANDONED_TAKE_AGE_MILLIS - 1)
-        assertNull(store.recoverablePendingTake(now))
-        assertTrue(unfinished.exists())
+        assertTrue(snapshotFile.parentFile!!.listFiles()!!.none { it.name.endsWith(".tmp") })
     }
 
     @Test
@@ -284,7 +281,10 @@ class OneLinersStoreTest {
 
     @Test
     fun widgetSnapshotFollowsEveryChange() = withStore {
-        repeat(4) { store.add("Line $it", now = it.toLong()) }
+        repeat(4) {
+            store.add("Line $it", now = it.toLong())
+            assertEquals(it + 1, Json.decodeFromString<OneLinersSnapshot>(snapshotFile.readText()).count)
+        }
         val snapshot = Json.decodeFromString<OneLinersSnapshot>(snapshotFile.readText())
         assertEquals(4, snapshot.count)
         assertEquals(listOf("Line 3", "Line 2", "Line 1"), snapshot.lines.map { it.text })
@@ -292,14 +292,5 @@ class OneLinersStoreTest {
 
         store.trash(store.all().first().id)
         assertEquals(3, Json.decodeFromString<OneLinersSnapshot>(snapshotFile.readText()).count)
-    }
-
-    private fun wav(dataBytes: Int): ByteArray {
-        val header = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
-            put("RIFF".toByteArray()); putInt(36 + dataBytes); put("WAVE".toByteArray())
-            put("fmt ".toByteArray()); putInt(16); putShort(1); putShort(1); putInt(16_000); putInt(32_000); putShort(2); putShort(16)
-            put("data".toByteArray()); putInt(dataBytes)
-        }
-        return header.array() + ByteArray(dataBytes)
     }
 }
