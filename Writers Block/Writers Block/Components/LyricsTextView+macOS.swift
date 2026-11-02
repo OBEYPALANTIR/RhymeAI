@@ -11,6 +11,33 @@ final class LyricsNSTextView: NSTextView {
     /// re-created per song open); it takes the focus as soon as it is on screen.
     var resumesEditingOnAttach = false
     var onFocusChange: ((Bool) -> Void)?
+    /// A new width rewraps the lines, so drawn highlight rects go stale.
+    var onWidthChange: (() -> Void)?
+
+    /// ⌘Z and ⇧⌘Z drive the app's one lyric history (the toolbar's undo and
+    /// redo), so "Use line", rewrites and toolbar steps are undone in the
+    /// same order. AppKit's own text undo is off (`allowsUndo = false`).
+    var historyUndo: (() -> Void)?
+    var historyRedo: (() -> Void)?
+    var canUndoHistory: () -> Bool = { false }
+    var canRedoHistory: () -> Bool = { false }
+
+    @objc func undo(_ sender: Any?) { historyUndo?() }
+    @objc func redo(_ sender: Any?) { historyRedo?() }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): return canUndoHistory()
+        case #selector(redo(_:)): return canRedoHistory()
+        default: return super.validateUserInterfaceItem(item)
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged { onWidthChange?() }
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -34,6 +61,7 @@ final class LyricsNSTextView: NSTextView {
 
 struct LyricsTextView: NSViewRepresentable {
     @Environment(\.appAppearanceStyle) private var appearance
+    @EnvironmentObject private var viewModel: EditorViewModel
 
     @Binding var text: String
     var selection: NSRange? = nil
@@ -59,10 +87,21 @@ struct LyricsTextView: NSViewRepresentable {
         textView.onFocusChange = { [weak coordinator = context.coordinator] focused in
             coordinator?.parent.onEditingChange?(focused)
         }
+        textView.onWidthChange = { [weak coordinator = context.coordinator] in
+            coordinator?.refreshRewriteHighlight()
+        }
+        textView.historyUndo = { [weak viewModel] in viewModel?.undoLyrics() }
+        textView.historyRedo = { [weak viewModel] in viewModel?.redoLyrics() }
+        textView.canUndoHistory = { [weak viewModel, weak coordinator = context.coordinator] in
+            coordinator?.parent.isEditable == true && viewModel?.canUndoLyrics == true
+        }
+        textView.canRedoHistory = { [weak viewModel, weak coordinator = context.coordinator] in
+            coordinator?.parent.isEditable == true && viewModel?.canRedoLyrics == true
+        }
         textView.font = Self.lyricsFont
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.drawsBackground = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
@@ -140,16 +179,23 @@ struct LyricsTextView: NSViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0,
               let container = textView.textContainer,
               let layout = textView.textLayoutManager else { return nil }
-        if container.size.width != width {
+        let laidOutSize = container.size
+        if laidOutSize.width != width {
             container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
         }
         layout.ensureLayout(for: layout.documentRange)
+        let usedHeight = layout.usageBoundsForTextContainer.height
+        // A measuring pass at another width must not leave the lines wrapped
+        // there: the container only re-tracks the view when its frame changes.
+        if textView.frame.width > 0, textView.frame.width != width {
+            container.size = laidOutSize
+        }
         let lineHeight = (textView.font ?? Self.lyricsFont).boundingRectForFont.height
         let placeholderHeight = context.coordinator.placeholderHeight(forWidth: width)
         // Fill an offered height, like the UITextView, so a click below the
         // last line still lands in the editor.
         let offered = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? 0
-        let height = max(layout.usageBoundsForTextContainer.height, lineHeight, placeholderHeight, offered)
+        let height = max(usedHeight, lineHeight, placeholderHeight, offered)
         return CGSize(width: width, height: ceil(height))
     }
 
@@ -257,8 +303,6 @@ struct LyricsTextView: NSViewRepresentable {
             defer { isApplyingProgrammaticUpdate = false }
             let selectedRange = selection ?? textView.selectedRange()
             textView.string = renderedText
-            // Undo entries recorded against the old text would replay at stale ranges.
-            textView.undoManager?.removeAllActions()
             if selectedRange.location >= 0,
                selectedRange.length >= 0,
                selectedRange.location <= renderedText.utf16.count,
@@ -484,6 +528,12 @@ struct LyricsTextView: NSViewRepresentable {
                     colors: RewriteHighlightColors.forHighlight(highlight, palette: self.parent.appearance.palette)
                 )
             }
+        }
+
+        /// Redraws the shown highlight at the current wrap, after a width change.
+        func refreshRewriteHighlight() {
+            guard let textView, let highlight = lastRewriteHighlight, highlight.range.length > 0 else { return }
+            updateRewriteHighlight(textView, highlight: highlight)
         }
 
         func scheduleKeepCursorVisible() {
