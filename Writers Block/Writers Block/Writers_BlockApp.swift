@@ -173,6 +173,7 @@ struct Writers_BlockApp: App {
                 persistenceState.refreshCloudSyncStatus()
                 // Launch only: the week-old rule keeps takes of lines still syncing.
                 reconcileOneLinerAudio()
+                publishOneLinersSnapshot()
             }
             .task {
                 // After the first frames, so launch is not competing with it.
@@ -183,7 +184,10 @@ struct Writers_BlockApp: App {
             // iCloud delivered changes: new or removed recordings get their files.
             .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
                 Task { await viewModel.reconcileRecordings() }
+                publishOneLinersSnapshot()
             }
+            // The widgets follow the chosen appearance.
+            .onChange(of: appearanceRawValue) { _, _ in publishOneLinersSnapshot() }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
@@ -209,6 +213,13 @@ struct Writers_BlockApp: App {
     private func reconcileOneLinerAudio() {
         guard let sharedModelContainer else { return }
         try? OneLinersStore(context: sharedModelContainer.mainContext).reconcileAudioFiles()
+    }
+
+    /// Lines another device added, and the appearance, reach the widgets too.
+    private func publishOneLinersSnapshot() {
+        // A library that failed to open would show the widgets an empty pool.
+        guard let sharedModelContainer, !persistenceState.persistenceDegraded else { return }
+        OneLinersStore(context: sharedModelContainer.mainContext).publishSnapshot()
     }
 
     @ViewBuilder
