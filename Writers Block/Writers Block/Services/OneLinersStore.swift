@@ -46,8 +46,7 @@ struct OneLinersStore {
     static let deletingFolderName = "deleting"
     /// A take older than this in `pendingRoot` was left by an app that closed mid-capture.
     static let abandonedTakeAge: TimeInterval = 24 * 60 * 60
-    /// Audio no row names is removed only once it is this old, so a line still on
-    /// its way down from iCloud keeps its take.
+    /// A set-aside file no row names is removed once it is this old.
     static let orphanAudioAge: TimeInterval = 7 * 24 * 60 * 60
 
     var pendingRoot: URL {
@@ -204,20 +203,22 @@ struct OneLinersStore {
         return (try? context.fetch(descriptor).first)?.deleteAfter
     }
 
-    /// Run at launch. Removes audio no row names once it is a week old (a line deleted
-    /// on another device, or a delete interrupted after its save), and takes an app
-    /// left pending for over a day. The age rule keeps the take of a line iCloud has
-    /// not delivered yet, as after an account change while the store fills again.
+    /// Run at launch. Never deletes from the main folder: a take no row names may
+    /// belong to a line iCloud has not delivered yet, so only delete forever and the
+    /// Trash purge remove takes. A set-aside file a row still names (a delete that
+    /// stopped before its save) goes back; other set-aside files go after a week, and
+    /// pending takes an app left behind after a day.
     func reconcileAudioFiles(now: Date = Date()) throws {
         let lines = try context.fetch(FetchDescriptor<OneLiner>())
         let trashed = try context.fetch(FetchDescriptor<TrashedOneLiner>())
         let referenced = Set(lines.compactMap(\.audioFileName) + trashed.compactMap(\.audioFileName))
-        let folders: Set<String> = [Self.pendingFolderName, Self.deletingFolderName]
-        for file in Self.files(in: audioRoot) where !folders.contains(file.lastPathComponent) && !referenced.contains(file.lastPathComponent) {
-            Self.remove(file, ifOlderThan: Self.orphanAudioAge, now: now)
-        }
         for file in Self.files(in: deletingRoot) {
-            Self.remove(file, ifOlderThan: Self.orphanAudioAge, now: now)
+            let home = audioURL(fileName: file.lastPathComponent)
+            if referenced.contains(file.lastPathComponent) {
+                if !FileManager.default.fileExists(atPath: home.path) { try? moveItem(file, home) }
+            } else {
+                Self.remove(file, ifOlderThan: Self.orphanAudioAge, now: now)
+            }
         }
         for take in Self.files(in: pendingRoot) {
             Self.remove(take, ifOlderThan: Self.abandonedTakeAge, now: now)

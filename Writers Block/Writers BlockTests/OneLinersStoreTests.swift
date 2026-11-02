@@ -430,18 +430,24 @@ struct OneLinersStoreTests {
     }
 
     @Test
-    func reconcileRemovesOnlyWeekOldAudioNoRowNamesAndDayOldTakes() throws {
+    func reconcileNeverDeletesMainFolderAudioAndRecoversInterruptedDeletes() throws {
         // Given
         let container = try Self.makeContainer()
         let store = try Self.makeStore(container)
         defer { try? FileManager.default.removeItem(at: store.audioRoot) }
-        try store.add(text: "kept", take: try Self.pendingTake(store, "kept.m4a"))
-        try Self.age(store.audioURL(fileName: "kept.m4a"), by: 30 * 24 * 60 * 60)
-        let fresh = store.audioURL(fileName: "still-syncing.m4a")
-        try Data("take".utf8).write(to: fresh)
-        let old = store.audioURL(fileName: "deleted-elsewhere.m4a")
-        try Data("take".utf8).write(to: old)
-        try Self.age(old, by: 8 * 24 * 60 * 60)
+        try FileManager.default.createDirectory(at: store.deletingRoot, withIntermediateDirectories: true)
+        // A take no row names yet, as while iCloud fills the store again.
+        let orphan = store.audioURL(fileName: "still-syncing.m4a")
+        try Data("take".utf8).write(to: orphan)
+        try Self.age(orphan, by: 30 * 24 * 60 * 60)
+        // A delete that set its audio aside and stopped before its save: the row survives.
+        try store.add(text: "kept", take: try Self.pendingTake(store, "interrupted.m4a"))
+        let interrupted = store.deletingRoot.appendingPathComponent("interrupted.m4a")
+        try FileManager.default.moveItem(at: store.audioURL(fileName: "interrupted.m4a"), to: interrupted)
+        // A finished delete whose set-aside copy was left behind.
+        let leftover = store.deletingRoot.appendingPathComponent("deleted.m4a")
+        try Data("take".utf8).write(to: leftover)
+        try Self.age(leftover, by: 8 * 24 * 60 * 60)
         let recordingNow = try Self.pendingTake(store, "recording-now.m4a")
         let abandoned = try Self.pendingTake(store, "left-behind.m4a")
         try Self.age(abandoned, by: 2 * 24 * 60 * 60)
@@ -450,11 +456,11 @@ struct OneLinersStoreTests {
         try store.reconcileAudioFiles()
 
         // Then
-        #expect(Self.exists(store.audioURL(fileName: "kept.m4a")))
-        #expect(Self.exists(fresh))
-        #expect(!Self.exists(old))
+        #expect(Self.exists(orphan))
+        #expect(Self.exists(store.audioURL(fileName: "interrupted.m4a")))
+        #expect(!Self.exists(interrupted))
+        #expect(!Self.exists(leftover))
         #expect(Self.exists(recordingNow))
         #expect(!Self.exists(abandoned))
     }
-
 }
