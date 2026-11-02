@@ -1739,6 +1739,8 @@ final class EditorViewModel: ObservableObject {
 
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
+        // One liners hold no song recordings, so they expire before the recordings check.
+        try? OneLinersStore(context: context).purgeExpired()
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -2035,7 +2037,8 @@ final class EditorViewModel: ObservableObject {
         let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
         // Already-expired recordings were purged above; only future expiries count.
         let nextMemoExpiry = trashedRecordings().map(\.deleteAfter).min().flatMap { $0 > now ? $0 : nil }
-        guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
+        let nextOneLinerExpiry = OneLinersStore(context: context).nextExpiry(after: now)
+        guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry, nextOneLinerExpiry].compactMap({ $0 }).min() else { return }
 
         let delay = max(nextExpiry.timeIntervalSinceNow, 0)
         trashSchedulerTask = Task { @MainActor [weak self] in
