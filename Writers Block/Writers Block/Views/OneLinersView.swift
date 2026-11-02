@@ -1,10 +1,28 @@
 import SwiftData
 import SwiftUI
 
+/// One Liners opened from outside the app, with the capture it asked for.
+struct OneLinersRoute: Identifiable {
+    let id = UUID()
+    let capture: OneLinerCaptureMode?
+
+    /// Nil for an action the screen does not open for (a Live Activity's Stop).
+    init?(action: OneLinerPendingAction) {
+        switch action {
+        case .record: capture = .record
+        case .type: capture = .type
+        case .open: capture = nil
+        case .stopRecording: return nil
+        }
+    }
+}
+
 /// The pool of stray lines, newest first. Nothing here belongs to a song until
 /// the writer sends it to one.
 struct OneLinersView: View {
     var onDismiss: () -> Void
+    /// A capture to open as soon as the screen appears, when a shortcut or widget asked for one.
+    var initialCapture: OneLinerCaptureMode? = nil
 
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
@@ -74,6 +92,11 @@ struct OneLinersView: View {
         .contentShape(Rectangle())
         .foregroundStyle(palette.primaryInk)
         .onAppear { try? store.purgeExpired() }
+        .task {
+            guard let initialCapture else { return }
+            if case .record = initialCapture { viewModel.voiceMemoService.stopPlayback() }
+            openCapture(initialCapture)
+        }
         .onDisappear { player.stop() }
         .onChange(of: player.lastError) { _, message in
             guard let message else { return }
