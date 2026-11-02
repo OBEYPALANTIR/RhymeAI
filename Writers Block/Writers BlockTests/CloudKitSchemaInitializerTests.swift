@@ -7,7 +7,7 @@ import Testing
 /// in the CloudKit Development schema (as `CD_<entity>` record types).
 struct CloudKitSchemaInitializerTests {
 
-    @Test func managedObjectModelHasTheFiveSyncedEntitiesAndTheirAttributes() throws {
+    @Test func managedObjectModelHasTheSyncedEntitiesAndTheirAttributes() throws {
         let model = try #require(CloudKitSchemaInitializer.makeManagedObjectModel())
 
         let expected: [String: Set<String>] = [
@@ -19,6 +19,8 @@ struct CloudKitSchemaInitializerTests {
                 "displayName", "displayNameChanged", "precedenceRepaired",
                 "trashedAtRepaired", "fileName", "claimedName",
             ],
+            "OneLiner": ["text", "createdAt", "audioFileName", "usedInProjectId", "syllableCount", "rhymeKeys", "stressPattern"],
+            "TrashedOneLiner": ["text", "deletedAt", "deleteAfter", "audioFileName"],
         ]
         #expect(Set(model.entities.compactMap(\.name)) == Set(expected.keys))
 

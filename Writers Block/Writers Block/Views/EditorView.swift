@@ -1317,5 +1317,5 @@ private struct ScribbleUnderline: View {
 #Preview {
     EditorView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }

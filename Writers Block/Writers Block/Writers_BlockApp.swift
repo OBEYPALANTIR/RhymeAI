@@ -228,6 +228,8 @@ struct Writers_BlockApp: App {
             SyncDeletionRecord.self,
             SyncRecordingDeletion.self,
             Recording.self,
+            OneLiner.self,
+            TrashedOneLiner.self,
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 
