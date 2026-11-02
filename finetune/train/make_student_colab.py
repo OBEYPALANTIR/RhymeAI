@@ -84,6 +84,10 @@ else:
     ROOT.mkdir()
     with tarfile.open(fileobj=io.BytesIO(packed)) as archive:
         archive.extractall(ROOT, filter='data')
+provenance = __import__('json').loads((ROOT / 'provenance.json').read_text())
+assert hashlib.sha256((ROOT / 'train_teacher.py').read_bytes()).hexdigest() == provenance['trainer_sha256']
+for name, binding in provenance['splits'].items():
+    assert hashlib.sha256((ROOT / 'data' / (name + '.jsonl')).read_bytes()).hexdigest() == binding['sha256']
 print('Package staged and verified:', ROOT)
 '''
     setup = f'''import json, os, subprocess, sys, time
@@ -128,6 +132,9 @@ try:
     source = PERSIST / 'source'
     if source.exists():
         assert (source / 'provenance.json').read_bytes() == (ROOT / 'provenance.json').read_bytes()
+    assert (source / 'train_teacher.py').read_bytes() == (ROOT / 'train_teacher.py').read_bytes()
+    for name in ['manifest.json', 'train.jsonl', 'validation.jsonl', 'test.jsonl']:
+        assert (source / 'data' / name).read_bytes() == (ROOT / 'data' / name).read_bytes()
     else:
         source.mkdir()
         for name in ['train_teacher.py', 'provenance.json']:
