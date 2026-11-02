@@ -1,0 +1,453 @@
+import SwiftData
+import SwiftUI
+
+/// The pool of stray lines, newest first. Nothing here belongs to a song until
+/// the writer sends it to one.
+struct OneLinersView: View {
+    var onDismiss: () -> Void
+
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Query(sort: \OneLiner.createdAt, order: .reverse) private var lines: [OneLiner]
+    @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
+    @State private var searchText = ""
+    @State private var capture: OneLinerCaptureMode?
+    @State private var sendingLine: OneLiner?
+    @State private var toast: Toast?
+
+    private struct Toast: Identifiable {
+        let id = UUID()
+        let message: String
+        var systemImage: String? = nil
+        var action: (label: String, run: () -> Void)? = nil
+    }
+
+    private var palette: AppAppearancePalette { appearance.palette }
+    private var store: OneLinersStore { OneLinersStore(context: modelContext) }
+    private var filteredLines: [OneLiner] { OneLinersStore.filter(lines, query: searchText) }
+
+    private var projectTitles: [String: String] {
+        Dictionary(projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) }) { first, _ in first }
+    }
+
+    var body: some View {
+        ZStack {
+            AppWritingBackground()
+
+            VStack(alignment: .leading, spacing: 0) {
+                topBar
+                header
+                    .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+                    .padding(.top, RhymeAITokens.Rhythm.standard)
+
+                list
+                    .overlay(alignment: .bottomTrailing) { floatingActions }
+
+                Text("Swipe right to send to a song, left to trash. Used lines stay.")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondaryInk)
+                    .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+                    .padding(.bottom, RhymeAITokens.Rhythm.related)
+            }
+            .frame(maxWidth: horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity)
+
+            if let toast {
+                toastView(toast)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.horizontal, RhymeAITokens.Spacing.lg)
+                    // Clear the floating Record and Type actions.
+                    .padding(.bottom, RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section + RhymeAITokens.Rhythm.standard)
+                    .transition(reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity))
+                    .zIndex(1)
+            }
+        }
+        // The background opts out of hit testing; without a shape, taps on
+        // blank parts of the screen reach the songs drawer underneath.
+        .contentShape(Rectangle())
+        .foregroundStyle(palette.primaryInk)
+        .onAppear { try? store.purgeExpired() }
+        .sheet(item: $capture) { mode in
+            OneLinerCaptureView(
+                mode: mode,
+                audioRoot: store.audioRoot,
+                microphoneBusy: viewModel.voiceMemoService.isRecording
+            ) { saved in
+                do {
+                    try store.add(text: saved.text, audioFileName: saved.audioFileName, audioDuration: saved.audioDuration)
+                    showToast(Toast(message: "Saved to One Liners", systemImage: "checkmark"))
+                } catch {
+                    showToast(Toast(message: "Couldn't save this line. Try again."))
+                }
+            }
+            .environment(\.appAppearanceStyle, appearance)
+        }
+        .sheet(item: $sendingLine) { line in
+            songPicker(for: line)
+                .environment(\.appAppearanceStyle, appearance)
+        }
+    }
+
+    // MARK: - Header
+
+    private var topBar: some View {
+        ZStack {
+            Text("One Liners")
+                .font(.headline)
+                .accessibilityHidden(true)
+            HStack {
+                Button(action: onDismiss) {
+                    HStack(spacing: RhymeAITokens.Spacing.xxs) {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                        Text("Songs")
+                    }
+                    .foregroundStyle(palette.secondaryInk)
+                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                }
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Back to songs")
+                Spacer()
+            }
+        }
+        .padding(.horizontal, RhymeAITokens.Spacing.sm)
+        .padding(.top, RhymeAITokens.Spacing.xs)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
+            Text("One Liners")
+                .font(.largeTitle.weight(.bold))
+                .fontDesign(.serif)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(Self.lineCountText(lines.count)), newest first. Nothing here belongs to a song until you send it.")
+                .font(.footnote)
+                .foregroundStyle(palette.secondaryInk)
+            searchField
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: RhymeAITokens.Spacing.xs) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(palette.secondaryInk)
+                .accessibilityHidden(true)
+            TextField(
+                "Search one liners",
+                text: $searchText,
+                prompt: Text("Search one liners").foregroundStyle(palette.placeholder)
+            )
+            .textInputAutocapitalization(.never)
+            .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(palette.secondaryInk)
+                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                }
+                .buttonStyle(.rhymePress)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+        .frame(minHeight: RhymeAITokens.Touch.minimum)
+        .background(palette.raisedSurface, in: Capsule())
+    }
+
+    // MARK: - List
+
+    private var list: some View {
+        List {
+            if lines.isEmpty {
+                emptyState(title: "No one liners yet.", caption: "Tap Record or Type to catch a line before it slips away.")
+            } else if filteredLines.isEmpty {
+                emptyState(title: "No one liners match your search.", caption: nil)
+            } else {
+                ForEach(filteredLines, id: \.id) { line in
+                    row(line)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparatorTint(palette.raisedSurface)
+                        .listRowInsets(EdgeInsets(
+                            top: RhymeAITokens.Rhythm.related,
+                            leading: RhymeAITokens.Rhythm.standard,
+                            bottom: RhymeAITokens.Rhythm.related,
+                            trailing: RhymeAITokens.Rhythm.standard
+                        ))
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button {
+                                sendingLine = line
+                            } label: {
+                                Label("Send to song", systemImage: "arrow.turn.down.right")
+                            }
+                            .tint(palette.action)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                trash(line)
+                            } label: {
+                                Label("Trash", systemImage: "trash")
+                            }
+                        }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.immediately)
+        // Room under the last row for the floating Record and Type actions.
+        .contentMargins(.bottom, RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
+        .padding(.top, RhymeAITokens.Rhythm.related)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: lines.isEmpty)
+    }
+
+    private func row(_ line: OneLiner) -> some View {
+        let usedTitle = line.usedInProjectId.flatMap { projectTitles[$0] }
+        let isVoiceOnly = line.text.isEmpty
+        return VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+            Text(isVoiceOnly ? "Voice line" : line.text)
+                .font(.callout)
+                .italic(isVoiceOnly)
+                .foregroundStyle(line.usedInProjectId == nil && !isVoiceOnly ? palette.primaryInk : palette.secondaryInk)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                Text(Self.relativeDateText(line.createdAt))
+                if line.audioFileName != nil {
+                    HStack(spacing: RhymeAITokens.Spacing.xxs) {
+                        Image(systemName: "mic")
+                            .fontWeight(.medium)
+                        Text(OneLinerCaptureView.durationText(line.audioDuration))
+                            .monospacedDigit()
+                    }
+                }
+                if let usedTitle {
+                    Text("In \(usedTitle)")
+                        .lineLimit(1)
+                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                        .padding(.vertical, 1)
+                        .background(palette.raisedSurface, in: Capsule())
+                }
+                Spacer(minLength: RhymeAITokens.Spacing.xs)
+                Text(Self.prosodyBadge(line))
+                    .monospaced()
+                    .lineLimit(1)
+                    .layoutPriority(1)
+            }
+            .font(.caption)
+            .foregroundStyle(palette.secondaryInk)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func emptyState(title: String, caption: String?) -> some View {
+        VStack(spacing: RhymeAITokens.Spacing.xs) {
+            Image(systemName: "text.quote")
+                .font(.title2)
+                .foregroundStyle(palette.secondaryInk)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondaryInk)
+            if let caption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondaryInk)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, RhymeAITokens.Touch.minimum)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .transition(.opacity)
+    }
+
+    // MARK: - Floating actions
+
+    private var floatingActions: some View {
+        HStack(spacing: RhymeAITokens.Rhythm.related) {
+            Button {
+                capture = .type
+            } label: {
+                Image(systemName: "keyboard")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(palette.primaryInk)
+                    .frame(width: RhymeAITokens.Rhythm.primary, height: RhymeAITokens.Rhythm.primary)
+                    .background(palette.surface, in: Circle())
+                    .overlay(Circle().strokeBorder(palette.outline, lineWidth: 1))
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Type a one liner")
+
+            Button {
+                viewModel.voiceMemoService.stopPlayback()
+                capture = .record
+            } label: {
+                HStack(spacing: RhymeAITokens.Rhythm.related) {
+                    Image(systemName: "mic.fill")
+                        .font(.title3.weight(.medium))
+                    Text("Record")
+                        .font(.body.weight(.semibold))
+                }
+                .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+                .frame(minHeight: RhymeAITokens.Rhythm.primary)
+                .appearanceActionSurface(cornerRadius: RhymeAITokens.Rhythm.primary / 2)
+                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Record a one liner")
+        }
+        .padding(.trailing, RhymeAITokens.Rhythm.standard)
+        .padding(.bottom, RhymeAITokens.Rhythm.related)
+    }
+
+    // MARK: - Send to song
+
+    private func songPicker(for line: OneLiner) -> some View {
+        NavigationStack {
+            List {
+                if projects.isEmpty {
+                    Text("No songs yet. Create one from the songs drawer first.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondaryInk)
+                        .listRowBackground(Color.clear)
+                }
+                ForEach(projects, id: \.id) { project in
+                    Button {
+                        send(line, to: project)
+                    } label: {
+                        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                            Text(project.title.isEmpty ? "Untitled Song" : project.title)
+                                .font(.headline)
+                                .fontDesign(.serif)
+                                .foregroundStyle(palette.primaryInk)
+                            Text(project.id == viewModel.currentProjectId ? "Open now · goes in at the cursor" : "Goes in as the last line")
+                                .font(.caption)
+                                .foregroundStyle(palette.secondaryInk)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.rhymePress)
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(palette.surface)
+            .navigationTitle("Send to song")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { sendingLine = nil }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func send(_ line: OneLiner, to project: SongProject) {
+        sendingLine = nil
+        let title = project.title.isEmpty ? "Untitled Song" : project.title
+        do {
+            try store.sendToSong(line, project: project, editor: viewModel)
+            showToast(Toast(message: "Sent to \u{201c}\(title)\u{201d}", systemImage: "checkmark"))
+        } catch {
+            showToast(Toast(message: "Couldn't send this line. Try again."))
+        }
+    }
+
+    private func trash(_ line: OneLiner) {
+        do {
+            let trashed = try store.trash(line)
+            showToast(Toast(message: "Line moved to Trash", action: ("Undo", { _ = try? store.restore(trashed) })))
+        } catch {
+            showToast(Toast(message: "Couldn't move this line to Trash."))
+        }
+    }
+
+    // MARK: - Toast
+
+    private func showToast(_ next: Toast) {
+        withRhymeAnimation(RhymeAITokens.Motion.state, reduceMotion: reduceMotion) {
+            toast = next
+        }
+    }
+
+    /// Same look and timing as the songs drawer's toast.
+    private func toastView(_ toast: Toast) -> some View {
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            if let systemImage = toast.systemImage {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.success.opacity(EditorViewConstants.TopBar.savedStatusOpacity))
+                    .accessibilityHidden(true)
+            }
+            Text(toast.message)
+                .font(.subheadline)
+                .foregroundStyle(palette.primaryInk)
+                .lineLimit(2)
+            Spacer(minLength: RhymeAITokens.Spacing.sm)
+            if let action = toast.action {
+                Button {
+                    withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                        action.run()
+                        self.toast = nil
+                    }
+                } label: {
+                    Text(action.label)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.action)
+                        .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                }
+                .buttonStyle(.rhymePress)
+            }
+        }
+        .padding(.horizontal, RhymeAITokens.Spacing.lg)
+        .padding(.vertical, RhymeAITokens.Spacing.sm)
+        .frame(minHeight: RhymeAITokens.Touch.minimum)
+        .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.06), fallbackOpacity: 0.14)
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
+        .accessibilityElement(children: .combine)
+        .task(id: toast.id) {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard self.toast?.id == toast.id else { return }
+            withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
+                self.toast = nil
+            }
+        }
+    }
+
+    // MARK: - Formatting
+
+    static func lineCountText(_ count: Int) -> String {
+        count == 1 ? "1 line" : "\(count) lines"
+    }
+
+    /// "10 syl · uw m"; the rhyme key is left off when the end word has none.
+    static func prosodyBadge(_ line: OneLiner) -> String {
+        let key = line.primaryRhymeKey
+        return key.isEmpty ? "\(line.syllableCount) syl" : "\(line.syllableCount) syl · \(key)"
+    }
+
+    /// "Just now", "5 min ago", "Tue", "Oct 14", "Oct 14, 2025".
+    static func relativeDateText(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let elapsed = now.timeIntervalSince(date)
+        if elapsed < 60 { return "Just now" }
+        if calendar.isDate(date, inSameDayAs: now) {
+            return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)
+        }
+        if elapsed < 6 * 24 * 60 * 60 {
+            return date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
