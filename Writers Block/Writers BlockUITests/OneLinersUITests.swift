@@ -19,7 +19,8 @@ final class OneLinersUITests: XCTestCase {
         XCTAssertTrue(openDrawer.waitForExistence(timeout: 8))
         openDrawer.tap()
 
-        let entry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "One Liners")).firstMatch
+        // The drawer's card, not the editor's toolbar button behind the drawer.
+        let entry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND identifier != %@", "One Liners", "editorOneLinersButton")).firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 0.6)
         attach(app, "1-drawer")
@@ -133,6 +134,29 @@ final class OneLinersUITests: XCTestCase {
         stop.tap()
     }
 
+    /// A widget's Type opens the sheet with the keyboard already up, from a cold start.
+    @MainActor
+    func testTypeLinkOpensTheCaptureWithTheKeyboardUp() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.open(try XCTUnwrap(URL(string: "writersblock://one-liners/type")))
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let confirm = springboard.buttons["Open"]
+        if confirm.waitForExistence(timeout: 3) { confirm.tap() }
+
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        // The field takes focus with no tap. A simulator that has seen a hardware keyboard
+        // keeps the software one minimized, so focus is the check, not the keyboard's frame.
+        let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        XCTAssertTrue(focused.waitForExistence(timeout: 5), "The field has the keyboard with no tap")
+        XCTAssertEqual(focused.placeholderValue, "Say it or type it")
+        XCTAssertEqual(app.keyboards.count, 1)
+        attach(app, "link-type-keyboard")
+        app.typeText("Straight from the widget")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "Straight from the widget")).firstMatch.exists)
+    }
+
     /// A second Record while a line is still being typed keeps the line and says so.
     @MainActor
     func testASecondRequestKeepsTheOpenCapture() throws {
@@ -174,6 +198,43 @@ final class OneLinersUITests: XCTestCase {
         attach(app, "shortcut-open")
         app.buttons["Back to songs"].tap()
         XCTAssertFalse(app.staticTexts["No one liners yet."].waitForExistence(timeout: 2))
+    }
+
+    /// The first screen offers One Liners without opening a song.
+    @MainActor
+    func testWelcomeCardOpensOneLiners() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "One Liners")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        attach(app, "welcome-card")
+        card.tap()
+
+        XCTAssertTrue(app.staticTexts["No one liners yet."].waitForExistence(timeout: 5))
+        attach(app, "welcome-one-liners")
+        app.buttons["Back to songs"].tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "Back returns to the welcome screen")
+    }
+
+    @MainActor
+    func testEditorToolbarButtonOpensOneLiners() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+
+        let welcomeNewSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        if welcomeNewSong.waitForExistence(timeout: 3) { welcomeNewSong.tap() }
+        let button = app.buttons["editorOneLinersButton"]
+        XCTAssertTrue(button.waitForExistence(timeout: 8))
+        XCTAssertEqual(button.label, "One Liners")
+        attach(app, "editor-toolbar")
+        button.tap()
+
+        XCTAssertTrue(app.staticTexts["No one liners yet."].waitForExistence(timeout: 5))
+        app.buttons["Back to songs"].tap()
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "Back returns to the editor")
     }
 
     @MainActor
