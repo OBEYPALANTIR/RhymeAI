@@ -181,6 +181,8 @@ struct Writers_BlockApp: App {
                 // Launch only: the week-old rule keeps takes of lines still syncing.
                 reconcileOneLinerAudio()
                 publishOneLinersSnapshot()
+                // A recording activity left by a process that ended has no take behind it.
+                if !OneLinerRouter.shared.isRecording { await OneLinerActivityAttributes.endAll() }
             }
             .task {
                 // After the first frames, so launch is not competing with it.

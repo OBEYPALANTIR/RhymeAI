@@ -49,6 +49,7 @@ final class OneLinerRecorder {
     /// Set on the audio thread the moment a write fails; read by `stop()` so a take
     /// that lost audio is never handed on, even before the main-actor notice runs.
     @ObservationIgnored private var writeFailed = OSAllocatedUnfairLock(initialState: false)
+    @ObservationIgnored private let liveActivity = OneLinerLiveActivity()
 
     /// True while any capture holds or is claiming the microphone; one-liner playback waits for it.
     static private(set) var isCapturing = false
@@ -138,6 +139,7 @@ final class OneLinerRecorder {
                 Task { @MainActor [weak self] in
                     guard let self, self.isRecording else { return }
                     self.transcript = text
+                    self.liveActivity.update(transcript: text, levels: self.levels)
                 }
             }
         } else {
@@ -171,28 +173,38 @@ final class OneLinerRecorder {
         pendingURL = nil
         transcript = ""
         takeDuration = 0
-        startedAt = Date()
+        let now = Date()
+        startedAt = now
         isStarting = false
         isRecording = true
+        OneLinerRouter.shared.isRecording = true
+        liveActivity.start(startedAt: now, levels: levels)
         return true
     }
 
     /// Stops the take (or cancels a start); the file stays at `fileURL` and its length
     /// in `takeDuration`. Returns false when audio failed to write: the take is then
-    /// removed and `notice` says so.
+    /// removed and `notice` says so. The Live Activity ends as stopped, unless
+    /// `endingActivity` is false because a save that reports the outcome follows.
     @discardableResult
-    func stop() -> Bool {
+    func stop(endingActivity: Bool = true) -> Bool {
         generation &+= 1
         let wasRecording = isRecording
         if isRecording, let startedAt {
             takeDuration = Date().timeIntervalSince(startedAt)
         }
-        tearDown()
-        guard wasRecording, writeFailed.withLock({ $0 }) else { return true }
+        let failed = wasRecording && writeFailed.withLock { $0 }
+        tearDown(endingActivityAs: failed ? .discarded : (endingActivity ? .stopped : nil))
+        guard failed else { return true }
         removeTakeFiles()
         takeDuration = 0
         notice = Self.writeFailureNotice
         return false
+    }
+
+    /// Ends the Live Activity with the outcome of a save that followed `stop(endingActivity: false)`.
+    func endActivity(_ phase: OneLinerLiveActivity.Phase) {
+        liveActivity.end(phase)
     }
 
     /// Points the take at where a failed save left it, so a retry adopts it from there.
@@ -205,12 +217,13 @@ final class OneLinerRecorder {
     /// Stops or cancels, and removes the take's file.
     func discard() {
         generation &+= 1
-        tearDown()
+        tearDown(endingActivityAs: .discarded)
         removeTakeFiles()
         takeDuration = 0
     }
 
-    private func tearDown() {
+    /// `endingActivityAs` nil leaves the Live Activity for `endActivity`.
+    private func tearDown(endingActivityAs phase: OneLinerLiveActivity.Phase?) {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -224,6 +237,8 @@ final class OneLinerRecorder {
         interruptionObserver = nil
         isStarting = false
         isRecording = false
+        OneLinerRouter.shared.isRecording = false
+        if let phase { liveActivity.end(phase) }
         Self.isCapturing = false
         startedAt = nil
         levels = Array(repeating: 0, count: Self.levelCount)
@@ -243,7 +258,7 @@ final class OneLinerRecorder {
 
     /// A start that failed after the session was activated: nothing it made is kept.
     private func failToStart() -> Bool {
-        tearDown()
+        tearDown(endingActivityAs: .discarded)
         removeTakeFiles()
         notice = "Couldn't start recording. Check the microphone and try again."
         return false
@@ -254,7 +269,7 @@ final class OneLinerRecorder {
     private func failTake(owner: UInt64) {
         guard owner == generation, isRecording else { return }
         generation &+= 1
-        tearDown()
+        tearDown(endingActivityAs: .discarded)
         removeTakeFiles()
         takeDuration = 0
         notice = Self.writeFailureNotice
@@ -281,6 +296,7 @@ final class OneLinerRecorder {
         guard isRecording else { return }
         levels.removeFirst()
         levels.append(level)
+        liveActivity.update(transcript: transcript, levels: levels)
     }
 
     // The tap runs on the audio render thread, so it is built outside the main actor.

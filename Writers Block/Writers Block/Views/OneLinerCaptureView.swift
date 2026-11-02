@@ -241,12 +241,17 @@ struct OneLinerCaptureView: View {
     private func save() {
         if recorder.isRecording || recorder.isStarting {
             // The audio failed to write: stay open so the notice is read before saving words alone.
-            guard recorder.stop() else { return }
+            guard recorder.stop(endingActivity: false) else { return }
         }
-        guard canSave else { return }
+        guard canSave else {
+            recorder.endActivity(.stopped)
+            return
+        }
         do {
             try onSave(OneLinerCapture(text: trimmedText, take: recorder.fileURL, audioDuration: recorder.takeDuration))
+            recorder.endActivity(.saved)
         } catch {
+            recorder.endActivity(.stopped)
             // The sheet, the words and the take stay for another try, from wherever the take now is.
             if let failure = error as? OneLinerSaveFailure, let takeNowAt = failure.takeNowAt {
                 recorder.takeMoved(to: takeNowAt)
