@@ -1026,6 +1026,18 @@ struct EditorView: View {
             }
             .accessibilityLabel("Open songs drawer")
 
+            Button {
+                dismissKeyboard()
+                OneLinerRouter.shared.request(.open)
+            } label: {
+                Image(systemName: "text.quote")
+                    .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            }
+            .accessibilityLabel("One Liners")
+            .accessibilityIdentifier("editorOneLinersButton")
+
             if historyControlsVisible {
                 EditorUndoRedoControls(
                     canUndo: viewModel.canUndoLyrics,

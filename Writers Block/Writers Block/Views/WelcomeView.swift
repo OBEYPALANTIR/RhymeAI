@@ -118,6 +118,16 @@ struct WelcomeView: View {
         ) {
             viewModel.showTemplatesSheet = true
         }
+
+        // The root's full-screen cover is the one path to the screen, so its routing guards apply.
+        WelcomeCard(
+            icon: "text.quote",
+            title: "One Liners",
+            subtitle: "Catch a line before it goes",
+            compact: usesHorizontalCards
+        ) {
+            OneLinerRouter.shared.request(.open)
+        }
     }
 }
 
