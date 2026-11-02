@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import SwiftData
 import CloudKit
 import CoreData
@@ -75,6 +77,7 @@ private struct ModelContainerBootstrap {
 }
 
 
+#if canImport(UIKit)
 final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -88,10 +91,13 @@ final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
         GGUFDownloadManager.shared.backgroundCompletionHandler = completionHandler
     }
 }
+#endif
 
 @main
 struct Writers_BlockApp: App {
+    #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(ModelDownloadAppDelegate.self) private var downloadDelegate
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
@@ -156,14 +162,7 @@ struct Writers_BlockApp: App {
                     .background(appearance.palette.canvas)
                 }
             }
-            .environmentObject(viewModel)
-            .environmentObject(persistenceState)
-            .environmentObject(ggufDownloadManager)
-            .environment(\.appAppearanceStyle, appearance)
-            .environment(\.appAppearanceBinding, appearanceBinding)
-            .preferredColorScheme(appearance.preferredColorScheme)
-            .tint(appearance.palette.action)
-            .modifier(UITestDynamicTypeSizeModifier())
+            .modifier(appEnvironment)
             .safeAreaInset(edge: .top) {
                 persistenceDegradedBanner
             }
@@ -202,6 +201,29 @@ struct Writers_BlockApp: App {
                 }
             }
         }
+        #if os(macOS)
+        .defaultSize(width: 1160, height: 780)
+        .commands { MacAppCommands(viewModel: viewModel) }
+        #endif
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+                .frame(minWidth: RhymeAITokens.Layout.assistantReadableWidth, idealWidth: 520, minHeight: 560)
+                .modifier(appEnvironment)
+        }
+        #endif
+    }
+
+    /// The objects and appearance every scene's root view reads.
+    private var appEnvironment: AppEnvironmentModifier {
+        AppEnvironmentModifier(
+            viewModel: viewModel,
+            persistenceState: persistenceState,
+            ggufDownloadManager: ggufDownloadManager,
+            appearance: appearance,
+            appearanceBinding: appearanceBinding
+        )
     }
 
     @ViewBuilder
@@ -257,7 +279,7 @@ struct Writers_BlockApp: App {
         // a CloudKit-less container still reads/writes the same local store.
         // The unsigned persistent UI-test bundle cannot initialize CloudKit's
         // asynchronous store setup. Keep its relaunch test local to its own app data.
-        if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store") {
+        if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store"), hasCloudKitEntitlement {
             let cloudKit = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: false,
@@ -307,6 +329,76 @@ struct Writers_BlockApp: App {
     }
 }
 
+extension Writers_BlockApp {
+    /// A Mac build signed without a provisioning profile (a local run) has no
+    /// iCloud entitlement, and CloudKit then traps instead of throwing, so the
+    /// library opens local-only. iOS always carries the entitlement.
+    fileprivate static var hasCloudKitEntitlement: Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let services = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-services" as CFString, nil)
+        return (services as? [String])?.contains("CloudKit") == true
+        #else
+        return true
+        #endif
+    }
+}
+
+private struct AppEnvironmentModifier: ViewModifier {
+    let viewModel: EditorViewModel
+    let persistenceState: AppPersistenceState
+    let ggufDownloadManager: GGUFDownloadManager
+    let appearance: AppAppearanceStyle
+    let appearanceBinding: Binding<AppAppearanceStyle>
+
+    func body(content: Content) -> some View {
+        content
+            .environmentObject(viewModel)
+            .environmentObject(persistenceState)
+            .environmentObject(ggufDownloadManager)
+            .environment(\.appAppearanceStyle, appearance)
+            .environment(\.appAppearanceBinding, appearanceBinding)
+            .preferredColorScheme(appearance.preferredColorScheme)
+            .tint(appearance.palette.action)
+            .modifier(UITestDynamicTypeSizeModifier())
+    }
+}
+
+#if os(macOS)
+/// Menu bar commands for the Mac app, on the same view model actions the
+/// editor's buttons use.
+private struct MacAppCommands: Commands {
+    @ObservedObject var viewModel: EditorViewModel
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Song") { viewModel.newProject() }
+                .keyboardShortcut("n")
+        }
+        CommandGroup(replacing: .saveItem) {
+            Button("Save") { viewModel.flushCurrentDraft(checkpoint: true) }
+                .keyboardShortcut("s")
+        }
+        CommandMenu("Song") {
+            Button("UnBlock") { viewModel.getSuggestions() }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(viewModel.lyrics.isEmpty || viewModel.isLoading)
+            Button("Cancel Generation") {
+                viewModel.cancelSuggestions()
+                viewModel.dismissRewrite()
+            }
+            .keyboardShortcut(".")
+            .disabled(!viewModel.isLoading && !viewModel.hasActiveRewrite)
+            Divider()
+            ForEach(RewriteAction.allCases) { action in
+                Button(action.label) { viewModel.requestRewrite(action) }
+                    .disabled(viewModel.selectedRange.length == 0 || viewModel.hasActiveRewrite)
+            }
+        }
+    }
+}
+#endif
+
 private struct UITestDynamicTypeSizeModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -320,6 +412,7 @@ private struct UITestDynamicTypeSizeModifier: ViewModifier {
 
 @MainActor
 private final class BackgroundTaskAssertion {
+    #if canImport(UIKit)
     private var identifier = UIBackgroundTaskIdentifier.invalid
 
     init(name: String) {
@@ -333,4 +426,9 @@ private final class BackgroundTaskAssertion {
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
     }
+    #else
+    // A Mac app keeps running in the background; there is nothing to request.
+    init(name: String) {}
+    func end() {}
+    #endif
 }
