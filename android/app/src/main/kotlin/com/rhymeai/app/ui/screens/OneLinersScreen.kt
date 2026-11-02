@@ -152,6 +152,8 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
     /** A take playing would reach the microphone, so playback stops before any capture opens. */
     fun openCapture(mode: CaptureMode) {
+        // Nothing opens on a screen that is already on its way out.
+        if (!viewModel.showOneLiners) return
         player.stop()
         viewModel.voiceMemoService.stopPlayback()
         captures.open(mode)
