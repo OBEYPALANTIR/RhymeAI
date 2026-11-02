@@ -38,14 +38,31 @@ enum OneLinerPendingAction: String, CaseIterable {
     }
 }
 
-/// The app-wide hand-off from intents and links to the views, which take what they handle.
+/// The app-wide hand-off from intents and links to the views. An action stays
+/// pending until the view that handles it takes it, so a request that cannot be
+/// shown yet is not lost, and nothing replaces a capture that is still open.
 @Observable
 final class OneLinerRouter {
     static let shared = OneLinerRouter()
 
+    /// Who acts on a pending action, given what is on screen.
+    enum Handler: Equatable {
+        /// Presents the One Liners screen; the screen then takes the action.
+        case root
+        /// The One Liners screen opened from outside: opens the capture asked for.
+        case screen
+        /// A capture sheet already open: keeps its words and take, and says so.
+        case capture
+    }
+
     private(set) var pending: OneLinerPendingAction?
-    /// A capture sheet is recording, so a Stop from the Live Activity has a take to save.
-    var isRecording = false
+    /// The recorder whose take is being recorded, so a Stop from the Live Activity
+    /// reaches that take and no other recorder's teardown clears it.
+    private(set) var recordingOwner: UUID?
+    /// Capture sheets on screen (one per scene at most).
+    private(set) var openCaptures: Set<UUID> = []
+
+    var isRecording: Bool { recordingOwner != nil }
 
     func request(_ action: OneLinerPendingAction) {
         pending = action
@@ -56,6 +73,36 @@ final class OneLinerRouter {
         guard let pending, actions.contains(pending) else { return nil }
         self.pending = nil
         return pending
+    }
+
+    func beginRecording(_ owner: UUID) {
+        recordingOwner = owner
+    }
+
+    /// Only the owner ends its recording; a Stop still waiting for that take goes with it.
+    func endRecording(_ owner: UUID) {
+        guard recordingOwner == owner else { return }
+        recordingOwner = nil
+        if pending == .stopRecording { pending = nil }
+    }
+
+    func captureAppeared(_ id: UUID) {
+        openCaptures.insert(id)
+    }
+
+    func captureDisappeared(_ id: UUID) {
+        openCaptures.remove(id)
+    }
+
+    /// Nil leaves the action pending (a Stop with no capture open waits for none).
+    static func handler(for action: OneLinerPendingAction, screenPresented: Bool, captureOpen: Bool) -> Handler? {
+        if captureOpen { return .capture }
+        if action == .stopRecording { return nil }
+        return screenPresented ? .screen : .root
+    }
+
+    func handler(screenPresented: Bool) -> Handler? {
+        pending.flatMap { Self.handler(for: $0, screenPresented: screenPresented, captureOpen: !openCaptures.isEmpty) }
     }
 }
 

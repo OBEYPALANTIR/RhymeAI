@@ -22,9 +22,11 @@ struct OneLinersSnapshot: Codable, Equatable {
     static let lineLimit = 3
     static let empty = OneLinersSnapshot(count: 0, lines: [], appearance: AppAppearanceStyle.ink.rawValue)
 
-    /// Nil when the App Group is not in this build's entitlements.
+    /// Nil when the App Group is not in this build's entitlements, and in hosted unit
+    /// tests, which never write the simulator's real widget snapshot.
     static var defaultURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)?
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)?
             .appendingPathComponent("one-liners-snapshot.json", isDirectory: false)
     }
 

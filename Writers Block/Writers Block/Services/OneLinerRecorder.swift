@@ -50,6 +50,8 @@ final class OneLinerRecorder {
     /// that lost audio is never handed on, even before the main-actor notice runs.
     @ObservationIgnored private var writeFailed = OSAllocatedUnfairLock(initialState: false)
     @ObservationIgnored private let liveActivity = OneLinerLiveActivity()
+    /// This recorder's identity in `OneLinerRouter.recordingOwner`.
+    let id = UUID()
 
     /// True while any capture holds or is claiming the microphone; one-liner playback waits for it.
     static private(set) var isCapturing = false
@@ -177,7 +179,7 @@ final class OneLinerRecorder {
         startedAt = now
         isStarting = false
         isRecording = true
-        OneLinerRouter.shared.isRecording = true
+        OneLinerRouter.shared.beginRecording(id)
         liveActivity.start(startedAt: now, levels: levels)
         return true
     }
@@ -237,7 +239,7 @@ final class OneLinerRecorder {
         interruptionObserver = nil
         isStarting = false
         isRecording = false
-        OneLinerRouter.shared.isRecording = false
+        OneLinerRouter.shared.endRecording(id)
         if let phase { liveActivity.end(phase) }
         Self.isCapturing = false
         startedAt = nil
