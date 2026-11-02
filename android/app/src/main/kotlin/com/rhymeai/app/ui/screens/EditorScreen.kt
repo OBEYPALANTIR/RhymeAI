@@ -236,6 +236,13 @@ internal fun historyControlsVisible(
     isRecording: Boolean
 ): Boolean = editorActionsVisible && !isRecording
 
+/**
+ * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics", and
+ * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it.
+ */
+internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean): Boolean =
+    songNotebookOpen || oneLinersOpen
+
 /** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
 internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
 private var SemanticsPropertyReceiver.editorOpenSettleAlpha by EditorOpenSettleAlpha
@@ -640,8 +647,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            // The Song Notebook offers "Keep selected lyrics", so it keeps the selection it opened over.
-            if (!viewModel.showSongNotebook) viewModel.clearPendingRewriteSelection()
+            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners)) {
+                viewModel.clearPendingRewriteSelection()
+            }
             if (modalOpen) {
                 focusManager.clearFocus(force = true)
             }
