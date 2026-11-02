@@ -133,6 +133,16 @@ struct OneLinerIntentsTests {
     }
 
     @Test
+    func liveActivityUpdatesGoAtMostEveryQuarterSecond() {
+        let start = ContinuousClock.now
+        #expect(OneLinerLiveActivity.delay(since: nil, now: start) == .zero)
+        #expect(OneLinerLiveActivity.delay(since: start, now: start) == .milliseconds(250))
+        #expect(OneLinerLiveActivity.delay(since: start, now: start + .milliseconds(100)) == .milliseconds(150))
+        #expect(OneLinerLiveActivity.delay(since: start, now: start + .milliseconds(250)) == .zero)
+        #expect(OneLinerLiveActivity.delay(since: start, now: start + .seconds(2)) == .zero)
+    }
+
+    @Test
     func launchArgumentNamesTheAction() {
         #expect(OneLinerPendingAction.fromLaunchArguments(["app", "-oneLinerPendingAction", "record"]) == .record)
         #expect(OneLinerPendingAction.fromLaunchArguments(["app", "-oneLinerPendingAction", "open"]) == .open)
