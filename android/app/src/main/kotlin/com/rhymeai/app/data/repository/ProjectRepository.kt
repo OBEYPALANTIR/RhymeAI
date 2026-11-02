@@ -160,6 +160,11 @@ class ProjectRepository internal constructor(
 
     private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
+    /**
+     * Writes every field, defaults too: `updatedAt` equal to its default (now) at encode would
+     * otherwise be left out and read back as an unknown (repaired, 0) time that loses a sync.
+     */
+    private val explicitJson = Json(json) { encodeDefaults = true }
 
     /**
      * A stored song as an earlier build may have written it: without an id it is refused
@@ -440,7 +445,7 @@ class ProjectRepository internal constructor(
             )
             val next = active.map { if (it.id == id) updated else it }
             inSameWrite(prefs)
-            prefs[PROJECTS_KEY] = json.encodeToString(next)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
             // The editor's saved draft of this song follows, so reopening it shows the line.
             if (prefs[CURRENT_PROJECT_ID_KEY] == id) prefs[CURRENT_LYRICS_KEY] = updated.lyrics
             committed = next

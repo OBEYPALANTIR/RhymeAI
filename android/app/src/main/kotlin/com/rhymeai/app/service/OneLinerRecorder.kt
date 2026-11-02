@@ -32,7 +32,7 @@ import kotlin.math.sqrt
  * [SpeechRecognizer] for a live transcript. The microphone is opened once, by this recorder;
  * without speech the take still records and the writer types the words.
  */
-class OneLinerRecorder(private val context: Context) {
+class OneLinerRecorder {
     var isRecording by mutableStateOf(false)
         private set
     var startedAt by mutableStateOf<Long?>(null)
@@ -49,14 +49,20 @@ class OneLinerRecorder(private val context: Context) {
         private set
     var notice by mutableStateOf<String?>(null)
 
-    private val main = Handler(Looper.getMainLooper())
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private var audioRecord: AudioRecord? = null
     private var thread: Thread? = null
     @Volatile private var running = false
     @Volatile private var writeFailed = false
+    @Volatile private var inputFailed = false
+    /** The pump wrote the WAV header and closed the file. */
+    @Volatile private var finalized = false
     @Volatile private var bytesWritten = 0L
     private var recognizer: SpeechRecognizer? = null
+    /** The end the recording thread writes to; closing it ends the recognition session. */
     private var feed: ParcelFileDescriptor? = null
+    /** The end the recognizer reads. Android parcels it after startListening returns, so it stays open until teardown. */
+    private var feedSource: ParcelFileDescriptor? = null
     private var heard = ""
 
     companion object {
@@ -64,16 +70,28 @@ class OneLinerRecorder(private val context: Context) {
         const val SAMPLE_RATE = 16_000
         private const val WAV_HEADER_BYTES = 44
         const val WRITE_FAILURE_NOTICE = "Recording stopped because the audio couldn't be saved. The words so far are kept."
+        const val INPUT_FAILURE_NOTICE = "Recording stopped because the microphone stopped sending audio. The words so far are kept."
         const val NO_SPEECH_NOTICE = "Live transcription isn't available here. The take is kept; type the words."
-        /** A one liner holds the microphone; a song memo must not start meanwhile. */
-        @Volatile var isCapturing = false
-            private set
+        const val MEMO_RECORDING_NOTICE = "A voice memo is recording. Stop it to record here, or type the line."
+        private const val MIC_FAILED_NOTICE = "The microphone couldn't start. Type the line instead."
     }
 
     /** Starts a take writing to [file]. The caller holds RECORD_AUDIO. False when the mic could not open. */
-    @SuppressLint("MissingPermission")
-    fun start(file: File): Boolean {
+    fun start(file: File, context: Context): Boolean {
         if (isRecording) return true
+        if (!MicrophoneOwner.claim(MicrophoneOwner.Owner.ONE_LINER)) {
+            notice = MEMO_RECORDING_NOTICE
+            return false
+        }
+        if (!open(file, context)) {
+            MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER)
+            return false
+        }
+        return true
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun open(file: File, context: Context): Boolean {
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val record = runCatching {
             AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -81,7 +99,7 @@ class OneLinerRecorder(private val context: Context) {
         }.getOrNull()
         if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
             record?.release()
-            notice = "The microphone couldn't start. Type the line instead."
+            notice = MIC_FAILED_NOTICE
             return false
         }
         val output = try {
@@ -98,7 +116,7 @@ class OneLinerRecorder(private val context: Context) {
             record.release()
             runCatching { output.close() }
             file.delete()
-            notice = "The microphone couldn't start. Type the line instead."
+            notice = MIC_FAILED_NOTICE
             return false
         }
         audioRecord = record
@@ -107,38 +125,57 @@ class OneLinerRecorder(private val context: Context) {
         heard = ""
         bytesWritten = 0L
         writeFailed = false
+        inputFailed = false
+        finalized = false
         running = true
-        isCapturing = true
         isRecording = true
         startedAt = System.currentTimeMillis()
-        val pipe = startRecognizer()
+        val pipe = startRecognizer(context)
         thread = Thread({ pump(record, output, pipe) }, "one-liner-take").apply { start() }
         return true
     }
 
-    /** Ends the take and keeps it. False when its audio failed to write (the take is dropped). */
+    /**
+     * Ends the take and keeps it once its WAV is finished. False when the audio failed to
+     * write, the input died, or the file could not be finished: that take is dropped and
+     * never offered for saving.
+     */
     fun stop(): Boolean {
         if (!isRecording) return true
         running = false
-        thread?.join(2_000)
+        // Stopping the input first ends a read in progress, so the pump can finish the file.
+        audioRecord?.let { runCatching { it.stop() } }
+        val pump = thread
+        pump?.join(2_000)
+        val finished = pump == null || (!pump.isAlive && finalized)
         thread = null
-        audioRecord?.let { runCatching { it.stop() }; it.release() }
+        audioRecord?.release()
         audioRecord = null
         // Closing the feed ends the recognizer's session; it delivers its last words first.
         runCatching { feed?.close() }
         feed = null
-        main.postDelayed({ releaseRecognizer() }, 1_500)
+        val ending = recognizer to feedSource
+        recognizer = null
+        feedSource = null
+        main.postDelayed({ releaseRecognizer(ending.first, ending.second) }, 1_500)
         isRecording = false
-        isCapturing = false
+        MicrophoneOwner.release(MicrophoneOwner.Owner.ONE_LINER)
         levels = List(LEVEL_COUNT) { 0f }
         takeDurationMs = bytesWritten * 1000L / (SAMPLE_RATE * 2)
-        if (writeFailed) {
+        if (writeFailed || inputFailed || !finished) {
             takeFile?.delete()
             takeFile = null
-            notice = WRITE_FAILURE_NOTICE
+            notice = if (inputFailed) INPUT_FAILURE_NOTICE else WRITE_FAILURE_NOTICE
             return false
         }
         return true
+    }
+
+    /** Offers a finished take a closed capture left behind, as this capture's take. */
+    fun recover(take: File) {
+        if (isRecording) return
+        takeFile = take
+        takeDurationMs = maxOf(0L, take.length() - WAV_HEADER_BYTES) * 1000L / (SAMPLE_RATE * 2)
     }
 
     /** A save moved the take (adopted, or put back after a failed save). */
@@ -149,7 +186,6 @@ class OneLinerRecorder(private val context: Context) {
     /** Closed without saving: the take is not kept. */
     fun discard() {
         stop()
-        releaseRecognizer()
         takeFile?.delete()
         takeFile = null
     }
@@ -160,7 +196,15 @@ class OneLinerRecorder(private val context: Context) {
         try {
             while (running) {
                 val read = record.read(buffer, 0, buffer.size)
-                if (read <= 0) continue
+                if (read < 0) {
+                    // A dead or invalid input while still recording ends the take; after stop it is expected.
+                    if (running) {
+                        inputFailed = true
+                        main.post { if (isRecording) stop() }
+                    }
+                    break
+                }
+                if (read == 0) continue
                 try {
                     output.write(buffer, 0, read)
                     bytesWritten += read
@@ -174,8 +218,9 @@ class OneLinerRecorder(private val context: Context) {
                 main.post { levels = levels.drop(1) + level }
             }
         } finally {
-            runCatching { writeWavHeader(output, bytesWritten) }.onFailure { writeFailed = true }
-            runCatching { output.close() }
+            val headed = runCatching { writeWavHeader(output, bytesWritten) }.isSuccess
+            val closed = runCatching { output.close() }.isSuccess
+            if (headed && closed) finalized = true else writeFailed = true
         }
     }
 
@@ -190,7 +235,7 @@ class OneLinerRecorder(private val context: Context) {
     }
 
     /** Returns the pipe end the recording thread writes to, or null without live speech. */
-    private fun startRecognizer(): ParcelFileDescriptor? {
+    private fun startRecognizer(context: Context): ParcelFileDescriptor? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             notice = NO_SPEECH_NOTICE
             return null
@@ -238,15 +283,18 @@ class OneLinerRecorder(private val context: Context) {
             created.startListening(intent)
             recognizer = created
             feed = write
+            feedSource = read
+            // Android 13 parcels the queued intent later on the main thread: the read end must still be open.
+            check(read.fileDescriptor.valid()) { "Recognizer audio source closed before it was sent" }
             write
         } catch (_: Exception) {
-            created.destroy()
+            recognizer = null
+            feed = null
+            feedSource = null
+            releaseRecognizer(created, read)
             runCatching { write.close() }
             notice = NO_SPEECH_NOTICE
             null
-        } finally {
-            // The recognizer service holds its own duplicate of the read end.
-            runCatching { read.close() }
         }
     }
 
@@ -258,9 +306,10 @@ class OneLinerRecorder(private val context: Context) {
         transcript = joined
     }
 
-    private fun releaseRecognizer() {
-        recognizer?.let { runCatching { it.destroy() } }
-        recognizer = null
+    /** Teardown: the recognizer goes first, then the audio source it was reading. */
+    private fun releaseRecognizer(ending: SpeechRecognizer?, source: ParcelFileDescriptor?) {
+        ending?.let { runCatching { it.destroy() } }
+        source?.let { runCatching { it.close() } }
     }
 
     private fun normalizedLevel(buffer: ByteArray, length: Int): Float {

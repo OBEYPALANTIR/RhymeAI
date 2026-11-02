@@ -202,7 +202,6 @@ class VoiceMemoService(private val context: Context) {
      */
     suspend fun startRecording(projectId: String): File = withContext(Dispatchers.IO) { synchronized(recorderLock) {
         check(!isRecording) { "Already recording — call stopRecording() first" }
-        check(!OneLinerRecorder.isCapturing) { "A one liner is recording" }
 
         // Ensure the directory exists; surface storage failures to the caller.
         val dir = RecordingFiles.memoDirectory(context.filesDir, projectId)
@@ -228,6 +227,11 @@ class VoiceMemoService(private val context: Context) {
         }
         duringStartForTest?.invoke()
 
+        if (!MicrophoneOwner.claim(MicrophoneOwner.Owner.SONG_MEMO)) {
+            markerFor(file).delete()
+            file.delete()
+            throw IllegalStateException("A one liner is recording")
+        }
         val rec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
         } else {
@@ -248,6 +252,7 @@ class VoiceMemoService(private val context: Context) {
             // Release immediately on failure — never leave an orphaned handle.
             runCatching { rec.stop() }
             rec.release()
+            MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
             if (file.exists()) file.delete()
             throw e
         }
@@ -312,6 +317,7 @@ class VoiceMemoService(private val context: Context) {
                     rec.release()
                 }
             }
+            MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
             file
         }
         finishTake(file, stopError)
@@ -641,6 +647,7 @@ class VoiceMemoService(private val context: Context) {
             runCatching { rec.stop() }
             rec.release()
         }
+        MicrophoneOwner.release(MicrophoneOwner.Owner.SONG_MEMO)
         file?.let { markerFor(it).delete() }
         file?.delete()
     }
