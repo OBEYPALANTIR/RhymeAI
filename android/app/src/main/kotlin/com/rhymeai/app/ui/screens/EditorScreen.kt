@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -744,6 +745,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 actions = {
+                    if (!focusMode) IconButton(
+                        onClick = { viewModel.showOneLiners = true },
+                        enabled = !viewModel.hasActiveRewrite,
+                        modifier = Modifier.testTag("oneLinersButton")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FormatQuote,
+                            contentDescription = stringResource(R.string.editor_open_one_liners),
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (!focusMode) Box {
                         IconButton(
                             onClick = { songActionsExpanded = true },

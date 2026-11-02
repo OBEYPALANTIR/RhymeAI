@@ -61,7 +61,8 @@ fun RhymeNavGraph(
                 },
                 onTemplates = {
                     viewModel.showTemplatesDialog = true
-                }
+                },
+                onOneLiners = viewModel::requestOneLinerAction
             )
         }
         composable(Routes.EDITOR) {
