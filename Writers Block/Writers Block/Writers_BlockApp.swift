@@ -171,6 +171,7 @@ struct Writers_BlockApp: App {
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
+                reconcileOneLinerAudio()
             }
             .task {
                 // After the first frames, so launch is not competing with it.
@@ -181,6 +182,8 @@ struct Writers_BlockApp: App {
             // iCloud delivered changes: new or removed recordings get their files.
             .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
                 Task { await viewModel.reconcileRecordings() }
+                // A line deleted on another device leaves its audio here.
+                reconcileOneLinerAudio()
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
@@ -202,6 +205,11 @@ struct Writers_BlockApp: App {
                 }
             }
         }
+    }
+
+    private func reconcileOneLinerAudio() {
+        guard let sharedModelContainer else { return }
+        try? OneLinersStore(context: sharedModelContainer.mainContext).reconcileAudioFiles()
     }
 
     @ViewBuilder
