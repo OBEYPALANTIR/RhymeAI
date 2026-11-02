@@ -112,6 +112,27 @@ final class OneLinersUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5), "The take lands in One Liners")
     }
 
+    /// The link a widget's body and the URL scheme use, through the app's onOpenURL.
+    @MainActor
+    func testRecordLinkOpensTheCaptureSheetRecording() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+        app.open(try XCTUnwrap(URL(string: "writersblock://one-liners/record")))
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<3 {
+            let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Open", "Allow", "OK"])).firstMatch
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+        }
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        let stop = app.buttons["Stop recording"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8), "The link opens the sheet already recording")
+        Thread.sleep(forTimeInterval: 1.5)
+        attach(app, "link-record")
+        stop.tap()
+    }
+
     @MainActor
     func testOpenActionShowsOneLiners() throws {
         let app = XCUIApplication()
