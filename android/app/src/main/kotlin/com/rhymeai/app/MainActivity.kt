@@ -33,8 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -314,11 +313,11 @@ class MainActivity : ComponentActivity() {
                             slideOutVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) { it }
                     ) {
                         val leaving = !oneLinersVisibility.targetState
-                        // A hardware keyboard could still activate a focused control, so focus goes with the taps.
-                        val focusManager = LocalFocusManager.current
-                        LaunchedEffect(leaving) { if (leaving) focusManager.clearFocus(force = true) }
+                        // Keys are judged on the live flag, so a hardware keyboard is shut out from the
+                        // moment Back lands, before this recomposes; taps and talkback once it has.
                         Box(
-                            if (leaving) Modifier.clearAndSetSemantics {}.focusProperties { canFocus = false } else Modifier
+                            Modifier.onPreviewKeyEvent { !viewModel.showOneLiners }
+                                .then(if (leaving) Modifier.clearAndSetSemantics {} else Modifier)
                         ) {
                             com.rhymeai.app.ui.screens.OneLinersScreen(
                                 viewModel = viewModel,
