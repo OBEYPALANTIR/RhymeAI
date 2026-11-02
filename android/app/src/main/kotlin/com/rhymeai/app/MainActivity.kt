@@ -17,6 +17,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
@@ -46,6 +52,7 @@ import com.rhymeai.app.ui.components.SettingsDialog
 import com.rhymeai.app.ui.components.TemplatesDialog
 import com.rhymeai.app.ui.navigation.RhymeNavGraph
 import com.rhymeai.app.ui.navigation.Routes
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.WordFrequency
@@ -281,7 +288,14 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    if (viewModel.showOneLiners) {
+                    // Rises over the editor like the iOS full-screen cover; a bare `if` popped it in with no motion.
+                    AnimatedVisibility(
+                        visible = viewModel.showOneLiners,
+                        enter = fadeIn(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) +
+                            slideInVertically(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) { it },
+                        exit = fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                            slideOutVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) { it }
+                    ) {
                         com.rhymeai.app.ui.screens.OneLinersScreen(
                             viewModel = viewModel,
                             onBack = {
