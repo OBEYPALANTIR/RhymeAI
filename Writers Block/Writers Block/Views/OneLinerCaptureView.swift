@@ -131,6 +131,11 @@ struct OneLinerCaptureView: View {
                 fieldFocused = true
             }
         }
+        // The Live Activity's Done: stop and save, as the Save button does.
+        .onChange(of: OneLinerRouter.shared.pending) { _, _ in
+            guard OneLinerRouter.shared.take([.stopRecording]) != nil else { return }
+            save()
+        }
         .onDisappear {
             // Closed without saving: the take is not kept.
             if !saved { recorder.discard() }

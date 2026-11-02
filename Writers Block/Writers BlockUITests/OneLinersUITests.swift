@@ -89,6 +89,43 @@ final class OneLinersUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5))
     }
 
+    /// A widget's Record, the Record control and the Record intent all hand the app
+    /// `record`; the launch argument makes the same hand-off.
+    @MainActor
+    func testRecordActionOpensTheCaptureSheetRecording() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store", "-oneLinerPendingAction", "record"]
+        app.launch()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<2 {
+            let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "OK"])).firstMatch
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+        }
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        let stop = app.buttons["Stop recording"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8), "The sheet opens already recording")
+        Thread.sleep(forTimeInterval: 1)
+        attach(app, "shortcut-record")
+        stop.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5), "The take lands in One Liners")
+    }
+
+    @MainActor
+    func testOpenActionShowsOneLiners() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store", "-oneLinerPendingAction", "open"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["No one liners yet."].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Record a one liner"].exists)
+        XCTAssertFalse(app.staticTexts["New one liner"].exists, "Open shows the list, not a capture")
+        attach(app, "shortcut-open")
+        app.buttons["Back to songs"].tap()
+        XCTAssertFalse(app.staticTexts["No one liners yet."].waitForExistence(timeout: 2))
+    }
+
     @MainActor
     private func attach(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())

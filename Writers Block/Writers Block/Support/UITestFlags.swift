@@ -165,9 +165,18 @@ enum UITestFlags {
         GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: url)
         GGUFModelSelection.save(fileName: option.fileName)
     }
+
+    /// `-oneLinerPendingAction record|type|open`: the same hand-off a widget or link makes.
+    static func oneLinerPendingAction(in arguments: [String] = ProcessInfo.processInfo.arguments) -> OneLinerPendingAction? {
+        OneLinerPendingAction.fromLaunchArguments(arguments)
+    }
     #else
     static func isEnabled(_ flag: String, in arguments: [String] = []) -> Bool {
         false
+    }
+
+    static func oneLinerPendingAction() -> OneLinerPendingAction? {
+        nil
     }
 
     static func editorDefaults() -> UserDefaults {

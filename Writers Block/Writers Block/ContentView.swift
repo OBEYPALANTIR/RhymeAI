@@ -6,6 +6,9 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.appAppearanceStyle) private var appearance
+    /// One Liners opened by a shortcut, widget, control or link, over whatever is on screen.
+    @State private var oneLinersRoute: OneLinersRoute?
 
     var body: some View {
         Group {
@@ -20,6 +23,18 @@ struct ContentView: View {
         .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.showWelcome)
         .onAppear {
             viewModel.modelContext = modelContext
+        }
+        .onOpenURL { url in
+            if let action = OneLinerPendingAction(url: url) { OneLinerRouter.shared.request(action) }
+        }
+        .onChange(of: OneLinerRouter.shared.pending, initial: true) { _, _ in
+            guard let action = OneLinerRouter.shared.take([.record, .type, .open]) else { return }
+            oneLinersRoute = OneLinersRoute(action: action)
+        }
+        .fullScreenCover(item: $oneLinersRoute) { route in
+            OneLinersView(onDismiss: { oneLinersRoute = nil }, initialCapture: route.capture)
+                .environmentObject(viewModel)
+                .environment(\.appAppearanceStyle, appearance)
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {

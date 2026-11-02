@@ -67,11 +67,15 @@ final class AppPersistenceState: ObservableObject {
     }
 }
 
-private struct ModelContainerBootstrap {
+struct ModelContainerBootstrap {
     let container: ModelContainer?
     let persistenceDegraded: Bool
     let cloudSyncStatus: CloudSyncStatus
     let usesCloudBackedStore: Bool
+
+    /// One container per process: the app's scene and its App Intents (which can
+    /// run with no scene) share it, so two never open the CloudKit store at once.
+    static let shared = Writers_BlockApp.makeModelContainer()
 }
 
 
@@ -124,7 +128,10 @@ struct Writers_BlockApp: App {
         #if DEBUG
         CloudKitSchemaInitializer.runIfRequested()
         #endif
-        let bootstrap = Self.makeModelContainer()
+        let bootstrap = ModelContainerBootstrap.shared
+        if let action = UITestFlags.oneLinerPendingAction() {
+            OneLinerRouter.shared.request(action)
+        }
         _persistenceState = StateObject(
             wrappedValue: AppPersistenceState(
                 persistenceDegraded: bootstrap.persistenceDegraded,
@@ -239,7 +246,7 @@ struct Writers_BlockApp: App {
         }
     }
 
-    private static func makeModelContainer() -> ModelContainerBootstrap {
+    fileprivate static func makeModelContainer() -> ModelContainerBootstrap {
         let schema = Schema([
             SongProject.self,
             TrashedSongProject.self,
