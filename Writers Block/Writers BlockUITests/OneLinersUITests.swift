@@ -38,7 +38,18 @@ final class OneLinersUITests: XCTestCase {
         let line = app.staticTexts["Found the Lord in a gas station bathroom"]
         XCTAssertTrue(line.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Saved to One Liners"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["10 syl · bathroom"].exists)
+        Thread.sleep(forTimeInterval: 0.5)  // the toast settles
         attach(app, "4-list-saved")
+        let toast = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saved to One Liners")).firstMatch.frame
+        let typeButton = app.buttons["Type a one liner"].frame
+        XCTAssertLessThan(toast.maxY, typeButton.minY, "The toast covers the floating actions")
+
+        line.tap()
+        XCTAssertTrue(app.staticTexts["Edit one liner"].waitForExistence(timeout: 5))
+        attach(app, "4b-edit")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Line updated"].waitForExistence(timeout: 5))
 
         line.swipeRight()
         let send = app.buttons["Send to song"]
@@ -62,8 +73,14 @@ final class OneLinersUITests: XCTestCase {
             if allow.waitForExistence(timeout: 3) { allow.tap() }
         }
         XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 5))
+        let stop = app.buttons["Stop recording"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 1.5)
         attach(app, "7-capture-record")
+        stop.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5))
+        attach(app, "8-list-with-take")
     }
 
     @MainActor

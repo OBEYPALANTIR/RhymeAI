@@ -17,6 +17,7 @@ struct OneLinersView: View {
     @State private var capture: OneLinerCaptureMode?
     @State private var sendingLine: OneLiner?
     @State private var toast: Toast?
+    @State private var player = OneLinerPlayer()
 
     private struct Toast: Identifiable {
         let id = UUID()
@@ -69,17 +70,25 @@ struct OneLinersView: View {
         .contentShape(Rectangle())
         .foregroundStyle(palette.primaryInk)
         .onAppear { try? store.purgeExpired() }
+        .onDisappear { player.stop() }
+        .onChange(of: player.lastError) { _, message in
+            guard let message else { return }
+            player.lastError = nil
+            showToast(Toast(message: message))
+        }
         .sheet(item: $capture) { mode in
             OneLinerCaptureView(
                 mode: mode,
-                audioRoot: store.audioRoot,
+                pendingRoot: store.pendingRoot,
                 microphoneBusy: viewModel.voiceMemoService.isRecording
             ) { saved in
-                do {
-                    try store.add(text: saved.text, audioFileName: saved.audioFileName, audioDuration: saved.audioDuration)
+                // A throw keeps the sheet open with its words and take.
+                if case .edit(let line) = mode {
+                    try store.updateText(line, to: saved.text)
+                    showToast(Toast(message: "Line updated", systemImage: "checkmark"))
+                } else {
+                    try store.add(text: saved.text, take: saved.take, audioDuration: saved.audioDuration)
                     showToast(Toast(message: "Saved to One Liners", systemImage: "checkmark"))
-                } catch {
-                    showToast(Toast(message: "Couldn't save this line. Try again."))
                 }
             }
             .environment(\.appAppearanceStyle, appearance)
@@ -177,13 +186,15 @@ struct OneLinersView: View {
                             bottom: RhymeAITokens.Rhythm.related,
                             trailing: RhymeAITokens.Rhythm.standard
                         ))
-                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        .swipeActions(edge: .leading, allowsFullSwipe: !line.text.isEmpty) {
                             Button {
                                 sendingLine = line
                             } label: {
                                 Label("Send to song", systemImage: "arrow.turn.down.right")
                             }
                             .tint(palette.action)
+                            // An audio-only line has no words to send yet.
+                            .disabled(line.text.isEmpty)
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
@@ -207,40 +218,76 @@ struct OneLinersView: View {
     private func row(_ line: OneLiner) -> some View {
         let usedTitle = line.usedInProjectId.flatMap { projectTitles[$0] }
         let isVoiceOnly = line.text.isEmpty
-        return VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
-            Text(isVoiceOnly ? "Voice line" : line.text)
-                .font(.callout)
-                .italic(isVoiceOnly)
-                .foregroundStyle(line.usedInProjectId == nil && !isVoiceOnly ? palette.primaryInk : palette.secondaryInk)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        return HStack(alignment: .center, spacing: RhymeAITokens.Spacing.xs) {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                Text(isVoiceOnly ? "Voice line" : line.text)
+                    .font(.callout)
+                    .italic(isVoiceOnly)
+                    .foregroundStyle(line.usedInProjectId == nil && !isVoiceOnly ? palette.primaryInk : palette.secondaryInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                Text(Self.relativeDateText(line.createdAt))
-                if line.audioFileName != nil {
-                    HStack(spacing: RhymeAITokens.Spacing.xxs) {
-                        Image(systemName: "mic")
-                            .fontWeight(.medium)
-                        Text(OneLinerCaptureView.durationText(line.audioDuration))
-                            .monospacedDigit()
+                if isVoiceOnly {
+                    Text("Transcribe or type the words first. Tap to add them.")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondaryInk)
+                }
+
+                HStack(spacing: RhymeAITokens.Spacing.xs) {
+                    Text(Self.relativeDateText(line.createdAt))
+                    if line.audioFileName != nil {
+                        HStack(spacing: RhymeAITokens.Spacing.xxs) {
+                            Image(systemName: "mic")
+                                .fontWeight(.medium)
+                            Text(OneLinerCaptureView.durationText(line.audioDuration))
+                                .monospacedDigit()
+                        }
+                    }
+                    if let usedTitle {
+                        Text("In \(usedTitle)")
+                            .lineLimit(1)
+                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                            .padding(.vertical, 1)
+                            .background(palette.raisedSurface, in: Capsule())
+                    }
+                    Spacer(minLength: RhymeAITokens.Spacing.xs)
+                    if !isVoiceOnly {
+                        Text(Self.prosodyBadge(line))
+                            .monospaced()
+                            .lineLimit(1)
+                            .layoutPriority(1)
                     }
                 }
-                if let usedTitle {
-                    Text("In \(usedTitle)")
-                        .lineLimit(1)
-                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                        .padding(.vertical, 1)
-                        .background(palette.raisedSurface, in: Capsule())
-                }
-                Spacer(minLength: RhymeAITokens.Spacing.xs)
-                Text(Self.prosodyBadge(line))
-                    .monospaced()
-                    .lineLimit(1)
-                    .layoutPriority(1)
+                .font(.caption)
+                .foregroundStyle(palette.secondaryInk)
             }
-            .font(.caption)
-            .foregroundStyle(palette.secondaryInk)
+            .contentShape(Rectangle())
+            .onTapGesture { capture = .edit(line) }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Edits the words")
+            .accessibilityAction { capture = .edit(line) }
+
+            if let fileName = line.audioFileName {
+                playButton(store.audioURL(fileName: fileName))
+            }
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    private func playButton(_ url: URL) -> some View {
+        let isPlaying = player.playingURL == url
+        return Button {
+            if !isPlaying { viewModel.voiceMemoService.stopPlayback() }
+            player.toggle(url)
+        } label: {
+            Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                .font(.body.weight(.medium))
+                .foregroundStyle(isPlaying ? palette.recording : palette.secondaryInk)
+                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+                .overlay(Circle().strokeBorder(palette.outline, lineWidth: 1))
+        }
+        // Borderless: in a List a plain button would take taps for the whole row.
+        .buttonStyle(.borderless)
+        .accessibilityLabel(isPlaying ? "Stop take" : "Play take")
     }
 
     private func emptyState(title: String, caption: String?) -> some View {
@@ -296,7 +343,7 @@ struct OneLinersView: View {
                 .padding(.horizontal, RhymeAITokens.Rhythm.standard)
                 .frame(minHeight: RhymeAITokens.Rhythm.primary)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Rhythm.primary / 2)
-                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+                .shadow(color: palette.primaryInk.opacity(0.16), radius: 10, y: 4)
             }
             .buttonStyle(.rhymePress)
             .accessibilityLabel("Record a one liner")
@@ -356,12 +403,15 @@ struct OneLinersView: View {
         do {
             try store.sendToSong(line, project: project, editor: viewModel)
             showToast(Toast(message: "Sent to \u{201c}\(title)\u{201d}", systemImage: "checkmark"))
+        } catch let error as OneLinersStoreError {
+            showToast(Toast(message: error.errorDescription ?? "Couldn't send this line. Try again."))
         } catch {
             showToast(Toast(message: "Couldn't send this line. Try again."))
         }
     }
 
     private func trash(_ line: OneLiner) {
+        if let fileName = line.audioFileName, player.playingURL == store.audioURL(fileName: fileName) { player.stop() }
         do {
             let trashed = try store.trash(line)
             showToast(Toast(message: "Line moved to Trash", action: ("Undo", { _ = try? store.restore(trashed) })))
@@ -411,8 +461,8 @@ struct OneLinersView: View {
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .frame(minHeight: RhymeAITokens.Touch.minimum)
         .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.06), fallbackOpacity: 0.14)
-        .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
+        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg)
+        .shadow(color: palette.primaryInk.opacity(0.3), radius: 14, y: 4)
         .accessibilityElement(children: .combine)
         .task(id: toast.id) {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -429,10 +479,10 @@ struct OneLinersView: View {
         count == 1 ? "1 line" : "\(count) lines"
     }
 
-    /// "10 syl · uw m"; the rhyme key is left off when the end word has none.
+    /// "10 syl · bathroom": the syllable count and the end word the line rhymes on.
     static func prosodyBadge(_ line: OneLiner) -> String {
-        let key = line.primaryRhymeKey
-        return key.isEmpty ? "\(line.syllableCount) syl" : "\(line.syllableCount) syl · \(key)"
+        let endWord = RhymeConstraint.lineEndWord(line.text)
+        return endWord.isEmpty ? "\(line.syllableCount) syl" : "\(line.syllableCount) syl · \(endWord)"
     }
 
     /// "Just now", "5 min ago", "Tue", "Oct 14", "Oct 14, 2025".

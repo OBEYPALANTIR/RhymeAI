@@ -446,7 +446,7 @@ struct TrashBinView: View {
                 VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
                     Text(title)
                         .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(appearance.palette.primaryInk)
                         .lineLimit(rowLineLimit)
 
                     Text(trashRemainingText(deleteAfter: line.deleteAfter))

@@ -1,56 +1,76 @@
 import SwiftUI
 import UIKit
 
-enum OneLinerCaptureMode: String, Identifiable {
+enum OneLinerCaptureMode: Identifiable {
     case record
     case type
+    /// New words for a saved line; no microphone.
+    case edit(OneLiner)
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .record: "record"
+        case .type: "type"
+        case .edit(let line): "edit-\(line.id)"
+        }
+    }
+
+    var isEdit: Bool {
+        if case .edit = self { return true }
+        return false
+    }
 }
 
 /// What a capture saved: the line, plus its take when one was recorded.
 struct OneLinerCapture {
     let text: String
-    let audioFileName: String?
+    /// The take's pending file; the store adopts it on a successful save.
+    let take: URL?
     let audioDuration: Double
 }
 
 /// Quick capture sheet. Record mode starts the microphone on open and
-/// transcribes on the device into the field; Type mode opens with the keyboard.
+/// transcribes on the device into the field; Type and Edit open with the keyboard.
 struct OneLinerCaptureView: View {
     let mode: OneLinerCaptureMode
-    let audioRoot: URL
+    /// Where a new take is written until a save adopts it.
+    let pendingRoot: URL
     /// A voice memo already holds the microphone; record mode falls back to typing.
     var microphoneBusy = false
-    let onSave: (OneLinerCapture) -> Void
+    /// Persists the capture; a throw keeps the sheet, the words and the take.
+    let onSave: (OneLinerCapture) throws -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appAppearanceStyle) private var appearance
     @State private var recorder = OneLinerRecorder()
     @State private var text = ""
     /// The field's text when the current take started; the transcript follows it.
     @State private var textBeforeTake = ""
-    @State private var takeDuration: Double = 0
     @State private var saved = false
+    @State private var saveError: String?
     @FocusState private var fieldFocused: Bool
 
     private var palette: AppAppearancePalette { appearance.palette }
 
     private var trimmedText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var canSave: Bool { !trimmedText.isEmpty || recorder.fileURL != nil }
+    private var canSave: Bool {
+        mode.isEdit ? !trimmedText.isEmpty : (!trimmedText.isEmpty || recorder.fileURL != nil)
+    }
+    private var canRecord: Bool { !mode.isEdit && !microphoneBusy }
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.standard) {
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
-                Text("New one liner")
+                Text(mode.isEdit ? "Edit one liner" : "New one liner")
                     .font(.footnote.weight(.semibold))
-                Text("Lands in One Liners. Pick a song later, or never.")
+                Text(mode.isEdit ? "Change the words. A recorded take stays as it was." : "Lands in One Liners. Pick a song later, or never.")
                     .font(.footnote)
             }
             .foregroundStyle(palette.secondaryInk)
 
             TextField(
-                "New one liner",
+                mode.isEdit ? "Edit one liner" : "New one liner",
                 text: $text,
                 prompt: Text("Say it or type it").foregroundStyle(palette.placeholder),
                 axis: .vertical
@@ -71,10 +91,10 @@ struct OneLinerCaptureView: View {
                 recordingRow
             }
 
-            if let notice = recorder.notice {
+            if let notice = saveError ?? recorder.notice {
                 Text(notice)
                     .font(.footnote)
-                    .foregroundStyle(palette.secondaryInk)
+                    .foregroundStyle(saveError == nil ? palette.secondaryInk : palette.error)
             }
 
             Spacer(minLength: 0)
@@ -92,11 +112,20 @@ struct OneLinerCaptureView: View {
             guard !transcript.isEmpty else { return }
             text = textBeforeTake.isEmpty ? transcript : textBeforeTake + " " + transcript
         }
+        // Leaving the app ends the take where it is (and cancels one still starting),
+        // so the microphone and the clock never run on in the background.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background, recorder.isRecording || recorder.isStarting else { return }
+            let wasRecording = recorder.isRecording
+            recorder.stop()
+            if wasRecording { recorder.notice = "Recording stopped when Writers Block went to the background. The take so far is kept." }
+        }
         .task {
-            if mode == .record && !microphoneBusy {
+            if case .edit(let line) = mode { text = line.text }
+            if case .record = mode, !microphoneBusy {
                 await startTake()
             } else {
-                if mode == .record {
+                if case .record = mode {
                     recorder.notice = "A voice memo is recording. Stop it to record here, or type the line."
                 }
                 fieldFocused = true
@@ -146,7 +175,9 @@ struct OneLinerCaptureView: View {
             .accessibilityLabel(fieldFocused ? "Hide keyboard" : "Switch to keyboard")
 
             if recorder.isRecording {
-                Button(action: stopTake) {
+                Button {
+                    recorder.stop()
+                } label: {
                     ZStack {
                         Circle().fill(palette.surface)
                         Circle().strokeBorder(palette.recording, lineWidth: 1)
@@ -158,13 +189,14 @@ struct OneLinerCaptureView: View {
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Stop recording")
-            } else if recorder.fileURL == nil && !microphoneBusy {
+            } else if recorder.fileURL == nil && canRecord {
                 Button {
                     Task { await startTake() }
                 } label: {
                     roundGlyph("mic", stroke: palette.outline, ink: palette.primaryInk)
                 }
                 .buttonStyle(.rhymePress)
+                .disabled(recorder.isStarting)
                 .accessibilityLabel("Record")
             }
 
@@ -195,25 +227,23 @@ struct OneLinerCaptureView: View {
 
     private func startTake() async {
         textBeforeTake = trimmedText
-        let url = audioRoot.appendingPathComponent("\(UUID().uuidString.lowercased()).m4a")
-        if !(await recorder.start(writingTo: url)) {
+        let url = pendingRoot.appendingPathComponent("\(UUID().uuidString.lowercased()).m4a")
+        if !(await recorder.start(writingTo: url)), !recorder.isRecording {
             fieldFocused = true
         }
     }
 
-    private func stopTake() {
-        takeDuration = recorder.stop()
-    }
-
     private func save() {
-        if recorder.isRecording { stopTake() }
+        if recorder.isRecording || recorder.isStarting { recorder.stop() }
         guard canSave else { return }
+        do {
+            try onSave(OneLinerCapture(text: trimmedText, take: recorder.fileURL, audioDuration: recorder.takeDuration))
+        } catch {
+            // The sheet, the words and the take stay for another try.
+            saveError = "Couldn't save this line. It's still here, so try again."
+            return
+        }
         saved = true
-        onSave(OneLinerCapture(
-            text: trimmedText,
-            audioFileName: recorder.fileURL?.lastPathComponent,
-            audioDuration: takeDuration
-        ))
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         dismiss()
     }
