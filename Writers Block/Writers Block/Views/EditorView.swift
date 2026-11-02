@@ -1,6 +1,10 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
 func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
@@ -197,7 +201,7 @@ struct EditorView: View {
             withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
                 viewModel.clearInsertionHighlight()
             }
-            try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 28 : 6))
+            try? await Task.sleep(for: .seconds(Self.isVoiceOverRunning ? 28 : 6))
             guard !Task.isCancelled else { return }
             viewModel.clearInsertionFeedback()
         }
@@ -337,7 +341,19 @@ struct EditorView: View {
     }
 
     private func dismissKeyboard() {
+        #if canImport(UIKit)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #else
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        #endif
+    }
+
+    private static var isVoiceOverRunning: Bool {
+        #if canImport(UIKit)
+        UIAccessibility.isVoiceOverRunning
+        #else
+        NSWorkspace.shared.isVoiceOverEnabled
+        #endif
     }
 
     // MARK: - iPad Layout (split view)
@@ -423,6 +439,7 @@ struct EditorView: View {
     /// compact layout and the regular layout below the side-column width.
     private func trackingAssistantSheet(_ content: some View) -> some View {
         content
+            #if canImport(UIKit)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
                 if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                     keyboardHeight = frame.height
@@ -433,6 +450,7 @@ struct EditorView: View {
                 keyboardIsVisible = false
                 keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
             }
+            #endif
             .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
                 if isPresented {
                     assistantSheetLifecycleTask?.cancel()

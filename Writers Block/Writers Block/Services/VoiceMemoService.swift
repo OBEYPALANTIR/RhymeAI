@@ -12,18 +12,25 @@ nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
 // deactivation before the next activation, even when that stop does not wait.
 nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
     static let shared = VoiceMemoAudioSessionTransitions(
+        // macOS has no audio session; recording and playback need no activation there.
         activateRecording: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
+            #endif
         },
         activatePlayback: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
+            #endif
         },
         deactivate: {
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
         }
     )
 
@@ -465,7 +472,7 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
-        if #available(iOS 17.0, *) {
+        if #available(iOS 17.0, macOS 14.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
             case .denied:
@@ -479,6 +486,7 @@ final class VoiceMemoService {
                 return false
             }
         } else {
+            #if os(iOS)
             return await withCheckedContinuation { continuation in
                 AVAudioSession.sharedInstance().requestRecordPermission { granted in
                     DispatchQueue.main.async {
@@ -487,6 +495,9 @@ final class VoiceMemoService {
                     }
                 }
             }
+            #else
+            return false
+            #endif
         }
     }
 
