@@ -49,6 +49,9 @@ class StudentPackageTests(unittest.TestCase):
                 exec(compile(stage, '<stage-again>', 'exec'), {})
                 self.assertEqual((root / 'staged/train_teacher.py').read_bytes(),
                                  (root / 'out/train_teacher.py').read_bytes())
+                (root / 'staged/train_teacher.py').write_text('changed')
+                with self.assertRaises(AssertionError):
+                    exec(compile(stage, '<corrupt-stage>', 'exec'), {})
                 # An edited input must fail before creating another output directory.
                 (inputs / 'train.jsonl').write_text('{}\n')
                 with self.assertRaisesRegex(ValueError, 'input changed'):

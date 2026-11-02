@@ -205,6 +205,8 @@ def main():
         write_json(out / "token-audit.json", token_audit)
         versions = {name: importlib.metadata.version(name) for name in
                     ("torch", "transformers", "peft", "accelerate", "bitsandbytes", "huggingface-hub")}
+        if args.resume and old_environment["versions"] != versions:
+            raise RuntimeError("Resume package versions changed")
         write_json(out / "environment.json", {"versions": versions,
                    "gpu": torch.cuda.get_device_name(0), "gpu_memory_bytes": total_memory,
                    "cuda": torch.version.cuda, "script_sha256": sha(__file__)})
@@ -213,8 +215,6 @@ def main():
         (out / "supervised-row-0.txt").write_text(decoded)
         print("SUPERVISED_ROW_0", decoded, flush=True)
         print("TOKEN_AUDIT", json.dumps(token_audit), flush=True)
-        if args.resume and old_environment["versions"] != versions:
-            raise RuntimeError("Resume package versions changed")
         quantization = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                          bnb_4bit_use_double_quant=True,
                                          bnb_4bit_compute_dtype=torch.bfloat16)
