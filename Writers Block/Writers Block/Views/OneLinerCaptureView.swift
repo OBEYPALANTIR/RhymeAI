@@ -49,6 +49,8 @@ struct OneLinerCaptureView: View {
     @State private var textBeforeTake = ""
     @State private var saved = false
     @State private var saveError: String?
+    /// This sheet's place in the router's open captures.
+    @State private var captureID = UUID()
     @FocusState private var fieldFocused: Bool
 
     private var palette: AppAppearancePalette { appearance.palette }
@@ -131,12 +133,13 @@ struct OneLinerCaptureView: View {
                 fieldFocused = true
             }
         }
-        // The Live Activity's Done: stop and save, as the Save button does.
-        .onChange(of: OneLinerRouter.shared.pending) { _, _ in
-            guard OneLinerRouter.shared.take([.stopRecording]) != nil else { return }
-            save()
+        .onAppear {
+            OneLinerRouter.shared.captureAppeared(captureID)
+            takeRequest()
         }
+        .onChange(of: OneLinerRouter.shared.pending) { _, _ in takeRequest() }
         .onDisappear {
+            OneLinerRouter.shared.captureDisappeared(captureID)
             // Closed without saving: the take is not kept.
             if !saved { recorder.discard() }
         }
@@ -229,6 +232,25 @@ struct OneLinerCaptureView: View {
             .background(palette.surface, in: Circle())
             .overlay(Circle().strokeBorder(stroke, lineWidth: 1))
     }
+
+    /// The Live Activity's Done stops and saves this take, as the Save button does.
+    /// Another Record or Type while this sheet is open never replaces it.
+    private func takeRequest() {
+        let router = OneLinerRouter.shared
+        guard router.openCaptures.contains(captureID), let action = router.pending else { return }
+        switch action {
+        case .stopRecording:
+            guard router.recordingOwner == recorder.id, router.take([.stopRecording]) != nil else { return }
+            save()
+        case .record, .type:
+            _ = router.take([.record, .type])
+            recorder.notice = Self.finishFirstNotice
+        case .open:
+            _ = router.take([.open])
+        }
+    }
+
+    static let finishFirstNotice = "Finish this one liner first. Save it or close it, then try again."
 
     private func startTake() async {
         textBeforeTake = trimmedText

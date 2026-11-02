@@ -133,6 +133,35 @@ final class OneLinersUITests: XCTestCase {
         stop.tap()
     }
 
+    /// A second Record while a line is still being typed keeps the line and says so.
+    @MainActor
+    func testASecondRequestKeepsTheOpenCapture() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store", "-oneLinerPendingAction", "type"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["New one liner"].waitForExistence(timeout: 8))
+        Thread.sleep(forTimeInterval: 0.8)  // the field takes focus once the sheet is up
+        app.typeText("Half a heart still beats on time")
+        let typed = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "Half a heart still beats on time"))
+        XCTAssertTrue(typed.firstMatch.waitForExistence(timeout: 3), "The words are typed before the second request")
+        attach(app, "second-request-before")
+
+        // The system opens the link into the running app; XCUIApplication.open relaunches it.
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "writersblock://one-liners/record")))
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let confirm = springboard.buttons["Open"]
+        if confirm.waitForExistence(timeout: 3) { confirm.tap() }
+
+        let notice = app.staticTexts["Finish this one liner first. Save it or close it, then try again."]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        attach(app, "second-request-after")
+        XCTAssertFalse(app.buttons["Stop recording"].exists, "The second request does not start recording")
+        XCTAssertTrue(typed.firstMatch.exists, "The typed words are still in the field")
+        attach(app, "second-request-kept")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Half a heart still beats on time"].waitForExistence(timeout: 5))
+    }
+
     @MainActor
     func testOpenActionShowsOneLiners() throws {
         let app = XCUIApplication()

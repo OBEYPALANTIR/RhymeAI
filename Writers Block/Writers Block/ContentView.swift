@@ -8,7 +8,24 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appAppearanceStyle) private var appearance
     /// One Liners opened by a shortcut, widget, control or link, over whatever is on screen.
-    @State private var oneLinersRoute: OneLinersRoute?
+    @State private var oneLinersCoverPresented = false
+
+    /// What the root does with a request for the One Liners screen.
+    enum OneLinersCoverStep: Equatable {
+        case present
+        /// A Projects, Templates or Settings sheet is up: close it, then present.
+        case closeSheetsFirst
+        /// The first-run restore offer waits for an answer; present once it is gone.
+        case wait
+        /// Not the root's request (no request, or the screen or a capture takes it).
+        case none
+    }
+
+    static func oneLinersCoverStep(handler: OneLinerRouter.Handler?, restoreOfferShown: Bool, sheetShown: Bool) -> OneLinersCoverStep {
+        guard handler == .root else { return .none }
+        if restoreOfferShown { return .wait }
+        return sheetShown ? .closeSheetsFirst : .present
+    }
 
     var body: some View {
         Group {
@@ -27,12 +44,11 @@ struct ContentView: View {
         .onOpenURL { url in
             if let action = OneLinerPendingAction(url: url) { OneLinerRouter.shared.request(action) }
         }
-        .onChange(of: OneLinerRouter.shared.pending, initial: true) { _, _ in
-            guard let action = OneLinerRouter.shared.take([.record, .type, .open]) else { return }
-            oneLinersRoute = OneLinersRoute(action: action)
-        }
-        .fullScreenCover(item: $oneLinersRoute) { route in
-            OneLinersView(onDismiss: { oneLinersRoute = nil }, initialCapture: route.capture)
+        .onChange(of: OneLinerRouter.shared.pending, initial: true) { _, _ in presentOneLinersIfRequested() }
+        .onChange(of: viewModel.firstRunRestoreOffer == nil) { _, _ in presentOneLinersIfRequested() }
+        // The screen takes the request once it is up, so a request that could not be shown stays pending.
+        .fullScreenCover(isPresented: $oneLinersCoverPresented) {
+            OneLinersView(onDismiss: { oneLinersCoverPresented = false }, takesRequests: true)
                 .environmentObject(viewModel)
                 .environment(\.appAppearanceStyle, appearance)
         }
@@ -61,6 +77,31 @@ struct ContentView: View {
                     idealWidth: horizontalSizeClass == .regular ? 520 : nil,
                     minHeight: horizontalSizeClass == .regular ? 560 : nil
                 )
+        }
+    }
+}
+
+extension ContentView {
+    private func presentOneLinersIfRequested() {
+        let step = Self.oneLinersCoverStep(
+            handler: OneLinerRouter.shared.handler(screenPresented: oneLinersCoverPresented),
+            restoreOfferShown: viewModel.firstRunRestoreOffer != nil,
+            sheetShown: viewModel.showProjectsSheet || viewModel.showTemplatesSheet || viewModel.showSettingsSheet
+        )
+        switch step {
+        case .present:
+            oneLinersCoverPresented = true
+        case .closeSheetsFirst:
+            viewModel.showProjectsSheet = false
+            viewModel.showTemplatesSheet = false
+            viewModel.showSettingsSheet = false
+            // shortcut: a fixed wait for the sheet to finish closing; a presentation started sooner is refused.
+            Task {
+                try? await Task.sleep(for: .milliseconds(600))
+                presentOneLinersIfRequested()
+            }
+        case .wait, .none:
+            break
         }
     }
 }

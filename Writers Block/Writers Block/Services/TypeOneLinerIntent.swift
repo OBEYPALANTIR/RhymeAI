@@ -23,6 +23,9 @@ struct TypeOneLinerIntent: AppIntent {
         return bootstrap.persistenceDegraded ? nil : bootstrap.container
     }
 
+    /// Where the widgets' snapshot goes after the save; tests point it at a temporary file.
+    static var snapshotURL: () -> URL? = { OneLinersSnapshot.defaultURL }
+
     @Parameter(title: "Line", requestValueDialog: "What's the line?")
     var text: String
 
@@ -37,7 +40,7 @@ struct TypeOneLinerIntent: AppIntent {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { throw $text.needsValueError("What's the line?") }
         guard let container = Self.container() else { throw OneLinerIntentError.libraryUnavailable }
-        try OneLinersStore(context: ModelContext(container)).add(text: line)
+        try OneLinersStore(context: ModelContext(container), snapshotURL: Self.snapshotURL()).add(text: line)
         return .result(dialog: "Saved to One Liners")
     }
 }

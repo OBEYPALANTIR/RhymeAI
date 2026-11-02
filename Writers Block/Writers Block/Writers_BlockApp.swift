@@ -76,6 +76,21 @@ struct ModelContainerBootstrap {
     /// One container per process: the app's scene and its App Intents (which can
     /// run with no scene) share it, so two never open the CloudKit store at once.
     static let shared = Writers_BlockApp.makeModelContainer()
+
+    // `groupContainer: .none` keeps the store in Application Support: with the App
+    // Group entitlement the default (.automatic) would move it into the group container.
+    static func cloudKitConfiguration(schema: Schema) -> ModelConfiguration {
+        ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            groupContainer: .none,
+            cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
+        )
+    }
+
+    static func localConfiguration(schema: Schema) -> ModelConfiguration {
+        ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, groupContainer: .none, cloudKitDatabase: .none)
+    }
 }
 
 
@@ -287,11 +302,7 @@ struct Writers_BlockApp: App {
         // The unsigned persistent UI-test bundle cannot initialize CloudKit's
         // asynchronous store setup. Keep its relaunch test local to its own app data.
         if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store") {
-            let cloudKit = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: false,
-                cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
-            )
+            let cloudKit = ModelContainerBootstrap.cloudKitConfiguration(schema: schema)
             do {
                 return ModelContainerBootstrap(
                     container: try ModelContainer(for: schema, configurations: [cloudKit]),
@@ -304,7 +315,7 @@ struct Writers_BlockApp: App {
             }
         }
 
-        let localOnly = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
+        let localOnly = ModelContainerBootstrap.localConfiguration(schema: schema)
         do {
             return ModelContainerBootstrap(
                 container: try ModelContainer(for: schema, configurations: [localOnly]),

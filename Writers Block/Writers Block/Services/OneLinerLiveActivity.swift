@@ -7,6 +7,8 @@ final class OneLinerLiveActivity {
     typealias Phase = OneLinerActivityAttributes.ContentState.Phase
 
     static let minimumInterval: Duration = .milliseconds(250)
+    /// ActivityKit refuses content over 4 KB; the capture keeps the whole transcript.
+    static let transcriptLimit = 600
     /// How long an ended activity shows its outcome before the system removes it.
     static let endedDisplayTime: TimeInterval = 4
 
@@ -18,7 +20,7 @@ final class OneLinerLiveActivity {
 
     func start(startedAt: Date, levels: [Float]) {
         guard activity == nil, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        state = .init(phase: .recording, transcript: "", levels: levels.map(Double.init))
+        state = Self.contentState(phase: .recording, transcript: "", levels: levels)
         let attributes = OneLinerActivityAttributes(
             startedAt: startedAt,
             appearance: AppAppearanceStyle.resolve(UserDefaults.standard.string(forKey: AppAppearanceStyle.storageKey)).rawValue
@@ -30,8 +32,7 @@ final class OneLinerLiveActivity {
 
     func update(transcript: String, levels: [Float]) {
         guard activity != nil else { return }
-        state.transcript = transcript
-        state.levels = levels.map(Double.init)
+        state = Self.contentState(phase: .recording, transcript: transcript, levels: levels)
         guard heldUpdate == nil else { return }
         let wait = Self.delay(since: lastSent, now: .now)
         guard wait > .zero else { return send() }
@@ -60,6 +61,14 @@ final class OneLinerLiveActivity {
         lastSent = .now
         let content = ActivityContent(state: state, staleDate: nil)
         Task { await activity.update(content) }
+    }
+
+    /// The end of the transcript within `transcriptLimit` UTF-8 bytes, and levels to two places.
+    static func contentState(phase: Phase, transcript: String, levels: [Float]) -> OneLinerActivityAttributes.ContentState {
+        var tail = transcript.suffix(transcriptLimit)
+        while tail.utf8.count > transcriptLimit { tail = tail.dropFirst() }
+        let preview = tail.count < transcript.count ? "…" + tail : String(tail)
+        return .init(phase: phase, transcript: preview, levels: levels.map { (Double($0) * 100).rounded() / 100 })
     }
 
     /// How long the next update waits so updates go at most once per `minimumInterval`.
