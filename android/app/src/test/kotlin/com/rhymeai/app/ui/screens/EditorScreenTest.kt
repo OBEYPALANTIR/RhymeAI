@@ -16,6 +16,13 @@ class EditorScreenTest {
     }
 
     @Test
+    fun `song notebook and one liners keep the rewrite selection, other modals clear it`() {
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = true, oneLinersOpen = false))
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = true))
+        assertFalse(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = false))
+    }
+
+    @Test
     fun `compact editor stats format zero counts`() {
         val result = compactEditorStats(wordCount = 0, syllableCount = 0)
 
