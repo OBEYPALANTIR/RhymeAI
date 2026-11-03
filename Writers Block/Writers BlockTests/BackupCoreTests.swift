@@ -1904,6 +1904,47 @@ struct BackupCoreTests {
         #expect(!after.projects.contains { $0.id == recovered } && after.deletions.contains { $0.projectId == recovered })
     }
 
+    /// A tombstone held only by an older duplicate manifest (two writers raced)
+    /// still holds the recovered song: it is not recreated and is counted deleted.
+    @MainActor
+    @Test func aTombstoneInAnOlderDuplicateManifestHoldsTheRecoveredSong() async throws {
+        let drive = FakeDriveClient()
+        let audio = Data("the take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        let manifest = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "a"),
+                                                    current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await device.service.probeRevisions().last)
+        #expect(revision.fileId == manifest.id)
+        let recovered = BackupService.recoveredId(fileId: manifest.id, revisionId: revision.id, "s")
+        drive.seedDuplicateManifest(try SyncBlob(deletions: [SyncDeletion(projectId: recovered, deletedAt: Date().epochMilliseconds)], savedByClientId: "b").encodedManifest())
+
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        #expect(device.service.lastReport?.songsDeletedSince == 1 && device.service.lastReport?.recoveredSongs == 0)
+        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+        #expect(drive.deleteCount == 0, "the duplicate is left for the next backup to fold in")
+    }
+
+    /// A take declaring an absurd size is never estimated or downloaded: it is
+    /// reported, the space check cannot overflow, and the rest still comes back.
+    @MainActor
+    @Test func aTakeDeclaringAnAbsurdSizeIsReportedWithoutTrapping() async throws {
+        let drive = FakeDriveClient()
+        let audio = Data("the take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        let huge = SyncRecording(id: "huge", projectId: "u", fileName: "huge.m4a", bytes: 4_611_686_018_427_387_904,
+                                 sha256: String(repeating: "a", count: 64), uploadedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s"), Self.song("u")], recordings: [take, huge], savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
+        drive.seed(name: huge.driveName, content: Data("x".utf8), appProperties: ["id": huge.id, "projectId": "u", "fileName": huge.fileName, "sha256": huge.sha256, "bytes": String(huge.bytes)])
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        device.service.freeSpace = { 1024 * 1024 * 1024 }
+        try await device.service.recoverRevision(try #require(try await device.service.probeRevisions().last), modelContext: device.context)
+        let report = try #require(device.service.lastReport)
+        #expect(report.recoveredSongs == 2 && report.recoveredRecordings == 1 && report.missingRecordings == ["huge.m4a"])
+        #expect(!drive.downloadAttempts.contains(try #require(try await drive.findFile(named: huge.driveName, accessToken: "")).id))
+    }
+
     /// Only a gone object, another declared size, or other bytes passes over to the
     /// next object under a take's name. A quota error on the second take, after the
     /// first downloaded, stops the run with nothing in the library (also after a
