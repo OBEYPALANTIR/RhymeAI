@@ -87,7 +87,7 @@ struct GGUFMarkerStrippingTests {
 
 struct GGUFDownloadCatalogTests {
     @Test func catalogUsesRhymeAITunedModels() {
-        let options = GGUFDownloadCatalog.options
+        let options = Array(GGUFDownloadCatalog.options.prefix(2))
 
         #expect(options.count == 2)
         #expect(options.allSatisfy { $0.url.host == "huggingface.co" })
@@ -102,6 +102,42 @@ struct GGUFDownloadCatalogTests {
             "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
             "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
         ])
+    }
+
+    @Test func largerModelIsOnlyOfferedOnMac() {
+#if os(macOS)
+        let option = GGUFDownloadCatalog.option(id: "gemma-4-12b-v7")
+        #expect(GGUFDownloadCatalog.options.count == 3)
+        #expect(option?.fileName == "gemma-4-12B-it-rhymeai-v7-Q4_K_M.gguf")
+        #expect(option?.expectedBytes == 7_381_382_976)
+        #expect(option?.sha256 == "b4da9dba8ca8dd8bd7fb1c327d4e7acff0c7390f5ff7f89526135adf3b169310")
+        #expect(option?.url.path.contains("/resolve/\(GGUFDownloadCatalog.mac12BV7Revision)/") == true)
+        #expect(GGUFDownloadCatalog.mac12BV7Revision.count == 40)
+        #expect(GGUFDownloadCatalog.mac12BV7Revision.allSatisfy { "0123456789abcdef".contains($0) })
+        #expect(option?.isRecommended == false)
+        if let option {
+            #expect(GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: (16 << 30) - 1))
+            #expect(!GGUFDownloadCatalog.needsMoreMemory(option, totalRAMBytes: 16 << 30))
+        }
+#else
+        #expect(GGUFDownloadCatalog.options.count == 2)
+        #expect(GGUFDownloadCatalog.option(id: "gemma-4-12b-v7") == nil)
+        #expect(!GGUFDownloadCatalog.options.contains { $0.fileName.contains("12B") })
+#endif
+    }
+
+    @Test func selectedSamplingPolicyRequiresExactVerifiedWeightsOnMac() {
+        #expect(!GGUFModelService.usesV7Sampling(verifiedSHA256: nil))
+        #expect(!GGUFModelService.usesV7Sampling(verifiedSHA256: "unverified"))
+        for option in GGUFDownloadCatalog.options.prefix(2) {
+            #expect(!GGUFModelService.usesV7Sampling(verifiedSHA256: option.sha256))
+        }
+        let selectedSHA = "b4da9dba8ca8dd8bd7fb1c327d4e7acff0c7390f5ff7f89526135adf3b169310"
+#if os(macOS)
+        #expect(GGUFModelService.usesV7Sampling(verifiedSHA256: selectedSHA))
+#else
+        #expect(!GGUFModelService.usesV7Sampling(verifiedSHA256: selectedSHA))
+#endif
     }
 
     // The catalog must pin an immutable commit, never a branch or placeholder.
