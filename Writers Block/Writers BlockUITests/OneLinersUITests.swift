@@ -132,6 +132,17 @@ final class OneLinersUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         attach(app, "link-record")
         stop.tap()
+
+        // The stopped take says it is attached and can be thrown away for another.
+        let discard = app.buttons["Discard take"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 5), "A stopped take shows its row")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Take, ")).firstMatch.exists)
+        XCTAssertFalse(app.buttons["Record"].exists, "One take at a time")
+        attach(app, "link-record-take")
+        discard.tap()
+        XCTAssertTrue(app.buttons["Record"].waitForExistence(timeout: 5), "Discarding brings the mic back")
+        XCTAssertFalse(discard.exists)
+        attach(app, "link-record-discarded")
     }
 
     /// A widget's Type opens the sheet with the keyboard already up, from a cold start.
@@ -233,6 +244,7 @@ final class OneLinersUITests: XCTestCase {
         XCTAssertTrue(focused.waitForExistence(timeout: 5), "The field has the keyboard with no tap")
         XCTAssertEqual(focused.placeholderValue, "Say it or type it")
         XCTAssertFalse(app.buttons["Stop recording"].exists, "Type does not record")
+        XCTAssertFalse(app.buttons["Discard take"].exists, "No take, no take row")
         attach(app, "welcome-type")
         app.typeText("Straight from the welcome screen")
         app.buttons["Save"].tap()
