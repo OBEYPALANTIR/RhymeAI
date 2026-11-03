@@ -231,6 +231,7 @@ class MainActivity : ComponentActivity() {
                     viewModel.restoreOffer?.let { offer ->
                         RestoreOfferSheet(
                             offer = offer,
+                            backupPaused = viewModel.backupStatus is com.rhymeai.app.data.sync.BackupStatus.Paused,
                             onRestore = viewModel::acceptRestoreOffer,
                             onNotNow = viewModel::declineRestoreOffer
                         )
@@ -396,7 +397,8 @@ class MainActivity : ComponentActivity() {
                                 busyLabel = viewModel.backupBusyLabel,
                                 legacyBackupPresent = viewModel.legacyBackupPresent,
                                 migrationInProgress = viewModel.migrationInProgress,
-                                migrationError = viewModel.migrationError
+                                migrationError = viewModel.migrationError,
+                                emptyBackupConfirm = viewModel.emptyBackupConfirm
                             ),
                             backupActions = remember(viewModel) {
                                 BackupSectionActions(
@@ -407,7 +409,9 @@ class MainActivity : ComponentActivity() {
                                     onMigrate = viewModel::migrateLegacyBackup,
                                     exportFileName = viewModel::exportFileName,
                                     onExport = viewModel::exportBackup,
-                                    onImport = viewModel::importBackup
+                                    onImport = viewModel::importBackup,
+                                    onConfirmEmptyBackup = viewModel::confirmEmptyBackup,
+                                    onCancelEmptyBackup = viewModel::cancelEmptyBackup
                                 )
                             },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().

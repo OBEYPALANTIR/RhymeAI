@@ -37,6 +37,10 @@ class BackupScheduleTest {
         assertEquals("Last backed up yesterday · Google Drive", backupStatusLine(BackupStatus.Connected(now - 30 * 60 * minute), now))
         assertEquals("Last backed up 4 days ago · Google Drive", backupStatusLine(BackupStatus.Connected(now - 4 * 24 * 60 * minute), now))
         assertEquals("Backup failed: offline", backupStatusLine(BackupStatus.Failed("Backup failed: offline", null), now))
+        assertEquals(
+            "Backup paused: this phone has no songs and Drive has 12. Restore to continue.",
+            backupStatusLine(BackupStatus.Paused(12), now)
+        )
     }
 
     @Test
@@ -74,6 +78,14 @@ class BackupScheduleTest {
             "We found 3 songs and 1 recording in your Google Drive backup.",
             restoreOfferBody(BackupProbe(projectCount = 3, recordingCount = 1, legacyBackupPresent = false))
         )
+        assertEquals(
+            "We found 1 song and 2 recordings in your Google Drive backup. Not now leaves Drive as it is; backup stays paused until you restore.",
+            restoreOfferBody(BackupProbe(projectCount = 1, recordingCount = 2, legacyBackupPresent = false), backupPaused = true)
+        )
+        assertEquals(
+            "This phone has no songs. Backing up now merges Drive's 5 songs with nothing from this phone. To get them back here, tap Restore instead.",
+            emptyBackupConfirmation(5)
+        )
         assertNull(backupResultNotice(SyncResult.Success(SyncBlob()), BackupAction.BackUp))
         assertEquals(
             "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive. 2 recordings are over 16 MB and were skipped.",
@@ -87,5 +99,19 @@ class BackupScheduleTest {
             "Restored 0 songs and 0 recordings. 1 recording did not match its backup checksum and was not saved.",
             backupResultNotice(SyncResult.Success(SyncBlob(), damagedRecordings = 1), BackupAction.Restore)
         )
+    }
+
+    @Test
+    fun anEmptyLibraryNeverBacksUpAutomaticallyOverADriveWithSongs() {
+        val d = BackupGate::decide
+        // The reinstall case: nothing here, songs in Drive.
+        assertEquals(BackupGate.Decision.PAUSE, d(0, 7, false, false))
+        assertEquals(BackupGate.Decision.CONFIRM, d(0, 7, true, false))
+        assertEquals(BackupGate.Decision.RUN, d(0, 7, true, true))
+        // Nothing to protect, or something here to add: back up as before.
+        assertEquals(BackupGate.Decision.RUN, d(0, 0, false, false))
+        assertEquals(BackupGate.Decision.RUN, d(0, 0, true, false))
+        assertEquals(BackupGate.Decision.RUN, d(1, 7, false, false))
+        assertEquals(BackupGate.Decision.RUN, d(3, 0, true, false))
     }
 }

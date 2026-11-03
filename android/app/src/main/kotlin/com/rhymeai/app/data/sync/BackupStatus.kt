@@ -7,6 +7,28 @@ sealed class BackupStatus {
     data object Pending : BackupStatus()
     data object BackingUp : BackupStatus()
     data class Failed(val reason: String, val lastBackupAt: Long?) : BackupStatus()
+    /** This device has no songs and Drive has [remoteSongCount]: nothing uploads until Restore or a confirmed Back up now. */
+    data class Paused(val remoteSongCount: Int) : BackupStatus()
+}
+
+/**
+ * Restore first: a device with no songs never backs up automatically over a Drive
+ * that lists songs (a reinstall, before Restore). Back up now asks first.
+ */
+object BackupGate {
+    enum class Decision { RUN, PAUSE, CONFIRM }
+
+    fun decide(localSongCount: Int, remoteSongCount: Int, interactive: Boolean, userConfirmed: Boolean): Decision = when {
+        localSongCount > 0 || remoteSongCount == 0 || userConfirmed -> Decision.RUN
+        interactive -> Decision.CONFIRM
+        else -> Decision.PAUSE
+    }
+}
+
+/** The Back up now confirmation for an empty device over a Drive with songs. */
+fun emptyBackupConfirmation(remoteSongCount: Int): String {
+    val songs = if (remoteSongCount == 1) "1 song" else "$remoteSongCount songs"
+    return "This phone has no songs. Backing up now merges Drive's $songs with nothing from this phone. To get them back here, tap Restore instead."
 }
 
 object BackupSchedule {
@@ -47,6 +69,7 @@ fun backupStatusLine(status: BackupStatus, nowMillis: Long): String = when (stat
         ?.let { "Last backed up ${relativeTime(nowMillis, it)} · Google Drive" }
         ?: "Connected · Google Drive"
     is BackupStatus.Failed -> status.reason
+    is BackupStatus.Paused -> "Backup paused: this phone has no songs and Drive has ${status.remoteSongCount}. Restore to continue."
 }
 
 internal fun relativeTime(nowMillis: Long, thenMillis: Long): String {
