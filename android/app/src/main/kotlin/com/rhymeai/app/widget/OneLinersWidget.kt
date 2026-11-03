@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +44,8 @@ import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.colorSchemeFor
 import com.rhymeai.app.ui.theme.recordingAccentColor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -49,12 +54,20 @@ class OneLinersWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Responsive(setOf(SMALL, MEDIUM))
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snapshot = withContext(Dispatchers.IO) {
-            runCatching {
-                Json { ignoreUnknownKeys = true }.decodeFromString<OneLinersSnapshot>(OneLinersStore.snapshotFile(context).readText())
-            }.getOrNull()
+        val first = read(context)
+        provideContent {
+            // Glance keeps a session running (45 s and more) and updateAll only recomposes it, never
+            // calling provideGlance again, so each refresh re-reads the snapshot here.
+            val version by refreshes.collectAsState()
+            val snapshot by produceState(first, version) { value = read(context) }
+            Content(context, snapshot)
         }
-        provideContent { Content(context, snapshot) }
+    }
+
+    private suspend fun read(context: Context): OneLinersSnapshot? = withContext(Dispatchers.IO) {
+        runCatching {
+            Json { ignoreUnknownKeys = true }.decodeFromString<OneLinersSnapshot>(OneLinersStore.snapshotFile(context).readText())
+        }.getOrNull()
     }
 
     @Composable
@@ -110,7 +123,13 @@ class OneLinersWidget : GlanceAppWidget() {
             Intent(Intent.ACTION_VIEW, Uri.parse(action.link), context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-        suspend fun refresh(context: Context) = OneLinersWidget().updateAll(context)
+        /** Bumped on every refresh, so a session still running reads the new snapshot. */
+        private val refreshes = MutableStateFlow(0)
+
+        suspend fun refresh(context: Context) {
+            refreshes.update { it + 1 }
+            OneLinersWidget().updateAll(context)
+        }
     }
 }
 
