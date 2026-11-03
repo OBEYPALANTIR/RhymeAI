@@ -142,6 +142,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     DisposableEffect(player) { onDispose { player.stop() } }
     var query by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
+    var searchFocused by remember { mutableStateOf(false) }
     val captures = viewModel.oneLinerCaptures
     var sendingLine by remember { mutableStateOf<OneLiner?>(null) }
     val lines = viewModel.oneLiners
@@ -221,7 +222,10 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     } else null,
                     placeholder = { Text("Search one liners") },
                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                    modifier = Modifier.fillMaxWidth().padding(top = DesignTokens.Rhythm.related)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = DesignTokens.Rhythm.related)
+                        .onFocusChanged { searchFocused = it.isFocused }
                 )
                 if (lines.isNotEmpty()) {
                     Text(
@@ -303,9 +307,12 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             onPick = { project ->
                 sendingLine = null
                 viewModel.sendOneLinerToSong(line, project) { message ->
-                    // The closing picker hands focus back to the search field; a finished send leaves none.
-                    focusManager.clearFocus()
-                    scope.launch { snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short) }
+                    scope.launch {
+                        // The closing picker hands focus back to the search field; a finished send
+                        // leaves none. On this screen's scope, so a send finishing after it left does nothing.
+                        if (searchFocused) focusManager.clearFocus()
+                        snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+                    }
                 }
             },
             onDismiss = { sendingLine = null }
