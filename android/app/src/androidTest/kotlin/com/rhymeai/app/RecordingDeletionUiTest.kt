@@ -66,7 +66,7 @@ class RecordingDeletionUiTest {
 
     @After fun closeEditor() {
         if (::projectId.isInitialized) RecordingFiles.memoDirectory(filesDir, projectId).deleteRecursively()
-        scenario.close()
+        if (::scenario.isInitialized) scenario.close()
         BackupTestHooks.driveClient = null
         BackupTestHooks.authorizer = null
         backupPrefs().edit().clear().commit()

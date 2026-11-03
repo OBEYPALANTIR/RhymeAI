@@ -36,10 +36,12 @@ import com.rhymeai.app.ui.components.BackupSectionActions
 import com.rhymeai.app.ui.components.BackupSectionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.RhymeAITheme
+import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.data.sync.backupStatusLine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -172,6 +174,12 @@ class BackupFlowInstrumentedTest {
     private var savedProjects: List<SongProject> = emptyList()
     private var savedTrash: List<TrashedSongProject> = emptyList()
     private var scenario: ActivityScenario<MainActivity>? = null
+
+    // Each launch while the dictionary is still loading starts another full load; this class relaunches
+    // fast enough to stack them past the 192 MB heap. Loaded once here, no launch loads it again.
+    @Before fun loadDictionaryOnce() {
+        if (PronunciationDictionary.shared.wordCount == 0) context.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+    }
 
     private fun launchConnectedWithEmptyLibrary(): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
