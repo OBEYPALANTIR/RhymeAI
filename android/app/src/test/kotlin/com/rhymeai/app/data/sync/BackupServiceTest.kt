@@ -2326,4 +2326,44 @@ class BackupServiceTest {
         assertFails { empty.validate() }
         assertFails { BackupManifest.encode(SyncBlob(recordings = listOf(empty)), 1L, "x") }
     }
+
+    /** Device A backs up two songs, each with a take; returns the two raw Drive names. */
+    private suspend fun backUpTwoSongsWithTakes(): List<String> {
+        repository.saveProjects(listOf(song("one"), song("two")))
+        val takes = listOf(writeMemo("one", "a.m4a", "take one".toByteArray()), writeMemo("two", "b.m4a", "take two".toByteArray()))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        return takes.map { BackupManifest.recordingDriveName(it.id) }
+    }
+
+    @Test
+    fun aFreshEmptyDeviceBackingUpLeavesDrivesSongsAndRecordingsInPlace() = runBlocking<Unit> {
+        val raw = backUpTwoSongsWithTakes()
+        // A reinstall: empty library, new client id, same Drive.
+        val (fresh, freshSide) = secondDevice("reinstalled")
+        clock += 60_000L
+
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+
+        assertEquals(setOf("one", "two"), remote().projects.map { it.id }.toSet())
+        assertEquals(2, remote().recordings.size)
+        raw.forEach { assertNotNull(drive.file(it), "$it was deleted from Drive") }
+        // Back up never applies Drive here.
+        assertTrue(fresh.projectsFlow.first().isEmpty())
+        assertTrue(fresh.recordingRecords().isEmpty())
+    }
+
+    @Test
+    fun aFreshDeviceWithOneNewSongAddsItToDrivesSongs() = runBlocking<Unit> {
+        val raw = backUpTwoSongsWithTakes()
+        val (fresh, freshSide) = secondDevice("reinstalled")
+        fresh.saveProjects(listOf(song("three")))
+        clock += 60_000L
+
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+
+        assertEquals(setOf("one", "two", "three"), remote().projects.map { it.id }.toSet())
+        assertEquals(2, remote().recordings.size)
+        raw.forEach { assertNotNull(drive.file(it), "$it was deleted from Drive") }
+        assertEquals(listOf("three"), fresh.projectsFlow.first().map { it.id })
+    }
 }
