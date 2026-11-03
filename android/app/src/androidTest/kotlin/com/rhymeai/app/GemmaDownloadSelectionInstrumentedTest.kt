@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
@@ -11,6 +12,7 @@ import com.rhymeai.app.ui.components.GemmaDownload
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -36,6 +38,10 @@ class GemmaDownloadSelectionInstrumentedTest {
     private lateinit var viewModel: MainViewModel
     private val file = File(app.filesDir, "selection-qa.gguf")
     private lateinit var download: GemmaDownload
+    // The stored choice as the class found it: a test that applies Gemini must not leave it for later classes.
+    private val repo = ProjectRepository(app)
+    private val providerBefore = runBlocking { repo.selectedProviderFlow.first() }
+    private val modelBefore = runBlocking { repo.modelIdFlow.first() }
 
     @Before
     fun setUp() {
@@ -58,6 +64,10 @@ class GemmaDownloadSelectionInstrumentedTest {
     @After
     fun tearDown() {
         file.delete()
+        runBlocking {
+            repo.saveSelectedProvider(providerBefore)
+            repo.saveModelId(modelBefore)
+        }
     }
 
     @Test

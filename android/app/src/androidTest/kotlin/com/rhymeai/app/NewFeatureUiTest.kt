@@ -16,6 +16,8 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -533,6 +535,10 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
         composeRule.onNodeWithContentDescription("Delete UI Trash Song").performClick()
+        // The snackbar follows the stored move, which Compose idling does not wait for.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("\"UI Trash Song\" moved to Trash").fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText("\"UI Trash Song\" moved to Trash").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
 
@@ -847,6 +853,8 @@ class NewFeatureUiTest {
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun rewriteActionsOpenReviewBarAndCancelBackToChipBar() {
+        // On-device rewrites: a cloud provider left selected would ask for sharing consent first.
+        scenario?.onActivity { ViewModelProvider(it)[MainViewModel::class.java].saveProvider(AIProvider.LOCAL) }
         composeRule.onNodeWithText("New Song").performClick()
 
         val lyrics = "yellow music\nfollow music"
@@ -861,7 +869,7 @@ class NewFeatureUiTest {
             if (action == "Punch Up") {
                 captureRootScreenshot("rewrite-review-punch-up.png")
             }
-            composeRule.onNodeWithText("Cancel").performClick()
+            composeRule.onNode(hasText("Cancel") and hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))).performClick()
             composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
         }
     }
