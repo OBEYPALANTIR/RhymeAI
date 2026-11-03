@@ -32,11 +32,11 @@ object BackupGate {
     }
 }
 
-/** "Nov 1, 3:14 PM · 14 KB" for one earlier Drive backup (its contents are read only once it is chosen). */
+/** "Nov 1, 3:14 PM · 14 KB" (plus " · Kept" when Drive keeps it forever) for one earlier Drive backup. */
 fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
     val time = revisionTime(revision, zone, locale)
-    val size = revision.sizeBytes ?: return time
-    return "$time · ${if (size < 1024) "$size bytes" else "${(size + 1023) / 1024} KB"}"
+    val size = revision.sizeBytes?.let { if (it < 1024) "$it bytes" else "${(it + 1023) / 1024} KB" }
+    return listOfNotNull(time, size, "Kept".takeIf { revision.kept }).joinToString(" · ")
 }
 
 /** What recovering [revision] does, said before anything is asked of Drive (its contents are unknown until then). */

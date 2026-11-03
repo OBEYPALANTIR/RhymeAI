@@ -136,6 +136,7 @@ class BackupScheduleTest {
         assertEquals("Nov 1, 3:14 PM · 14 KB", revisionLabel(revision, utc, us))
         assertEquals("Nov 1, 3:14 PM · 900 bytes", revisionLabel(revision.copy(sizeBytes = 900L), utc, us))
         assertEquals("an unknown time", revisionLabel(revision.copy(modifiedTime = null, sizeBytes = null), utc, us))
+        assertEquals("Nov 1, 3:14 PM · 14 KB · Kept", revisionLabel(revision.copy(kept = true), utc, us))
         assertEquals(
             "Recovered 2 songs and 3 recordings. 1 already here. 1 recording is over 16 MB and was skipped.",
             com.rhymeai.app.recoveryNotice(RecoverySummary(2, 3, alreadyHere = 1, skippedLargeRecordings = 1))

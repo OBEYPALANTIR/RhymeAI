@@ -80,13 +80,13 @@ class RealDriveClientTest {
             200 to when {
                 "alt=media" in request.target -> "manifest bytes"
                 "pageToken=" !in request.target -> """{"nextPageToken":"p2","revisions":[{"id":"r1","modifiedTime":"2026-11-01T10:00:00Z","size":"9"}]}"""
-                else -> """{"revisions":[{"id":"r2","modifiedTime":"2026-11-02T10:00:00Z"}]}"""
+                else -> """{"revisions":[{"id":"r2","modifiedTime":"2026-11-02T10:00:00Z","keepForever":true}]}"""
             }
         }
         val client = RealDriveClient("$base/drive", "$base/upload", "$base/revoke")
 
         assertEquals(
-            listOf(DriveRevision("r1", "2026-11-01T10:00:00Z", 9L), DriveRevision("r2", "2026-11-02T10:00:00Z")),
+            listOf(DriveRevision("r1", "2026-11-01T10:00:00Z", 9L), DriveRevision("r2", "2026-11-02T10:00:00Z", keepForever = true)),
             client.listRevisions("token", "file-1")
         )
         assertEquals("manifest bytes", String(client.downloadRevision("token", "file-1", "r2", 100L)))

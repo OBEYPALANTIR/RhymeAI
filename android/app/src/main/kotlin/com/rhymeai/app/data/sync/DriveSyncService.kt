@@ -121,10 +121,24 @@ sealed class ProbeResult {
 }
 
 /** One earlier version of the Drive manifest file [fileId] that Drive still keeps (listed without downloading it). */
-data class BackupRevision(val fileId: String, val revisionId: String, val modifiedTime: String?, val sizeBytes: Long?)
+data class BackupRevision(
+    val fileId: String,
+    val revisionId: String,
+    val modifiedTime: String?,
+    val sizeBytes: Long?,
+    /** Drive keeps it forever (an earlier recovery pinned it). */
+    val kept: Boolean = false
+)
+
+/**
+ * A recovered song's or take's id: UUID v3 (lowercase) of
+ * "writersblock-recovery/<file id>/<revision id>/<old id>". The same on iOS (shared fixed vector in the tests).
+ */
+internal fun recoveredId(revision: BackupRevision, oldId: String): String =
+    java.util.UUID.nameUUIDFromBytes("writersblock-recovery/${revision.fileId}/${revision.revisionId}/$oldId".toByteArray()).toString()
 
 sealed class RevisionsResult {
-    /** Newest first, at most [DriveSyncService.MAX_LISTED_REVISIONS]. */
+    /** Newest first: the [DriveSyncService.MAX_LISTED_REVISIONS] newest plus every kept one. */
     data class Ready(val revisions: List<BackupRevision>) : RevisionsResult()
     data class Failed(val result: SyncResult) : RevisionsResult()
 }
@@ -261,7 +275,7 @@ class PlayServicesDriveAuthorizer(
     }
 }
 
-data class DriveRevision(val id: String, val modifiedTime: String?, val sizeBytes: Long? = null)
+data class DriveRevision(val id: String, val modifiedTime: String?, val sizeBytes: Long? = null, val keepForever: Boolean = false)
 
 data class DriveFileMetadata(
     val id: String,
@@ -374,7 +388,7 @@ class RealDriveClient internal constructor(
         var pageToken: String? = null
         do {
             val page = pageToken?.let { "&pageToken=${URLEncoder.encode(it, "UTF-8")}" } ?: ""
-            val url = "$driveBase/files/$fileId/revisions?pageSize=1000&fields=nextPageToken,revisions(id,modifiedTime,size)$page"
+            val url = "$driveBase/files/$fileId/revisions?pageSize=1000&fields=nextPageToken,revisions(id,modifiedTime,size,keepForever)$page"
             pageToken = mapIoFailure("Drive revisions") {
                 val conn = openRequest(url, "GET", accessToken)
                 try {
@@ -384,7 +398,10 @@ class RealDriveClient internal constructor(
                     body["revisions"]?.jsonArray.orEmpty().forEach { element ->
                         val obj = element.jsonObject
                         val id = obj["id"]?.jsonPrimitive?.content ?: return@forEach
-                        revisions += DriveRevision(id, obj["modifiedTime"]?.jsonPrimitive?.content, obj["size"]?.jsonPrimitive?.content?.toLongOrNull())
+                        revisions += DriveRevision(
+                            id, obj["modifiedTime"]?.jsonPrimitive?.content, obj["size"]?.jsonPrimitive?.content?.toLongOrNull(),
+                            keepForever = obj["keepForever"]?.jsonPrimitive?.content == "true"
+                        )
                     }
                     body["nextPageToken"]?.jsonPrimitive?.content
                 } finally {
@@ -1057,6 +1074,9 @@ class DriveSyncService(
         internal const val MIN_FREE_AFTER_RECORDING_RESTORE_BYTES = 128L * 1024L * 1024L
         private const val MAX_MANIFEST_WRITE_ATTEMPTS = 3
         internal const val MAX_LISTED_REVISIONS = 50
+        internal const val KEPT_REVISION_LIMIT = 200
+        internal const val TOO_MANY_KEPT_MESSAGE =
+            "Google Drive keeps at most 200 versions of a file permanently, and this backup has reached that. Recover one of the versions marked Kept."
         private val legacyJson = Json { ignoreUnknownKeys = true }
     }
 
@@ -1127,8 +1147,7 @@ class DriveSyncService(
         val deletions = SyncMerger.mergeDeletions(repository.syncDeletions() + current?.deletions.orEmpty())
         val deletedSongIds = deletions.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
         val deletedRecordingIds = deletions.mapNotNullTo(HashSet()) { it.recordingId }
-        fun recoveredId(oldId: String) =
-            java.util.UUID.nameUUIDFromBytes("writersblock-recovery/${revision.fileId}/${revision.revisionId}/$oldId".toByteArray()).toString()
+        fun recoveredId(oldId: String) = recoveredId(revision, oldId)
         val at = now()
         // Old song id to recovered id, for songs added now or added by an earlier, interrupted run.
         val recovering = HashMap<String, String>()
@@ -1231,20 +1250,29 @@ class DriveSyncService(
         return if (gone == candidates.size) RawDownload.Gone else RawDownload.Damaged
     }
 
-    /** Drive's revisions of the manifest, newest first, at most [MAX_LISTED_REVISIONS]; nothing is downloaded or changed. */
+    /**
+     * Drive's revisions of the manifest, newest first: the [MAX_LISTED_REVISIONS] newest plus every
+     * kept-forever one, so a version pinned by an earlier recovery stays reachable. Nothing is
+     * downloaded or changed.
+     */
     suspend fun probeRevisions(): RevisionsResult = authorized({ RevisionsResult.Failed(it) }) { token ->
         val manifest = primaryManifest(token) ?: return@authorized RevisionsResult.Ready(emptyList())
+        val newestFirst = driveClient.listRevisions(token, manifest.id).sortedByDescending { it.modifiedTime.orEmpty() }
+        val newest = newestFirst.take(MAX_LISTED_REVISIONS).mapTo(HashSet()) { it.id }
         RevisionsResult.Ready(
-            driveClient.listRevisions(token, manifest.id)
-                .sortedByDescending { it.modifiedTime.orEmpty() }
-                .take(MAX_LISTED_REVISIONS)
-                .map { BackupRevision(manifest.id, it.id, it.modifiedTime, it.sizeBytes) }
+            newestFirst.filter { it.id in newest || it.keepForever }
+                .map { BackupRevision(manifest.id, it.id, it.modifiedTime, it.sizeBytes, kept = it.keepForever) }
         )
     }
 
     /** Drive serves an earlier blob revision only once it is kept forever, so only the chosen one is pinned. */
     private suspend fun downloadKeptRevision(token: String, revision: BackupRevision): SyncBlob {
-        driveClient.keepRevisionForever(token, revision.fileId, revision.revisionId)
+        val listed = driveClient.listRevisions(token, revision.fileId)
+        if (listed.firstOrNull { it.id == revision.revisionId }?.keepForever != true) {
+            // Drive keeps at most 200 per file; none is ever unpinned to make room.
+            if (listed.count { it.keepForever } >= KEPT_REVISION_LIMIT) throw DriveNetworkException(TOO_MANY_KEPT_MESSAGE)
+            driveClient.keepRevisionForever(token, revision.fileId, revision.revisionId)
+        }
         return BackupManifest.decode(driveClient.downloadRevision(token, revision.fileId, revision.revisionId, MAX_SYNC_BLOB_BYTES))
     }
 
