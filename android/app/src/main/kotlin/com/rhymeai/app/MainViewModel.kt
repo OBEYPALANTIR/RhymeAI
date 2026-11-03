@@ -246,6 +246,9 @@ internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
         val parts = listOfNotNull(plural(songs, "song").takeIf { songs > 0 }, plural(takes, "recording").takeIf { takes > 0 })
         "${parts.joinToString(" and ")} deleted after an earlier recovery stay deleted."
     },
+    summary.deletedSongsStillHere.takeIf { it > 0 }?.let {
+        "An earlier copy of $it of them is still on this phone and will not be backed up."
+    },
     summary.unknownDateDeletions.takeIf { it > 0 }?.let {
         "$it could not be placed because an earlier deletion of unknown date names ${if (it == 1) "it" else "them"}."
     },
@@ -1216,6 +1219,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** At most one queued cleanup of recovery stages, waiting for the running backup or recovery. */
+    private var recoveryStageCleanup: Job? = null
+
+    /**
+     * Queued, not blocking maintenance: runs once the backup or recovery releases the lock. A failure
+     * (for example storage full while a record is written) is reported like any maintenance failure,
+     * never thrown; the next launch or recovery tries again.
+     */
+    private fun queueRecoveryStageCleanup(filesDir: java.io.File) = synchronized(this) {
+        if (recoveryStageCleanup?.isActive == true) return@synchronized
+        recoveryStageCleanup = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                backupMutex.withLock { com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) {
+                    reportRecordingMaintenance("Files left by an interrupted recovery could not be cleaned up yet. The app tries again later.")
+                }
+            }
+        }
+    }
+
     /** Debounced automatic backup after a change; waits out any backoff. */
     fun scheduleAutoBackup() = backupScheduler.schedule()
 
@@ -1692,10 +1718,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             backupMutex.unlock()
                         }
                     } else {
-                        // Queued, not blocking maintenance: runs once the backup or recovery releases the lock.
-                        viewModelScope.launch(Dispatchers.IO) {
-                            backupMutex.withLock { com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir) }
-                        }
+                        queueRecoveryStageCleanup(filesDir)
                     }
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                     val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
