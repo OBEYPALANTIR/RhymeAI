@@ -398,7 +398,8 @@ class MainActivity : ComponentActivity() {
                                 legacyBackupPresent = viewModel.legacyBackupPresent,
                                 migrationInProgress = viewModel.migrationInProgress,
                                 migrationError = viewModel.migrationError,
-                                emptyBackupConfirm = viewModel.emptyBackupConfirm
+                                emptyBackupConfirm = viewModel.emptyBackupConfirm,
+                                revisions = viewModel.backupRevisions
                             ),
                             backupActions = remember(viewModel) {
                                 BackupSectionActions(
@@ -411,7 +412,10 @@ class MainActivity : ComponentActivity() {
                                     onExport = viewModel::exportBackup,
                                     onImport = viewModel::importBackup,
                                     onConfirmEmptyBackup = viewModel::confirmEmptyBackup,
-                                    onCancelEmptyBackup = viewModel::cancelEmptyBackup
+                                    onCancelEmptyBackup = viewModel::cancelEmptyBackup,
+                                    onListRevisions = viewModel::listBackupRevisions,
+                                    onCloseRevisions = viewModel::closeBackupRevisions,
+                                    onRecoverRevision = viewModel::recoverBackupRevision
                                 )
                             },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().

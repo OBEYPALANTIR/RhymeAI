@@ -75,6 +75,27 @@ class RealDriveClientTest {
     }
 
     @Test
+    fun revisionsFollowEveryPageAndDownloadByRevisionId() = runBlocking {
+        serve { request ->
+            200 to when {
+                "alt=media" in request.target -> "manifest bytes"
+                "pageToken=" !in request.target -> """{"nextPageToken":"p2","revisions":[{"id":"r1","modifiedTime":"2026-11-01T10:00:00Z","size":"9"}]}"""
+                else -> """{"revisions":[{"id":"r2","modifiedTime":"2026-11-02T10:00:00Z"}]}"""
+            }
+        }
+        val client = RealDriveClient("$base/drive", "$base/upload", "$base/revoke")
+
+        assertEquals(
+            listOf(DriveRevision("r1", "2026-11-01T10:00:00Z"), DriveRevision("r2", "2026-11-02T10:00:00Z")),
+            client.listRevisions("token", "file-1")
+        )
+        assertEquals("manifest bytes", String(client.downloadRevision("token", "file-1", "r2", 100L)))
+        assertTrue(requests.take(2).all { it.target.startsWith("/drive/files/file-1/revisions?") })
+        assertTrue("pageToken=p2" in requests[1].target)
+        assertEquals("/drive/files/file-1/revisions/r2?alt=media", requests.last().target)
+    }
+
+    @Test
     fun revokePostsTheTokenAndReportsFailure() = runBlocking {
         var status = 200
         serve { status to "" }

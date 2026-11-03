@@ -48,6 +48,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupProbe
+import com.rhymeai.app.data.sync.BackupRevision
+import com.rhymeai.app.data.sync.recoverRevisionConfirmation
+import com.rhymeai.app.data.sync.revisionLabel
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.emptyBackupConfirmation
 import com.rhymeai.app.ui.theme.DesignTokens
@@ -64,7 +69,9 @@ data class BackupSectionState(
     val migrationInProgress: Boolean = false,
     val migrationError: String? = null,
     /** Drive's song count while Back up now asks before backing up an empty library. */
-    val emptyBackupConfirm: Int? = null
+    val emptyBackupConfirm: Int? = null,
+    /** Drive's earlier backups while "Recover an earlier backup…" is open. */
+    val revisions: List<BackupRevision>? = null
 )
 
 class BackupSectionActions(
@@ -77,7 +84,10 @@ class BackupSectionActions(
     val onExport: (Uri) -> Unit = {},
     val onImport: (Uri) -> Unit = {},
     val onConfirmEmptyBackup: () -> Unit = {},
-    val onCancelEmptyBackup: () -> Unit = {}
+    val onCancelEmptyBackup: () -> Unit = {},
+    val onListRevisions: () -> Unit = {},
+    val onCloseRevisions: () -> Unit = {},
+    val onRecoverRevision: (String) -> Unit = {}
 )
 
 /** Rows in the shared order: status, Connect/Disconnect, Back up now, Restore, Export, Import. */
@@ -131,6 +141,39 @@ internal fun BackupSection(
         )
     }
 
+    var chosenRevision by remember { mutableStateOf<BackupRevision?>(null) }
+    chosenRevision?.let { revision ->
+        AlertDialog(
+            onDismissRequest = { chosenRevision = null },
+            title = { Text("Recover this backup?") },
+            text = { Text(recoverRevisionConfirmation(revision)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { chosenRevision = null; actions.onRecoverRevision(revision.revisionId) },
+                    modifier = Modifier.testTag("backup_recover_confirm")
+                ) { Text("Recover") }
+            },
+            dismissButton = { TextButton(onClick = { chosenRevision = null }) { Text("Cancel") } }
+        )
+    }
+    if (chosenRevision == null) state.revisions?.let { revisions ->
+        AlertDialog(
+            onDismissRequest = actions.onCloseRevisions,
+            title = { Text("Recover an earlier backup") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    revisions.forEach { revision ->
+                        TextButton(onClick = { chosenRevision = revision }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
+                            Text(revisionLabel(revision), modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = actions.onCloseRevisions) { Text("Close") } }
+        )
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = DesignTokens.Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -170,6 +213,9 @@ internal fun BackupSection(
             progressLabel = if (state.status is BackupStatus.BackingUp) state.busyLabel ?: "Backing up…" else null
         )
         BackupRow("Restore from backup", "backup_restore", enabled = connected && !working, onClick = actions.onRestore)
+        if (connected) {
+            BackupRow("Recover an earlier backup…", "backup_recover", enabled = !working, onClick = actions.onListRevisions)
+        }
         if (connected && state.legacyBackupPresent) {
             BackupRow(
                 "Migrate older encrypted backup…", "backup_migrate", enabled = !working,

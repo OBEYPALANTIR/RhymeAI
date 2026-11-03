@@ -31,6 +31,8 @@ import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupGate
 import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
+import com.rhymeai.app.data.sync.BackupRevision
+import com.rhymeai.app.data.sync.RevisionsResult
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
 import com.rhymeai.app.data.sync.actionAfterAuthorization
@@ -175,7 +177,8 @@ internal fun recordingMaintenanceNotes(leftInPlace: Int, unresolved: Int, unread
     setAside.takeIf { it > 0 }?.let { "$it deleted recording(s) were set aside on this device." }
 )
 
-internal enum class BackupAction { Connect, BackUp, Restore, Migrate }
+/** [Recover] lists Drive's earlier backups again (after consent) or recovers one. */
+internal enum class BackupAction { Connect, BackUp, Restore, Migrate, Recover }
 
 internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
     "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive.".takeIf { result.migratedLegacyBackup },
@@ -199,7 +202,7 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         1 -> "1 older song could not be moved; the older backup was kept."
         else -> "${result.unmovedLegacySongs} older songs could not be moved; the older backup was kept."
     },
-    if (action == BackupAction.Restore) {
+    if (action == BackupAction.Restore || action == BackupAction.Recover) {
         "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.merged.recordings.size, "recording")}."
     } else null,
     when (result.skippedLargeRecordings) {
@@ -221,6 +224,11 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         0 -> null
         1 -> "1 recording did not match its backup checksum and was not saved."
         else -> "${result.damagedRecordings} recordings did not match their backup checksum and were not saved."
+    },
+    when (result.missingRecordings) {
+        0 -> null
+        1 -> "1 recording is no longer in your Google Drive and was not restored."
+        else -> "${result.missingRecordings} recordings are no longer in your Google Drive and were not restored."
     }
 ).joinToString(" ").ifEmpty { null }
 
@@ -916,6 +924,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var emptyBackupConfirm by mutableStateOf<Int?>(null)
         private set
 
+    /** Drive's earlier manifest versions while "Recover an earlier backup…" is open. */
+    var backupRevisions by mutableStateOf<List<BackupRevision>?>(null)
+        private set
+
     /** One run's explicit "Back up anyway" for an empty library over a Drive with songs. */
     private var emptyBackupConfirmed = false
 
@@ -1007,6 +1019,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         restoreOffer = null
         emptyBackupConfirm = null
         emptyBackupConfirmed = false
+        backupRevisions = null
         backupBusyLabel = "Disconnecting…"
         viewModelScope.launch {
             val revoked = backupMutex.withLock { driveSyncService.disconnect() }
@@ -1032,6 +1045,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = backupMutex.withLock { driveSyncService.restore(repo) }
             backupBusyLabel = null
             handleBackupResult(result, BackupAction.Restore, interactive = true)
+        }
+    }
+
+    fun listBackupRevisions() {
+        backupNotice = null
+        backupBusyLabel = "Looking for earlier backups…"
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.probeRevisions() }
+            backupBusyLabel = null
+            when (result) {
+                is RevisionsResult.Ready ->
+                    if (result.revisions.isEmpty()) backupNotice = "Google Drive keeps no earlier backups."
+                    else backupRevisions = result.revisions
+                is RevisionsResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
+            }
+        }
+    }
+
+    fun closeBackupRevisions() {
+        backupRevisions = null
+    }
+
+    /** Merges one earlier Drive version into this device through the Restore path; Drive's revisions stay as they are. */
+    fun recoverBackupRevision(revisionId: String) {
+        backupRevisions = null
+        backupNotice = null
+        backupBusyLabel = "Recovering…"
+        backupStatus = BackupStatus.BackingUp
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revisionId) }
+            backupBusyLabel = null
+            handleBackupResult(result, BackupAction.Recover, interactive = true)
         }
     }
 
@@ -1092,6 +1137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             BackupAction.Connect -> connectDrive()
             BackupAction.BackUp -> startBackup(interactive = true)
             BackupAction.Restore -> restoreFromBackup()
+            BackupAction.Recover -> listBackupRevisions()
             BackupAction.Migrate -> if (passphrase != null) migrateLegacyBackup(passphrase) else startBackup(interactive = true)
         }
     }

@@ -1803,11 +1803,16 @@ class BackupServiceTest {
         assertEquals(listOf("binned" to 500L), remote().trashed.map { it.project.id to it.deletedAt })
     }
 
-    class StoredFile(val name: String, var bytes: ByteArray, var appProperties: Map<String, String>, var version: Int, val created: Int)
+    class StoredFile(val name: String, var bytes: ByteArray, var appProperties: Map<String, String>, var version: Int, val created: Int) {
+        /** Every content this file has had, oldest first, as Drive keeps for an in-place update. */
+        val revisions = mutableListOf<Pair<Int, ByteArray>>()
+    }
 
     class FakeDrive : DriveClient {
         private val files = LinkedHashMap<String, StoredFile>()
         private var nextId = 0
+        private var nextRevision = 0
+        private fun StoredFile.revise() = revisions.add(++nextRevision to bytes)
         var uploads = 0
         var calls = 0
         var manifestWrites = 0
@@ -1828,6 +1833,7 @@ class BackupServiceTest {
                 existing.bytes = bytes
                 existing.appProperties = appProperties
                 existing.version++
+                existing.revise()
             } else {
                 add(name, bytes, appProperties)
             }
@@ -1838,7 +1844,7 @@ class BackupServiceTest {
 
         fun add(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()): String {
             val id = "id-${nextId++}"
-            files[id] = StoredFile(name, bytes, appProperties, 1, nextId)
+            files[id] = StoredFile(name, bytes, appProperties, 1, nextId).apply { revise() }
             return id
         }
         fun file(name: String) = files.values.firstOrNull { it.name == name }
@@ -1891,12 +1897,21 @@ class BackupServiceTest {
                 bytes = content
                 version++
                 if (appProperties.isNotEmpty()) this.appProperties = appProperties
+                revise()
             }
             if (files.getValue(fileId).name == BackupManifest.FILE_NAME) manifestWritten()
         }
         override suspend fun deleteFile(accessToken: String, fileId: String) {
             calls++
             files.remove(fileId)
+        }
+        override suspend fun listRevisions(accessToken: String, fileId: String): List<DriveRevision> {
+            calls++
+            return files.getValue(fileId).revisions.map { (n, _) -> DriveRevision("rev-$n", "%08d".format(n)) }
+        }
+        override suspend fun downloadRevision(accessToken: String, fileId: String, revisionId: String, maxBytes: Long): ByteArray {
+            calls++
+            return files.getValue(fileId).revisions.single { "rev-${it.first}" == revisionId }.second
         }
         override suspend fun revokeToken(token: String) {
             if (failRevoke) throw DriveNetworkException("Google revoke failed — check your connection.")
@@ -2365,5 +2380,50 @@ class BackupServiceTest {
         assertEquals(2, remote().recordings.size)
         raw.forEach { assertNotNull(drive.file(it), "$it was deleted from Drive") }
         assertEquals(listOf("three"), fresh.projectsFlow.first().map { it.id })
+    }
+
+    /** A, then a manifest overwritten in place without A's songs, then a fresh device's backup over it. */
+    private suspend fun lostAfterAFreshBackup(): Pair<ProjectRepository, DriveSyncService> {
+        backUpTwoSongsWithTakes()
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(), 2_000L, "lost"))
+        val (fresh, freshSide) = secondDevice("reinstalled")
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+        assertTrue(remote().projects.isEmpty())
+        return fresh to freshSide.second
+    }
+
+    @Test
+    fun anEarlierManifestRevisionIsListedAndRecoveredWithItsRecordings() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+
+        val revisions = assertIs<RevisionsResult.Ready>(freshService.probeRevisions()).revisions
+        assertEquals(listOf(0, 0, 2), revisions.map { it.songCount }) // newest first
+        val earlier = revisions.last()
+        assertEquals(2, earlier.recordingCount)
+
+        val result = assertIs<SyncResult.Success>(freshService.recoverRevision(fresh, earlier.revisionId))
+
+        assertEquals(setOf("one", "two"), fresh.projectsFlow.first().map { it.id }.toSet())
+        assertEquals(setOf("a.m4a", "b.m4a"), fresh.recordingRecords().map { it.displayName }.toSet())
+        assertEquals(0, result.missingRecordings)
+        // Drive lists them again, and every earlier revision is still there, unchanged.
+        assertEquals(setOf("one", "two"), remote().projects.map { it.id }.toSet())
+        val after = assertIs<RevisionsResult.Ready>(freshService.probeRevisions()).revisions
+        assertEquals(revisions, after.takeLast(revisions.size))
+    }
+
+    @Test
+    fun recoveryRestoresTheSongsWhenARecordingIsNoLongerInDrive() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val earlier = assertIs<RevisionsResult.Ready>(freshService.probeRevisions()).revisions.last()
+        val gone = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.revisions.first().second)
+            .recordings.single { it.fileName == "b.m4a" }
+        drive.remove(BackupManifest.recordingDriveName(gone.id))
+
+        val result = assertIs<SyncResult.Success>(freshService.recoverRevision(fresh, earlier.revisionId))
+
+        assertEquals(setOf("one", "two"), fresh.projectsFlow.first().map { it.id }.toSet())
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().map { it.displayName })
+        assertEquals(1, result.missingRecordings)
     }
 }
