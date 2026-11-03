@@ -162,6 +162,7 @@ class BackupSchedulerTest {
     /** The real scheduler driving the real gated run, with Drive and the library faked. */
     private class GatedHarness(scope: TestScope) {
         var localSongs: Int? = 0
+        var offerPending = false
         var driveSongs = 7
         var probeFailure: SyncResult? = null
         var backupResult: SyncResult = SyncResult.Success(SyncBlob())
@@ -182,7 +183,8 @@ class BackupSchedulerTest {
                     is SyncResult.NetworkError -> BackupRunOutcome.RETRY
                     else -> BackupRunOutcome.STOP
                 }
-            }
+            },
+            decisionPending = { offerPending }
         )
         val scheduler = BackupScheduler(
             scope = scope.backgroundScope,
@@ -277,5 +279,25 @@ class BackupSchedulerTest {
         assertEquals(0, h.probes)
         assertEquals(emptyList(), h.backups)
         assertEquals(emptyList(), h.gated)
+    }
+
+    @Test
+    fun whileTheRestoreOfferWaitsNoRunUploadsEvenWithSongsHere() = runTest {
+        val h = GatedHarness(this)
+        h.localSongs = 3
+        h.offerPending = true
+        h.scheduler.schedule()
+        advanceTimeBy(31_000)
+        advanceTimeBy(BackupScheduler.BACKGROUND_MIN_INTERVAL_MILLIS)
+        h.scheduler.onBackground()
+        h.scheduler.runNow(interactive = true)
+        runCurrent()
+        assertEquals(emptyList(), h.backups)
+        assertEquals(0, h.probes)
+        // Answered (Not now on a phone with songs): the next run backs up.
+        h.offerPending = false
+        h.scheduler.runNow(interactive = false)
+        runCurrent()
+        assertEquals(1, h.backups.size)
     }
 }

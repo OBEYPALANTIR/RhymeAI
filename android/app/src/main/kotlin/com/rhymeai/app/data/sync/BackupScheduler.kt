@@ -128,7 +128,9 @@ class GatedBackupRun(
     /** PAUSE or CONFIRM with Drive's song count, for the status line or the confirmation. */
     private val onGated: (BackupGate.Decision, Int) -> Unit,
     /** Renders a result (a failed probe or the backup's) and says whether to retry. */
-    private val onResult: (SyncResult, Boolean) -> BackupRunOutcome
+    private val onResult: (SyncResult, Boolean) -> BackupRunOutcome,
+    /** True while the restore offer waits for Restore or Not now: no run uploads, whatever this device holds. */
+    private val decisionPending: () -> Boolean = { false }
 ) {
     private var confirmed = false
 
@@ -137,6 +139,8 @@ class GatedBackupRun(
     }
 
     suspend operator fun invoke(interactive: Boolean): BackupRunOutcome {
+        // The offer's answer decides; Not now or Restore starts the next run.
+        if (decisionPending()) return BackupRunOutcome.STOP
         val userConfirmed = confirmed
         confirmed = false
         val local = localSongCount()

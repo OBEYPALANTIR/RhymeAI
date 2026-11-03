@@ -99,6 +99,14 @@ class BackupScheduleTest {
             "Restored 0 songs and 0 recordings. 1 recording did not match its backup checksum and was not saved.",
             backupResultNotice(SyncResult.Success(SyncBlob(), damagedRecordings = 1), BackupAction.Restore)
         )
+        // Counted from what is on the device, not what the manifest lists.
+        assertEquals(
+            "Restored 1 song and 2 recordings. 1 recording is over 16 MB and was skipped.",
+            backupResultNotice(
+                SyncResult.Success(SyncBlob(projects = listOf(com.rhymeai.app.data.model.SongProject(id = "s"))), skippedLargeRecordings = 1, restoredRecordings = 2),
+                BackupAction.Restore
+            )
+        )
     }
 
     @Test
@@ -127,8 +135,12 @@ class BackupScheduleTest {
         assertEquals("Nov 1, 3:14 PM · 900 bytes", revisionLabel(revision.copy(sizeBytes = 900L), utc, us))
         assertEquals("an unknown time", revisionLabel(revision.copy(modifiedTime = null, sizeBytes = null), utc, us))
         assertEquals(
-            "The backup from Nov 1, 3:14 PM holds 12 songs and 1 recording. They will be merged into this phone and your current backup; songs already here stay. " +
-                "Nothing in Google Drive is deleted, and Drive will keep this earlier version.",
+            "Recovered 2 songs and 3 recordings. 1 already here. 1 recording is over 16 MB and was skipped.",
+            com.rhymeai.app.recoveryNotice(RecoverySummary(2, 3, alreadyHere = 1, skippedLargeRecordings = 1))
+        )
+        assertEquals(
+            "The backup from Nov 1, 3:14 PM holds 12 songs and 1 recording. Songs from that earlier backup that aren't on this phone are added as new songs. " +
+                "Nothing on Drive is changed or deleted.",
             recoverRevisionConfirmation(RevisionContents(revision, songCount = 12, recordingCount = 1), utc, us)
         )
     }

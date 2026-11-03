@@ -550,7 +550,8 @@ below is the contract it must meet, not verified behaviour.
 - Restore first (Android; iOS pending): while this device has no songs, active
   or in Trash, and the manifest lists any, no automatic run uploads
   (`BackupGate`, applied by `GatedBackupRun` to every scheduled, retried,
-  background and Back up now run; a library that cannot be read never uploads).
+  background and Back up now run; a library that cannot be read never uploads,
+  and no run uploads while the restore offer waits for an answer).
   Connect does not back up while the offer is up, Not now leaves Drive untouched
   and shows "Backup paused: this phone has no songs and Drive has N. Restore to
   continue.", and Back up now asks before merging Drive's songs with nothing.
@@ -558,12 +559,15 @@ below is the contract it must meet, not verified behaviour.
   revisions newest first, at most 50, by time and size without downloading them.
   Choosing one marks only that revision `keepForever` (Drive serves an earlier
   blob revision only then, and keeps at most 200 per file; none is unpinned) and
-  shows its song and recording counts. Recover merges its songs and recordings
-  (not its old Trash or tombstones) into the device and the current manifest
-  through the Restore merge with no Drive deletion of any kind; a song or
-  recording neither the device nor the current manifest holds is stamped with
-  the recovery time so a current tombstone cannot remove it again. A recording
-  whose raw file is gone is reported, not fatal.
+  shows its song and recording counts. Recover is a local import: each song of
+  the revision that neither this device nor the current backup holds (active or
+  Trash, by id, or here by the same title, lyrics and theme) becomes a new song
+  with a new id, and its recordings are downloaded and attached under new ids.
+  Nothing in Drive is written during recovery besides the pin; the next ordinary
+  backup uploads the new songs, so no tombstone, Trash entry or other device's
+  edit of the old ids touches them. The result reads "Recovered N songs and M
+  recordings. K already here.", with missing, damaged and oversized recordings
+  reported.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a

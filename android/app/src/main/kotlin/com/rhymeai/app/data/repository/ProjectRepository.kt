@@ -363,6 +363,16 @@ class ProjectRepository internal constructor(
         }
     }
 
+    /** Adds [added] after the stored songs in one write (a recovery's new songs); nothing stored is changed. */
+    suspend fun addProjects(added: List<SongProject>) = projectSaveMutex.withLock {
+        if (added.isEmpty()) return@withLock
+        dataStore.edit { prefs ->
+            val stored = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            require(stored.none { held -> added.any { it.id == held.id } }) { "A recovered song id is already in use" }
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(stored + added)
+        }
+    }
+
     suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) = projectSaveMutex.withLock {
         val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
         dataStore.edit { prefs ->

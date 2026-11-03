@@ -34,6 +34,8 @@ import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRevision
 import com.rhymeai.app.data.sync.RevisionsResult
 import com.rhymeai.app.data.sync.RevisionContents
+import com.rhymeai.app.data.sync.RecoveryResult
+import com.rhymeai.app.data.sync.RecoverySummary
 import com.rhymeai.app.data.sync.RevisionPreviewResult
 import com.rhymeai.app.data.sync.GatedBackupRun
 import com.rhymeai.app.data.sync.BackupRunOutcome
@@ -205,9 +207,9 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         1 -> "1 older song could not be moved; the older backup was kept."
         else -> "${result.unmovedLegacySongs} older songs could not be moved; the older backup was kept."
     },
-    if (action == BackupAction.Restore || action == BackupAction.Recover) {
-        // Recordings here after the restore: listed ones minus those missing from Drive or failing their checksum.
-        "Restored ${plural(result.merged.projects.size, "song")} and ${plural((result.merged.recordings.size - result.missingRecordings - result.damagedRecordings).coerceAtLeast(0), "recording")}."
+    if (action == BackupAction.Restore) {
+        // Recordings actually on this device after the apply, not the manifest's count.
+        "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.restoredRecordings, "recording")}."
     } else null,
     when (result.skippedLargeRecordings) {
         0 -> null
@@ -235,6 +237,26 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         else -> "${result.missingRecordings} recordings are no longer in your Google Drive and were not restored."
     }
 ).joinToString(" ").ifEmpty { null }
+
+/** "Recovered 2 songs and 3 recordings. 1 already here." and what was left out, from what was created. */
+internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
+    "Recovered ${plural(summary.songsAdded, "song")} and ${plural(summary.recordingsAdded, "recording")}. ${summary.alreadyHere} already here.",
+    when (summary.missingRecordings) {
+        0 -> null
+        1 -> "1 recording is no longer in your Google Drive and was not recovered."
+        else -> "${summary.missingRecordings} recordings are no longer in your Google Drive and were not recovered."
+    },
+    when (summary.damagedRecordings) {
+        0 -> null
+        1 -> "1 recording did not match its backup checksum and was not saved."
+        else -> "${summary.damagedRecordings} recordings did not match their backup checksum and were not saved."
+    },
+    when (summary.skippedLargeRecordings) {
+        0 -> null
+        1 -> "1 recording is over 16 MB and was skipped."
+        else -> "${summary.skippedLargeRecordings} recordings are over 16 MB and were skipped."
+    }
+).joinToString(" ")
 
 private fun plural(count: Int, noun: String): String =
     if (count == 1) "$count $noun" else "$count ${noun}s"
@@ -964,7 +986,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 true -> BackupRunOutcome.RETRY
                 false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
             }
-        }
+        },
+        decisionPending = { restoreOffer != null }
     )
 
     private val backupScheduler = BackupScheduler(
@@ -1082,17 +1105,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Merges the previewed version into this device; nothing in Drive is deleted. */
+    /** Adds the previewed version's missing songs here as new songs; nothing in Drive is changed or deleted. */
     fun recoverBackupRevision() {
         val revision = revisionPreview?.revision ?: return
         revisionPreview = null
         backupNotice = null
         backupBusyLabel = "Recovering…"
-        backupStatus = BackupStatus.BackingUp
         viewModelScope.launch {
             val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revision) }
             backupBusyLabel = null
-            handleBackupResult(result, BackupAction.Recover, interactive = true)
+            when (result) {
+                // New songs reach Drive through the next ordinary backup (the song list change schedules it).
+                is RecoveryResult.Recovered -> backupNotice = recoveryNotice(result.summary)
+                is RecoveryResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
+            }
         }
     }
 

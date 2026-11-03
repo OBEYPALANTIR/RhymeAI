@@ -162,6 +162,11 @@ internal fun BackupSection(
             title = { Text("Recover an earlier backup") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Earlier versions of the current backup file that Google Drive still keeps (about 30 days). " +
+                            "If the backup file was recreated, versions of the earlier file are not listed.",
+                        fontSize = 12.sp
+                    )
                     revisions.forEach { revision ->
                         TextButton(onClick = { actions.onOpenRevision(revision) }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
                             Text(revisionLabel(revision), modifier = Modifier.fillMaxWidth())
