@@ -114,4 +114,16 @@ class BackupScheduleTest {
         assertEquals(BackupGate.Decision.RUN, d(1, 7, false, false))
         assertEquals(BackupGate.Decision.RUN, d(3, 0, true, false))
     }
+
+    @Test
+    fun earlierBackupsReadAsTimeSongsAndRecordings() {
+        val revision = BackupRevision("r", "2026-11-01T15:14:00Z", songCount = 12, recordingCount = 1)
+        val utc = java.time.ZoneOffset.UTC
+        assertEquals("Nov 1, 3:14 PM · 12 songs · 1 recording", revisionLabel(revision, utc, java.util.Locale.US))
+        assertEquals(
+            "The 12 songs and 1 recording in the backup from Nov 1, 3:14 PM will be merged into this phone. Songs already here stay, and nothing in Google Drive is deleted.",
+            recoverRevisionConfirmation(revision, utc, java.util.Locale.US)
+        )
+        assertEquals("an unknown time · 1 song · 0 recordings", revisionLabel(revision.copy(modifiedTime = null, songCount = 1, recordingCount = 0), utc, java.util.Locale.US))
+    }
 }

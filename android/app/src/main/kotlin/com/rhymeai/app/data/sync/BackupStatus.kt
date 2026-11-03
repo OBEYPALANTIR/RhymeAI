@@ -1,5 +1,10 @@
 package com.rhymeai.app.data.sync
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
 /** Backup state shown in Settings; the same cases exist on iOS. */
 sealed class BackupStatus {
     data object NotConnected : BackupStatus()
@@ -24,6 +29,21 @@ object BackupGate {
         else -> Decision.PAUSE
     }
 }
+
+/** "Nov 1, 3:14 PM · 12 songs · 8 recordings" for one earlier Drive backup. */
+fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
+    "${revisionTime(revision, zone, locale)} · ${count(revision.songCount, "song")} · ${count(revision.recordingCount, "recording")}"
+
+/** What recovering [revision] does, said before it runs. */
+fun recoverRevisionConfirmation(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
+    "The ${count(revision.songCount, "song")} and ${count(revision.recordingCount, "recording")} in the backup from " +
+        "${revisionTime(revision, zone, locale)} will be merged into this phone. Songs already here stay, and nothing in Google Drive is deleted."
+
+private fun revisionTime(revision: BackupRevision, zone: ZoneId, locale: Locale): String =
+    revision.modifiedTime?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, h:mm a", locale).format(Instant.parse(it).atZone(zone)) }.getOrNull() }
+        ?: "an unknown time"
+
+private fun count(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
 
 /** The Back up now confirmation for an empty device over a Drive with songs. */
 fun emptyBackupConfirmation(remoteSongCount: Int): String {
