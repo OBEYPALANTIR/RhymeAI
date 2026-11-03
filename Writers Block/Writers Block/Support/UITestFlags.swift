@@ -209,7 +209,7 @@ final class InMemoryDriveAppDataClient: DriveAppDataClient {
     }
 
     func downloadFile(id: String, accessToken: String) async throws -> Data {
-        guard let stored = files.values.first(where: { $0.file.id == id }) else { throw BackupError.noRemoteBackup }
+        guard let stored = files.values.first(where: { $0.file.id == id }) else { throw BackupError.remoteFileMissing }
         return stored.content
     }
 

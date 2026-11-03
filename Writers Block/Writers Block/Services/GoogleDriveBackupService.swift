@@ -26,6 +26,8 @@ enum BackupError: Error, Equatable {
     /// Drive refused (403) or no longer has (404) a revision of the backup.
     case revisionUnavailable
     case tooManyKeptRevisions
+    /// A Drive file the request named is gone (404).
+    case remoteFileMissing
 }
 
 extension BackupError: LocalizedError {
@@ -70,7 +72,9 @@ extension BackupError: LocalizedError {
         case .revisionUnavailable:
             return "Google Drive no longer has that version of the backup, or would not open it."
         case .tooManyKeptRevisions:
-            return "Google Drive already keeps the most earlier versions of this backup it can; recover one of those."
+            return "Google Drive keeps at most 200 versions of a file permanently, and this backup has reached that. Recover one of the versions marked Kept."
+        case .remoteFileMissing:
+            return "A file in the Google Drive backup is no longer there."
         }
     }
 }
@@ -155,7 +159,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         var request = try request(from: components)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        return try await data(for: request)
+        return try await data(for: request, missing: .remoteFileMissing)
     }
 
     func uploadNewFile(named name: String, mimeType: String, content: Data, appProperties: [String: String]?, accessToken: String) async throws -> DriveAppDataFile {
@@ -193,7 +197,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
             var request = try request(from: components)
             request.httpMethod = "GET"
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-            let responseData = try await data(for: request, unavailable: .revisionUnavailable)
+            let responseData = try await data(for: request, forbidden: .revisionUnavailable, missing: .revisionUnavailable)
             do {
                 let page = try JSONDecoder().decode(DriveRevisionsResponse.self, from: responseData)
                 revisions += page.revisions ?? []
@@ -216,7 +220,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         var request = try request(from: components)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        return try await data(for: request, unavailable: .revisionUnavailable)
+        return try await data(for: request, forbidden: .revisionUnavailable, missing: .revisionUnavailable)
     }
 
     func keepRevisionForever(fileId: String, revisionId: String, accessToken: String) async throws {
@@ -232,7 +236,7 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         request.httpBody = Data(#"{"keepForever":true}"#.utf8)
         request.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        _ = try await data(for: request, unavailable: .revisionUnavailable)
+        _ = try await data(for: request, forbidden: .revisionUnavailable, missing: .revisionUnavailable)
     }
 
     private func upload<T: Encodable>(path: String, method: String, metadata: T, mimeType: String, content: Data, accessToken: String) async throws -> DriveAppDataFile {
@@ -298,19 +302,22 @@ final class RealDriveAppDataClient: DriveAppDataClient {
         return URLRequest(url: url)
     }
 
-    /// `unavailable` replaces the generic reading of a 403 or 404 (revision requests:
-    /// a 403 there is not quota exhaustion).
-    private func data(for request: URLRequest, unavailable: BackupError? = nil) async throws -> Data {
+    /// `forbidden` and `missing` replace the generic reading of a 403 or a 404 where
+    /// the request knows better (on revision requests a 403 is not quota exhaustion).
+    private func data(for request: URLRequest, forbidden: BackupError? = nil, missing: BackupError? = nil) async throws -> Data {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw BackupError.invalidResponse }
-            if let unavailable, [403, 404].contains(http.statusCode) { throw unavailable }
+            if http.statusCode == 403, let forbidden { throw forbidden }
+            if http.statusCode == 404, let missing { throw missing }
             guard (200...299).contains(http.statusCode) else {
                 throw Self.httpError(statusCode: http.statusCode)
             }
             return data
         } catch let error as BackupError {
             throw error
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as URLError {
             throw Self.urlError(error)
         }
@@ -787,6 +794,11 @@ struct BackupReport: Equatable, Sendable {
     var recoveredSongs = 0
     var recoveredRecordings = 0
     var songsAlreadyHere = 0
+    /// Held only in the current backup's Trash: Restore brings them to this device's Trash.
+    var songsInBackupTrash = 0
+    /// Recovered earlier and deleted since (here or on another device): not brought back.
+    var songsDeletedSince = 0
+    var recordingsDeletedSince = 0
     var missingRecordings: [String] = []
 }
 
@@ -802,15 +814,6 @@ struct BackupRevision: Equatable, Sendable, Identifiable {
     var modifiedAt: Date?
     var bytes: Int64?
     var keptForever: Bool
-}
-
-/// A chosen revision, kept forever and decoded, waiting for the user's confirmation.
-struct RevisionRecovery: Equatable, Sendable, Identifiable {
-    var revision: BackupRevision
-    var blob: SyncBlob
-    var id: String { revision.id }
-    var songs: Int { blob.projects.count }
-    var recordings: Int { blob.recordings.count }
 }
 
 /// What to do with an older encrypted backup (`rhymeai-projects.json`) at sync time.
@@ -974,6 +977,9 @@ final class BackupService {
     private func recordingFailure(_ operation: () async throws -> Void) async throws {
         do {
             try await operation()
+        } catch is CancellationError {
+            // Stopped, not failed: nothing to retry.
+            throw CancellationError()
         } catch {
             recordBackgroundBackupFailure(error)
             throw error
@@ -992,60 +998,54 @@ final class BackupService {
     // MARK: Earlier backups (Drive revisions)
 
     static let revisionListLimit = 50
-    /// Drive keeps at most 200 revisions of a file forever; recovery pins well under that.
-    static let keptRevisionLimit = 100
+    /// Google Drive keeps at most 200 revisions of a file forever.
+    static let keptRevisionLimit = 200
 
-    /// The manifest's kept revisions, newest first (at most 50), by time and size.
-    /// Their content cannot be downloaded before it is kept forever, so nothing is read yet.
+    /// The manifest's revisions newest first: the latest 50 and every one already
+    /// kept forever (those can always be recovered), by time and size. Their content
+    /// cannot be downloaded before it is kept forever, so nothing is read here.
     func probeRevisions() async throws -> [BackupRevision] {
         guard isConnected else { return [] }
         let accessToken = try await oauthProvider.accessToken(interactive: true)
         guard let manifest = try await manifestFiles(accessToken: accessToken).max(by: { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }) else { return [] }
         // Drive's RFC 3339 UTC times sort as text; on a tie the later-listed one is newer.
-        return try await driveClient.listRevisions(fileId: manifest.id, accessToken: accessToken).enumerated()
-            .sorted { ($0.element.modifiedTime ?? "", $0.offset) > ($1.element.modifiedTime ?? "", $1.offset) }
-            .prefix(Self.revisionListLimit)
+        let newestFirst = try await driveClient.listRevisions(fileId: manifest.id, accessToken: accessToken).enumerated()
+            .sorted { ($0.element.modifiedTime ?? "", $0.offset) > ($1.element.modifiedTime ?? "", $1.offset) }.map(\.element)
+        return newestFirst.enumerated().filter { $0.offset < Self.revisionListLimit || $0.element.keepForever == true }
             .map { BackupRevision(fileId: manifest.id, id: $0.element.id, modifiedAt: $0.element.modifiedTime.flatMap(Self.driveDate),
                                   bytes: $0.element.size.flatMap { Int64($0) }, keptForever: $0.element.keepForever == true) }
     }
 
-    /// Keeps the chosen revision forever (Drive allows its content to be downloaded
-    /// only then), downloads and decodes it. Marking it is the only request that
-    /// changes anything on Drive, and it changes no file content.
-    func prepareRevision(_ revision: BackupRevision) async throws -> RevisionRecovery {
-        let accessToken = try await oauthProvider.accessToken(interactive: true)
-        if !revision.keptForever {
-            let kept = try await driveClient.listRevisions(fileId: revision.fileId, accessToken: accessToken).filter { $0.keepForever == true }.count
-            guard kept < Self.keptRevisionLimit else { throw BackupError.tooManyKeptRevisions }
-            try await driveClient.keepRevisionForever(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken)
-        }
-        let blob = try Self.decodeDriveManifest(try await driveClient.downloadRevision(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken))
-        return RevisionRecovery(revision: revision, blob: blob)
-    }
-
-    /// Imports an earlier backup's songs onto this device as new songs, with Drive
-    /// only read: no manifest write, upload or deletion, and nothing existing is
-    /// overwritten. A revision song is skipped (counted as already here) only when a
-    /// song held here or in the current backup, active or in Trash, has its words
-    /// and every one of its recordings (SHA-256 and size); otherwise it becomes a new
-    /// song with its content and the current time, and its recordings come down
-    /// from Drive under new ids. The next ordinary backup uploads them as new entries.
+    /// Recovers an earlier backup the user confirmed: asks Drive to keep that
+    /// revision forever (Drive serves an earlier version's content only then; the
+    /// one change on Drive, which deletes and rewrites nothing), downloads it, and
+    /// imports its songs onto this device as new songs. Nothing existing is
+    /// overwritten and nothing is uploaded or deleted; the next ordinary backup
+    /// uploads the new songs as new entries.
     ///
-    /// Retry-safe: new ids are derived from the revision and the old id, takes are
-    /// attached first and the songs saved last in one save, so a run that stops
-    /// part-way leaves its takes in place and a retry adds only what is missing.
-    /// Counts in `lastReport` are what the library holds when the run ends.
-    func recoverRevision(_ recovery: RevisionRecovery, modelContext: ModelContext) async throws {
+    /// Identity, not content, decides: a revision song is skipped when its own id
+    /// or its recovered id is held here or in the current backup (active or Trash).
+    /// A song recovered earlier only gets the takes it lacks, so a retry finishes
+    /// what an interrupted run began and an edit made since stands. A recovered song
+    /// or take that a tombstone here or in the current backup names was deleted on
+    /// purpose and is not brought back. Every take is downloaded and verified before
+    /// anything is written; then takes are attached, and the songs saved last in one save.
+    func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws {
         try await recordingFailure {
             let accessToken = try await oauthProvider.accessToken(interactive: true)
+            let listed = try await driveClient.listRevisions(fileId: revision.fileId, accessToken: accessToken)
+            if listed.first(where: { $0.id == revision.id })?.keepForever != true {
+                guard listed.filter({ $0.keepForever == true }).count < Self.keptRevisionLimit else { throw BackupError.tooManyKeptRevisions }
+                try await driveClient.keepRevisionForever(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken)
+            }
+            let old = try Self.decodeDriveManifest(try await driveClient.downloadRevision(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken))
             try await library.withGate {
-                try await importRevisionHoldingGate(recovery, modelContext: modelContext, accessToken: accessToken)
+                try await importRevisionHoldingGate(old, revisionId: revision.id, modelContext: modelContext, accessToken: accessToken)
             }
         }
     }
 
-    private func importRevisionHoldingGate(_ recovery: RevisionRecovery, modelContext: ModelContext, accessToken: String) async throws {
-        let old = recovery.blob
+    private func importRevisionHoldingGate(_ old: SyncBlob, revisionId: String, modelContext: ModelContext, accessToken: String) async throws {
         var report = BackupReport()
         library.clearStaging(context: modelContext)
         try await library.reconcile(context: modelContext)
@@ -1054,74 +1054,97 @@ final class BackupService {
             current = try await downloadManifest(file, accessToken: accessToken)
         }
         let remote = try await recordingFiles(accessToken: accessToken)
-        let localRecordings = try modelContext.fetch(FetchDescriptor<Recording>())
-        // Every song held here or in the current backup, active or in Trash, with the takes it holds.
-        let heldSongs: [(id: String, words: [String])] = try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, [$0.title, $0.lyrics, $0.theme]) }
-            + (try modelContext.fetch(FetchDescriptor<TrashedSongProject>())).map { ($0.id, [$0.title, $0.lyrics, $0.theme]) }
-            + current.projects.map { ($0.id, [$0.title, $0.lyrics, $0.theme]) } + current.trashed.map { ($0.id, [$0.title, $0.lyrics, $0.theme]) }
-        var heldTakes: [String: Set<String>] = [:]
-        for row in localRecordings { heldTakes[row.projectId, default: []].insert("\(row.sha256)/\(row.bytes)") }
-        for entry in current.recordings { heldTakes[entry.projectId, default: []].insert("\(entry.sha256)/\(entry.bytes)") }
+        let active = Set(try modelContext.fetch(FetchDescriptor<SongProject>()).map(\.id))
+        let trashed = Set(try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id))
+        let backupActive = Set(current.projects.map(\.id))
+        let backupTrash = Set(current.trashed.map(\.id))
+        let attachedIds = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
+        // Any tombstone naming a recovered identity is a deliberate deletion, whatever its time.
+        let tombstones = try DeletionStore.all(in: modelContext) + current.deletions
         let stamp = Date(millisecondsSince1970: Date().epochMilliseconds)
 
         var songs: [SongProject] = []
-        // Each take to attach, with the Drive name its audio is under (the backup's id).
-        var takes: [(entry: SyncRecording, source: String)] = []
+        // Each take to place, with the Drive name its audio is under (the revision's id).
+        var takes: [(take: SyncRecording, source: String)] = []
         for song in old.projects {
-            let mine = old.recordings.filter { $0.projectId == song.id }
-            let held = heldSongs.contains { held in
-                held.words == [song.title, song.lyrics, song.theme]
-                    && mine.allSatisfy { heldTakes[held.id, default: []].contains("\($0.sha256)/\($0.bytes)") }
-            }
-            if held {
-                report.songsAlreadyHere += 1
+            let id = Self.recoveredId(revisionId, song.id).uuidString
+            if tombstones.contains(where: { $0.projectId == id && $0.isSongTombstone }) {
+                report.songsDeletedSince += 1
                 continue
             }
-            let id = Self.recoveredId(recovery.revision.id, song.id).uuidString
-            songs.append(SongProject(id: id, title: song.title, lyrics: song.lyrics, theme: song.theme, updatedAt: stamp))
-            takes += mine.map { entry in
-                var copy = entry
-                copy.id = Self.recoveredId(recovery.revision.id, entry.id).uuidString.lowercased()
-                copy.projectId = id
-                copy.uploadedAt = stamp
-                copy.precedenceRepaired = false
-                return (copy, entry.driveName)
+            let heldHere = active.contains(song.id) || trashed.contains(song.id) || active.contains(id) || trashed.contains(id)
+            let heldInBackup = backupActive.contains(song.id) || backupActive.contains(id)
+            if heldHere || heldInBackup || backupTrash.contains(song.id) || backupTrash.contains(id) {
+                if heldHere || heldInBackup { report.songsAlreadyHere += 1 } else { report.songsInBackupTrash += 1 }
+                // Only a song this recovery made, live here, takes what it still lacks.
+                guard active.contains(id) else { continue }
+            } else {
+                songs.append(SongProject(id: id, title: song.title, lyrics: song.lyrics, theme: song.theme, updatedAt: stamp))
+            }
+            for entry in old.recordings where entry.projectId == song.id {
+                var take = entry
+                take.id = Self.recoveredId(revisionId, entry.id).uuidString.lowercased()
+                take.projectId = id
+                take.uploadedAt = stamp
+                take.precedenceRepaired = false
+                guard !attachedIds.contains(take.id) else { continue }
+                if tombstones.contains(where: { $0.projectId == id && $0.recordingId == take.id }) {
+                    report.recordingsDeletedSince += 1
+                    continue
+                }
+                takes.append((take, entry.driveName))
             }
         }
 
-        // Takes first, one at a time: each is staged, verified and moved in before the next downloads.
-        for (entry, source) in takes where !localRecordings.contains(where: { $0.id == entry.id }) {
-            guard let audio = try await downloadVerified(entry, from: remote[source] ?? [], accessToken: accessToken) else { continue }
-            try library.commitRestored(audio, entry: entry, origin: .restored, context: modelContext)
+        // Everything is downloaded and verified first, to files outside the library;
+        // any failure but a gone or mismatched object stops the run before a write.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("recovery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var downloaded: [(take: SyncRecording, file: URL)] = []
+        for (take, source) in takes {
+            guard let audio = try await downloadVerified(take, from: remote[source] ?? [], accessToken: accessToken) else {
+                report.missingRecordings.append(take.fileName)
+                continue
+            }
+            let file = folder.appendingPathComponent(take.id)
+            try audio.write(to: file)
+            downloaded.append((take, file))
         }
-        // Then the songs, in one save.
+        try Task.checkCancellation()
+
+        // Takes first, each one's download released once it is in the library; then the songs, in one save.
+        for (take, file) in downloaded {
+            try library.commitRestored(try Data(contentsOf: file), entry: take, origin: .restored, context: modelContext)
+            try? FileManager.default.removeItem(at: file)
+        }
         songs.forEach(modelContext.insert)
         if modelContext.hasChanges { try modelContext.save() }
         try await library.reconcile(context: modelContext)
 
         let attached = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
         report.recoveredSongs = songs.count
-        report.recoveredRecordings = takes.filter { attached.contains($0.entry.id) }.count
-        report.missingRecordings = takes.filter { !attached.contains($0.entry.id) }.map(\.entry.fileName)
+        report.recoveredRecordings = downloaded.filter { attached.contains($0.take.id) }.count
+        report.missingRecordings += downloaded.filter { !attached.contains($0.take.id) }.map(\.take.fileName)
         lastReport = report
         clearBackgroundBackupFailure()
     }
 
-    /// The first object under a recording's Drive name whose bytes match it. An
-    /// object that cannot be read (gone, refused, other size) is passed over for the
-    /// next; a sign-in failure stops the run.
+    /// The first object under a recording's Drive name whose bytes match it. Only an
+    /// object that is gone, declares another size, or holds other bytes is passed
+    /// over for the next; any other failure (network, quota, server, sign-in) and
+    /// cancellation stop the run.
     private func downloadVerified(_ entry: SyncRecording, from objects: [DriveAppDataFile], accessToken: String) async throws -> Data? {
         guard entry.bytes <= SyncRecording.maxBytes else { return nil }
-        // Objects whose recorded size differs are never downloaded (the size bound).
         for object in objects where object.appProperties?["bytes"].map({ $0 == String(entry.bytes) }) ?? true {
+            try Task.checkCancellation()
             let bytes: Data
             do {
                 bytes = try await driveClient.downloadFile(id: object.id, accessToken: accessToken)
-            } catch BackupError.authorizationRequired {
-                throw BackupError.authorizationRequired
-            } catch {
+            } catch BackupError.remoteFileMissing {
                 continue
             }
+            try Task.checkCancellation()
             if Int64(bytes.count) == entry.bytes, RecordingBackupManifest.sha256Hex(bytes) == entry.sha256 { return bytes }
         }
         return nil
