@@ -427,7 +427,23 @@ struct PersistenceTests {
         let empty = try Self.makeHarness(backupService: unreadable)
         await empty.viewModel.runCloudBackupOnBackgroundIfPossible()
         #expect(unreadable.backgroundCalls == 0, "an empty library is not backed up while Drive's count is unknown")
-        #expect(empty.viewModel.backupStatus == .connected(lastBackupAt: nil))
+        #expect(empty.viewModel.backupStatus == .failed(reason: "Backup waiting: couldn't check the Google Drive backup. offline", lastBackupAt: nil),
+                "the reason shows, with Retry")
+        unreadable.summaryError = nil
+        await empty.viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(unreadable.backgroundCalls == 1 && empty.viewModel.backupStatus == .connected(lastBackupAt: nil))
+    }
+
+    /// Choosing an earlier backup only asks; Drive is reached once "Recover" is confirmed.
+    @MainActor
+    @Test func recoveringAnEarlierBackupWaitsForTheConfirmation() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let revision = BackupRevision(fileId: "f", id: "r", modifiedAt: nil, bytes: 2048, keptForever: false)
+        harness.viewModel.recoveryToConfirm = revision
+        #expect(backupService.recovered.isEmpty)
+        await harness.viewModel.recoverBackupRevision(revision)
+        #expect(backupService.recovered == ["r"] && harness.viewModel.recoveryToConfirm == nil)
     }
 
     @MainActor
@@ -612,6 +628,12 @@ struct PersistenceTests {
             disconnectCalls += 1
             isConnected = false
             return revokeSucceeds
+        }
+
+        private(set) var recovered: [String] = []
+
+        func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws {
+            recovered.append(revision.id)
         }
 
         func remoteBackupSummary() async throws -> RemoteBackupSummary? {

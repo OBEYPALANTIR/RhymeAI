@@ -834,8 +834,8 @@ struct SettingsCloudBackupSection: View {
 }
 
 /// "Recover an earlier backup": the backup versions Google Drive kept, newest
-/// first. Choosing one marks it Keep Forever (Drive serves its content only
-/// then) and opens it; "Recover" then adds its songs to this device as new songs.
+/// first. Choosing one only asks for confirmation; "Recover" then has Drive keep
+/// that version permanently and adds its songs to this device as new songs.
 struct EarlierBackupsSheet: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.appAppearanceStyle) private var appearance
@@ -860,20 +860,15 @@ struct EarlierBackupsSheet: View {
                         }
                         ForEach(revisions) { revision in
                             Button {
-                                Task { await viewModel.prepareRecovery(revision) }
+                                viewModel.recoveryToConfirm = revision
                             } label: {
-                                HStack {
-                                    Text(EditorViewModel.revisionLabel(revision))
-                                        .font(.body)
-                                        .foregroundStyle(appearance.palette.primaryInk)
-                                    Spacer()
-                                    if viewModel.preparingRevisionId == revision.id { ProgressView() }
-                                }
-                                .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
-                                .contentShape(Rectangle())
+                                Text(EditorViewModel.revisionLabel(revision))
+                                    .font(.body)
+                                    .foregroundStyle(appearance.palette.primaryInk)
+                                    .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(viewModel.preparingRevisionId != nil)
                             .accessibilityIdentifier("earlierBackup")
                         }
                     } else {
@@ -897,19 +892,15 @@ struct EarlierBackupsSheet: View {
             "Recover this backup?",
             isPresented: Binding(get: { viewModel.recoveryToConfirm != nil }, set: { if !$0 { viewModel.recoveryToConfirm = nil } }),
             presenting: viewModel.recoveryToConfirm
-        ) { recovery in
+        ) { revision in
             Button("Cancel", role: .cancel) {}
             Button("Recover") {
                 dismiss()
-                Task { await viewModel.recoverBackupRevision(recovery) }
+                Task { await viewModel.recoverBackupRevision(revision) }
             }
-        } message: { recovery in
-            Text("The backup from \(EditorViewModel.revisionDate(recovery.revision)) has \(count(recovery.songs, "song")) and \(count(recovery.recordings, "recording")). Songs from that earlier backup that aren't on this device are added as new songs. Nothing on Drive is changed or deleted.")
+        } message: { revision in
+            Text("Backup from \(EditorViewModel.revisionLabel(revision)). This asks Drive to keep that version permanently (nothing is deleted or rewritten), then adds its songs that aren't on this device as new songs.")
         }
-    }
-
-    private func count(_ value: Int, _ noun: String) -> String {
-        "\(value) \(noun)\(value == 1 ? "" : "s")"
     }
 }
 

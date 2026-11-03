@@ -1609,10 +1609,35 @@ struct BackupCoreTests {
         #expect(try deviceB.context.fetchCount(FetchDescriptor<Recording>()) == 0)
     }
 
+    /// The id a recovery gives an item of a revision (as the service derives it).
+    private static func recoveredId(_ revisionId: String, _ id: String, recording: Bool = false) -> String {
+        let digest = Array(SHA256.hash(data: Data("recovered|\(revisionId)|\(id)".utf8)))
+        let uuid = digest.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress!) as UUID }.uuidString
+        return recording ? uuid.lowercased() : uuid
+    }
+
+    /// An earlier backup with songs and takes, then a current manifest written over it.
+    @MainActor
+    private static func seedRevisions(_ drive: FakeDriveClient, earlier: SyncBlob, current: SyncBlob, audio: [String: Data]) async throws -> DriveAppDataFile {
+        let manifest = try await drive.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: try earlier.encodedManifest(), appProperties: nil, accessToken: "")
+        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try current.encodedManifest(), appProperties: nil, accessToken: "")
+        for entry in earlier.recordings + current.recordings { if let bytes = audio[entry.id] { drive.seedRecording(entry, content: bytes) } }
+        return manifest
+    }
+
+    private static func take(_ id: String, of projectId: String, _ audio: Data) -> SyncRecording {
+        SyncRecording(id: id, projectId: projectId, fileName: "\(id).m4a", bytes: Int64(audio.count), sha256: RecordingBackupManifest.sha256Hex(audio),
+                      uploadedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    private static func song(_ id: String, _ lyrics: String? = nil) -> SyncSongProject {
+        SyncSongProject(id: id, title: id, lyrics: lyrics ?? "\(id) words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
     /// A wiped device's backup (confirmed by hand, so past the gate) and then a
     /// writer that drops every song, as the Android incident left Drive: the songs
     /// survive in the manifest's kept Drive revisions and come back from there as
-    /// new songs, with Drive only read.
+    /// new songs. Listing changes nothing; recovery's one change on Drive is the pin.
     @MainActor
     @Test(arguments: [false, true])
     func anEarlierBackupRevisionBringsSongsAndRecordingsBack(aRecordingIsGoneFromDrive: Bool) async throws {
@@ -1632,19 +1657,15 @@ struct BackupCoreTests {
         _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try SyncBlob().encodedManifest(), appProperties: nil, accessToken: "")
         if aRecordingIsGoneFromDrive { drive.remove(named: try #require(recordings.first { $0.projectId == "song-2" }).driveName) }
 
-        // Listing reads no content: Drive serves it only for revisions kept forever.
+        let driveBefore = (drive.content(named: SyncBlob.driveFileName), drive.uploadCount, drive.deleteCount)
         let revisions = try await deviceB.service.probeRevisions()
         #expect(revisions.count == 3 && revisions.allSatisfy { $0.fileId == manifest.id && !$0.keptForever && ($0.bytes ?? 0) > 0 })
         #expect(revisions.map(\.modifiedAt) == revisions.map(\.modifiedAt).sorted { ($0 ?? .distantPast) > ($1 ?? .distantPast) }, "newest first")
-        let driveBefore = (drive.content(named: SyncBlob.driveFileName), drive.uploadCount, drive.deleteCount, drive.pinCount)
-        #expect(driveBefore.3 == 0)
-        let recovery = try await deviceB.service.prepareRevision(try #require(revisions.last))
-        #expect(recovery.songs == 2 && recovery.recordings == 2)
-        #expect(try await deviceB.service.probeRevisions().last?.keptForever == true)
-        try await deviceB.service.recoverRevision(recovery, modelContext: deviceB.context)
-        // Across opening and recovery, the one change on Drive is the single Keep Forever mark.
+        #expect(drive.pinCount == 0, "listing changes nothing")
+        try await deviceB.service.recoverRevision(try #require(revisions.last), modelContext: deviceB.context)
         #expect(drive.content(named: SyncBlob.driveFileName) == driveBefore.0)
-        #expect(drive.uploadCount == driveBefore.1 && drive.deleteCount == driveBefore.2 && drive.pinCount == 1)
+        #expect(drive.uploadCount == driveBefore.1 && drive.deleteCount == driveBefore.2 && drive.pinCount == 1, "the one change on Drive is the pin")
+        #expect(try await deviceB.service.probeRevisions().last?.keptForever == true)
 
         let songs = try deviceB.context.fetch(FetchDescriptor<SongProject>())
         #expect(songs.count == 2 && Set(songs.map(\.id)).isDisjoint(with: ["song-1", "song-2"]), "new songs, new ids")
@@ -1677,16 +1698,12 @@ struct BackupCoreTests {
                                  sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(millisecondsSince1970: 100))
         let earlier = SyncBlob(projects: [SyncSongProject(id: "s", title: "S", lyrics: "old words", theme: "", updatedAt: Date(millisecondsSince1970: 100))],
                                recordings: [take], savedByClientId: "a")
-        let manifest = try await drive.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: try earlier.encodedManifest(), appProperties: nil, accessToken: "")
-        drive.seedRecording(take, content: audio)
-        let later = SyncBlob(deletions: [SyncDeletion(projectId: "s", deletedAt: 200)], savedByClientId: "a")
-        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try later.encodedManifest(), appProperties: nil, accessToken: "")
+        _ = try await Self.seedRevisions(drive, earlier: earlier, current: SyncBlob(deletions: [SyncDeletion(projectId: "s", deletedAt: 200)], savedByClientId: "a"),
+                                         audio: [take.id: audio])
 
         let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        let revisions = try await device.service.probeRevisions()
-        #expect(revisions.count == 2)
         let writes = (drive.uploadCount, drive.deleteCount)
-        try await device.service.recoverRevision(try await device.service.prepareRevision(try #require(revisions.last)), modelContext: device.context)
+        try await device.service.recoverRevision(try #require(try await device.service.probeRevisions().last), modelContext: device.context)
         #expect(drive.uploadCount == writes.0 && drive.deleteCount == writes.1 && drive.pinCount == 1)
         #expect(device.service.lastReport?.recoveredSongs == 1 && device.service.lastReport?.recoveredRecordings == 1)
 
@@ -1704,18 +1721,14 @@ struct BackupCoreTests {
         #expect(try device.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [row.id])
     }
 
-    /// Two devices. A song in Drive's Trash and a song already on A with the same
-    /// words are held, so A's recovery skips them (already here); the lost song and
-    /// the revision's older words of a song B has since edited come back as new
-    /// songs. Later backups and restores on both devices leave B's edit and the
+    /// Two devices, by id only. B's newer edit of a song and a song on A are held,
+    /// and a song in the backup's Trash is reported as such; only the lost song
+    /// comes back. Later backups and restores on both devices leave B's edit and the
     /// Trash entry as they were.
     @MainActor
     @Test func recoveryNeverTouchesASongHeldHereOrInTheCurrentBackup() async throws {
         let drive = FakeDriveClient()
         let old = Date(timeIntervalSince1970: 1_700_000_000)
-        let earlier = SyncBlob(projects: ["edited", "trashed", "lost", "on-a"].map { SyncSongProject(id: $0, title: $0, lyrics: "\($0) v1", theme: "", updatedAt: old) },
-                               savedByClientId: "a")
-        let manifest = try await drive.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: try earlier.encodedManifest(), appProperties: nil, accessToken: "")
         let now = Date()
         let later = SyncBlob(
             projects: [SyncSongProject(id: "edited", title: "edited", lyrics: "edited v2 on B", theme: "", updatedAt: old.addingTimeInterval(500))],
@@ -1723,23 +1736,23 @@ struct BackupCoreTests {
             deletions: [SyncDeletion(projectId: "lost", deletedAt: old.addingTimeInterval(100).epochMilliseconds)],
             savedByClientId: "b"
         )
-        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try later.encodedManifest(), appProperties: nil, accessToken: "")
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: ["edited", "trashed", "lost", "on-a"].map { Self.song($0) }, savedByClientId: "a"),
+                                         current: later, audio: [:])
         let deviceB = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
         try await deviceB.service.restoreNow(modelContext: deviceB.context)
         let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        deviceA.context.insert(SongProject(id: "on-a", title: "on-a", lyrics: "on-a v1", updatedAt: old.addingTimeInterval(50)))
+        deviceA.context.insert(SongProject(id: "on-a", title: "on-a", lyrics: "on-a, edited here", updatedAt: old.addingTimeInterval(50)))
         try deviceA.context.save()
 
-        let revisions = try await deviceA.service.probeRevisions()
         let writes = (drive.uploadCount, drive.deleteCount)
-        try await deviceA.service.recoverRevision(try await deviceA.service.prepareRevision(try #require(revisions.last)), modelContext: deviceA.context)
+        try await deviceA.service.recoverRevision(try #require(try await deviceA.service.probeRevisions().last), modelContext: deviceA.context)
         #expect(drive.uploadCount == writes.0 && drive.deleteCount == writes.1)
-        #expect(deviceA.service.lastReport?.recoveredSongs == 2 && deviceA.service.lastReport?.songsAlreadyHere == 2)
+        let report = try #require(deviceA.service.lastReport)
+        #expect(report.recoveredSongs == 1 && report.songsAlreadyHere == 2 && report.songsInBackupTrash == 1)
         let onA = try deviceA.context.fetch(FetchDescriptor<SongProject>())
-        #expect(onA.count == 3 && onA.first { $0.id == "on-a" }?.lyrics == "on-a v1", "nothing here is overwritten")
-        let recovered = try #require(onA.first { $0.lyrics == "lost v1" })
-        let olderWords = try #require(onA.first { $0.lyrics == "edited v1" })
-        #expect(Set([recovered.id, olderWords.id]).isDisjoint(with: ["edited", "trashed", "lost", "on-a"]))
+        #expect(onA.count == 2 && onA.first { $0.id == "on-a" }?.lyrics == "on-a, edited here", "nothing here is overwritten")
+        let recovered = try #require(onA.first { $0.lyrics == "lost words" })
+        #expect(!["edited", "trashed", "lost", "on-a"].contains(recovered.id))
 
         for device in [deviceA, deviceB, deviceA, deviceB] {
             try await device.service.backupNow(modelContext: device.context)
@@ -1748,7 +1761,7 @@ struct BackupCoreTests {
         let final = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
         #expect(final.projects.first { $0.id == "edited" }?.lyrics == "edited v2 on B")
         #expect(final.trashed.map(\.id) == ["trashed"] && !final.projects.contains { $0.id == "trashed" })
-        #expect(final.projects.contains { $0.id == recovered.id } && final.projects.contains { $0.id == olderWords.id } && !final.projects.contains { $0.id == "lost" })
+        #expect(final.projects.contains { $0.id == recovered.id } && !final.projects.contains { $0.id == "lost" })
         for device in [deviceA, deviceB] {
             let songs = try device.context.fetch(FetchDescriptor<SongProject>())
             #expect(songs.first { $0.id == "edited" }?.lyrics == "edited v2 on B")
@@ -1757,103 +1770,156 @@ struct BackupCoreTests {
         }
     }
 
-    /// The same words with another take are not the same song: the revision's
-    /// version comes back as a new song with its own take.
+    /// Identity only: a song under another id with the same words and another take
+    /// is not the revision's song, so the revision's comes back as its own copy.
+    /// Recovering the same revision again adds nothing.
     @MainActor
-    @Test func aSongWithTheSameWordsButAnotherTakeIsImported() async throws {
+    @Test func aSongWithTheSameWordsUnderAnotherIdIsImportedOnce() async throws {
         let drive = FakeDriveClient()
         let (oldAudio, newAudio) = (Data("old melody".utf8), Data("new melody".utf8))
-        let words = SyncSongProject(id: "s", title: "S", lyrics: "same words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
-        let oldTake = SyncRecording(id: "old-take", projectId: "s", fileName: "take.m4a", bytes: Int64(oldAudio.count), sha256: RecordingBackupManifest.sha256Hex(oldAudio),
-                                    uploadedAt: Date(timeIntervalSince1970: 1_700_000_000))
-        let newTake = SyncRecording(id: "new-take", projectId: "s", fileName: "take.m4a", bytes: Int64(newAudio.count), sha256: RecordingBackupManifest.sha256Hex(newAudio),
-                                    uploadedAt: Date(timeIntervalSince1970: 1_700_000_100))
-        let manifest = try await drive.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType,
-                                                     content: try SyncBlob(projects: [words], recordings: [oldTake], savedByClientId: "a").encodedManifest(), appProperties: nil, accessToken: "")
-        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType,
-                                       content: try SyncBlob(projects: [words], recordings: [newTake], savedByClientId: "a").encodedManifest(), appProperties: nil, accessToken: "")
-        drive.seedRecording(oldTake, content: oldAudio)
-        drive.seedRecording(newTake, content: newAudio)
-
+        let oldTake = Self.take("old-take", of: "s", oldAudio), newTake = Self.take("new-take", of: "t", newAudio)
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s", "same words")], recordings: [oldTake], savedByClientId: "a"),
+                                         current: SyncBlob(projects: [SyncSongProject(id: "t", title: "s", lyrics: "same words", theme: "", updatedAt: Date())], recordings: [newTake], savedByClientId: "a"),
+                                         audio: [oldTake.id: oldAudio, newTake.id: newAudio])
         let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        let revisions = try await device.service.probeRevisions()
-        try await device.service.recoverRevision(try await device.service.prepareRevision(try #require(revisions.last)), modelContext: device.context)
+        let revision = try #require(try await device.service.probeRevisions().last)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
         #expect(device.service.lastReport?.recoveredSongs == 1 && device.service.lastReport?.songsAlreadyHere == 0)
-        let song = try #require(try device.context.fetch(FetchDescriptor<SongProject>()).first)
-        #expect(song.id != "s" && song.lyrics == "same words")
         #expect(try device.context.fetch(FetchDescriptor<Recording>()).map(\.sha256) == [oldTake.sha256])
 
-        // Recovering the same version again finds it here, with its take: nothing is added.
-        try await device.service.recoverRevision(try await device.service.prepareRevision(try #require(revisions.last)), modelContext: device.context)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
         #expect(device.service.lastReport?.recoveredSongs == 0 && device.service.lastReport?.songsAlreadyHere == 1)
         #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 1 && device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
     }
 
-    /// A run that stops part-way (a sign-in failure while downloading the second
-    /// take) has saved no song; its first take is in place. The retry attaches the
-    /// rest and saves both songs, with no duplicates. A raw object that fails or
-    /// declares another size is passed over for the next one under its name.
+    /// A take that was unavailable comes back on a retry, onto the one song row the
+    /// first run made; an edit made since to the recovered song stands.
     @MainActor
-    @Test func anInterruptedRecoveryFinishesOnRetryWithEveryTakeAndNoDuplicates() async throws {
+    @Test func aRetryAttachesTheMissingTakeToTheSameSongAndKeepsItsEdit() async throws {
         let drive = FakeDriveClient()
-        let audios = [Data("first take".utf8), Data("second take".utf8)]
-        let takes = audios.enumerated().map { index, audio in
-            SyncRecording(id: "take-\(index)", projectId: "song-\(index)", fileName: "take.m4a", bytes: Int64(audio.count),
-                          sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 1_700_000_000))
-        }
-        let earlier = SyncBlob(projects: (0..<2).map { SyncSongProject(id: "song-\($0)", title: "Song \($0)", lyrics: "words \($0)", theme: "", updatedAt: Date(timeIntervalSince1970: 1_700_000_000)) },
-                               recordings: takes, savedByClientId: "a")
-        let manifest = try await drive.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: try earlier.encodedManifest(), appProperties: nil, accessToken: "")
-        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try SyncBlob().encodedManifest(), appProperties: nil, accessToken: "")
-        for (take, audio) in zip(takes, audios) { drive.seedRecording(take, content: audio) }
-        // The first take's listed object is gone (404); a second object under its name holds the audio.
-        let gone = try #require(try await drive.findFile(named: takes[0].driveName, accessToken: ""))
-        drive.downloadFailures[gone.id] = .noRemoteBackup
-        drive.seedDuplicateRecording(takes[0], content: audios[0], id: "~good-copy")
-        let second = try #require(try await drive.findFile(named: takes[1].driveName, accessToken: ""))
-        drive.downloadFailures[second.id] = .authorizationRequired
-
+        let audios = ["t1": Data("first".utf8), "t2": Data("second".utf8)]
+        let takes = ["t1", "t2"].map { Self.take($0, of: "s", audios[$0]!) }
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: takes, savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: ["t1": audios["t1"]!])
         let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        let recovery = try await device.service.prepareRevision(try #require(try await device.service.probeRevisions().last))
-        await #expect(throws: BackupError.authorizationRequired) { try await device.service.recoverRevision(recovery, modelContext: device.context) }
-        #expect(drive.downloadAttempts.contains(gone.id) && drive.downloadAttempts.contains("~good-copy"), "the failing object was passed over")
-        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0, "no song before its takes")
-        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
+        let revision = try #require(try await device.service.probeRevisions().last)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        #expect(device.service.lastReport?.missingRecordings == ["t2.m4a"] && device.service.lastReport?.recoveredRecordings == 1)
+        let song = try #require(try device.context.fetch(FetchDescriptor<SongProject>()).first)
+        song.lyrics = "edited after recovery"
+        try device.context.save()
 
-        try await device.service.recoverRevision(recovery, modelContext: device.context)
+        drive.seedRecording(takes[1], content: audios["t2"]!)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
         let songs = try device.context.fetch(FetchDescriptor<SongProject>())
-        let rows = try device.context.fetch(FetchDescriptor<Recording>())
-        #expect(songs.count == 2 && rows.count == 2)
-        #expect(Set(rows.map(\.projectId)) == Set(songs.map(\.id)) && Set(rows.map(\.sha256)) == Set(takes.map(\.sha256)))
-        #expect(device.service.lastReport?.recoveredSongs == 2 && device.service.lastReport?.recoveredRecordings == 2)
-        #expect(device.service.lastReport?.missingRecordings == [])
+        #expect(songs.count == 1 && songs.first?.id == song.id && songs.first?.lyrics == "edited after recovery")
+        #expect(Set(try device.context.fetch(FetchDescriptor<Recording>()).map(\.sha256)) == Set(takes.map(\.sha256)))
+        let report = try #require(device.service.lastReport)
+        #expect(report.recoveredSongs == 0 && report.songsAlreadyHere == 1 && report.recoveredRecordings == 1 && report.missingRecordings.isEmpty)
+    }
+
+    /// A recovered song or take deleted since, here or in the current backup (by
+    /// another device), is not brought back by recovering again.
+    @MainActor
+    @Test func recoveringAgainNeverBringsBackWhatWasDeletedSince() async throws {
+        let drive = FakeDriveClient()
+        let audios = ["t1": Data("first".utf8), "t2": Data("second".utf8)]
+        let takes = ["t1", "t2"].map { Self.take($0, of: "s", audios[$0]!) }
+        let manifest = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: takes, savedByClientId: "a"),
+                                                    current: SyncBlob(savedByClientId: "a"), audio: ["t1": audios["t1"]!])
+        let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await deviceA.service.probeRevisions().last)
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        let song = try #require(try deviceA.context.fetch(FetchDescriptor<SongProject>()).first)
+        #expect(song.id == Self.recoveredId(revision.id, "s"))
+
+        // The take that never came is deleted here; its audio then reappears on Drive.
+        deviceA.context.insert(SyncRecordingDeletion(projectId: song.id, recordingId: Self.recoveredId(revision.id, "t2", recording: true), fileName: "t2.m4a",
+                                                     deletedAt: Date().epochMilliseconds))
+        try deviceA.context.save()
+        drive.seedRecording(takes[1], content: audios["t2"]!)
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        #expect(deviceA.service.lastReport?.recordingsDeletedSince == 1 && deviceA.service.lastReport?.recoveredRecordings == 0)
+        #expect(try deviceA.context.fetchCount(FetchDescriptor<Recording>()) == 1)
+
+        // The song itself deleted forever here.
+        deviceA.context.delete(song)
+        deviceA.context.insert(SyncDeletionRecord(projectId: song.id, deletedAt: Date().epochMilliseconds))
+        try deviceA.context.save()
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        #expect(deviceA.service.lastReport?.songsDeletedSince == 1 && deviceA.service.lastReport?.recoveredSongs == 0)
+        #expect(try deviceA.context.fetchCount(FetchDescriptor<SongProject>()) == 0)
+
+        // Another device's deletion of it, in the current backup, holds on a fresh device too.
+        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType,
+                                       content: try SyncBlob(deletions: [SyncDeletion(projectId: song.id, deletedAt: Date().epochMilliseconds)], savedByClientId: "a").encodedManifest(),
+                                       appProperties: nil, accessToken: "")
+        let deviceC = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        try await deviceC.service.recoverRevision(revision, modelContext: deviceC.context)
+        #expect(deviceC.service.lastReport?.songsDeletedSince == 1)
+        #expect(try deviceC.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && deviceC.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+    }
+
+    /// Only a gone object, another declared size, or other bytes passes over to the
+    /// next object under a take's name. A quota error stops the run before any
+    /// write; so does cancellation, which is neither a failure nor "missing".
+    @MainActor
+    @Test func recoveryStopsOnQuotaAndCancellationBeforeWritingAndSkipsOnlyGoneObjects() async throws {
+        let drive = FakeDriveClient()
+        let audio = Data("the take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
+        let listed = try #require(try await drive.findFile(named: take.driveName, accessToken: ""))
+        drive.seedDuplicateRecording(take, content: audio, id: "~good-copy")
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await device.service.probeRevisions().last)
+
+        drive.downloadFailures[listed.id] = .quotaExceeded
+        await #expect(throws: BackupError.quotaExceeded) { try await device.service.recoverRevision(revision, modelContext: device.context) }
+        #expect(!drive.downloadAttempts.contains("~good-copy"), "a quota error is not passed over")
+        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+        #expect(device.service.lastReport == nil && device.service.backgroundBackupFailureDescription != nil)
+
+        let task = Task { @MainActor in try await device.service.recoverRevision(revision, modelContext: device.context) }
+        drive.beforeDownload = { task.cancel() }
+        await #expect(throws: CancellationError.self) { try await task.value }
+        drive.beforeDownload = nil
+        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+        #expect(device.service.lastReport == nil, "no missing-audio report")
+
+        drive.downloadFailures[listed.id] = .remoteFileMissing
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        #expect(drive.downloadAttempts.suffix(2) == [listed.id, "~good-copy"], "a gone object is passed over for the next")
+        #expect(device.service.lastReport?.recoveredRecordings == 1 && device.service.backgroundBackupFailureDescription == nil)
     }
 
     @MainActor
-    @Test func openingARevisionPinsOnlyThatOneAndStopsBeforeDrivesLimit() async throws {
+    @Test func keptRevisionsStayListedAndThePinStopsAtDrivesLimit() async throws {
         let harness = try await makeHarness()
         try await harness.service.backupNow(modelContext: harness.context)
         let manifest = try #require(try await harness.drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
         _ = try await harness.drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: Data("damaged".utf8), appProperties: nil, accessToken: "")
+        _ = try await harness.drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try SyncBlob().encodedManifest(), appProperties: nil, accessToken: "")
 
         let listed = try await harness.service.probeRevisions()
-        await #expect(throws: BackupError.damagedManifest) { _ = try await harness.service.prepareRevision(listed[0]) }
-        // The damaged one does not stop another from opening, and a kept one is not pinned again.
-        let opened = try await harness.service.prepareRevision(listed[1])
-        #expect(opened.songs == 0)
-        _ = try await harness.service.prepareRevision(try harness.service.probeRevisions()[1])
-        #expect(harness.drive.pinCount == 2)
+        await #expect(throws: BackupError.damagedManifest) { try await harness.service.recoverRevision(listed[1], modelContext: harness.context) }
+        try await harness.service.recoverRevision(listed[2], modelContext: harness.context)
+        try await harness.service.recoverRevision(listed[2], modelContext: harness.context)
+        #expect(harness.drive.pinCount == 2, "a kept revision is not pinned again")
 
-        for _ in 0..<(BackupService.keptRevisionLimit + 1) {
+        for _ in 0..<(BackupService.keptRevisionLimit + BackupService.revisionListLimit) {
             _ = try await harness.drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try SyncBlob().encodedManifest(), appProperties: nil, accessToken: "")
         }
-        // The two opened above and the oldest of the rest make 100 kept; the newest stay unkept.
+        // Two kept above and the oldest of the rest make Drive's 200; the newest 50 stay unkept.
         for revision in try await harness.drive.listRevisions(fileId: manifest.id, accessToken: "").dropFirst(2).prefix(BackupService.keptRevisionLimit - 2) {
             try await harness.drive.keepRevisionForever(fileId: manifest.id, revisionId: revision.id, accessToken: "")
         }
-        let unkept = try #require(try await harness.service.probeRevisions().first { !$0.keptForever })
-        await #expect(throws: BackupError.tooManyKeptRevisions) { _ = try await harness.service.prepareRevision(unkept) }
-        #expect(try await harness.service.probeRevisions().count == BackupService.revisionListLimit)
+        let shown = try await harness.service.probeRevisions()
+        #expect(shown.count == BackupService.revisionListLimit + BackupService.keptRevisionLimit, "every kept one is listed, so one can always be chosen")
+        let unkept = try #require(shown.first { !$0.keptForever })
+        await #expect(throws: BackupError.tooManyKeptRevisions) { try await harness.service.recoverRevision(unkept, modelContext: harness.context) }
+        try await harness.service.recoverRevision(try #require(shown.first { $0.keptForever }), modelContext: harness.context)
     }
 
     @Test func backupGateWaitsForARestoreOnlyWhenThisDeviceIsEmptyAndDriveIsNot() {
@@ -3230,6 +3296,8 @@ private final class FakeDriveClient: DriveAppDataClient {
     private(set) var pinCount = 0
     /// One-shot download failures by Drive file id.
     var downloadFailures: [String: BackupError] = [:]
+    /// Runs before each download (a test cancels the run from here).
+    var beforeDownload: (() -> Void)?
     private(set) var downloadAttempts: [String] = []
 
     func listRevisions(fileId: String, accessToken: String) async throws -> [DriveFileRevision] {
@@ -3325,10 +3393,11 @@ private final class FakeDriveClient: DriveAppDataClient {
 
     func downloadFile(id: String, accessToken: String) async throws -> Data {
         downloadAttempts.append(id)
+        beforeDownload?()
         if let failure = downloadFailures.removeValue(forKey: id) { throw failure }
         if let extra = extraFiles.first(where: { $0.file.id == id }) { return extra.content }
         guard let (name, stored) = filesByName.first(where: { $0.value.file.id == id }).map({ ($0.key, $0.value) }) else {
-            throw BackupError.noRemoteBackup
+            throw BackupError.remoteFileMissing
         }
         if manifestWritten, name != SyncBlob.driveFileName, let hook = afterManifestWrite {
             afterManifestWrite = nil
