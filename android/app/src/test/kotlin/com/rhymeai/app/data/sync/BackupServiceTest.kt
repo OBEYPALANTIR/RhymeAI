@@ -2909,7 +2909,7 @@ class BackupServiceTest {
         assertTrue(fresh.recordingRecords().none { it.projectId == oneId })
         assertEquals(
             "Recovered 0 songs and 1 recording. 1 already here. 1 song deleted after an earlier recovery stay deleted. " +
-                "An earlier copy of 1 of them is still on this phone and will not be backed up.",
+                "An earlier copy of 1 of them is still on this phone; a deletion elsewhere keeps it out of the backup unless you edit it here.",
             com.rhymeai.app.recoveryNotice(summary)
         )
         // The next backup keeps the deletion winning: no song and no take of it reach Drive.

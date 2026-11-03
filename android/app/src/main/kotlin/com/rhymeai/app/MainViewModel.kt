@@ -247,7 +247,7 @@ internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
         "${parts.joinToString(" and ")} deleted after an earlier recovery stay deleted."
     },
     summary.deletedSongsStillHere.takeIf { it > 0 }?.let {
-        "An earlier copy of $it of them is still on this phone and will not be backed up."
+        "An earlier copy of $it of them is still on this phone; a deletion elsewhere keeps it out of the backup unless you edit it here."
     },
     summary.unknownDateDeletions.takeIf { it > 0 }?.let {
         "$it could not be placed because an earlier deletion of unknown date names ${if (it == 1) "it" else "them"}."
