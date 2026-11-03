@@ -74,6 +74,21 @@ enum RhymeAITokens {
         }
     }
 
+    /// The local-model row (Settings › On-Device): a golden split of text and actions.
+    /// Android mirror: `DesignTokens.ModelRow`.
+    enum ModelRow {
+        /// 55 × φ; no state changes it.
+        static let height: CGFloat = 89
+        /// The trailing remove column (× / trash / spinner), `Rhythm.primary`.
+        static let column: CGFloat = Rhythm.primary
+        static let chipHeight: CGFloat = Rhythm.section
+        static let glyph: CGFloat = 21
+        /// The download wave: a φ step under the progress copy, one even wave 8 tall and 21 long.
+        static let waveGap: CGFloat = Rhythm.tight
+        static let waveHeight: CGFloat = Rhythm.tight
+        static let wavePeriod: CGFloat = Rhythm.standard
+    }
+
     enum Motion {
         // Golden-ratio duration ladder: 0.16 ×φ ≈0.26 ×φ ≈0.42 (φ=1.618). Utilitarian tiers ≤0.50s.
         static let feedbackDuration: TimeInterval = 0.16

@@ -143,7 +143,10 @@ struct SettingsLocalModelSection: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var customModelImporterPresented = false
     @State private var customImportError: String?
-    @State private var modelToDelete: GGUFDownloadOption?
+    @State private var modelToDelete: ModelDeletion?
+    /// The file just chosen with Use, whose Selected chip is still wet ink.
+    @State private var wetFileName: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
     @ObservedObject private var inferenceStatus = LocalInferenceStatus.shared
@@ -163,10 +166,29 @@ struct SettingsLocalModelSection: View {
 
                 customModelSelector
 
-                SettingsSectionTitle("RhymeAI Gemma Downloads", systemImage: "arrow.down.circle")
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                    SettingsSectionTitle("RhymeAI Gemma Downloads", systemImage: "arrow.down.circle")
+                    if ggufDownloadManager.installedModelFiles.isEmpty && ggufDownloadManager.bytesOnDisk.isEmpty {
+                        Text("No model on this device yet. Download one and suggestions keep writing offline.")
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("gemmaEmptyNudge")
+                    }
+                }
 
-                ForEach(GGUFDownloadCatalog.options) { option in
-                    gemmaDownloadRow(option)
+                VStack(spacing: RhymeAITokens.Rhythm.tight) {
+                    ForEach(GGUFDownloadCatalog.options) { option in
+                        gemmaDownloadRow(option)
+                    }
+                    #if DEBUG
+                    if UITestFlags.isEnabled(UITestFlags.modelRowGallery) {
+                        ForEach(Array(ModelRowContent.gallery.enumerated()), id: \.offset) { index, sample in
+                            ModelRowView(content: sample.content, isWet: sample.isWet, identifier: "modelRowGallery.\(index)",
+                                         columnIdentifier: "modelRowGalleryColumn.\(index)", action: {}, columnAction: {})
+                        }
+                    }
+                    #endif
                 }
 
                 if let statusMessage = ggufDownloadManager.statusMessage {
@@ -207,33 +229,63 @@ struct SettingsLocalModelSection: View {
             Text("Delete \(modelToDelete?.title ?? "")?"),
             isPresented: Binding(get: { modelToDelete != nil }, set: { if !$0 { modelToDelete = nil } }),
             presenting: modelToDelete
-        ) { option in
+        ) { deletion in
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
                 viewModel.cancelEditorAIWork()
-                Task { await ggufDownloadManager.delete(option) }
+                Task {
+                    switch deletion {
+                    case .catalog(let option): await ggufDownloadManager.delete(option)
+                    case .custom(let model): await ggufDownloadManager.deleteCustom(model)
+                    }
+                }
             }
-        } message: { option in
-            let bytes = ggufDownloadManager.catalogBytesOnDisk[option.fileName] ?? 0
-            Text("Frees \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) on this device. You can download it again later.")
+        } message: { deletion in
+            Text(ModelRowContent.deleteMessage(
+                bytes: ggufDownloadManager.bytesOnDisk[deletion.fileName] ?? 0,
+                isCustom: deletion.isCustom,
+                inUse: ggufDownloadManager.selectedModelFileName == deletion.fileName
+            ))
+        }
+        .onChange(of: ggufDownloadManager.freedSpace) { old, new in
+            for freed in new.values where old[freed.fileName] != freed {
+                AccessibilityNotification.Announcement(
+                    "\(freed.title) deleted. \(ModelRowContent.size(freed.bytes)) back for your songs."
+                ).post()
+            }
+        }
+        .task(id: wetFileName) {
+            guard wetFileName != nil else { return }
+            try? await Task.sleep(for: .seconds(ModelRowMotion.wetHold))
+            guard !Task.isCancelled else { return }
+            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) { wetFileName = nil }
         }
     }
 
     private var customModelSelector: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
             SettingsSectionTitle("Custom Models", systemImage: "externaldrive")
-            ForEach(GGUFCustomModelRegistry.models().filter { ggufDownloadManager.installedModelFiles.contains($0.fileName) }) { model in
-                Button {
-                    viewModel.cancelEditorAIWork()
-                    if ggufDownloadManager.selectCustom(model) {
-                        viewModel.saveProvider(.local)
-                        viewModel.saveModel(.localModel)
-                    }
-                } label: {
-                    Label(model.displayName, systemImage: ggufDownloadManager.selectedModelFileName == model.fileName ? "checkmark.circle.fill" : "externaldrive")
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+            VStack(spacing: RhymeAITokens.Rhythm.tight) {
+                ForEach(GGUFCustomModelRegistry.models().filter { ggufDownloadManager.installedModelFiles.contains($0.fileName) }) { model in
+                    let content = ModelRowContent.custom(model, facts: facts(fileName: model.fileName))
+                    ModelRowView(
+                        content: content,
+                        isColumnEnabled: !isLocalModelBusy,
+                        isWet: wetFileName == model.fileName,
+                        identifier: "customGGUF.\(model.id)",
+                        columnIdentifier: "customGGUFDelete.\(model.id)",
+                        action: {
+                            guard content.chip == .use else { return }
+                            viewModel.cancelEditorAIWork()
+                            if ggufDownloadManager.selectCustom(model) {
+                                beginWet(model.fileName)
+                                viewModel.saveProvider(.local)
+                                viewModel.saveModel(.localModel)
+                            }
+                        },
+                        columnAction: { modelToDelete = .custom(model) }
+                    )
                 }
-                .accessibilityIdentifier("customGGUF.\(model.id)")
             }
             Button {
                 customModelImporterPresented = true
@@ -311,113 +363,97 @@ struct SettingsLocalModelSection: View {
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
+    /// The manager's state for one file name, as the row reads it.
+    private func facts(fileName: String, option: GGUFDownloadOption? = nil) -> ModelRowContent.Facts {
+        let manager = ggufDownloadManager
+        let isActive = option.map { manager.activeDownloadID == $0.id } ?? false
+        return ModelRowContent.Facts(
+            bytesOnDisk: manager.bytesOnDisk[fileName],
+            isInstalled: manager.installedModelFiles.contains(fileName),
+            isSelected: manager.selectedModelFileName == fileName,
+            isActive: isActive,
+            isVerifying: isActive && manager.isVerifying,
+            receivedBytes: manager.receivedBytes,
+            pausedBytes: manager.pausedBytes[fileName],
+            isDeleting: manager.deletingModelFileName == fileName,
+            freedBytes: manager.freedSpace[fileName]?.bytes,
+            needsMoreMemory: option.map(manager.needsMoreMemory) ?? false
+        )
+    }
+
+    /// A local model is loading or generating, or a delete or check holds the manager:
+    /// Delete waits for it.
+    private var isLocalModelBusy: Bool {
+        ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
+            ggufDownloadManager.deletingModelFileName != nil || inferenceStatus.loadingCount > 0 ||
+            viewModel.isLoading || viewModel.rewriteLoading
+    }
+
+    private func beginWet(_ fileName: String) {
+        if ModelRowMotion.beginsWet(reduceMotion: reduceMotion) { wetFileName = fileName }
+    }
+
     private func gemmaDownloadRow(_ option: GGUFDownloadOption) -> some View {
-        let isDownloaded = ggufDownloadManager.installedModelFiles.contains(option.fileName)
-        let isSelected = ggufDownloadManager.selectedModelFileName == option.fileName
-        let isDownloading = ggufDownloadManager.activeDownloadID == option.id
-        let isOnDisk = ggufDownloadManager.catalogBytesOnDisk[option.fileName] != nil
-
-        return Button {
-            if isDownloading {
-                ggufDownloadManager.pauseDownload()
-            } else if isDownloaded {
-                viewModel.cancelEditorAIWork()
-                ggufDownloadManager.select(option)
-            } else {
-                ggufDownloadManager.start(option)
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-                // Beside each other at standard sizes; stacked at accessibility
-                // sizes, where a row left the title one or two letters wide.
-                let stacked = dynamicTypeSize.isAccessibilitySize
-                let rowLayout = stacked
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Spacing.sm))
-                    : AnyLayout(HStackLayout(alignment: .center, spacing: RhymeAITokens.Spacing.md))
-                rowLayout {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "arrow.down.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.action)
-                        .frame(width: 36, height: 36)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(option.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-
-                        if option.isRecommended {
-                            Text("Recommended")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(appearance.palette.action)
-                        }
-
-                        Text("\(option.subtitle) · \(option.size)")
-                            .font(.caption)
-                            .foregroundStyle(appearance.palette.secondaryInk)
-                    }
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                    if !stacked {
-                        Spacer(minLength: RhymeAITokens.Spacing.sm)
-                    }
-
-                    Text(downloadActionTitle(isDownloaded: isDownloaded, isSelected: isSelected, isDownloading: isDownloading))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(isSelected ? appearance.palette.success : appearance.palette.primaryInk)
-                        .fixedSize()
-                        .padding(.horizontal, RhymeAITokens.Spacing.sm)
-                        .padding(.vertical, 7)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
+        let manager = ggufDownloadManager
+        let content = ModelRowContent.catalog(option, facts: facts(fileName: option.fileName, option: option))
+        let isDownloading = manager.activeDownloadID == option.id
+        return ModelRowView(
+            content: content,
+            isEnabled: !(manager.isRestoringDownloads || manager.isPausing || manager.isVerifying ||
+                         manager.deletingModelFileName != nil || (manager.activeDownloadID != nil && !isDownloading)),
+            isColumnEnabled: content.column == .cancel
+                ? !(manager.isRestoringDownloads || manager.isPausing || manager.isVerifying || manager.deletingModelFileName != nil)
+                : !isLocalModelBusy,
+            isWet: wetFileName == option.fileName,
+            identifier: "gemmaDownload.\(option.id)",
+            columnIdentifier: content.column == .cancel ? "gemmaCancel.\(option.id)" : "gemmaDelete.\(option.id)",
+            action: {
+                switch content.chip {
+                case .pause:
+                    manager.pauseDownload()
+                case .download, .resume, .update:
+                    manager.start(option)
+                case .use:
+                    viewModel.cancelEditorAIWork()
+                    beginWet(option.fileName)
+                    manager.select(option)
+                case .selected, nil:
+                    break
                 }
-
-                if isDownloading {
-                    ProgressView(value: ggufDownloadManager.progress)
-                        .tint(appearance.palette.action)
-                        .accessibilityValue("\(Int(ggufDownloadManager.progress * 100)) percent")
+            },
+            columnAction: {
+                if content.column == .cancel {
+                    manager.cancelDownload(option)
+                } else {
+                    modelToDelete = .catalog(option)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Room for the overlaid Delete control (44pt tall over the 16pt padding).
-            .padding(.bottom, isOnDisk ? RhymeAITokens.Touch.minimum - RhymeAITokens.Spacing.md : 0)
-            .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
-        }
-        .buttonStyle(.rhymePress)
-        .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
-                  ggufDownloadManager.isVerifying || ggufDownloadManager.deletingModelFileName != nil ||
-                  (ggufDownloadManager.activeDownloadID != nil && !isDownloading))
-        .accessibilityIdentifier("gemmaDownload.\(option.id)")
-        // A stale same-name file (previous version) is not installed but is still deletable.
-        // Laid over the card instead of beside it, so the title keeps its width on narrow screens.
-        .overlay(alignment: .bottomTrailing) {
-            if isOnDisk {
-                Button {
-                    modelToDelete = option
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(appearance.palette.error)
-                        .padding(.horizontal, RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.rhymePress)
-                // Off while this entry downloads (cancel that first) or a local model is loading or generating.
-                .disabled(isDownloading || ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isVerifying ||
-                          ggufDownloadManager.deletingModelFileName != nil || inferenceStatus.loadingCount > 0 || viewModel.isLoading || viewModel.rewriteLoading)
-                .accessibilityLabel("Delete \(option.title)")
-                .accessibilityIdentifier("gemmaDelete.\(option.id)")
-                .padding(.horizontal, RhymeAITokens.Spacing.sm)
-            }
+        )
+    }
+}
+
+/// The model a Delete confirmation is open for.
+private enum ModelDeletion {
+    case catalog(GGUFDownloadOption)
+    case custom(GGUFCustomModel)
+
+    var title: String {
+        switch self {
+        case .catalog(let option): option.title
+        case .custom(let model): model.displayName
         }
     }
 
-    private func downloadActionTitle(isDownloaded: Bool, isSelected: Bool, isDownloading: Bool) -> String {
-        if isDownloading { return "Pause" }
-        if isSelected { return "Selected" }
-        if isDownloaded { return "Use" }
-        return "Download"
+    var fileName: String {
+        switch self {
+        case .catalog(let option): option.fileName
+        case .custom(let model): model.fileName
+        }
+    }
+
+    var isCustom: Bool {
+        if case .custom = self { return true }
+        return false
     }
 }
 

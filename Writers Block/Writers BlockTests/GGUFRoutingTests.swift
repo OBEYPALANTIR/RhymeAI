@@ -185,7 +185,7 @@ struct GGUFDownloadCatalogTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -638,7 +638,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -675,7 +675,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -702,7 +702,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -727,7 +727,7 @@ struct GGUFDownloadIntegrityTests {
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let previousModel = Data("existing model".utf8)
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -757,7 +757,7 @@ struct GGUFDownloadIntegrityTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let data = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(data.count),
             sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -978,10 +978,7 @@ struct GGUFDownloadCompletionTests {
             let manager = GGUFDownloadManager(
                 configuration: .ephemeral, modelsRoot: root, defaults: defaults, totalRAMBytes: totalRAMBytes
             )
-            for _ in 0..<250 where manager.isRestoringDownloads {
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            try #require(!manager.isRestoringDownloads)
+            try #require(await GGUFDownloadCompletionTests.eventually { !manager.isRestoringDownloads })
             manager.refreshInstalledModels()
             return manager
         }
@@ -1155,7 +1152,7 @@ struct GGUFDownloadCompletionTests {
         for url in [staging, resume, legacyResume] { try Data("partial".utf8).write(to: url) }
         let manager = try await sandbox.restoredManager()
         manager.select(e2b)
-        try #require(manager.catalogBytesOnDisk[e2b.fileName] == e2b.expectedBytes)
+        try #require(manager.bytesOnDisk[e2b.fileName] == e2b.expectedBytes)
 
         await manager.delete(e2b)
 
@@ -1165,9 +1162,10 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFVerifiedArtifactStore.marker(fileName: e2b.fileName, defaults: sandbox.defaults) == nil)
         #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
         #expect(manager.installedModelFiles == [e4b.fileName])
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
         #expect(manager.statusMessage == "\(e2b.title) deleted.")
         #expect(manager.errorMessage == nil)
+        #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
 
         #expect(manager.selectedModelFileName == nil)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
@@ -1198,12 +1196,12 @@ struct GGUFDownloadCompletionTests {
         let manager = try await sandbox.restoredManager()
         manager.select(e4b)
         #expect(!manager.installedModelFiles.contains(e2b.fileName))
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == 3_427_878_784)
+        #expect(manager.bytesOnDisk[e2b.fileName] == 3_427_878_784)
 
         await manager.delete(e2b)
 
         #expect(!FileManager.default.fileExists(atPath: stale.path))
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
         #expect(manager.installedModelFiles == [e4b.fileName])
         #expect(manager.selectedModelFileName == e4b.fileName)
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e4b.fileName)
@@ -1285,7 +1283,7 @@ struct GGUFDownloadCompletionTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         try Data("keep".utf8).write(to: folder.appendingPathComponent("inside.txt"))
         let manager = try await sandbox.restoredManager()
-        #expect(manager.catalogBytesOnDisk[e2b.fileName] == nil)
+        #expect(manager.bytesOnDisk[e2b.fileName] == nil)
 
         await manager.delete(e2b)
 
@@ -1301,7 +1299,7 @@ struct GGUFDownloadCompletionTests {
         defer { sandbox.tearDown() }
         let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
         let option = GGUFDownloadOption(
-            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            id: "fixture", title: "Fixture", character: "",
             fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
             sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
             url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
@@ -1313,14 +1311,14 @@ struct GGUFDownloadCompletionTests {
 
         // Nothing deleted: the completion installs.
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option))
         #expect(try Data(contentsOf: installed) == valid)
 
         await manager.delete(option)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
 
         try valid.write(to: staging)
-        #expect(try await Task.detached { try manager.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option) == false)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(GGUFVerifiedArtifactStore.marker(fileName: option.fileName, defaults: sandbox.defaults) == nil)
@@ -1328,13 +1326,13 @@ struct GGUFDownloadCompletionTests {
         // The app was terminated before the callback: a fresh manager still discards it.
         let relaunched = try await sandbox.restoredManager()
         try valid.write(to: staging)
-        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value == false)
+        #expect(try await Self.deliverCompletion(relaunched, staging: staging, directory: directory, option: option) == false)
         #expect(!FileManager.default.fileExists(atPath: installed.path))
 
         // A download of the entry beginning is a fresh intent; the next completion installs.
         relaunched.beginDownloadForTest(option)
         try valid.write(to: staging)
-        #expect(try await Task.detached { try relaunched.installCompletedDownload(from: staging, in: directory, option: option) }.value)
+        #expect(try await Self.deliverCompletion(relaunched, staging: staging, directory: directory, option: option))
         #expect(try Data(contentsOf: installed) == valid)
     }
 
@@ -1373,6 +1371,408 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName)
         manager.refreshInstalledModels()
         #expect(manager.installedModelFiles == [e2b.fileName])
+    }
+
+    /// Delivers a finished download the way URLSession does: `installCompletedDownload` blocks
+    /// its calling thread until the publish on the runner's serial path is done, which is right
+    /// on the session's delegate queue but must never happen on the Swift concurrency pool.
+    /// There, tests running in parallel (CI) each block a pool thread and starve the very
+    /// publish task they wait for, and the run hangs. So it runs on a GCD thread, and the wait
+    /// is bounded: a regression fails here after `timeout` (generous, for a loaded runner)
+    /// instead of hanging the job.
+    private static func deliverCompletion(
+        _ manager: GGUFDownloadManager,
+        staging: URL,
+        directory: URL,
+        option: GGUFDownloadOption,
+        taskIdentifier: Int? = nil,
+        timeout: TimeInterval = 600
+    ) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                once.resume(with: Result {
+                    try manager.installCompletedDownload(from: staging, in: directory, option: option, taskIdentifier: taskIdentifier)
+                })
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                once.resume(with: .failure(CompletionTimedOut(seconds: timeout)))
+            }
+        }
+    }
+
+    private struct CompletionTimedOut: Error, CustomStringConvertible {
+        let seconds: TimeInterval
+        var description: String { "installCompletedDownload did not return within \(Int(seconds)) s" }
+    }
+
+    /// Resumes its continuation once: the first of the result and the timeout wins.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Error>?
+
+        init(_ continuation: CheckedContinuation<Bool, Error>) { self.continuation = continuation }
+
+        func resume(with result: Result<Bool, Error>) {
+            lock.withLock {
+                defer { continuation = nil }
+                return continuation
+            }?.resume(with: result)
+        }
+    }
+
+    /// Waits for `condition` up to `timeout` of wall time. CI runs every suite in parallel on
+    /// a small runner whose main actor stays saturated for minutes (a callback queued behind it
+    /// landed after more than 130 s, so a 90 s bound failed), hence 10 minutes: far past any
+    /// lag measured there, far under the job's 45-minute limit. A condition that never holds
+    /// still fails the test instead of hanging the job.
+    static func eventually(timeout: TimeInterval = 600, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return true
+    }
+
+    // MARK: Pause, resume and cancel (model rows)
+
+    private static func resumeBlob(received: Int64) throws -> Data {
+        try PropertyListSerialization.data(
+            fromPropertyList: ["NSURLSessionResumeBytesReceived": NSNumber(value: received)], format: .binary, options: 0
+        )
+    }
+
+    private func row(_ option: GGUFDownloadOption, _ manager: GGUFDownloadManager) -> ModelRowContent {
+        ModelRowContent.catalog(option, facts: ModelRowContent.Facts(
+            bytesOnDisk: manager.bytesOnDisk[option.fileName],
+            isInstalled: manager.installedModelFiles.contains(option.fileName),
+            isSelected: manager.selectedModelFileName == option.fileName,
+            isActive: manager.activeDownloadID == option.id,
+            isVerifying: manager.isVerifying,
+            receivedBytes: manager.receivedBytes,
+            pausedBytes: manager.pausedBytes[option.fileName],
+            isDeleting: manager.deletingModelFileName == option.fileName,
+            freedBytes: manager.freedSpace[option.fileName]?.bytes
+        ))
+    }
+
+    /// A saved resume blob is a paused download: its row offers Resume and Cancel with the
+    /// bytes it holds; Cancel removes only the downloader's files and the row reads Download.
+    @Test func pausedEntryShowsResumeAndCancelDiscardsOnlyDownloadArtifacts() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e4b])
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        let notes = sandbox.root.appendingPathComponent("\(e2b.fileName).notes")
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        for url in [staging, notes] { try Data("x".utf8).write(to: url) }
+        let manager = try await sandbox.restoredManager()
+
+        #expect(manager.pausedBytes == [e2b.fileName: 1_474_000_000])
+        let paused = row(e2b, manager)
+        #expect(paused.chip == .resume)
+        #expect(paused.column == .cancel)
+        #expect(paused.metadata == "Paused · 1.47 of 3.43 GB")
+        #expect(paused.accessibilityLabel == "Resume download of \(e2b.title)")
+
+        manager.cancelDownload(e2b)
+
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(FileManager.default.fileExists(atPath: notes.path))
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.appendingPathComponent(e4b.fileName).path))
+        #expect(manager.installedModelFiles == [e4b.fileName])
+        #expect(manager.pausedBytes.isEmpty)
+        #expect(manager.statusMessage == "Download of \(e2b.title) cancelled.")
+        let rest = row(e2b, manager)
+        #expect(rest.chip == .download)
+        #expect(rest.column == .empty)
+        #expect(rest.line == .none)
+        #expect(rest.metadata == "Quick drafts · 3.43 GB · Recommended")
+    }
+
+    /// Resume continues from the saved bytes (the line does not restart from the ghost),
+    /// and Cancel while it runs stops it and returns the row to Download.
+    @Test func resumeStartsFromTheSavedBytesAndCancelStopsTheRunningDownload() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        let manager = try await sandbox.restoredManager()
+
+        manager.start(e2b)
+
+        #expect(manager.activeDownloadID == e2b.id)
+        #expect(manager.receivedBytes == 1_474_000_000)
+        let running = row(e2b, manager)
+        #expect(running.chip == .pause)
+        #expect(running.column == .cancel)
+        #expect(running.metadata == "1.47 of 3.43 GB · 43%")
+        #expect(running.line == .written(Double(1_474_000_000) / Double(e2b.expectedBytes)))
+
+        manager.cancelDownload(e2b)
+
+        #expect(manager.activeDownloadID == nil)
+        #expect(!FileManager.default.fileExists(atPath: resume.path))
+        #expect(manager.pausedBytes.isEmpty)
+        #expect(row(e2b, manager).chip == .download)
+    }
+
+    /// A completion the session delivers after Cancel is discarded, not published; a new
+    /// download of the entry lifts that.
+    @Test func completionDeliveredAfterCancelIsDiscarded() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", character: "",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+        manager.beginDownloadForTest(option)
+        let starting = ModelRowContent.catalog(option, facts: ModelRowContent.Facts(isActive: true))
+        #expect(starting.chip == .pause)
+        #expect(starting.line == .ghost)
+        #expect(starting.metadata == "Starting download…")
+
+        manager.cancelDownload(option)
+        #expect(manager.activeDownloadID == nil)
+
+        try valid.write(to: staging)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option) == false)
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+
+        manager.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option))
+        #expect(FileManager.default.fileExists(atPath: installed.path))
+    }
+
+    /// After Cancel and a new download of the same entry, the cancelled transfer's late
+    /// progress, completion and resume data are all discarded and never touch the new one.
+    @Test func aCancelledTransfersLateCallbacksNeverTouchTheNextDownload() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let resume = GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root)
+        try Self.resumeBlob(received: 1_474_000_000).write(to: resume)
+        let manager = try await sandbox.restoredManager()
+        manager.start(e2b)
+        let old = try #require(manager.activeTransferIdentifier)
+        manager.cancelDownload(e2b)
+        try Self.resumeBlob(received: 1_000_000_000).write(to: resume)
+        manager.start(e2b)
+        let current = try #require(manager.activeTransferIdentifier)
+        #expect(current != old)
+
+        manager.receiveProgressForTest(e2b, taskIdentifier: old, bytes: 3_000_000_000)
+        #expect(manager.receivedBytes == 1_000_000_000)
+        #expect(!manager.finishForTest(e2b, taskIdentifier: old))
+        #expect(manager.activeDownloadID == e2b.id)
+        #expect(!manager.saveResumeData(Data("late".utf8), for: e2b, taskIdentifier: old))
+        #expect(try Data(contentsOf: resume) == Self.resumeBlob(received: 1_000_000_000))
+
+        let staging = sandbox.root.appendingPathComponent("\(e2b.fileName).download")
+        try Data("not the model".utf8).write(to: staging)
+        let directory = sandbox.root
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: e2b, taskIdentifier: old) == false)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        manager.cancelDownload(e2b)
+    }
+
+    /// A Pause accepted just as the transfer finished: the check began, then the pause cleared
+    /// the running task. The completion, or its failure, still ends the check, so downloads,
+    /// choices, imports and deletes are not left disabled.
+    @Test(arguments: [true, false])
+    func aPauseThatRacesTheCompletionNeverLeavesTheCheckOpen(completes: Bool) async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let manager = try await sandbox.restoredManager()
+        manager.beginTransferForTest(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.pauseDownload()
+        manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
+        try #require(await Self.eventually { !manager.isPausing })
+        #expect(manager.activeTransferIdentifier == nil)
+
+        if completes {
+            manager.finishForTest(e2b, taskIdentifier: transfer)
+        } else {
+            manager.failForTest(e2b, taskIdentifier: transfer, error: CocoaError(.fileWriteUnknown))
+            #expect(manager.errorMessage?.hasPrefix("Download failed for \(e2b.title)") == true)
+        }
+        #expect(!manager.isVerifying)
+        #expect(manager.activeDownloadID == nil)
+    }
+
+    /// The other order: the Pause clears the running task before the check registers, so the
+    /// check is refused, and a newer operation (here another entry's check) starts. The old
+    /// transfer's completion or failure must leave that operation alone.
+    @Test(arguments: [true, false])
+    func aPausedTransfersLateCompletionLeavesANewerOperationAlone(completes: Bool) async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let manager = try await sandbox.restoredManager()
+        manager.beginTransferForTest(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.pauseDownload()
+        try #require(await Self.eventually { !manager.isPausing })
+        manager.setVerifyingForTest(e2b, taskIdentifier: transfer)
+        #expect(!manager.isVerifying)
+
+        manager.beginDownloadForTest(e4b)
+        manager.setVerifyingForTest(e4b, taskIdentifier: nil)
+        try #require(manager.isVerifying)
+
+        if completes {
+            #expect(!manager.finishForTest(e2b, taskIdentifier: transfer))
+        } else {
+            manager.failForTest(e2b, taskIdentifier: transfer, error: CocoaError(.fileWriteUnknown))
+            #expect(manager.errorMessage == nil)
+        }
+        #expect(manager.isVerifying)
+        #expect(manager.activeDownloadID == e4b.id)
+    }
+
+    /// When a completion was already published, a Cancel that follows keeps the installed
+    /// model and says so; it never removes an install.
+    @Test func aCompletionPublishedBeforeCancelKeepsTheModel() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", character: "",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = sandbox.root.appendingPathComponent("\(option.fileName).download")
+        let installed = sandbox.root.appendingPathComponent(option.fileName)
+        let manager = try await sandbox.restoredManager()
+        let directory = sandbox.root
+        manager.beginDownloadForTest(option)
+        try valid.write(to: staging)
+        #expect(try await Self.deliverCompletion(manager, staging: staging, directory: directory, option: option, taskIdentifier: 4_242))
+
+        manager.cancelDownload(option)
+
+        #expect(try Data(contentsOf: installed) == valid)
+        #expect(manager.statusMessage == "Fixture had already finished downloading.")
+        #expect(manager.installedModelFiles.contains(option.fileName))
+    }
+
+    /// Resume shows the saved count, then the offset URLSession actually resumed at; a
+    /// lower count arriving late is ignored, so the line never runs backwards on its own.
+    @Test func resumeOffsetReplacesTheSavedCountAndProgressNeverGoesBack() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try Self.resumeBlob(received: 1_474_000_000).write(to: GGUFModelStorage.resumeDataURL(for: e2b, in: sandbox.root))
+        let manager = try await sandbox.restoredManager()
+        manager.start(e2b)
+        let transfer = try #require(manager.activeTransferIdentifier)
+
+        manager.receiveProgressForTest(e2b, taskIdentifier: transfer, bytes: 1_000_000_000)
+        #expect(manager.receivedBytes == 1_474_000_000)
+        manager.resumedForTest(taskIdentifier: transfer, offset: 0)  // the server restarted the file
+        #expect(manager.receivedBytes == 0)
+        manager.receiveProgressForTest(e2b, taskIdentifier: transfer, bytes: 2 << 20)
+        #expect(manager.receivedBytes == 2 << 20)
+        manager.cancelDownload(e2b)
+    }
+
+    /// Each delete's "back for your songs" line keeps its own 4 s: a second delete does not
+    /// cut the first one short.
+    @Test func freedSpaceIsHeldPerModel() async throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        try sandbox.install([e2b, e4b])
+        let manager = try await sandbox.restoredManager()
+
+        await manager.delete(e2b)
+        await manager.delete(e4b)
+
+        #expect(manager.freedSpace[e2b.fileName]?.bytes == e2b.expectedBytes)
+        #expect(manager.freedSpace[e4b.fileName]?.bytes == e4b.expectedBytes)
+        // Each line expires on its own clock; polled with a deadline (a loaded runner can be
+        // slow to deliver the 4 s timer), so a line that never clears still fails here.
+        #expect(await Self.eventually { manager.freedSpace.isEmpty })
+    }
+
+    // MARK: Custom model delete
+
+    /// Delete on an imported model removes the app's copy and its registration and clears
+    /// the selection; the file the writer picked is never touched.
+    @Test func customDeleteRemovesOnlyTheAppsCopyNeverTheOriginal() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let picked = sandbox.root.deletingLastPathComponent()
+            .appendingPathComponent("picked-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: picked, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: picked) }
+        let original = picked.appendingPathComponent("Night Drive.gguf")
+        let bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0] + [UInt8](repeating: 7, count: 4_088))
+        try bytes.write(to: original)
+        let manager = try await sandbox.restoredManager()
+
+        #expect(await manager.importCustomModel(from: original))
+        let model = try #require(GGUFCustomModelRegistry.models(defaults: sandbox.defaults).first)
+        let copy = sandbox.root.appendingPathComponent(model.fileName)
+        #expect(model.displayName == "Night Drive")
+        #expect(manager.selectedModelFileName == model.fileName)
+        #expect(manager.bytesOnDisk[model.fileName] == Int64(bytes.count))
+        let selected = ModelRowContent.custom(model, facts: ModelRowContent.Facts(bytesOnDisk: Int64(bytes.count), isSelected: true))
+        #expect(selected.metadata == "In use · 4 KB on this device")
+        #expect(selected.chip == .selected)
+        #expect(selected.column == .trash)
+
+        await manager.deleteCustom(model)
+
+        #expect(manager.errorMessage == nil)
+        #expect(!FileManager.default.fileExists(atPath: copy.path))
+        #expect(try Data(contentsOf: original) == bytes)
+        #expect(GGUFCustomModelRegistry.models(defaults: sandbox.defaults).isEmpty)
+        #expect(manager.selectedModelFileName == nil)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == nil)
+        #expect(GGUFModelSelection.isCleared(defaults: sandbox.defaults))
+        #expect(manager.bytesOnDisk[model.fileName] == nil)
+        #expect(manager.freedSpace[model.fileName]?.bytes == Int64(bytes.count))
+        #expect(manager.statusMessage == "Night Drive deleted.")
+    }
+
+    /// A custom entry whose file name is not a plain name in the models folder is refused.
+    @Test func customDeleteRefusesANameOutsideTheModelsFolder() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let outside = sandbox.root.deletingLastPathComponent().appendingPathComponent("outside-\(UUID().uuidString).gguf")
+        try Data("GGUF".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let model = GGUFCustomModel(id: "escape", displayName: "Escape", fileName: "../\(outside.lastPathComponent)")
+        GGUFCustomModelRegistry.register(model, defaults: sandbox.defaults)
+        let manager = try await sandbox.restoredManager()
+
+        await manager.deleteCustom(model)
+
+        #expect(FileManager.default.fileExists(atPath: outside.path))
+        #expect(GGUFCustomModelRegistry.contains(fileName: model.fileName, defaults: sandbox.defaults))
     }
 }
 

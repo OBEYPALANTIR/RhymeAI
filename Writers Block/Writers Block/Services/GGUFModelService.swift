@@ -46,6 +46,10 @@ nonisolated enum GGUFCustomModelRegistry {
         save(updated, defaults: defaults)
     }
 
+    static func remove(fileName: String, defaults: UserDefaults = .standard) {
+        save(models(defaults: defaults).filter { $0.fileName != fileName }, defaults: defaults)
+    }
+
     static func contains(
         fileName: String,
         defaults: UserDefaults = .standard

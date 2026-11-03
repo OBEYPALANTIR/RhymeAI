@@ -21,6 +21,8 @@ enum UITestFlags {
     /// Installs the catalog E2B entry as a sparse file of the catalog size with its verified
     /// marker, selected, so Settings can exercise Delete without a download.
     static let seedInstalledGGUFModel = "--ui-test-seed-installed-gguf-model"
+    /// Settings lists every local-model row state under the real rows (`ModelRowContent.gallery`).
+    static let modelRowGallery = "--ui-test-model-row-gallery"
     /// Suggest Next Line answers from `scriptedSuggestionStream` instead of a
     /// provider, on the on-device route, so the Assistant's real loading and
     /// arrival states can be held and replayed with no key, request or model.
