@@ -217,6 +217,24 @@ class OneLinerCaptureTest {
     }
 
     @Test
+    fun aReleasedClaimNotifiesWhoeverReadTheOwner() {
+        val memo = Any()
+        val changes = mutableListOf<Any?>()
+        val observer = androidx.compose.runtime.snapshots.SnapshotStateObserver { it() }
+        try {
+            assertTrue(MicrophoneOwner.claim(memo))
+            observer.start()
+            observer.observeReads(Unit, onValueChangedForScope = { changes += MicrophoneOwner.current }) { MicrophoneOwner.current }
+            MicrophoneOwner.release(memo)
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            assertEquals(listOf<Any?>(null), changes)
+        } finally {
+            observer.stop()
+            MicrophoneOwner.release(memo)
+        }
+    }
+
+    @Test
     fun aStartThatFailsAfterClaimingLeavesTheMicrophoneFree() {
         val memo = Any()
         val other = Any()

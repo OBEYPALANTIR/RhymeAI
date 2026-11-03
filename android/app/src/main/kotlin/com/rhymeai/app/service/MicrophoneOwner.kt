@@ -1,12 +1,17 @@
 package com.rhymeai.app.service
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
 /**
  * One recorder holds the microphone at a time, from the moment it starts opening it until it
  * has stopped: song memos and one liners never record together, even when both start at once.
  * The owner is the recorder instance itself, so one recorder can never release another's claim.
  */
 object MicrophoneOwner {
-    @Volatile var current: Any? = null
+    /** Snapshot state, so a sheet waiting on another recorder's claim recomposes when it is released. */
+    var current: Any? by mutableStateOf(null)
         private set
 
     /** False when another recorder holds the microphone. */
