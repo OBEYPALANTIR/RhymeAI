@@ -112,6 +112,12 @@ class PlaybackGuardInstrumentedTest {
         instrumentation.waitForIdleSync()
     }
 
+    /** Waits until playback reaches [positionMs] or [timeoutMs] passes. */
+    private fun awaitPosition(positionMs: Long, timeoutMs: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (service.playbackPositionMs < positionMs && System.currentTimeMillis() < deadline) Thread.sleep(50)
+    }
+
     private fun play(target: VoiceMemo = memo) = instrumentation.runOnMainSync { service.play(target) }
 
     /** Plays and returns once the play's authorization is inside its gated read. */
@@ -140,21 +146,21 @@ class PlaybackGuardInstrumentedTest {
 
     @Test fun pauseThenPlayResumesWhereItStopped() {
         play()
-        settle()
-        Thread.sleep(2_000)
+        awaitPosition(2_000L, timeoutMs = 8_000L)
         instrumentation.runOnMainSync { service.pausePlayback() }
         assertNull(service.playingFile)
         assertEquals(memo.file, service.pausedFile)
         val pausedAt = service.playbackPositionMs
         assertTrue("paused at $pausedAt", pausedAt >= 2_000L)
 
-        // A restart from zero cannot reach the paused offset within 1.5 s; a resume does.
+        // A restart from zero cannot reach the paused offset within 1.5 s; a resume does. Half a
+        // second later the player's own ticks (not the value set at prepare) must still be past it.
         play()
-        val deadline = System.currentTimeMillis() + 1_500L
-        while (service.playbackPositionMs < pausedAt && System.currentTimeMillis() < deadline) Thread.sleep(50)
+        awaitPosition(pausedAt, timeoutMs = 1_500L)
+        Thread.sleep(500)
         assertEquals(memo.file, service.playingFile)
         assertNull(service.pausedFile)
-        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs >= pausedAt)
+        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs > pausedAt)
     }
 
     @Test fun onlyAMoveOfThePausedRecordingForgetsItsPosition() {
