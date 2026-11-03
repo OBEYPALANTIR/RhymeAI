@@ -1088,7 +1088,10 @@ final class BackupService {
         var songs: [SongProject] = []
         // Each take to place, with the Drive name its audio is under (the revision's id).
         var takes: [(take: SyncRecording, source: String)] = []
-        for song in old.projects {
+        // A revision listing an id twice (a hash-valid manifest can) yields one song and
+        // one take per id, the first listed; no recovered id is ever inserted twice.
+        var seenSongs = Set<String>(), seenTakes = Set<String>()
+        for song in old.projects where seenSongs.insert(song.id).inserted {
             let id = Self.recoveredId(fileId: fileId, revisionId: revisionId, song.id)
             // The song's own deletion wins first, whether or not its row is here: no take is attached.
             if tombstones.contains(where: { $0.projectId == id && $0.isSongTombstone }) {
@@ -1108,7 +1111,7 @@ final class BackupService {
             } else {
                 songs.append(SongProject(id: id, title: song.title, lyrics: song.lyrics, theme: song.theme, updatedAt: stamp))
             }
-            for entry in old.recordings where entry.projectId == song.id {
+            for entry in old.recordings where entry.projectId == song.id && seenTakes.insert(entry.id).inserted {
                 var take = entry
                 take.id = Self.recoveredId(fileId: fileId, revisionId: revisionId, entry.id)
                 take.projectId = id
@@ -1162,12 +1165,13 @@ final class BackupService {
             try library.commitRestored(try Data(contentsOf: file), entry: take, origin: .restored, context: modelContext)
             try? FileManager.default.removeItem(at: file)
         }
-        songs.forEach(modelContext.insert)
+        var inserted = Set<String>()
+        for song in songs where inserted.insert(song.id).inserted { modelContext.insert(song) }
         if modelContext.hasChanges { try modelContext.save() }
         try await library.reconcile(context: modelContext)
 
         let attached = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
-        report.recoveredSongs = songs.count
+        report.recoveredSongs = inserted.count
         report.recoveredRecordings = downloaded.filter { attached.contains($0.take.id) }.count
         report.missingRecordings += downloaded.filter { !attached.contains($0.take.id) }.map(\.take.fileName)
         lastReport = report
