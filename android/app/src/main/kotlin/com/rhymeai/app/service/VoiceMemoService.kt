@@ -106,6 +106,14 @@ class VoiceMemoService(private val context: Context) {
     var playingFile by mutableStateOf<File?>(null)
         private set
 
+    /** Where playback of [playingFile] (or of [pausedFile]) is, in ms; ticks while playing. */
+    var playbackPositionMs by mutableLongStateOf(0L)
+        private set
+
+    /** The memo Pause left off in; Play on it resumes at [playbackPositionMs]. */
+    var pausedFile by mutableStateOf<File?>(null)
+        private set
+
     // --- Private resource handles ---
 
     private var recorder: MediaRecorder? = null
@@ -113,6 +121,8 @@ class VoiceMemoService(private val context: Context) {
     private var recordingStartMs = 0L
 
     private var player: MediaPlayer? = null
+    /** Ticks [playbackPositionMs] once the player has started; null before that. */
+    private var positionJob: Job? = null
     /** The pending playback check, owned so Stop, release and deletions cancel it. */
     private var playJob: Job? = null
     /** The id of the recording playing, so it is found again after its path changes. */
@@ -664,13 +674,14 @@ class VoiceMemoService(private val context: Context) {
      * When playback completes naturally, [playingFile] is cleared automatically.
      */
     fun play(memo: VoiceMemo) {
+        val resumeAt = resumePositionMs(pausedFile, playbackPositionMs, memo)
         stopPlayback()
         // A28: authorized and started under the recording lock, with a verified id; Stop,
         // release and a deletion cancel a play still waiting for it.
         playJob = scope.launch {
             val catalog = catalog
             if (catalog == null) {
-                startPlayer(memo, null) // tests without a catalog only
+                startPlayer(memo, null, resumeAt) // tests without a catalog only
                 return@launch
             }
             val projectId = memo.file.parentFile?.name ?: return@launch
@@ -681,20 +692,30 @@ class VoiceMemoService(private val context: Context) {
                 ) { id, file ->
                     withContext(Dispatchers.Main) {
                         ensureActive()
-                        startPlayer(memo.copy(file = file), id)
+                        startPlayer(memo.copy(file = file), id, resumeAt)
                     }
                 }
             }
         }
     }
 
-    private fun startPlayer(memo: VoiceMemo, recordingId: String?) {
+    private fun startPlayer(memo: VoiceMemo, recordingId: String?, startAtMs: Long = 0L) {
         releasePlayer()
         val mp = MediaPlayer()
         try {
             mp.setDataSource(memo.file.absolutePath)
             mp.setOnPreparedListener { prepared ->
-                if (player === prepared) prepared.start()
+                if (player === prepared) {
+                    if (startAtMs > 0L) prepared.seekTo(startAtMs.toInt())
+                    prepared.start()
+                    playbackPositionMs = startAtMs
+                    positionJob = scope.launch {
+                        while (true) {
+                            playbackPositionMs = runCatching { prepared.currentPosition.toLong() }.getOrDefault(playbackPositionMs)
+                            delay(POSITION_TICK_MS)
+                        }
+                    }
+                }
             }
             mp.setOnCompletionListener { completed ->
                 if (player === completed) stopPlayback()
@@ -731,11 +752,27 @@ class VoiceMemoService(private val context: Context) {
         releasePlayer()
     }
 
+    /** Stops playback and remembers where, so Play on the same memo resumes there. */
+    fun pausePlayback() {
+        val file = playingFile
+        // The position is read only once the player started (before that it may be preparing).
+        val at = if (positionJob != null) runCatching { player?.currentPosition?.toLong() }.getOrNull() else null
+        stopPlayback()
+        if (file != null && at != null && at > 0L) {
+            pausedFile = file
+            playbackPositionMs = at
+        }
+    }
+
     private fun releasePlayer() {
         val mp = player
         player = null
         playingFile = null
         playingRecordingId = null
+        pausedFile = null
+        positionJob?.cancel()
+        positionJob = null
+        playbackPositionMs = 0L
 
         if (mp != null) {
             runCatching { mp.stop() }
@@ -750,6 +787,8 @@ class VoiceMemoService(private val context: Context) {
     suspend fun stopPlayingIds(ids: Set<String>) = withContext(Dispatchers.Main) {
         playJob?.takeIf { it.isActive }?.cancel()
         if (playingRecordingId in ids) stopPlayback()
+        // A paused memo whose bytes move resumes from the start, never at a stale path.
+        pausedFile = null
     }
 
     // ---------------------------------------------------------------------------
@@ -1196,6 +1235,12 @@ class VoiceMemoService(private val context: Context) {
 
         fun formatMemoLabel(timestampMs: Long): String =
             LABEL_FORMAT.format(Date(timestampMs))
+
+        private const val POSITION_TICK_MS = 200L
+
+        /** Where Play starts [memo]: at the paused position when Pause left off in it, else at 0. */
+        internal fun resumePositionMs(pausedFile: File?, pausedAtMs: Long, memo: VoiceMemo): Long =
+            if (pausedFile == memo.file && pausedAtMs in 1 until memo.durationMs) pausedAtMs else 0L
 
         fun formatDuration(ms: Long): String {
             val totalSecs = (ms / 1_000).coerceAtLeast(0)

@@ -39,6 +39,18 @@ class VoiceMemoServiceTest {
     }
 
     @Test
+    fun playResumesOnlyThePausedMemoInsideItsLength() {
+        val paused = VoiceMemo(File("a.m4a"), "a", durationMs = 10_000L)
+        val other = VoiceMemo(File("b.m4a"), "b", durationMs = 10_000L)
+        assertEquals(4_200L, VoiceMemoService.resumePositionMs(paused.file, 4_200L, paused))
+        assertEquals(0L, VoiceMemoService.resumePositionMs(paused.file, 4_200L, other))
+        assertEquals(0L, VoiceMemoService.resumePositionMs(null, 4_200L, paused))
+        // At or past the end (or nothing played) starts over.
+        assertEquals(0L, VoiceMemoService.resumePositionMs(paused.file, 10_000L, paused))
+        assertEquals(0L, VoiceMemoService.resumePositionMs(paused.file, 0L, paused))
+    }
+
+    @Test
     fun formatMemoLabelIsNonEmptyForCurrentTime() {
         val label = VoiceMemoService.formatMemoLabel(System.currentTimeMillis())
         assertTrue(label.isNotBlank())

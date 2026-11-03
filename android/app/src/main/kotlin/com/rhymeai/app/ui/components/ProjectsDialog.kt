@@ -67,6 +67,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -111,6 +112,7 @@ import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.R
@@ -716,6 +718,8 @@ internal fun RecordingMemoRow(
     val colorScheme = MaterialTheme.colorScheme
     val context = LocalContext.current
     val isPlaying = service.playingFile == memo.file
+    // Playing or paused part way: the row shows where it is.
+    val showsPosition = isPlaying || service.pausedFile == memo.file
     var pendingRename by remember { mutableStateOf(false) }
     var renameText by remember(memo.file.absolutePath) {
         mutableStateOf(VoiceMemoService.displayLabel(memo.displayName))
@@ -779,7 +783,7 @@ internal fun RecordingMemoRow(
                 }
                 IconButton(
                     onClick = {
-                        if (isPlaying) service.stopPlayback() else service.play(memo)
+                        if (isPlaying) service.pausePlayback() else service.play(memo)
                     },
                     modifier = Modifier.size(DesignTokens.Touch.minTarget)
                 ) {
@@ -798,10 +802,29 @@ internal fun RecordingMemoRow(
                         color = colorScheme.onSurface
                     )
                     Text(
-                        text = VoiceMemoService.formatDuration(memo.durationMs),
+                        text = if (showsPosition) {
+                            "${VoiceMemoService.formatDuration(service.playbackPositionMs)} / ${VoiceMemoService.formatDuration(memo.durationMs)}"
+                        } else {
+                            VoiceMemoService.formatDuration(memo.durationMs)
+                        },
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
+                    if (showsPosition) {
+                        LinearProgressIndicator(
+                            progress = {
+                                if (memo.durationMs > 0L) (service.playbackPositionMs.toFloat() / memo.durationMs).coerceIn(0f, 1f) else 0f
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = DesignTokens.Spacing.xs)
+                                .height(2.dp),
+                            color = colorScheme.primary,
+                            trackColor = colorScheme.outlineVariant,
+                            gapSize = 0.dp,
+                            drawStopIndicator = {}
+                        )
+                    }
                 }
 
                 IconButton(
@@ -1065,12 +1088,10 @@ private fun TrashBinPage(
     } else {
         memoPaths.isNotEmpty() && selectedMemoPaths.containsAll(memoPaths)
     }
-    val bottomActionClearance = maxOf(
-        navigationBarBottomPadding(),
-        DialogBottomActionMinClearance
-    )
+    // The bar sits on the navigation bar: its surface takes the inset once, with no floor below it.
+    val navigationBarInset = navigationBarBottomPadding(extra = 0.dp)
     val bottomActionBarHeight = DesignTokens.Touch.minTarget + DesignTokens.Spacing.md + DesignTokens.Spacing.md
-    val contentBottomPadding = bottomActionClearance + bottomActionBarHeight + DesignTokens.Spacing.xl
+    val contentBottomPadding = navigationBarInset + bottomActionBarHeight + DesignTokens.Spacing.xl
 
     LaunchedEffect(trashIdSet) {
         selectedIds = selectedIds.intersect(trashIdSet)
@@ -1406,10 +1427,10 @@ private fun TrashBinPage(
             ) {
                 TrashBottomActionBar(
                     selectedCount = selectedCount,
+                    bottomInset = navigationBarInset,
                     onRestoreSelected = ::restoreSelected,
                     onRequestDeleteSelected = { confirmPermanentDelete = true }
                 )
-                Spacer(Modifier.height(bottomActionClearance))
             }
         }
     }
@@ -1750,6 +1771,7 @@ private fun SelectionCircle(selected: Boolean) {
 @Composable
 private fun TrashBottomActionBar(
     selectedCount: Int,
+    bottomInset: Dp,
     onRestoreSelected: () -> Unit,
     onRequestDeleteSelected: () -> Unit,
     modifier: Modifier = Modifier
@@ -1769,7 +1791,7 @@ private fun TrashBottomActionBar(
                     start = DesignTokens.Spacing.lg,
                     top = DesignTokens.Spacing.md,
                     end = DesignTokens.Spacing.lg,
-                    bottom = DesignTokens.Spacing.md
+                    bottom = DesignTokens.Spacing.md + bottomInset
                 )
                 .height(DesignTokens.Touch.minTarget),
             horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm),
