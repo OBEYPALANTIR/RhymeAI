@@ -499,7 +499,6 @@ private fun OneLinerCaptureSheet(
     val imeVisible = rememberUpdatedState(WindowInsets.isImeVisible)
     // Words, take and errors live in the session (the ViewModel's), so a recreated activity keeps them.
     var text by session::text
-    var textBeforeTake by session::textBeforeTake
     var saveError by session::saveError
     val saving = session.saving
     val isEdit = mode is CaptureMode.Edit
@@ -507,8 +506,8 @@ private fun OneLinerCaptureSheet(
     val canSave = !saving && (text.isNotBlank() || (!isEdit && (recorder.takeFile != null || recorder.isRecording)))
 
     fun startTake() {
-        textBeforeTake = text.trim()
-        if (!recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"), context.applicationContext)) focusRequester.requestFocus()
+        if (recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"), context.applicationContext)) session.takeStarted()
+        else focusRequester.requestFocus()
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -526,12 +525,8 @@ private fun OneLinerCaptureSheet(
     // The save runs in the ViewModel (see OneLinerCaptures.save): the sheet only shows its state.
     fun save() = onSave()
 
-    LaunchedEffect(recorder.transcript) {
-        val heard = recorder.transcript
-        if (heard.isEmpty() || heard == session.appliedTranscript) return@LaunchedEffect
-        session.appliedTranscript = heard
-        text = if (textBeforeTake.isEmpty()) heard else "$textBeforeTake $heard"
-    }
+    // Keyed by the take too, so a new take's first words land even when they match the last take's.
+    LaunchedEffect(recorder.startedAt, recorder.transcript) { session.applyTranscript(recorder.transcript) }
     LaunchedEffect(session) {
         // Once per capture: a sheet recreated with the activity keeps its take and does not reopen the mic.
         if (session.opened) return@LaunchedEffect

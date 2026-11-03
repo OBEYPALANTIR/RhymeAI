@@ -46,7 +46,7 @@ class OneLinerRecorder {
     var takeFile by mutableStateOf<File?>(null)
         private set
     var takeDurationMs by mutableStateOf(0L)
-        private set
+        internal set
     var notice by mutableStateOf<String?>(null)
 
     private val main by lazy { Handler(Looper.getMainLooper()) }
@@ -58,12 +58,16 @@ class OneLinerRecorder {
     /** The pump wrote the WAV header and closed the file. */
     @Volatile private var finalized = false
     @Volatile private var bytesWritten = 0L
+    /** The take the recognizer would report for now (tests use it in place of a recognizer). */
+    internal val currentTake get() = take
     private var recognizer: SpeechRecognizer? = null
     /** The end the recording thread writes to; closing it ends the recognition session. */
     private var feed: ParcelFileDescriptor? = null
     /** The end the recognizer reads. Android parcels it after startListening returns, so it stays open until teardown. */
     private var feedSource: ParcelFileDescriptor? = null
     private var heard = ""
+    /** Which take the recognizer's results belong to; a discarded or earlier take's late results are dropped. */
+    private var take = 0
 
     companion object {
         const val LEVEL_COUNT = 12
@@ -116,8 +120,7 @@ class OneLinerRecorder {
         }
         audioRecord = record
         takeFile = file
-        transcript = ""
-        heard = ""
+        beginTake()
         bytesWritten = 0L
         writeFailed = false
         inputFailed = false
@@ -178,6 +181,14 @@ class OneLinerRecorder {
         takeFile?.delete()
         takeFile = null
         takeDurationMs = 0L
+        take++
+    }
+
+    /** A new take: what the recognizer heard for an earlier one no longer lands. */
+    internal fun beginTake() {
+        take++
+        transcript = ""
+        heard = ""
     }
 
     private fun pump(record: AudioRecord, output: RandomAccessFile, pipe: ParcelFileDescriptor?) {
@@ -247,10 +258,11 @@ class OneLinerRecorder {
             return null
         }
         runCatching { Os.fcntlInt(write.fileDescriptor, OsConstants.F_SETFL, OsConstants.O_NONBLOCK) }
+        val forTake = take
         created.setRecognitionListener(object : RecognitionListener {
-            override fun onPartialResults(partialResults: Bundle?) = show(partialResults, commit = false)
-            override fun onSegmentResults(segmentResults: Bundle) = show(segmentResults, commit = true)
-            override fun onResults(results: Bundle?) = show(results, commit = true)
+            override fun onPartialResults(partialResults: Bundle?) = show(forTake, partialResults, commit = false)
+            override fun onSegmentResults(segmentResults: Bundle) = show(forTake, segmentResults, commit = true)
+            override fun onResults(results: Bundle?) = show(forTake, results, commit = true)
             override fun onError(error: Int) {
                 if (isRecording) notice = "Transcription stopped. The take is still recording; type the words after."
             }
@@ -292,9 +304,12 @@ class OneLinerRecorder {
         }
     }
 
-    private fun show(results: Bundle?, commit: Boolean) {
-        val words = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
-        if (words.isEmpty()) return
+    private fun show(forTake: Int, results: Bundle?, commit: Boolean) =
+        recognized(forTake, results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty(), commit)
+
+    /** The recognizer's words for [forTake]; dropped once that take is discarded or another has begun. */
+    internal fun recognized(forTake: Int, words: String, commit: Boolean) {
+        if (forTake != take || words.isEmpty()) return
         val joined = listOf(heard, words).filter { it.isNotEmpty() }.joinToString(" ")
         if (commit) heard = joined
         transcript = joined

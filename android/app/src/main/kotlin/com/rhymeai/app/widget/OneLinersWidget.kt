@@ -56,8 +56,8 @@ class OneLinersWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val first = read(context)
         provideContent {
-            // Glance keeps a session running (45 s and more) and updateAll only recomposes it, never
-            // calling provideGlance again, so each refresh re-reads the snapshot here.
+            // Glance keeps a session running for 45 s after it first draws, and updateAll only recomposes
+            // it, never calling provideGlance again, so each refresh re-reads the snapshot here.
             val version by refreshes.collectAsState()
             val snapshot by produceState(first, version) { value = read(context) }
             Content(context, snapshot)

@@ -33,6 +33,19 @@ class OneLinerCaptureSession(val mode: Mode, val recorder: OneLinerRecorder = On
     /** The opening action (mic or keyboard) already ran; a recreated sheet does not run it again. */
     var opened = false
 
+    /** A take started: its transcript follows the words in the field now, and is applied afresh. */
+    fun takeStarted() {
+        textBeforeTake = text.trim()
+        appliedTranscript = ""
+    }
+
+    /** Puts the take's transcript after the words typed before it, once per transcript. */
+    fun applyTranscript(heard: String) {
+        if (heard.isEmpty() || heard == appliedTranscript) return
+        appliedTranscript = heard
+        text = if (textBeforeTake.isEmpty()) heard else "$textBeforeTake $heard"
+    }
+
     /** Drops a new capture's take so the writer can record again; the words stay. Never during a save, which holds the take. */
     fun discardTake() {
         if (saving || mode is Mode.Edit) return
