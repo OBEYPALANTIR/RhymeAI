@@ -438,6 +438,13 @@ below is the contract it must meet, not verified behaviour.
   lock first, so playback stops before a Trash, restore, migration or quarantine
   move and no play can start in between; a rename moves nothing and playback
   continues. iOS stops playback through its `willMove` hook.
+- Playback controls (known difference): on Android a playing recording's row
+  shows elapsed / total under its name with a 2dp progress line, and Pause
+  remembers the position so Play on the same recording resumes there
+  (`VoiceMemoService.pausePlayback`, `resumePositionMs`; the row keeps the
+  position while paused; closing the sheet, playing another recording, a byte
+  move or the end of the take starts it over). iOS Pause still stops, and Play
+  starts again from the beginning, with no progress shown.
 - iOS specifics (round 6): recording tombstones by id live in the CloudKit
   record type `SyncRecordingDeletion` (`SyncDeletionRecord` keeps song and
   legacy name tombstones, without a recording id); iOS drops `claimedName` and
