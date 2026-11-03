@@ -3,6 +3,7 @@ package com.rhymeai.app
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -60,6 +61,7 @@ import com.rhymeai.app.ui.navigation.Routes
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.WordFrequency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -98,6 +100,10 @@ class MainActivity : ComponentActivity() {
             }.onFailure { error ->
                 Log.w("RhymeAI", "Word frequency list failed to load; rhyme candidates will use dictionary order.", error)
             }
+            // Ready before the first word lookup or rhyme-constrained suggestion asks for it.
+            val indexStart = SystemClock.elapsedRealtime()
+            ProsodyAnalyzer.prepareRhymeIndex()
+            Log.i("RhymeAI", "Rhyme index ready in ${SystemClock.elapsedRealtime() - indexStart} ms")
         }
         enableEdgeToEdge()
         setContent {

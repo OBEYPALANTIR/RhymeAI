@@ -255,6 +255,24 @@ class BackupFlowInstrumentedTest {
         assertEquals(BackupStatus.NotConnected, vm.backupStatus)
     }
 
+    /** Not now reads the library before it pauses; a Disconnect in that gap must stay Not connected. */
+    @Test fun disconnectRightAfterNotNowStaysNotConnected() {
+        val vm = launchConnectedWithEmptyLibrary()
+        waitForText("Restore your songs?")
+        // One main-thread turn: Not now's coroutine suspends on the library read, then Disconnect runs.
+        instrumentation.runOnMainSync {
+            vm.declineRestoreOffer()
+            vm.disconnectDrive()
+        }
+
+        waitUntil { vm.backupNotice?.startsWith("Disconnected from Google Drive") == true }
+        // Let Not now's coroutine finish its library read and resume.
+        SystemClock.sleep(500)
+        instrumentation.waitForIdleSync()
+        assertEquals(BackupStatus.NotConnected, vm.backupStatus)
+        assertFalse(prefs().getBoolean("drive_connected", false))
+    }
+
     @Test fun tombstonesAndRecordingChangesQueueTheDebouncedBackup() {
         val vm = launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")

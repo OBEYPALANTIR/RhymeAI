@@ -29,7 +29,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 - TXT export: Android and iOS unit-verified for untitled fallback, optional theme header, and lyric text preservation.
 - LRC export: Android and iOS unit-verified for shared metadata headers, blank-line handling, leading lyric indentation preservation, and trailing horizontal whitespace trimming.
-- JSON export: Android and iOS unit-verified for project field round trip. Platform timestamp encodings differ by model type (`Long` on Android, ISO-8601 `Date` on iOS), but each export remains re-importable on its source platform.
+- JSON export: Android and iOS unit-verified for project field round trip. Android writes every field, default values included (the single-song JSON and each `songs/<id>.json` in the export zip), so an `updatedAt` equal to its default is never dropped (`jsonExportWritesDefaultValuedFieldsSoUpdatedAtIsNeverDropped`). Platform timestamp encodings differ by model type (`Long` on Android, ISO-8601 `Date` on iOS), but each export remains re-importable on its source platform.
 - PDF export: iOS unit-verified to produce PDF bytes from a long lyric sheet. Android instrumented-verified that a long lyric sheet produces readable PDF bytes, paginates through `PdfRenderer`, and renders visible ink on the first page. Both advance the layout cursor by every wrapped theme row, so lyrics start below a long theme (iOS by the theme's measured height; Android per row with page breaks, instrumented `pdfExportStartsLyricsBelowAWrappedTheme`).
 
 ## Trash and persistence checks

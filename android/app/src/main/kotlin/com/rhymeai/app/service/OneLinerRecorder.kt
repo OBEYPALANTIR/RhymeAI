@@ -48,6 +48,9 @@ class OneLinerRecorder {
     var takeDurationMs by mutableStateOf(0L)
         internal set
     var notice by mutableStateOf<String?>(null)
+    /** From [start] until the microphone has opened (or failed) on its background thread. */
+    var isStarting by mutableStateOf(false)
+        private set
 
     private val main by lazy { Handler(Looper.getMainLooper()) }
     private var audioRecord: AudioRecord? = null
@@ -68,6 +71,8 @@ class OneLinerRecorder {
     private var heard = ""
     /** Which take the recognizer's results belong to; a discarded or earlier take's late results are dropped. */
     private var take = 0
+    /** Counts starts; a stop during one bumps it, so that open is closed when it lands instead of used. */
+    private var opening = 0
 
     companion object {
         const val LEVEL_COUNT = 12
@@ -80,17 +85,39 @@ class OneLinerRecorder {
         private const val MIC_FAILED_NOTICE = "The microphone couldn't start. Type the line instead."
     }
 
-    /** Starts a take writing to [file]. The caller holds RECORD_AUDIO. False when the mic could not open. */
-    fun start(file: File, context: Context): Boolean {
-        if (isRecording) return true
-        val opened = MicrophoneOwner.claimWhileStarting(this) { open(file, context) }
-        if (opened == null) notice = MEMO_RECORDING_NOTICE
-        if (opened != true) MicrophoneOwner.release(this)
-        return opened == true
+    /**
+     * Starts a take writing to [file]; the caller holds RECORD_AUDIO. The microphone and the file
+     * open on a background thread (on the main thread they froze the sheet), then [onStarted] runs
+     * on the main thread: false when the mic could not open. A [stop] before then cancels the start.
+     */
+    fun start(file: File, context: Context, onStarted: (Boolean) -> Unit) {
+        if (isRecording || isStarting) return
+        if (!MicrophoneOwner.claim(this)) {
+            notice = MEMO_RECORDING_NOTICE
+            onStarted(false)
+            return
+        }
+        isStarting = true
+        val attempt = ++opening
+        val appContext = context.applicationContext
+        Thread({
+            val input = runCatching { openInput(file, appContext) }.getOrElse { OpenedInput(failure = MIC_FAILED_NOTICE) }
+            main.post { finishStart(attempt, file, appContext, input, onStarted) }
+        }, "one-liner-open").start()
     }
 
+    /** What the background open produced: the input and file, or the notice for why not. */
+    private class OpenedInput(
+        val record: AudioRecord? = null,
+        val output: RandomAccessFile? = null,
+        /** True for the on-device recognizer, false for the default one, null for none. */
+        val onDeviceSpeech: Boolean? = null,
+        val failure: String? = null
+    )
+
+    /** Off the main thread: everything here can block on audio, storage or package queries. */
     @SuppressLint("MissingPermission")
-    private fun open(file: File, context: Context): Boolean {
+    private fun openInput(file: File, context: Context): OpenedInput {
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val record = runCatching {
             AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -98,16 +125,14 @@ class OneLinerRecorder {
         }.getOrNull()
         if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
             record?.release()
-            notice = MIC_FAILED_NOTICE
-            return false
+            return OpenedInput(failure = MIC_FAILED_NOTICE)
         }
         val output = try {
             file.parentFile?.mkdirs()
             RandomAccessFile(file, "rw").apply { setLength(0); write(ByteArray(WAV_HEADER_BYTES)) }
         } catch (_: Exception) {
             record.release()
-            notice = WRITE_FAILURE_NOTICE
-            return false
+            return OpenedInput(failure = WRITE_FAILURE_NOTICE)
         }
         try {
             record.startRecording()
@@ -115,9 +140,40 @@ class OneLinerRecorder {
             record.release()
             runCatching { output.close() }
             file.delete()
-            notice = MIC_FAILED_NOTICE
-            return false
+            return OpenedInput(failure = MIC_FAILED_NOTICE)
         }
+        val onDeviceSpeech = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) null else runCatching {
+            when {
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(context) -> true
+                SpeechRecognizer.isRecognitionAvailable(context) -> false
+                else -> null
+            }
+        }.getOrNull()
+        return OpenedInput(record, output, onDeviceSpeech)
+    }
+
+    /** Main thread: the take begins with what [openInput] opened, unless a stop cancelled it meanwhile. */
+    private fun finishStart(attempt: Int, file: File, context: Context, input: OpenedInput, onStarted: (Boolean) -> Unit) {
+        val record = input.record
+        val output = input.output
+        if (attempt != opening || record == null || output == null) {
+            if (record != null) {
+                record.release()
+                runCatching { output?.close() }
+                file.delete()
+            }
+            if (attempt == opening) {
+                isStarting = false
+                notice = input.failure
+                MicrophoneOwner.release(this)
+                onStarted(false)
+            } else if (!isStarting && !isRecording) {
+                // Cancelled, and no later start holds the claim.
+                MicrophoneOwner.release(this)
+            }
+            return
+        }
+        isStarting = false
         audioRecord = record
         takeFile = file
         beginTake()
@@ -128,9 +184,9 @@ class OneLinerRecorder {
         running = true
         isRecording = true
         startedAt = System.currentTimeMillis()
-        val pipe = startRecognizer(context)
+        val pipe = startRecognizer(context, input.onDeviceSpeech)
         thread = Thread({ pump(record, output, pipe) }, "one-liner-take").apply { start() }
-        return true
+        onStarted(true)
     }
 
     /**
@@ -139,6 +195,12 @@ class OneLinerRecorder {
      * never offered for saving.
      */
     fun stop(): Boolean {
+        if (isStarting) {
+            // The microphone has not opened yet: there is no take, and finishStart closes that open.
+            opening++
+            isStarting = false
+            return true
+        }
         if (!isRecording) return true
         running = false
         // Stopping the input first ends a read in progress, so the pump can finish the file.
@@ -235,17 +297,20 @@ class OneLinerRecorder {
         false
     }
 
-    /** Returns the pipe end the recording thread writes to, or null without live speech. */
-    private fun startRecognizer(context: Context): ParcelFileDescriptor? {
+    /**
+     * Returns the pipe end the recording thread writes to, or null without live speech. [onDevice] is
+     * [openInput]'s availability answer; the recognizer itself is created on the main thread, as Android requires.
+     */
+    private fun startRecognizer(context: Context, onDevice: Boolean?): ParcelFileDescriptor? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             notice = NO_SPEECH_NOTICE
             return null
         }
         val created = runCatching {
-            when {
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-                SpeechRecognizer.isRecognitionAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
-                else -> null
+            when (onDevice) {
+                true -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                false -> SpeechRecognizer.createSpeechRecognizer(context)
+                null -> null
             }
         }.getOrNull()
         if (created == null) {
