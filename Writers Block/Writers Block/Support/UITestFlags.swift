@@ -228,6 +228,17 @@ final class InMemoryDriveAppDataClient: DriveAppDataClient {
     func deleteFile(id: String, accessToken: String) async throws {
         files = files.filter { $0.value.file.id != id }
     }
+
+    // shortcut: the UI tests' Drive keeps no revisions; add them when a UI test covers recovery.
+    func listRevisions(fileId: String, accessToken: String) async throws -> [DriveFileRevision] { [] }
+
+    func keepRevisionForever(fileId: String, revisionId: String, accessToken: String) async throws {
+        throw BackupError.revisionUnavailable
+    }
+
+    func downloadRevision(fileId: String, revisionId: String, accessToken: String) async throws -> Data {
+        throw BackupError.revisionUnavailable
+    }
 }
 
 /// Signs in without a browser: an interactive request connects.

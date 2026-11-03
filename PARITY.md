@@ -546,6 +546,15 @@ below is the contract it must meet, not verified behaviour.
 - First-run restore: after Drive connects, or at launch when connected with an
   empty library, a manifest with at least one song offers "Restore your songs?"
   with Restore (merge) and Not now. Never automatic.
+  Restore first (`BackupGate`): while the offer is open no automatic backup runs,
+  and while the library (active plus Trash) is empty and Drive's manifest lists
+  songs none runs either (the status reads "Backup paused: … Restore to
+  continue."; Back up now asks before merging Drive's songs with nothing).
+  Recover an earlier backup lists the manifest's Drive revisions (newest first, up
+  to 50), marks the chosen one Keep Forever so Drive serves it, and imports each
+  song whose id is held nowhere (here or in the current backup, active or Trash)
+  as a new song with new ids and its recordings, with no Drive write or deletion;
+  held songs are skipped and counted as already here.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a

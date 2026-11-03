@@ -485,6 +485,7 @@ struct SettingsCloudBackupSection: View {
     @State private var importerShown = false
     @State private var exporterShown = false
     @State private var pendingExport: (fileName: String, document: ExportDocument)?
+    @State private var earlierBackupsShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -540,6 +541,21 @@ struct SettingsCloudBackupSection: View {
         } message: {
             Text("Enter the passphrase of your older encrypted backup. It is used once to move that backup to the new format and is not kept.")
         }
+        .alert(
+            "Back up with no songs here?",
+            isPresented: Binding(get: { viewModel.emptyBackupConfirmation != nil }, set: { if !$0 { viewModel.emptyBackupConfirmation = nil } }),
+            presenting: viewModel.emptyBackupConfirmation
+        ) { _ in
+            Button("Cancel", role: .cancel) {}
+            Button("Back Up Anyway") {
+                Task { await viewModel.backUpNow(confirmedEmptyMerge: true) }
+            }
+        } message: { remoteSongs in
+            Text("This device has no songs. Google Drive's \(remoteSongs) \(remoteSongs == 1 ? "song" : "songs") would be merged with nothing. Restore from backup to bring them here instead.")
+        }
+        .sheet(isPresented: $earlierBackupsShown) {
+            EarlierBackupsSheet()
+        }
         .fileImporter(isPresented: $importerShown, allowedContentTypes: [.zip, .json], allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
             let scoped = url.startAccessingSecurityScopedResource()
@@ -578,6 +594,11 @@ struct SettingsCloudBackupSection: View {
             }
             row("Restore from backup", systemImage: "arrow.down.doc.fill", id: "restoreFromBackup", enabled: viewModel.canRunCloudBackup) {
                 Task { await viewModel.restoreBackupNow() }
+            }
+            if viewModel.cloudBackupConnected {
+                row("Recover an earlier backup…", systemImage: "clock.arrow.circlepath", id: "recoverEarlierBackup", enabled: viewModel.canRunCloudBackup) {
+                    earlierBackupsShown = true
+                }
             }
             if viewModel.legacyBackupNeedsPassphrase {
                 row("Migrate older encrypted backup…", systemImage: "lock.open", id: "migrateLegacyBackup", enabled: viewModel.canRunCloudBackup) {
@@ -809,6 +830,86 @@ struct SettingsCloudBackupSection: View {
         case .on: "checkmark.icloud.fill"
         case .noAccount, .restricted, .localOnlyFallback, .temporarilyUnavailable: "icloud.slash"
         }
+    }
+}
+
+/// "Recover an earlier backup": the backup versions Google Drive kept, newest
+/// first. Choosing one marks it Keep Forever (Drive serves its content only
+/// then) and opens it; "Recover" then adds its songs to this device as new songs.
+struct EarlierBackupsSheet: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                    if viewModel.cloudBackupLastResultIsError, !viewModel.cloudBackupStatusText.isEmpty {
+                        Label(viewModel.cloudBackupStatusText, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.error)
+                            .accessibilityIdentifier("earlierBackupsError")
+                    }
+                    if let revisions = viewModel.backupRevisions {
+                        if revisions.isEmpty {
+                            Text("Google Drive has no earlier versions of this backup.")
+                                .font(.body)
+                                .foregroundStyle(appearance.palette.secondaryInk)
+                                .accessibilityIdentifier("earlierBackupsEmpty")
+                        }
+                        ForEach(revisions) { revision in
+                            Button {
+                                Task { await viewModel.prepareRecovery(revision) }
+                            } label: {
+                                HStack {
+                                    Text(EditorViewModel.revisionLabel(revision))
+                                        .font(.body)
+                                        .foregroundStyle(appearance.palette.primaryInk)
+                                    Spacer()
+                                    if viewModel.preparingRevisionId == revision.id { ProgressView() }
+                                }
+                                .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(viewModel.preparingRevisionId != nil)
+                            .accessibilityIdentifier("earlierBackup")
+                        }
+                    } else {
+                        ProgressView("Looking for earlier backups…")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(RhymeAITokens.Spacing.lg)
+            }
+            .background(appearance.palette.canvas)
+            .navigationTitle("Earlier Backups")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .task { await viewModel.loadBackupRevisions() }
+        .alert(
+            "Recover this backup?",
+            isPresented: Binding(get: { viewModel.recoveryToConfirm != nil }, set: { if !$0 { viewModel.recoveryToConfirm = nil } }),
+            presenting: viewModel.recoveryToConfirm
+        ) { recovery in
+            Button("Cancel", role: .cancel) {}
+            Button("Recover") {
+                dismiss()
+                Task { await viewModel.recoverBackupRevision(recovery) }
+            }
+        } message: { recovery in
+            Text("The backup from \(EditorViewModel.revisionDate(recovery.revision)) has \(count(recovery.songs, "song")) and \(count(recovery.recordings, "recording")). Songs from that earlier backup that aren't on this device are added as new songs. Nothing on Drive is changed or deleted.")
+        }
+    }
+
+    private func count(_ value: Int, _ noun: String) -> String {
+        "\(value) \(noun)\(value == 1 ? "" : "s")"
     }
 }
 
