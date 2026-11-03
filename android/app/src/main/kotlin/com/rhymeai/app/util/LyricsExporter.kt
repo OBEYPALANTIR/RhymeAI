@@ -8,9 +8,12 @@ import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 
 object LyricsExporter {
+    /** Every field, defaults too, like ProjectRepository's store: an `updatedAt` equal to its
+     *  default (now) would otherwise be dropped and import as an unknown time. */
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
+        encodeDefaults = true
     }
 
     fun buildTxt(project: SongProject): ByteArray {

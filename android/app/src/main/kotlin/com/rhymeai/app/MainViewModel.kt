@@ -1037,7 +1037,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val remoteSongs = result.probe.projectCount
                     // While the restore offer is up nothing uploads; Not now decides.
                     if (remoteSongs > 0) restoreOffer = result.probe else startBackup(interactive = false)
-                    if (pausesBackup(remoteSongs)) backupStatus = BackupStatus.Paused(remoteSongs)
+                    // isBackupConnected after the read: a Disconnect meanwhile keeps NotConnected.
+                    if (pausesBackup(remoteSongs) && isBackupConnected()) backupStatus = BackupStatus.Paused(remoteSongs)
                 }
                 is ProbeResult.Failed -> handleBackupResult(result.result, BackupAction.Connect, interactive = true)
             }
@@ -1139,7 +1140,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         restoreOffer = null
         if (!isBackupConnected()) return
         viewModelScope.launch {
-            if (pausesBackup(offer.projectCount)) backupStatus = BackupStatus.Paused(offer.projectCount)
+            val pause = pausesBackup(offer.projectCount)
+            // A Disconnect during the library read already set NotConnected; keep it.
+            if (!isBackupConnected()) return@launch
+            if (pause) backupStatus = BackupStatus.Paused(offer.projectCount)
             else startBackup(interactive = false)
         }
     }
@@ -1255,7 +1259,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = backupMutex.withLock { driveSyncService.probe(repo) }
             if (result !is ProbeResult.Ready) return@launch
             legacyBackupPresent = result.probe.legacyBackupPresent
-            if (pausesBackup(result.probe.projectCount)) {
+            if (pausesBackup(result.probe.projectCount) && isBackupConnected()) {
                 restoreOffer = result.probe
                 backupStatus = BackupStatus.Paused(result.probe.projectCount)
             }
@@ -2091,12 +2095,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inspectorSynonyms = emptyList()
         inspectorSynonymsError = null
 
-        // Local word results remain valid when autosave assigns this song its first project ID.
-        val inspectorLyrics = lyrics
         inspectorProsody = null
         inspectorMatches = null
         viewModelScope.launch {
-            fun stillCurrent() = inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics
+            // Both results depend only on the word, so they publish for as long as this
+            // inspector is open, whatever else (lyrics, project ID, selection) changes meanwhile.
+            fun stillCurrent() = inspectorWord == word && inspectorRange == range
             // Pronunciation is a direct dictionary read; publish it before the rhyme search,
             // whose first run of a session builds the whole rhyme index.
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }

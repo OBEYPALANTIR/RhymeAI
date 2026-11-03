@@ -89,7 +89,8 @@ class OneLinerCaptures(private val scope: CoroutineScope) {
         if (session.saving) return
         val recorder = session.recorder
         // The audio failed to write: stay open so the notice is read before saving words alone.
-        if (recorder.isRecording && !recorder.stop()) return
+        // A start still opening the mic is cancelled; it has no take yet.
+        if ((recorder.isRecording || recorder.isStarting) && !recorder.stop()) return
         if (session.text.isBlank() && (session.mode is OneLinerCaptureSession.Mode.Edit || recorder.takeFile == null)) return
         session.saving = true
         session.saveError = null

@@ -506,8 +506,11 @@ private fun OneLinerCaptureSheet(
     val canSave = !saving && (text.isNotBlank() || (!isEdit && (recorder.takeFile != null || recorder.isRecording)))
 
     fun startTake() {
-        if (recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"), context.applicationContext)) session.takeStarted()
-        else focusRequester.requestFocus()
+        recorder.start(File(pendingRoot, "${java.util.UUID.randomUUID()}.wav"), context.applicationContext) { started ->
+            if (started) session.takeStarted()
+            // The answer comes after the mic opens; a sheet recreated meanwhile has a new field.
+            else runCatching { focusRequester.requestFocus() }
+        }
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -551,6 +554,7 @@ private fun OneLinerCaptureSheet(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && recorder.isStarting) recorder.stop()
             if (event == Lifecycle.Event.ON_STOP && recorder.isRecording && recorder.stop()) {
                 recorder.notice = "Recording stopped when Writers Block went to the background. The take so far is kept."
             }
