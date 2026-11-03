@@ -1945,59 +1945,34 @@ struct BackupCoreTests {
         #expect(!drive.downloadAttempts.contains(try #require(try await drive.findFile(named: huge.driveName, accessToken: "")).id))
     }
 
-    /// A revision listing the same song (and take) twice gives one song and one take,
-    /// and a later restore does not trip over a duplicate id.
+    /// A revision listing a song id or a recording id twice is damaged, as Android
+    /// refuses it: nothing is imported. A recording listed under two songs is the same
+    /// recording id twice, in either order. A valid revision still recovers.
     @MainActor
-    @Test func aRevisionListingASongTwiceRecoversItOnce() async throws {
-        let drive = FakeDriveClient()
-        let audio = Data("the take".utf8)
-        let take = Self.take("t", of: "s", audio)
-        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s"), Self.song("s", "other words")], recordings: [take, take], savedByClientId: "a"),
-                                         current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
-        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        try await device.service.recoverRevision(try #require(try await device.service.probeRevisions().last), modelContext: device.context)
-        #expect(try device.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["s words"])
-        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
-        #expect(device.service.lastReport?.recoveredSongs == 1 && device.service.lastReport?.recoveredRecordings == 1)
-        try await device.service.backupNow(modelContext: device.context)
-        try await device.service.restoreNow(modelContext: device.context)
-        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 1)
-    }
-
-    /// A recording listed under two songs belongs to the first song it is listed
-    /// under, in either order. After that song is deleted forever (its take with
-    /// it), recovering again leaves the take deleted: the other song never takes it.
-    @MainActor
-    @Test(arguments: [false, true])
-    func aRecordingListedUnderTwoSongsStaysWithItsFirstSongAndStaysDeleted(reversed: Bool) async throws {
+    @Test(arguments: ["song twice", "recording under two songs", "recording under two songs, reversed"])
+    func aRevisionListingAnIdTwiceIsRefusedWhole(_ kind: String) async throws {
         let drive = FakeDriveClient()
         let audio = Data("shared take".utf8)
         let (underA, underB) = (Self.take("r", of: "a", audio), Self.take("r", of: "b", audio))
-        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("a"), Self.song("b")], recordings: reversed ? [underB, underA] : [underA, underB],
-                                                                  savedByClientId: "x"),
-                                         current: SyncBlob(savedByClientId: "x"), audio: ["r": audio])
+        let damaged: SyncBlob = switch kind {
+        case "song twice": SyncBlob(projects: [Self.song("a"), Self.song("a", "other words")], recordings: [underA], savedByClientId: "x")
+        case "recording under two songs": SyncBlob(projects: [Self.song("a"), Self.song("b")], recordings: [underA, underB], savedByClientId: "x")
+        default: SyncBlob(projects: [Self.song("a"), Self.song("b")], recordings: [underB, underA], savedByClientId: "x")
+        }
+        let manifest = try await Self.seedRevisions(drive, earlier: damaged, current: SyncBlob(projects: [Self.song("a"), Self.song("b")], recordings: [underA], savedByClientId: "x"),
+                                                    audio: ["r": audio])
+        _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType, content: try SyncBlob(savedByClientId: "x").encodedManifest(), appProperties: nil, accessToken: "")
         let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        let revision = try #require(try await device.service.probeRevisions().last)
-        let id = { BackupService.recoveredId(fileId: revision.fileId, revisionId: revision.id, $0) }
-        let (ownerSong, otherSong, take) = (id(reversed ? "b" : "a"), id(reversed ? "a" : "b"), id("r"))
-        try await device.service.recoverRevision(revision, modelContext: device.context)
-        let row = try #require(try device.context.fetch(FetchDescriptor<Recording>()).first)
-        #expect(row.id == take && row.projectId == ownerSong)
-        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
+        let revisions = try await device.service.probeRevisions()
+        #expect(revisions.count == 3)
 
-        // The owning song is deleted forever, and its take with it.
-        let now = Date().epochMilliseconds
-        try? FileManager.default.removeItem(at: device.file(take, ownerSong))
-        device.context.delete(row)
-        if let song = try device.context.fetch(FetchDescriptor<SongProject>()).first(where: { $0.id == ownerSong }) { device.context.delete(song) }
-        device.context.insert(SyncRecordingDeletion(projectId: ownerSong, recordingId: take, fileName: row.displayName, deletedAt: now))
-        device.context.insert(SyncDeletionRecord(projectId: ownerSong, deletedAt: now))
-        try device.context.save()
+        await #expect(throws: BackupError.damagedRevision) { try await device.service.recoverRevision(revisions[2], modelContext: device.context) }
+        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+        #expect(device.service.backgroundBackupFailureDescription == "This earlier backup is damaged and cannot be recovered.")
 
-        try await device.service.recoverRevision(revision, modelContext: device.context)
-        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 0, "the deleted take is not brought back under the other song")
-        #expect(try device.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == [otherSong])
-        #expect(device.service.lastReport?.songsDeletedSince == 1 && device.service.lastReport?.recoveredRecordings == 0)
+        // The valid version after it still recovers.
+        try await device.service.recoverRevision(revisions[1], modelContext: device.context)
+        #expect(device.service.lastReport?.recoveredSongs == 2 && device.service.lastReport?.recoveredRecordings == 1)
     }
 
     /// Only a gone object, another declared size, or other bytes passes over to the
