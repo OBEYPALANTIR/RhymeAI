@@ -173,6 +173,9 @@ final class VoiceMemoService {
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
+    /// The file a recorder is being started on, off the main thread; staging
+    /// recovery leaves its folder alone, as it does the recording one's.
+    @ObservationIgnored private var startingRecordingURL: URL?
     @ObservationIgnored private var pendingPlayURL: URL?
     /// Called after a recording file is added, renamed, trashed, restored or
     /// deleted, so the automatic backup can pick the change up.
@@ -197,7 +200,7 @@ final class VoiceMemoService {
     /// the recorder is writing is left alone.
     func refreshPendingTakes() {
         let fm = FileManager.default
-        let active = [audioRecorder?.url, finishing?.recorder.url].compactMap { $0?.deletingLastPathComponent().standardizedFileURL.path }
+        let active = [audioRecorder?.url, finishing?.recorder.url, startingRecordingURL].compactMap { $0?.deletingLastPathComponent().standardizedFileURL.path }
         var takes: [PendingTake] = []
         do {
             // Only a staging root the file system confirms missing means no takes;
@@ -535,9 +538,11 @@ final class VoiceMemoService {
         // microphone (`recordingActivationRevision`), so a stop meanwhile gives the session back.
         let forwarder = VoiceMemoDelegate(service: self)
         let delegate = UncheckedSendable(value: forwarder)
+        startingRecordingURL = url
         let started = await Task.detached(priority: .userInitiated) {
             UncheckedSendable(value: Self.startRecorder(url: url, delegate: delegate.value))
         }.value.value
+        if startingRecordingURL == url { startingRecordingURL = nil }
         if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
         guard audioIntentRevision == recordingRevision else {
             // Stopped or replaced while starting: this take is not wanted.
