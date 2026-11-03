@@ -197,7 +197,8 @@ class ProjectRepository internal constructor(
     private fun isRecordingPath(path: String): Boolean {
         val parts = path.split('/')
         return !path.startsWith("/") && parts.size >= 2 && parts.none { it.isEmpty() || it == "." || it == ".." } &&
-            (parts.first() in RECORDING_ROOT_NAMES || parts.first().startsWith(".recording-restore-"))
+            (parts.first() in RECORDING_ROOT_NAMES || parts.first().startsWith(".recording-restore-") ||
+                parts.first().startsWith(com.rhymeai.app.data.recording.RecordingFiles.RECOVERY_STAGE_PREFIX))
     }
     private val projectsStore = FailClosedStoredJson("song library") { raw ->
         json.decodeFromJsonElement<List<SongProject>>(JsonArray(json.parseToJsonElement(raw).jsonArray.map { storedSong(it.jsonObject) }))
@@ -712,7 +713,8 @@ class ProjectRepository internal constructor(
         val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
         // The same content kept twice (a retried write, a later Restore) is kept once.
         val fresh = losers.filterNot { loser -> stored.any { it.sameAs(loser) } }
-        if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = json.encodeToString(stored + fresh)
+        // Defaults are written: an omitted updatedAt would decode as a new current time and fail the read-back.
+        if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = explicitJson.encodeToString(stored + fresh)
         return KeptLosers(losers, fresh.size)
     }
 

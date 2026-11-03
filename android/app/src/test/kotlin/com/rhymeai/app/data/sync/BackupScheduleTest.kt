@@ -6,6 +6,8 @@ import com.rhymeai.app.ui.components.restoreOfferBody
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class BackupScheduleTest {
     private val minute = 60_000L
@@ -139,9 +141,13 @@ class BackupScheduleTest {
             com.rhymeai.app.recoveryNotice(RecoverySummary(2, 3, alreadyHere = 1, skippedLargeRecordings = 1))
         )
         assertEquals(
-            "The backup from Nov 1, 3:14 PM holds 12 songs and 1 recording. Songs from that earlier backup that aren't on this phone are added as new songs. " +
-                "Nothing on Drive is changed or deleted.",
-            recoverRevisionConfirmation(RevisionContents(revision, songCount = 12, recordingCount = 1), utc, us)
+            "Backup from Nov 1, 3:14 PM · 14 KB. This asks Drive to keep that version permanently " +
+                "(nothing is deleted or rewritten), then adds its songs that aren't on this phone as new songs.",
+            recoverRevisionConfirmation(revision, utc, us)
         )
+        // Takes alone (a finished retry) still need the backup that uploads them.
+        assertTrue(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(0, 1, alreadyHere = 2)))
+        assertTrue(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(1, 0, alreadyHere = 0)))
+        assertFalse(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(0, 0, alreadyHere = 2)))
     }
 }
