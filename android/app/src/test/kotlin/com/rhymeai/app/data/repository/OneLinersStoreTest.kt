@@ -249,6 +249,16 @@ class OneLinersStoreTest {
     }
 
     @Test
+    fun aSongSavedInTheSameMillisecondAsItsDefaultKeepsItsTime() = withStore {
+        // A dropped time reads back as 0; the next backup's A32 repair then rewrites the song and queues another backup.
+        repeat(200) { round ->
+            val song = SongProject(id = "song", lyrics = "round $round")
+            songs.saveProjects(listOf(song))
+            assertEquals(song.updatedAt, songs.projectsFlow.first().single().updatedAt, "round $round dropped updatedAt")
+        }
+    }
+
+    @Test
     fun concurrentChangesLeaveTheLatestPoolAsValidJson() = withStore {
         // Two stores (two activities) share the pool and the widget's file.
         val other = OneLinersStore(dataStore, store.audioRoot, snapshotFile)
