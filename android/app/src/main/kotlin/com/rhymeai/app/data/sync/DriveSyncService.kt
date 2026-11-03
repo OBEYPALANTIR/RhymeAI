@@ -153,6 +153,8 @@ data class RecoverySummary(
     val deletedSongs: Int = 0,
     /** Recovered takes deleted after an earlier recovery of this revision: they stay deleted. */
     val deletedRecordings: Int = 0,
+    /** Recovered songs and takes left out because a deletion of unknown date names them (suspended, not confirmed). */
+    val unknownDateDeletions: Int = 0,
     /** Recordings whose raw file is no longer in Drive. */
     val missingRecordings: Int = 0,
     /** Recordings whose downloaded bytes did not match the revision's hash and size. */
@@ -1145,8 +1147,13 @@ class DriveSyncService(
         val remoteIds = (current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
         // Deletions here and in the current backup: a recovered song or take deleted since stays deleted.
         val deletions = SyncMerger.mergeDeletions(repository.syncDeletions() + current?.deletions.orEmpty())
-        val deletedSongIds = deletions.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
-        val deletedRecordingIds = deletions.mapNotNullTo(HashSet()) { it.recordingId }
+        // A deletion of unknown date (0) also keeps the item out, but is reported apart from confirmed ones.
+        val (known, unknownDate) = deletions.partition { it.timeKnown }
+        val deletedSongIds = known.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
+        val deletedRecordingIds = known.mapNotNullTo(HashSet()) { it.recordingId }
+        val suspendedSongIds = unknownDate.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
+        val suspendedRecordingIds = unknownDate.mapNotNullTo(HashSet()) { it.recordingId }
+        var suspended = 0
         fun recoveredId(oldId: String) = recoveredId(revision, oldId)
         val at = now()
         // Old song id to recovered id, for songs added now or added by an earlier, interrupted run.
@@ -1158,7 +1165,10 @@ class DriveSyncService(
             val newId = recoveredId(song.id)
             when {
                 song.id in activeHere || song.id in trashedHere || song.id in remoteIds -> alreadyHere++
-                newId in deletedSongIds && newId !in activeHere -> deletedSongs++
+                // A recovered song deleted since gets nothing, even when an earlier run's copy is still here:
+                // a take attached now would carry a new time that outranks that deletion.
+                newId in deletedSongIds -> deletedSongs++
+                newId in suspendedSongIds -> suspended++
                 newId in activeHere -> {
                     alreadyHere++
                     recovering[song.id] = newId
@@ -1179,6 +1189,10 @@ class DriveSyncService(
             if (id in heldRecordings) return@mapNotNull null
             if (id in deletedRecordingIds) {
                 deletedTakes++
+                return@mapNotNull null
+            }
+            if (id in suspendedRecordingIds) {
+                suspended++
                 return@mapNotNull null
             }
             entry to entry.copy(
@@ -1215,7 +1229,7 @@ class DriveSyncService(
                 repository.addProjects(added)
                 RecordingFileStore.commitStagedRestores(repository, filesDir, staged)
             }
-            return RecoverySummary(added.size, placed.size, alreadyHere, deletedSongs, deletedTakes, missing, damaged, skippedLarge)
+            return RecoverySummary(added.size, placed.size, alreadyHere, deletedSongs, deletedTakes, suspended, missing, damaged, skippedLarge)
         } finally {
             // Only a stage no pending publication reads from is removed.
             withContext(NonCancellable) { RecordingTransitions.removeRecoveryStages(repository, filesDir) }
