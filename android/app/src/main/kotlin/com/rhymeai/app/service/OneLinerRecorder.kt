@@ -48,7 +48,7 @@ class OneLinerRecorder {
     var takeDurationMs by mutableStateOf(0L)
         internal set
     var notice by mutableStateOf<String?>(null)
-    /** From [start] until the microphone has opened (or failed) on its background thread. */
+    /** From [start] until its microphone open has landed (opened, failed or cancelled); no other start begins meanwhile. */
     var isStarting by mutableStateOf(false)
         private set
 
@@ -71,8 +71,8 @@ class OneLinerRecorder {
     private var heard = ""
     /** Which take the recognizer's results belong to; a discarded or earlier take's late results are dropped. */
     private var take = 0
-    /** Counts starts; a stop during one bumps it, so that open is closed when it lands instead of used. */
-    private var opening = 0
+    /** A stop came while the mic was opening: that open is closed when it lands instead of used. */
+    private var startCancelled = false
 
     companion object {
         const val LEVEL_COUNT = 12
@@ -88,7 +88,8 @@ class OneLinerRecorder {
     /**
      * Starts a take writing to [file]; the caller holds RECORD_AUDIO. The microphone and the file
      * open on a background thread (on the main thread they froze the sheet), then [onStarted] runs
-     * on the main thread: false when the mic could not open. A [stop] before then cancels the start.
+     * on the main thread: false when the mic could not open. A [stop] before then cancels the start
+     * (and [onStarted] never runs); a start while one is still opening does nothing.
      */
     fun start(file: File, context: Context, onStarted: (Boolean) -> Unit) {
         if (isRecording || isStarting) return
@@ -98,11 +99,11 @@ class OneLinerRecorder {
             return
         }
         isStarting = true
-        val attempt = ++opening
+        startCancelled = false
         val appContext = context.applicationContext
         Thread({
             val input = runCatching { openInput(file, appContext) }.getOrElse { OpenedInput(failure = MIC_FAILED_NOTICE) }
-            main.post { finishStart(attempt, file, appContext, input, onStarted) }
+            main.post { finishStart(file, appContext, input, onStarted) }
         }, "one-liner-open").start()
     }
 
@@ -153,27 +154,24 @@ class OneLinerRecorder {
     }
 
     /** Main thread: the take begins with what [openInput] opened, unless a stop cancelled it meanwhile. */
-    private fun finishStart(attempt: Int, file: File, context: Context, input: OpenedInput, onStarted: (Boolean) -> Unit) {
+    private fun finishStart(file: File, context: Context, input: OpenedInput, onStarted: (Boolean) -> Unit) {
         val record = input.record
         val output = input.output
-        if (attempt != opening || record == null || output == null) {
+        isStarting = false
+        if (startCancelled || record == null || output == null) {
             if (record != null) {
                 record.release()
                 runCatching { output?.close() }
                 file.delete()
             }
-            if (attempt == opening) {
-                isStarting = false
+            // Only one open is ever outstanding, so the claim is this open's to release.
+            MicrophoneOwner.release(this)
+            if (!startCancelled) {
                 notice = input.failure
-                MicrophoneOwner.release(this)
                 onStarted(false)
-            } else if (!isStarting && !isRecording) {
-                // Cancelled, and no later start holds the claim.
-                MicrophoneOwner.release(this)
             }
             return
         }
-        isStarting = false
         audioRecord = record
         takeFile = file
         beginTake()
@@ -197,8 +195,7 @@ class OneLinerRecorder {
     fun stop(): Boolean {
         if (isStarting) {
             // The microphone has not opened yet: there is no take, and finishStart closes that open.
-            opening++
-            isStarting = false
+            startCancelled = true
             return true
         }
         if (!isRecording) return true
