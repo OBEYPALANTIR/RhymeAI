@@ -73,7 +73,9 @@ sealed class SyncResult {
         /** A41: deleted recordings whose time was unknown: unlisted, but their raw audio stays in Drive. */
         val deletedRecordingsKeptInDrive: Int = 0,
         /** Restore: listed recordings this device lacks whose raw file is not in Drive; nothing to download. */
-        val missingRecordings: Int = 0
+        val missingRecordings: Int = 0,
+        /** Restore: the merged library's recordings that are now on this device (live), counted after the apply. */
+        val restoredRecordings: Int = 0
     ) : SyncResult()
 
     /** The user must approve Drive access; launch [pendingIntent], then retry. */
@@ -126,6 +128,25 @@ sealed class RevisionsResult {
     /** Newest first, at most [DriveSyncService.MAX_LISTED_REVISIONS]. */
     data class Ready(val revisions: List<BackupRevision>) : RevisionsResult()
     data class Failed(val result: SyncResult) : RevisionsResult()
+}
+
+/** What a recovery created on this device; nothing in Drive changed except the revision being kept forever. */
+data class RecoverySummary(
+    val songsAdded: Int,
+    val recordingsAdded: Int,
+    /** Songs of the revision this device or the current backup already holds (same id, or same title, lyrics and theme here). */
+    val alreadyHere: Int,
+    /** Recordings whose raw file is no longer in Drive. */
+    val missingRecordings: Int = 0,
+    /** Recordings whose downloaded bytes did not match the revision's hash and size. */
+    val damagedRecordings: Int = 0,
+    /** Recordings over [RecordingManifestEntry.MAX_SYNC_RECORDING_BYTES], never downloaded here. */
+    val skippedLargeRecordings: Int = 0
+)
+
+sealed class RecoveryResult {
+    data class Recovered(val summary: RecoverySummary) : RecoveryResult()
+    data class Failed(val result: SyncResult) : RecoveryResult()
 }
 
 sealed class RevisionPreviewResult {
@@ -308,6 +329,7 @@ class RealDriveClient internal constructor(
         private const val CONNECT_TIMEOUT_MS = 20_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MULTIPART_BOUNDARY = "rhymeai_boundary_g91hf"
+        private const val KEEP_REVISION = "Keeping the earlier backup"
         private val driveJson = Json { ignoreUnknownKeys = true }
     }
 
@@ -337,7 +359,7 @@ class RealDriveClient internal constructor(
             conn.outputStream.use { it.write("""{"keepForever":true}""".toByteArray(Charsets.UTF_8)) }
             try {
                 val code = conn.responseCode
-                if (code !in 200..299) throwRevisionFailure("Keeping the earlier backup", code, conn.errorBody())
+                if (code !in 200..299) throwRevisionFailure(KEEP_REVISION, code, conn.errorBody())
             } finally {
                 conn.disconnect()
             }
@@ -553,7 +575,11 @@ class RealDriveClient internal constructor(
         when (code) {
             401 -> throw DriveAuthException("Drive authorization expired (401)")
             404 -> throw DriveHttpException(code, "This earlier backup is no longer in Google Drive.")
-            403 -> throw DriveHttpException(code, "Google Drive refused: $operation failed (403): $reason")
+            403 -> throw DriveHttpException(
+                code,
+                "Google Drive refused: $operation failed (403): $reason" +
+                    if (operation == KEEP_REVISION) " Google Drive keeps at most 200 earlier versions of a file forever." else ""
+            )
             429 -> throw DriveHttpException(code, "Drive rate limit reached — try again later.")
             in 500..599 -> throw DriveHttpException(code, "Drive server error ($code) — try again later.")
             else -> throw DriveHttpException(code, "$operation failed ($code): $reason")
@@ -1030,7 +1056,7 @@ class DriveSyncService(
         private val legacyJson = Json { ignoreUnknownKeys = true }
     }
 
-    private enum class Mode { BACKUP, RESTORE, MIGRATE, RECOVER }
+    private enum class Mode { BACKUP, RESTORE, MIGRATE }
 
     private class PushOutcome(
         val written: SyncBlob,
@@ -1040,7 +1066,8 @@ class DriveSyncService(
         val notMigrated: Int = 0,
         val conflicting: Int = 0,
         val keptDeleted: Int = 0,
-        val missing: Int = 0
+        val missing: Int = 0,
+        val restored: Int = 0
     )
 
     /** All manifests named [BackupManifest.FILE_NAME]: the newest is kept, the rest merged in and removed. */
@@ -1065,13 +1092,79 @@ class DriveSyncService(
     suspend fun restore(repository: ProjectRepository): SyncResult = run(repository, Mode.RESTORE, null)
 
     /**
-     * Brings back the songs and recordings of one earlier manifest version ([recoveryInput])
-     * through the Restore merge, on a path that deletes nothing in Drive: no raw recording,
-     * no duplicate manifest. The chosen revision is kept forever (Drive's condition for
-     * downloading it); no revision is ever deleted or unpinned.
+     * Adds the songs of one earlier manifest version to this device as new songs with new ids,
+     * each with its recordings (downloaded from Drive and given new ids). A song this device or
+     * the current backup holds (active or in Trash) is left out and counted as already here, so
+     * no tombstone, Trash entry or other device's edit can touch what is added, and nothing
+     * existing changes. Drive is only read, except that the chosen revision is kept forever
+     * (Drive's condition for reading it). The next backup uploads the new songs as new entries.
      */
-    suspend fun recoverRevision(repository: ProjectRepository, revision: BackupRevision): SyncResult =
-        run(repository, Mode.RECOVER, null, revision)
+    suspend fun recoverRevision(repository: ProjectRepository, revision: BackupRevision): RecoveryResult =
+        authorized({ RecoveryResult.Failed(it) }) { token ->
+            val old = SyncMerger.resolve(SyncMerger.gather(downloadKeptRevision(token, revision)))
+            RecoveryResult.Recovered(importAsNewSongs(token, old, repository, readRemote(token, null).blob))
+        }
+
+    private suspend fun importAsNewSongs(token: String, old: SyncBlob, repository: ProjectRepository, current: SyncBlob?): RecoverySummary {
+        val active = repository.projectsFlow.first()
+        val trashed = repository.trashedProjectsFlow.first()
+        val heldIds = (active.map { it.id } + trashed.map { it.project.id } +
+            current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
+        // The same words here under another id (an earlier recovery of this revision) count as here too.
+        val heldContent = (active + trashed.map { it.project }).mapTo(HashSet()) { Triple(it.title, it.lyrics, it.theme) }
+        val wanted = old.projects.filterNot { it.id in heldIds || Triple(it.title, it.lyrics, it.theme) in heldContent }
+        val at = now()
+        val newIds = wanted.associate { it.id to java.util.UUID.randomUUID().toString() }
+        val takes = old.recordings.filter { it.projectId in newIds }
+        val skippedLarge = takes.count { !it.isTransferable }
+        val transferable = takes.filter { it.isTransferable }
+
+        // Every take is downloaded and verified before anything is written here, so a failed
+        // download leaves this device as it was and a retry starts over cleanly.
+        val rawByName = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).groupBy { it.name }
+        val needed = requireTransferableRecordings(transferable)
+        if (filesDir.usableSpace < needed + MIN_FREE_AFTER_RECORDING_RESTORE_BYTES) {
+            throw DriveNetworkException("Not enough storage to recover recordings safely")
+        }
+        val stage = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
+        try {
+            var missing = 0
+            var damaged = 0
+            val staged = transferable.mapNotNull { entry ->
+                val candidates = rawByName[BackupManifest.recordingDriveName(entry.id)].orEmpty()
+                    .sortedBy { if (it.appProperties["sha256"] == entry.sha256) 0 else 1 }
+                if (candidates.isEmpty()) {
+                    missing++
+                    return@mapNotNull null
+                }
+                val bytes = candidates.firstNotNullOfOrNull { file ->
+                    driveClient.downloadFile(token, file.id, entry.sizeBytes)
+                        .takeIf { it.size.toLong() == entry.sizeBytes && BackupManifest.sha256Hex(it) == entry.sha256 }
+                }
+                if (bytes == null) {
+                    damaged++
+                    return@mapNotNull null
+                }
+                entry to File(stage, "take-${entry.id}").apply { writeBytes(bytes) }
+            }
+            repository.addProjects(wanted.map { it.copy(id = newIds.getValue(it.id), updatedAt = at, precedenceRepaired = false) })
+            var added = 0
+            for ((entry, file) in staged) {
+                val projectId = newIds.getValue(entry.projectId)
+                val fresh = entry.copy(
+                    projectId = projectId,
+                    id = RecordingManifestEntry.newRecordingId(),
+                    driveName = RecordingManifestEntry.driveNameFor(projectId, entry.fileName),
+                    uploadedAt = at,
+                    precedenceRepaired = false
+                )
+                if (RecordingFileStore.importVerified(repository, filesDir, fresh, file.readBytes(), RecordingRecord.IMPORTED)) added++
+            }
+            return RecoverySummary(wanted.size, added, old.projects.size - wanted.size, missing, damaged, skippedLarge)
+        } finally {
+            stage.deleteRecursively()
+        }
+    }
 
     /** Drive's revisions of the manifest, newest first, at most [MAX_LISTED_REVISIONS]; nothing is downloaded or changed. */
     suspend fun probeRevisions(): RevisionsResult = authorized({ RevisionsResult.Failed(it) }) { token ->
@@ -1094,25 +1187,6 @@ class DriveSyncService(
     private suspend fun downloadKeptRevision(token: String, revision: BackupRevision): SyncBlob {
         driveClient.keepRevisionForever(token, revision.fileId, revision.revisionId)
         return BackupManifest.decode(driveClient.downloadRevision(token, revision.fileId, revision.revisionId, MAX_SYNC_BLOB_BYTES))
-    }
-
-    /**
-     * The chosen revision as an explicit recovery: only its songs and recordings (its old Trash
-     * and tombstones are left out, so recovering removes nothing). A song or recording that
-     * neither this device nor the current manifest holds is stamped with the recovery time, so
-     * a current tombstone cannot take it out again, here or on another device's next backup.
-     * One still held somewhere keeps the ordinary merge, so no newer edit is overwritten.
-     */
-    private suspend fun recoveryInput(revision: SyncBlob, repository: ProjectRepository, current: SyncBlob?): SyncBlob {
-        val at = now()
-        val heldSongs = (repository.projectsFlow.first().map { it.id } + repository.trashedProjectsFlow.first().map { it.project.id } +
-            current?.projects.orEmpty().map { it.id }).toSet()
-        val heldRecordings = (repository.recordingRecords().map { it.id } + current?.recordings.orEmpty().map { it.id }).toSet()
-        return SyncBlob(
-            projects = revision.projects.map { if (it.id in heldSongs) it else it.copy(updatedAt = at, precedenceRepaired = false) },
-            recordings = revision.recordings.map { if (it.id in heldRecordings) it else it.copy(uploadedAt = at, precedenceRepaired = false) },
-            savedByClientId = revision.savedByClientId
-        )
     }
 
     private suspend fun <T> authorized(onFailure: (SyncResult) -> T, block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
@@ -1188,7 +1262,7 @@ class DriveSyncService(
         revoked
     }
 
-    private suspend fun run(repository: ProjectRepository, mode: Mode, typedPassphrase: CharArray?, revision: BackupRevision? = null): SyncResult =
+    private suspend fun run(repository: ProjectRepository, mode: Mode, typedPassphrase: CharArray?): SyncResult =
         withContext(Dispatchers.IO) {
             guarded({ it }) {
                 val token = when (val auth = authorizer.authorize()) {
@@ -1197,16 +1271,14 @@ class DriveSyncService(
                     DriveAuthorization.Unavailable -> return@guarded SyncResult.NotConfigured
                     is DriveAuthorization.Failed -> return@guarded SyncResult.AuthorizationFailed(auth.reason, auth.retryable)
                 }
-                // Only Restore (and recovery) may touch local recordings, so only they finish an interrupted restore.
-                if (mode == Mode.RESTORE || mode == Mode.RECOVER) RecordingFileStore.recoverInterruptedRestores(filesDir)
-                val recovered = revision?.let { recoveryInput(downloadKeptRevision(token, it), repository, readRemote(token, null).blob) }
+                // Only Restore may touch local recordings, so only it finishes an interrupted restore.
+                if (mode == Mode.RESTORE) RecordingFileStore.recoverInterruptedRestores(filesDir)
                 val legacyFile = unmigratedLegacyFile(token)
                 val storedPassphrase = secureKeyStore.getKey(LEGACY_PASSPHRASE_KEY)
                 val passphrase = typedPassphrase ?: storedPassphrase.takeIf { it.isNotEmpty() }?.toCharArray()
                 var legacy: SyncBlob? = null
                 var move: LegacyMove? = null
-                // Recovery does nothing else: no migration and no passphrase change.
-                when (if (mode == Mode.RECOVER) LegacyBackupAction.NONE else decideLegacyBackupAction(legacyFile != null, passphrase != null)) {
+                when (decideLegacyBackupAction(legacyFile != null, passphrase != null)) {
                     LegacyBackupAction.MIGRATE -> {
                         legacy = openLegacyManifest(token, legacyFile!!, passphrase!!)
                         if (legacy == null && typedPassphrase != null) return@guarded SyncResult.WrongPassphrase
@@ -1223,12 +1295,11 @@ class DriveSyncService(
                 val outcome = pushMerge(
                     token = token,
                     repository = repository,
-                    applyLocally = mode == Mode.RESTORE || mode == Mode.RECOVER,
+                    applyLocally = mode == Mode.RESTORE,
                     // Every older recording, with its original time, joins the gathered inputs so
                     // tombstones resolve against all of them at once.
-                    extraRemote = listOfNotNull(legacy?.let(::legacyInputs), recovered),
-                    requireRemote = mode == Mode.RESTORE || mode == Mode.RECOVER,
-                    deletesInDrive = mode != Mode.RECOVER,
+                    extraRemote = legacy?.let(::legacyInputs),
+                    requireRemote = mode == Mode.RESTORE,
                     unlistable = legacy?.recordings.orEmpty().map { it.identityKey }.filterNot { it in move?.moved.orEmpty() }.toSet()
                 ) ?: return@guarded SyncResult.NoBackup
 
@@ -1261,7 +1332,8 @@ class DriveSyncService(
                     conflictingRecordings = outcome.conflicting,
                     songsSetAside = repository.recoveredSongs().size - setAsideBefore,
                     deletedRecordingsKeptInDrive = outcome.keptDeleted,
-                    missingRecordings = outcome.missing
+                    missingRecordings = outcome.missing,
+                    restoredRecordings = outcome.restored
                 )
             }
         }
@@ -1307,10 +1379,8 @@ class DriveSyncService(
         token: String,
         repository: ProjectRepository,
         applyLocally: Boolean,
-        extraRemote: List<SyncBlob>,
+        extraRemote: SyncBlob?,
         requireRemote: Boolean,
-        /** False for recovery: no duplicate manifest and no raw recording is deleted. */
-        deletesInDrive: Boolean = true,
         unlistable: Set<String> = emptySet()
     ): PushOutcome? {
         // Every input seen by an earlier attempt (its local, remote and any conflicting
@@ -1325,10 +1395,10 @@ class DriveSyncService(
             // tombstones); resolution decides once, with every input present.
             val local = base.blob.copy(recordings = scannedFiles.map { it.entry }, savedByClientId = clientId())
             val remote = readRemote(token, repository)
-            if (requireRemote && remote.blob == null && extraRemote.isEmpty()) return null
+            if (requireRemote && remote.blob == null && extraRemote == null) return null
 
             // A32: missing precedence times are fixed (and persisted) before anything is compared.
-            val inputs = repository.establishPrecedence(listOfNotNull(seen, local) + extraRemote + listOfNotNull(remote.blob), now())
+            val inputs = repository.establishPrecedence(listOfNotNull(seen, local, extraRemote, remote.blob), now())
             // Every later use of this device's recordings (uploads, skips, reports) sees the established times.
             val established = inputs[if (seen != null) 1 else 0].recordings.associateBy { it.id }
             val localFiles = scannedFiles.map { file -> established[file.entry.id]?.let { file.copy(entry = it) } ?: file }
@@ -1426,7 +1496,7 @@ class DriveSyncService(
                 seen = SyncMerger.gather(*repository.establishPrecedence(listOf(gathered, BackupManifest.decode(readBack)), now()).toTypedArray())
                 return@repeat
             }
-            if (deletesInDrive) remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
+            remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
             // A40: a raw object goes only when its stored id, digest and length match an entry
             // gathered this run that a winning tombstone covers, and only by its own Drive file id.
             // A41: a recording whose time was only a repair is never deleted for losing to a
@@ -1434,7 +1504,7 @@ class DriveSyncService(
             val tombstones = SyncMerger.Tombstones(merged.deletions)
             val gatheredById = gathered.recordings.groupBy { it.id }
             var keptDeleted = 0
-            for ((driveName, files) in driveFiles.takeIf { deletesInDrive }.orEmpty()) {
+            for ((driveName, files) in driveFiles) {
                 for (file in files) {
                     val id = file.appProperties["id"] ?: continue
                     if (driveName != BackupManifest.recordingDriveName(id)) continue
@@ -1453,6 +1523,7 @@ class DriveSyncService(
 
             var damaged = 0
             var missing = 0
+            var restored = 0
             var committed = merged
             // A36: each held recording now has the display name just written (metadata only; no
             // file changes), and a rename made here is written. A rename made while this ran stays.
@@ -1485,6 +1556,9 @@ class DriveSyncService(
                 RecordingTransitions.reconcile(repository, filesDir)
                 committed = repository.applySyncResult(gathered, base)
                 quarantineDeletedRecordings(repository, filesDir)
+                // What is actually here now, not what the manifest lists.
+                val committedIds = committed.recordings.mapTo(HashSet()) { it.id }
+                restored = repository.recordingRecords().count { it.id in committedIds && it.trashedAt == null && it.path != null }
             }
             // A29: a recording too large to move counts as backed up only when its raw Drive
             // object is there with this hash and size; otherwise it is reported as skipped.
@@ -1496,7 +1570,7 @@ class DriveSyncService(
                 // A Trash-held recording Drive lists but does not hold intact is unpreserved too.
                 localFiles.count { it.inTrash && !it.entry.isTransferable && it.entry.id in listedIds && !onDrive(it.entry) } +
                 merged.recordings.count { !it.isTransferable && it.id !in heldIds }
-            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size, conflicting, keptDeleted, missing)
+            return PushOutcome(merged, committed, skipped, damaged, notMigrated.size, conflicting, keptDeleted, missing, restored)
         }
         throw DriveNetworkException(CONFLICT_MESSAGE)
     }

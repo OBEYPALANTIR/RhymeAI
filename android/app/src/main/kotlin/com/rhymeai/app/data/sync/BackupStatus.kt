@@ -42,8 +42,8 @@ fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(
 /** What recovering the chosen version does, with what it holds, said before it runs. */
 fun recoverRevisionConfirmation(contents: RevisionContents, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
     "The backup from ${revisionTime(contents.revision, zone, locale)} holds ${count(contents.songCount, "song")} and " +
-        "${count(contents.recordingCount, "recording")}. They will be merged into this phone and your current backup; songs already here stay. " +
-        "Nothing in Google Drive is deleted, and Drive will keep this earlier version."
+        "${count(contents.recordingCount, "recording")}. Songs from that earlier backup that aren't on this phone are added as new songs. " +
+        "Nothing on Drive is changed or deleted."
 
 private fun revisionTime(revision: BackupRevision, zone: ZoneId, locale: Locale): String =
     revision.modifiedTime?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, h:mm a", locale).format(Instant.parse(it).atZone(zone)) }.getOrNull() }
