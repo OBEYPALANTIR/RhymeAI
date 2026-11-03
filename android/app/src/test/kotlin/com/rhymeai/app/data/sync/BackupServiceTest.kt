@@ -2904,8 +2904,14 @@ class BackupServiceTest {
         val summary = recoverOldest(freshService, fresh)
 
         assertEquals(1, summary.deletedSongs)
+        assertEquals(1, summary.deletedSongsStillHere)
         assertEquals(1, summary.recordingsAdded)
         assertTrue(fresh.recordingRecords().none { it.projectId == oneId })
+        assertEquals(
+            "Recovered 0 songs and 1 recording. 1 already here. 1 song deleted after an earlier recovery stay deleted. " +
+                "An earlier copy of 1 of them is still on this phone and will not be backed up.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
         // The next backup keeps the deletion winning: no song and no take of it reach Drive.
         clock += 1_000L
         assertIs<SyncResult.Success>(freshService.backUp(fresh))

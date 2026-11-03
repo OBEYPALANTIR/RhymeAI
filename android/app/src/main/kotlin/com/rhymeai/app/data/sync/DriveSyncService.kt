@@ -151,6 +151,8 @@ data class RecoverySummary(
     val alreadyHere: Int,
     /** Recovered songs deleted after an earlier recovery of this revision (here or in the backup): they stay deleted. */
     val deletedSongs: Int = 0,
+    /** Of [deletedSongs], those an earlier interrupted run left on this device (not backed up: the deletion wins). */
+    val deletedSongsStillHere: Int = 0,
     /** Recovered takes deleted after an earlier recovery of this revision: they stay deleted. */
     val deletedRecordings: Int = 0,
     /** Recovered songs and takes left out because a deletion of unknown date names them (suspended, not confirmed). */
@@ -1161,13 +1163,17 @@ class DriveSyncService(
         val added = mutableListOf<SongProject>()
         var alreadyHere = 0
         var deletedSongs = 0
+        var deletedStillHere = 0
         for (song in old.projects) {
             val newId = recoveredId(song.id)
             when {
                 song.id in activeHere || song.id in trashedHere || song.id in remoteIds -> alreadyHere++
                 // A recovered song deleted since gets nothing, even when an earlier run's copy is still here:
                 // a take attached now would carry a new time that outranks that deletion.
-                newId in deletedSongIds -> deletedSongs++
+                newId in deletedSongIds -> {
+                    deletedSongs++
+                    if (newId in activeHere || newId in trashedHere) deletedStillHere++
+                }
                 newId in suspendedSongIds -> suspended++
                 newId in activeHere -> {
                     alreadyHere++
@@ -1229,7 +1235,7 @@ class DriveSyncService(
                 repository.addProjects(added)
                 RecordingFileStore.commitStagedRestores(repository, filesDir, staged)
             }
-            return RecoverySummary(added.size, placed.size, alreadyHere, deletedSongs, deletedTakes, suspended, missing, damaged, skippedLarge)
+            return RecoverySummary(added.size, placed.size, alreadyHere, deletedSongs, deletedStillHere, deletedTakes, suspended, missing, damaged, skippedLarge)
         } finally {
             // Only a stage no pending publication reads from is removed.
             withContext(NonCancellable) { RecordingTransitions.removeRecoveryStages(repository, filesDir) }
