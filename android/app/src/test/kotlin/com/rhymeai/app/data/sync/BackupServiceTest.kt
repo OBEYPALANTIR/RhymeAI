@@ -1937,7 +1937,7 @@ class BackupServiceTest {
         }
         override suspend fun listRevisions(accessToken: String, fileId: String): List<DriveRevision> {
             calls++
-            return files.getValue(fileId).revisions.map { DriveRevision(it.id, "%08d".format(it.number), it.bytes.size.toLong()) }
+            return files.getValue(fileId).revisions.map { DriveRevision(it.id, "%08d".format(it.number), it.bytes.size.toLong(), it.keepForever) }
         }
         override suspend fun keepRevisionForever(accessToken: String, fileId: String, revisionId: String) {
             calls++
@@ -2836,5 +2836,49 @@ class BackupServiceTest {
         assertTrue(fresh.projectsFlow.first().isEmpty())
         assertTrue(fresh.recordingRecords().isEmpty())
         assertEquals(writesBefore, drive.writes)
+    }
+
+    @Test
+    fun recoveredIdsFollowTheSharedFixedVector() {
+        // The same vector is pinned on iOS: a change to the derivation must fail on both.
+        assertEquals("3ec9dc72-4f40-37c0-a588-f62dc27d13de", recoveredId(BackupRevision("f1", "r1", null, null), "song-1"))
+    }
+
+    @Test
+    fun theListShowsTheFiftyNewestAndEveryKeptRevision() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("first")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        val oldest = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions.single()
+        // Recovering pins the oldest (its song is already here); then every backup writes one more version.
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, oldest))
+        repeat(60) { assertIs<SyncResult.Success>(service.backUp(repository)) }
+
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+
+        assertEquals(DriveSyncService.MAX_LISTED_REVISIONS + 1, listed.size)
+        assertEquals(oldest.revisionId, listed.last().revisionId)
+        assertTrue(listed.last().kept)
+        assertEquals(listOf(true), listed.filter { it.kept }.map { it.kept })
+    }
+
+    @Test
+    fun withTwoHundredKeptVersionsOnlyAKeptOneCanBeRecoveredAndNothingIsUnpinned() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("first")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        repeat(DriveSyncService.KEPT_REVISION_LIMIT) { assertIs<SyncResult.Success>(service.backUp(repository)) }
+        val id = drive.listFilesByNamePrefix("t", BackupManifest.FILE_NAME).single().id
+        val all = drive.file(BackupManifest.FILE_NAME)!!.revisions
+        all.drop(1).forEach { drive.keepRevisionForever("t", id, it.id) }
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+        // All 200 kept ones are listed (more than the 50 newest); the one unkept version is too old to be.
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, listed.size)
+        val unkept = BackupRevision(id, all.first().id, null, null)
+
+        val refused = assertIs<RecoveryResult.Failed>(service.recoverRevision(repository, unkept)).result
+        assertEquals(SyncResult.NetworkError(DriveSyncService.TOO_MANY_KEPT_MESSAGE), refused)
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, drive.pinnedRevisions().size)
+        assertTrue(listed.first().kept)
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, listed.first()))
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, drive.pinnedRevisions().size)
     }
 }
