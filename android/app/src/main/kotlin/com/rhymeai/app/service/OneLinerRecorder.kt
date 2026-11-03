@@ -177,6 +177,7 @@ class OneLinerRecorder {
         stop()
         takeFile?.delete()
         takeFile = null
+        takeDurationMs = 0L
     }
 
     private fun pump(record: AudioRecord, output: RandomAccessFile, pipe: ParcelFileDescriptor?) {

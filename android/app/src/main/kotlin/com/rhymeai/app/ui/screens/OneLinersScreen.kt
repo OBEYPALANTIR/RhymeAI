@@ -50,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
@@ -632,6 +633,9 @@ private fun OneLinerCaptureSheet(
                             .testTag("oneLinerField")
                     )
                     if (recorder.isRecording) RecordingRow(recorder)
+                    if (showsStoppedTake(isEdit, recorder.isRecording, recorder.takeFile != null)) {
+                        TakeRow(recorder.takeDurationMs, enabled = !saving, onDiscard = session::discardTake)
+                    }
                     (saveError ?: recorder.notice)?.let { notice ->
                         Text(
                             notice,
@@ -705,6 +709,34 @@ private fun RecordingRow(recorder: OneLinerRecorder) {
             }
         }
         Text("Listening", fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
+    }
+}
+
+/** A new capture's stopped take: its length and a way to drop it. Edit keeps its take as it was. */
+internal fun showsStoppedTake(isEdit: Boolean, isRecording: Boolean, hasTake: Boolean): Boolean =
+    !isEdit && !isRecording && hasTake
+
+@Composable
+private fun TakeRow(durationMs: Long, enabled: Boolean, onDiscard: () -> Unit) {
+    val colorScheme = MaterialTheme.colorScheme
+    val duration = VoiceMemoService.formatDuration(durationMs)
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
+    ) {
+        Row(
+            Modifier.weight(1f).clearAndSetSemantics { contentDescription = "Take recorded, $duration" },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)
+        ) {
+            Icon(Icons.Default.GraphicEq, contentDescription = null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Text(duration, style = MaterialTheme.typography.labelMedium, color = colorScheme.onSurfaceVariant)
+            Text("Take", fontSize = DesignTokens.Typography.caption, color = colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = onDiscard, enabled = enabled, modifier = Modifier.heightIn(min = DesignTokens.Touch.minTarget)) {
+            Text("Discard take")
+        }
     }
 }
 

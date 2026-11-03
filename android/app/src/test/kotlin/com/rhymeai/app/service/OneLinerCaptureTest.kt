@@ -120,6 +120,36 @@ class OneLinerCaptureTest {
     }
 
     @Test
+    fun discardingATakeKeepsTheWordsAndTheSheetButNeverMidSave() = runBlocking {
+        val captures = capturesWithTake(this)
+        val session = captures.current!!
+        val gate = CompletableDeferred<Unit>()
+        captures.save { _, _, _ -> gate.await(); throw IOException("disk full") }
+        yield()
+        session.discardTake()
+        assertTrue(take.exists())
+        assertEquals(take, session.recorder.takeFile)
+        gate.complete(Unit)
+        yield()
+
+        session.discardTake()
+        assertFalse(take.exists())
+        assertNull(session.recorder.takeFile)
+        assertEquals(0L, session.recorder.takeDurationMs)
+        assertSame(session, captures.current)
+        assertEquals("half a line", session.text)
+    }
+
+    @Test
+    fun anEditNeverDiscardsATake() {
+        val session = OneLinerCaptureSession(OneLinerCaptureSession.Mode.Edit(OneLiner(text = "Coffee gone cold")))
+        session.recorder.takeMoved(take)
+        session.discardTake()
+        assertTrue(take.exists())
+        assertEquals(take, session.recorder.takeFile)
+    }
+
+    @Test
     fun anEditSavesItsWordsWithoutATake() = runBlocking {
         val captures = OneLinerCaptures(this)
         captures.open(OneLinerCaptureSession.Mode.Edit(OneLiner(text = "Coffee gone cold")))
