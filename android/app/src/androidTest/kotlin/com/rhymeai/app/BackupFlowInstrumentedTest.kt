@@ -219,7 +219,7 @@ class BackupFlowInstrumentedTest {
         assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
         instrumentation.runOnMainSync { vm.backUpNow() }
-        waitUntil { vm.backupStatus is BackupStatus.Connected }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
     }
 
     @After fun restore() {
