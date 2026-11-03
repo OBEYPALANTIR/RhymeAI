@@ -160,6 +160,10 @@ struct AIService {
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                // The prompt and line filter read the rhyme index on the main actor.
+                // A request before the launch warm-up finishes waits for the build
+                // here, off the main thread, instead of building it on main.
+                await Task.detached(priority: .userInitiated) { RhymeIndex.shared.warmUp() }.value
                 do {
                     if provider == .local {
                         let prompt = buildLocalPrompt(

@@ -372,13 +372,16 @@ struct SongRecordingsView: View {
                 .accessibilityLabel(isSelected ? "Deselect recording" : "Select recording")
             }
 
-            PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
+            VoiceMemoPlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
 
-            Text(displayLabel(item))
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                Text(displayLabel(item))
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                VoiceMemoPlaybackProgress(url: item.url, service: viewModel.voiceMemoService)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 let stem = (item.displayName as NSString).deletingPathExtension
@@ -549,7 +552,8 @@ struct SongRecordingsView: View {
 // MARK: - Play / Pause Helper
 
 // Observe the shared player so every row reflects playback and completion.
-private struct PlayPauseButton: View {
+// Shared by the song's recordings and the songs drawer.
+struct VoiceMemoPlayPauseButton: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let url: URL
@@ -569,5 +573,39 @@ private struct PlayPauseButton: View {
         .buttonStyle(.rhymePress)
         .disabled(service.isRecording)
         .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
+    }
+}
+
+/// Elapsed and total time over a progress bar, while this memo plays or is paused.
+struct VoiceMemoPlaybackProgress: View {
+    @Environment(\.appAppearanceStyle) private var appearance
+
+    let url: URL
+    let service: VoiceMemoService
+
+    var body: some View {
+        if service.playbackPosition(at: url) != nil {
+            // The player's clock is not observable; a quarter-second tick is smooth enough for a bar.
+            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                let position = service.playbackPosition(at: url) ?? (0, 0)
+                let elapsed = min(position.elapsed, position.duration)
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                    ProgressView(value: elapsed, total: max(position.duration, 0.001))
+                        .tint(appearance.palette.action)
+                    Text("\(Self.clock(elapsed)) / \(Self.clock(position.duration))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Playback position")
+                .accessibilityValue("\(Self.clock(elapsed)) of \(Self.clock(position.duration))")
+            }
+        }
+    }
+
+    /// m:ss, as the recording clock shows time.
+    static func clock(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded(.down)))
+        return String(format: "%d:%02d", whole / 60, whole % 60)
     }
 }

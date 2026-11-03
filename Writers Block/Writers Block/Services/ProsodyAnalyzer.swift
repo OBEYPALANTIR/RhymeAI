@@ -217,13 +217,16 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
                 return
             }
             guard word.count >= 2 else { return }
-            var seenK0 = Set<String>()
-            var seenK1 = Set<String>()
+            // Arrays, not sets: a word has one to three pronunciations, and a set
+            // per word was a large share of the build's allocations.
+            var seenK0: [String] = []
+            var seenK1: [String] = []
             var profiles: [ProsodyAnalyzer.RhymeProfile] = []
             for phones in variants {
                 let ks = ProsodyAnalyzer.rhymeKeysForPhonesPublic(phones, maxDepth: 2)
                 guard let k0 = ks.first else { continue }
-                if seenK0.insert(k0).inserted {
+                if !seenK0.contains(k0) {
+                    seenK0.append(k0)
                     perfectBuild[k0, default: []].append(word)
                 }
                 if let tail = ProsodyAnalyzer.rhymeTailForPhonesPublic(phones) {
@@ -231,13 +234,15 @@ nonisolated final class RhymeIndex: @unchecked Sendable {
                 }
                 if ks.count > 1 {
                     let k1 = ks[1]
-                    if seenK1.insert(k1).inserted {
+                    if !seenK1.contains(k1) {
+                        seenK1.append(k1)
                         multiBuild[k1, default: []].append(word)
                     }
                 }
             }
-            var seenTails = Set<RhymeTail>()
-            for tail in profiles.map(\.tail) where seenTails.insert(tail).inserted {
+            var seenTails: [RhymeTail] = []
+            for tail in profiles.map(\.tail) where !seenTails.contains(tail) {
+                seenTails.append(tail)
                 let entry = RhymeTailEntry(word: word, tail: tail, profiles: profiles)
                 nearBuild[tail.vowel, default: []].append(entry)
                 if !tail.coda.isEmpty {
@@ -771,8 +776,11 @@ nonisolated enum ProsodyAnalyzer {
         return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: CharacterSet(charactersIn: "'"))
     }
 
+    /// The phone without its trailing stress digit. Not a regex: the index build
+    /// calls this for every phone of every dictionary word.
     private static func basePhone(_ phone: String) -> String {
-        phone.replacingOccurrences(of: "[0-2]$", with: "", options: .regularExpression)
+        guard let last = phone.last, last == "0" || last == "1" || last == "2" else { return phone }
+        return String(phone.dropLast())
     }
 
     private static func stressForPhone(_ phone: String) -> Int? {
@@ -882,24 +890,26 @@ nonisolated enum ProsodyAnalyzer {
     }
 
     private static func rhymeKeysForPhones(_ phones: [String], maxDepth: Int) -> [String] {
-        let vowelIndexes = phones.indices.filter { vowels.contains(basePhone(phones[$0])) }
+        let bases = phones.map(basePhone)
+        let vowelIndexes = bases.indices.filter { vowels.contains(bases[$0]) }
         guard !vowelIndexes.isEmpty else { return [] }
 
         let stressed = vowelIndexes.filter { (stressForPhone(phones[$0]) ?? 0) > 0 }
         let anchors = stressed.isEmpty ? vowelIndexes : stressed
         return anchors.suffix(maxDepth).reversed().map { index in
-            phones[index...].map(basePhone).joined(separator: " ")
+            bases[index...].joined(separator: " ")
         }
     }
 
     private static func rhymeTailForPhones(_ phones: [String]) -> RhymeTail? {
-        let vowelIndexes = phones.indices.filter { vowels.contains(basePhone(phones[$0])) }
+        let bases = phones.map(basePhone)
+        let vowelIndexes = bases.indices.filter { vowels.contains(bases[$0]) }
         guard !vowelIndexes.isEmpty else { return nil }
         let stressed = vowelIndexes.filter { (stressForPhone(phones[$0]) ?? 0) > 0 }
         guard let vowelIndex = (stressed.isEmpty ? vowelIndexes : stressed).last else { return nil }
         return RhymeTail(
-            vowel: basePhone(phones[vowelIndex]),
-            coda: phones[(vowelIndex + 1)...].map(basePhone)
+            vowel: bases[vowelIndex],
+            coda: Array(bases[(vowelIndex + 1)...])
         )
     }
 }

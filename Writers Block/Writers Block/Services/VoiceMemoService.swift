@@ -3,6 +3,11 @@ import Foundation
 import Observation
 import os
 
+/// Hands a non-Sendable value to or from a detached task that is its only user meanwhile.
+nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 // All memo audio-session mutations share one serial queue. A stop enqueues its
 // deactivation before the next activation, even when that stop does not wait.
 nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
@@ -162,7 +167,8 @@ final class VoiceMemoService {
     // Separate metering timer so elapsed-clock updates do not drive dB reads.
     @ObservationIgnored private var meteringTimer: Timer?
     @ObservationIgnored private var recordingStartTime: Date?
-    @ObservationIgnored private var activePlayURL: URL?
+    /// The memo playing or paused; observed so its row shows the position.
+    private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
@@ -381,6 +387,12 @@ final class VoiceMemoService {
         isPlaying && activePlayURL == url
     }
 
+    /// Where playback of `url` is, while it plays or is paused; nil otherwise.
+    func playbackPosition(at url: URL) -> (elapsed: TimeInterval, duration: TimeInterval)? {
+        guard activePlayURL == url, let audioPlayer else { return nil }
+        return (audioPlayer.currentTime, audioPlayer.duration)
+    }
+
     /// Move the memo at `url` to the Trash Bin instead of deleting it. The file
     /// is kept for `trashRetentionInterval` before purge.
     /// Returns the trashed record on success (usable for undo), nil on failure.
@@ -513,37 +525,32 @@ final class VoiceMemoService {
             failToStartRecording()
             return
         }
-        if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
-        guard audioIntentRevision == recordingRevision else { return }
-
-        // AAC in an MPEG-4 container matches the Android MediaRecorder output
-        // format (.m4a / AAC_ADTS) for cross-platform parity.
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
-        let recorder: AVAudioRecorder
-        do {
-            recorder = try AVAudioRecorder(url: url, settings: settings)
-        } catch {
-            failToStartRecording()
+        guard audioIntentRevision == recordingRevision else {
+            if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
             return
         }
 
+        // Opening and starting the recorder block for a noticeable moment on a phone,
+        // so they run off the main thread. Until they finish the start still claims the
+        // microphone (`recordingActivationRevision`), so a stop meanwhile gives the session back.
         let forwarder = VoiceMemoDelegate(service: self)
-        delegateForwarder = forwarder
-        recorder.delegate = forwarder
-        // Metering must be enabled before record() so AVAudioRecorder captures
-        // level data from the first packet; it cannot be toggled mid-session.
-        recorder.isMeteringEnabled = true
-        guard recorder.record() else {
-            recorder.stop()
+        let delegate = UncheckedSendable(value: forwarder)
+        let started = await Task.detached(priority: .userInitiated) {
+            UncheckedSendable(value: Self.startRecorder(url: url, delegate: delegate.value))
+        }.value.value
+        if recordingActivationRevision == recordingRevision { recordingActivationRevision = nil }
+        guard audioIntentRevision == recordingRevision else {
+            // Stopped or replaced while starting: this take is not wanted.
+            started?.delegate = nil
+            started?.stop()
+            started?.deleteRecording()
+            return
+        }
+        guard let recorder = started else {
             failToStartRecording()
             return
         }
+        delegateForwarder = forwarder
 
         audioRecorder = recorder
         recordingProjectId = projectId
@@ -577,6 +584,28 @@ final class VoiceMemoService {
                 self.averagePowerNormalized = 0.3 * Float(clamped) + 0.7 * self.averagePowerNormalized
             }
         }
+    }
+
+    /// An AAC recorder already recording into `url`, or nil when it could not start.
+    nonisolated private static func startRecorder(url: URL, delegate: AVAudioRecorderDelegate) -> AVAudioRecorder? {
+        // AAC in an MPEG-4 container matches the Android MediaRecorder output
+        // format (.m4a / AAC_ADTS) for cross-platform parity.
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+        guard let recorder = try? AVAudioRecorder(url: url, settings: settings) else { return nil }
+        recorder.delegate = delegate
+        // Metering must be enabled before record() so AVAudioRecorder captures
+        // level data from the first packet; it cannot be toggled mid-session.
+        recorder.isMeteringEnabled = true
+        guard recorder.record() else {
+            recorder.stop()
+            return nil
+        }
+        return recorder
     }
 
     /// Stops the recorder; a recording that finished is published into the memo
@@ -629,8 +658,21 @@ final class VoiceMemoService {
 
     // MARK: - Playback
 
+    /// Plays `url`; on the memo playing it pauses, and on a paused one resumes
+    /// where it stopped.
     func togglePlayback(url: URL) {
-        if (isPlaying && activePlayURL == url) || pendingPlayURL == url {
+        if activePlayURL == url, let audioPlayer {
+            if isPlaying {
+                audioPlayer.pause()
+                isPlaying = false
+            } else if audioPlayer.play() {
+                isPlaying = true
+            } else {
+                stopPlayback()
+            }
+            return
+        }
+        if pendingPlayURL == url {
             stopPlayback()
             return
         }

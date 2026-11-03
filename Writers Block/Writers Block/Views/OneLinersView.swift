@@ -16,6 +16,7 @@ struct OneLinersView: View {
     @Query(sort: \OneLiner.createdAt, order: .reverse) private var lines: [OneLiner]
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     @State private var capture: OneLinerCaptureMode?
     @State private var sendingLine: OneLiner?
     @State private var toast: Toast?
@@ -157,6 +158,7 @@ struct OneLinersView: View {
             )
             .textInputAutocapitalization(.never)
             .submitLabel(.search)
+            .focused($searchFocused)
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
@@ -195,6 +197,9 @@ struct OneLinersView: View {
                         ))
                         .swipeActions(edge: .leading, allowsFullSwipe: !line.text.isEmpty) {
                             Button {
+                                // Released first, or the sheet hands focus (and the
+                                // keyboard) back to the search field when it closes.
+                                searchFocused = false
                                 sendingLine = line
                             } label: {
                                 Label("Send to song", systemImage: "arrow.turn.down.right")
