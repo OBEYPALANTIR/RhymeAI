@@ -37,6 +37,19 @@ struct RhymeLookupColdStartTests {
         #expect(RhymeResultPresentation.state(for: warm) == .results(warm))
     }
 
+    @Test func freshIndexKeepsKnownPerfectRhymes() {
+        // Pinned from the index as built before its build stopped using a regex
+        // per phone; a faster build must return the same words.
+        let index = RhymeIndex()
+        let unlimited = { (word: String) in
+            index.find(word: word, perfectLimit: .max, nearLimit: .max, multiLimit: .max)
+        }
+        #expect(Set(unlimited("music").perfect) == ["cusic", "muzik", "guzik", "husic", "cusick"])
+        #expect(Set(unlimited("silver").perfect) == ["quicksilver", "quiksilver"])
+        #expect(unlimited("orange").perfect.isEmpty)
+        #expect(Array(index.find(word: "chair").perfect.prefix(6)) == ["their", "there", "where", "care", "air", "share"])
+    }
+
     @Test func emptyTextIsOnlyForAFinishedLookup() {
         #expect(RhymeResultPresentation.state(for: nil) == .finding)
         #expect(RhymeResultPresentation.state(for: .empty) == .results(.empty))

@@ -90,6 +90,54 @@ final class OneLinersUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Play take"].waitForExistence(timeout: 5))
     }
 
+    /// Sending a line found by search leaves the keyboard down: the picker sheet
+    /// used to hand focus back to the search field when it closed.
+    @MainActor
+    func testSendingASearchedLineReleasesTheSearchField() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-in-memory-store"]
+        app.launch()
+
+        let welcomeNewSong = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Song")).firstMatch
+        if welcomeNewSong.waitForExistence(timeout: 3) { welcomeNewSong.tap() }
+        // A first-keyboard tip can cover the screen; it has one button.
+        let tip = app.buttons["Continue"]
+        if tip.waitForExistence(timeout: 2) { tip.tap() }
+        // Some words so the song is saved and the picker lists it.
+        let editor = app.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        app.typeText("Driving slow tonight")
+        if tip.waitForExistence(timeout: 1) { tip.tap() }
+        Thread.sleep(forTimeInterval: 2)
+
+        app.buttons["Open songs drawer"].tap()
+        let entry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND identifier != %@", "One Liners", "editorOneLinersButton")).firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        app.buttons["Type a one liner"].tap()
+        Thread.sleep(forTimeInterval: 0.8)  // the field takes focus once the sheet is up
+        app.typeText("Found the Lord in a gas station bathroom")
+        app.buttons["Save"].tap()
+        let line = app.staticTexts["Found the Lord in a gas station bathroom"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 2.5)  // the saved toast leaves
+
+        let search = app.textFields["Search one liners"]
+        search.tap()
+        app.typeText("Found")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        line.swipeRight()
+        let send = app.buttons["Send to song"]
+        if send.waitForExistence(timeout: 3) { send.tap() }
+        XCTAssertTrue(app.navigationBars["Send to song"].waitForExistence(timeout: 5))
+        app.staticTexts["Open now · goes in at the cursor"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sent to")).firstMatch.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "The search field took focus back after sending")
+        attach(app, "sent-from-search")
+    }
+
     /// A widget's Record, the Record control and the Record intent all hand the app
     /// `record`; the launch argument makes the same hand-off.
     @MainActor

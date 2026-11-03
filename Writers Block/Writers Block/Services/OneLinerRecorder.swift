@@ -119,65 +119,47 @@ final class OneLinerRecorder {
         guard owner == generation else { return false }
         guard activated else { return failToStart() }
 
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { return failToStart() }
         pendingURL = url
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // AAC in MPEG-4, as voice memos are recorded.
-            file = try AVAudioFile(
-                forWriting: url,
-                settings: [
-                    AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: format.sampleRate,
-                    AVNumberOfChannelsKey: format.channelCount,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-                ],
-                commonFormat: format.commonFormat,
-                interleaved: format.isInterleaved
-            )
-        } catch {
-            return failToStart()
-        }
-
         let take = beginTake()
-        if let recognizer {
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.requiresOnDeviceRecognition = true
-            request.shouldReportPartialResults = true
-            self.request = request
-            task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
-                guard let text = result?.bestTranscription.formattedString else { return }
-                Task { @MainActor [weak self] in self?.receive(transcript: text, forTake: take) }
-            }
-        } else {
+        if recognizer == nil {
             notice = "Live transcription isn't available on this device. The audio is still saved."
         }
-
-        writeFailed = OSAllocatedUnfairLock(initialState: false)
-        Self.installTap(
-            on: input,
-            format: format,
-            file: file,
-            request: request,
-            failed: writeFailed,
-            level: { [weak self] level in
-                Task { @MainActor [weak self] in self?.pushLevel(level, forTake: take) }
-            },
-            writeFailed: { [weak self] in
-                Task { @MainActor [weak self] in self?.failTake(owner: owner) }
-            }
-        )
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
-            return failToStart()
+        let failed = OSAllocatedUnfairLock(initialState: false)
+        writeFailed = failed
+        let transcriptHandler: @Sendable (String) -> Void = { [weak self] text in
+            Task { @MainActor [weak self] in self?.receive(transcript: text, forTake: take) }
         }
-        self.engine = engine
+        let levelHandler: @Sendable (Float) -> Void = { [weak self] level in
+            Task { @MainActor [weak self] in self?.pushLevel(level, forTake: take) }
+        }
+        let writeFailedHandler: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor [weak self] in self?.failTake(owner: owner) }
+        }
+        // Opening the input, the file and the recognizer, and starting the engine,
+        // block for a noticeable moment on a phone, so they run off the main thread.
+        let recognizerBox = UncheckedSendable(value: recognizer)
+        let started = await Task.detached(priority: .userInitiated) {
+            Self.startCapture(
+                writingTo: url,
+                recognizer: recognizerBox.value,
+                failed: failed,
+                transcript: transcriptHandler,
+                level: levelHandler,
+                writeFailed: writeFailedHandler
+            )
+        }.value
+        // Stopped or discarded meanwhile: that already gave the session back and
+        // removed the take's file, which the capture may have created since.
+        guard owner == generation else {
+            started?.cancel()
+            try? FileManager.default.removeItem(at: url)
+            return false
+        }
+        guard let started else { return failToStart() }
+        file = started.file
+        request = started.request
+        task = started.task
+        self.engine = started.engine
         observeInterruptions()
         fileURL = url
         pendingURL = nil
@@ -326,6 +308,81 @@ final class OneLinerRecorder {
         liveActivity.update(transcript: transcript.text, levels: levels)
     }
 
+    /// What `startCapture` built off the main thread, handed back to the main actor once.
+    private struct StartedCapture: @unchecked Sendable {
+        let engine: AVAudioEngine
+        let file: AVAudioFile
+        let request: SFSpeechAudioBufferRecognitionRequest?
+        let task: SFSpeechRecognitionTask?
+
+        /// Undoes a capture whose start was cancelled while it was being built.
+        func cancel() {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            request?.endAudio()
+            task?.cancel()
+        }
+    }
+
+    /// Opens the input, the .m4a and the recognizer and starts the engine; nil when
+    /// any of it fails, with nothing left running.
+    nonisolated private static func startCapture(
+        writingTo url: URL,
+        recognizer: SFSpeechRecognizer?,
+        failed: OSAllocatedUnfairLock<Bool>,
+        transcript: @escaping @Sendable (String) -> Void,
+        level: @escaping @Sendable (Float) -> Void,
+        writeFailed: @escaping @Sendable () -> Void
+    ) -> StartedCapture? {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0 else { return nil }
+        let file: AVAudioFile
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // AAC in MPEG-4, as voice memos are recorded.
+            file = try AVAudioFile(
+                forWriting: url,
+                settings: [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: format.sampleRate,
+                    AVNumberOfChannelsKey: format.channelCount,
+                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+                ],
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+        } catch {
+            return nil
+        }
+
+        var request: SFSpeechAudioBufferRecognitionRequest?
+        var task: SFSpeechRecognitionTask?
+        if let recognizer {
+            let speech = SFSpeechAudioBufferRecognitionRequest()
+            speech.requiresOnDeviceRecognition = true
+            speech.shouldReportPartialResults = true
+            request = speech
+            task = recognizer.recognitionTask(with: speech) { result, _ in
+                guard let text = result?.bestTranscription.formattedString else { return }
+                transcript(text)
+            }
+        }
+
+        installTap(on: input, format: format, file: file, request: request, failed: failed, level: level, writeFailed: writeFailed)
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            request?.endAudio()
+            task?.cancel()
+            return nil
+        }
+        return StartedCapture(engine: engine, file: file, request: request, task: task)
+    }
+
     // The tap runs on the audio render thread, so it is built outside the main actor.
     nonisolated private static func installTap(
         on input: AVAudioInputNode,
@@ -374,11 +431,14 @@ final class OneLinerRecorder {
         let status: SFSpeechRecognizerAuthorizationStatus = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
-        guard status == .authorized,
-              let recognizer = SFSpeechRecognizer(),
-              recognizer.isAvailable,
-              recognizer.supportsOnDeviceRecognition else { return nil }
-        return recognizer
+        guard status == .authorized else { return nil }
+        // Creating the recognizer loads its locale's model: off the main thread.
+        return await Task.detached(priority: .userInitiated) { () -> UncheckedSendable<SFSpeechRecognizer?> in
+            guard let recognizer = SFSpeechRecognizer(),
+                  recognizer.isAvailable,
+                  recognizer.supportsOnDeviceRecognition else { return UncheckedSendable(value: nil) }
+            return UncheckedSendable(value: recognizer)
+        }.value.value
     }
 }
 

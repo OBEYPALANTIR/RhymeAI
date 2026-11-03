@@ -763,13 +763,16 @@ struct ProjectsDrawerView: View {
                 .accessibilityLabel(isSelected ? "Deselect recording" : "Select recording")
             }
 
-            PlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
+            VoiceMemoPlayPauseButton(url: item.url, service: viewModel.voiceMemoService)
 
-            Text(displayLabel(item))
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                Text(displayLabel(item))
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                VoiceMemoPlaybackProgress(url: item.url, service: viewModel.voiceMemoService)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 let stem = (item.displayName as NSString).deletingPathExtension
@@ -1034,33 +1037,6 @@ struct ProjectsDrawerView: View {
         case .failure:
             drawerError = "Could not open the selected file."
         }
-    }
-}
-
-// MARK: - Play / Pause Helper
-
-// Isolated view so each recording row tracks its own playing state independently.
-// The service serialises playback — tapping a second row stops the first — so the
-// worst case is one extra render cycle where both rows show "playing".
-private struct PlayPauseButton: View {
-    @Environment(\.appAppearanceStyle) private var appearance
-
-    let url: URL
-    let service: VoiceMemoService
-
-    @State private var rowIsPlaying = false
-
-    var body: some View {
-        Button {
-            rowIsPlaying.toggle()
-            service.togglePlayback(url: url)
-        } label: {
-            Image(systemName: rowIsPlaying ? "pause.circle.fill" : "play.circle.fill")
-                .font(.title2)
-                .foregroundStyle(rowIsPlaying ? appearance.palette.recording : appearance.palette.action)
-                .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-        }
-        .accessibilityLabel(rowIsPlaying ? "Pause recording" : "Play recording")
     }
 }
 
