@@ -33,6 +33,7 @@ class OneLinerCaptureTest {
         OneLinerCaptures(scope).apply {
             open(mode)
             current!!.recorder.takeMoved(take)
+            current!!.recorder.takeDurationMs = 7_000
             current!!.text = "half a line"
         }
 
@@ -138,6 +139,41 @@ class OneLinerCaptureTest {
         assertEquals(0L, session.recorder.takeDurationMs)
         assertSame(session, captures.current)
         assertEquals("half a line", session.text)
+    }
+
+    @Test
+    fun aDiscardedTakesLateWordsNeverReachTheNextTake() {
+        val recorder = OneLinerRecorder()
+        recorder.beginTake()
+        val first = recorder.currentTake
+        recorder.recognized(first, "Midnight", commit = true)
+        assertEquals("Midnight", recorder.transcript)
+
+        recorder.discard()
+        recorder.recognized(first, "train", commit = true) // the stopped recognizer's last result, after the discard
+        assertEquals("Midnight", recorder.transcript)
+
+        recorder.beginTake()
+        recorder.recognized(first, "train", commit = true)
+        assertEquals("", recorder.transcript)
+        recorder.recognized(recorder.currentTake, "Coffee", commit = true)
+        assertEquals("Coffee", recorder.transcript)
+    }
+
+    @Test
+    fun aNewTakeAppliesATranscriptEqualToTheLastTakes() {
+        val session = OneLinerCaptureSession(OneLinerCaptureSession.Mode.Record)
+        session.takeStarted()
+        session.applyTranscript("Midnight")
+        session.applyTranscript("Midnight") // a recreated sheet sees the same transcript again
+        assertEquals("Midnight", session.text)
+
+        session.discardTake()
+        assertEquals("Midnight", session.text) // the words stay; only the audio goes
+        session.text = ""
+        session.takeStarted()
+        session.applyTranscript("Midnight")
+        assertEquals("Midnight", session.text)
     }
 
     @Test
