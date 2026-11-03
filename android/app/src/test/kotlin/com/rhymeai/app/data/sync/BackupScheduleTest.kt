@@ -113,17 +113,23 @@ class BackupScheduleTest {
         assertEquals(BackupGate.Decision.RUN, d(0, 0, true, false))
         assertEquals(BackupGate.Decision.RUN, d(1, 7, false, false))
         assertEquals(BackupGate.Decision.RUN, d(3, 0, true, false))
+        // A library not read yet never backs up, whatever else holds.
+        assertEquals(BackupGate.Decision.PAUSE, d(null, 0, false, false))
+        assertEquals(BackupGate.Decision.PAUSE, d(null, 0, true, true))
     }
 
     @Test
     fun earlierBackupsReadAsTimeSongsAndRecordings() {
-        val revision = BackupRevision("r", "2026-11-01T15:14:00Z", songCount = 12, recordingCount = 1)
+        val revision = BackupRevision("f", "r", "2026-11-01T15:14:00Z", sizeBytes = 14_000L)
         val utc = java.time.ZoneOffset.UTC
-        assertEquals("Nov 1, 3:14 PM · 12 songs · 1 recording", revisionLabel(revision, utc, java.util.Locale.US))
+        val us = java.util.Locale.US
+        assertEquals("Nov 1, 3:14 PM · 14 KB", revisionLabel(revision, utc, us))
+        assertEquals("Nov 1, 3:14 PM · 900 bytes", revisionLabel(revision.copy(sizeBytes = 900L), utc, us))
+        assertEquals("an unknown time", revisionLabel(revision.copy(modifiedTime = null, sizeBytes = null), utc, us))
         assertEquals(
-            "The 12 songs and 1 recording in the backup from Nov 1, 3:14 PM will be merged into this phone. Songs already here stay, and nothing in Google Drive is deleted.",
-            recoverRevisionConfirmation(revision, utc, java.util.Locale.US)
+            "The backup from Nov 1, 3:14 PM holds 12 songs and 1 recording. They will be merged into this phone and your current backup; songs already here stay. " +
+                "Nothing in Google Drive is deleted, and Drive will keep this earlier version.",
+            recoverRevisionConfirmation(RevisionContents(revision, songCount = 12, recordingCount = 1), utc, us)
         )
-        assertEquals("an unknown time · 1 song · 0 recordings", revisionLabel(revision.copy(modifiedTime = null, songCount = 1, recordingCount = 0), utc, java.util.Locale.US))
     }
 }

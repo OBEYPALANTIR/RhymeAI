@@ -203,6 +203,17 @@ class BackupFlowInstrumentedTest {
 
     private fun prefs() = context.getSharedPreferences("rhymeai_backup", Context.MODE_PRIVATE)
 
+    /** Not now on the empty phone: backup pauses and Drive keeps its bytes; a song saved here then ends the pause. */
+    private fun declineThenEndThePauseWithASongHere(vm: MainViewModel) {
+        val before = drive.bytes(BackupManifest.FILE_NAME)
+        compose.onNodeWithText("Not now").performClick()
+        waitUntil { vm.backupStatus == BackupStatus.Paused(2) }
+        assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
+        runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
+        instrumentation.runOnMainSync { vm.backUpNow() }
+        waitUntil { vm.backupStatus is BackupStatus.Connected }
+    }
+
     @After fun restore() {
         scenario?.close()
         BackupTestHooks.driveClient = null
@@ -217,7 +228,9 @@ class BackupFlowInstrumentedTest {
     @Test fun firstRunSheetOffersTheBackupAndRestoreMergesIt() {
         launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("We found 2 songs and 0 recordings in your Google Drive backup.").assertIsDisplayed()
+        compose.onNodeWithText(
+            "We found 2 songs and 0 recordings in your Google Drive backup. Not now leaves Drive as it is; backup stays paused until you restore."
+        ).assertIsDisplayed()
         compose.onNodeWithText("Not now").assertIsDisplayed()
         compose.onNodeWithText("Restore").performClick()
 
@@ -245,8 +258,7 @@ class BackupFlowInstrumentedTest {
     @Test fun tombstonesAndRecordingChangesQueueTheDebouncedBackup() {
         val vm = launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("Not now").performClick()
-        waitUntil { vm.backupStatus is BackupStatus.Connected }
+        declineThenEndThePauseWithASongHere(vm)
 
         // A recording tombstone alone changes no song list.
         runBlocking {
@@ -270,8 +282,7 @@ class BackupFlowInstrumentedTest {
     @Test fun importThatAddsOnlyRecordingsQueuesTheDebouncedBackup() {
         val vm = launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("Not now").performClick()
-        waitUntil { vm.backupStatus is BackupStatus.Connected }
+        declineThenEndThePauseWithASongHere(vm)
 
         val audio = byteArrayOf(7, 7, 7)
         val source = java.io.File(context.cacheDir, "import-source.m4a").apply { writeBytes(audio) }
@@ -408,6 +419,7 @@ class BackupFlowInstrumentedTest {
             val id = files.entries.firstOrNull { it.value.first == name }?.key ?: "id-${nextId++}"
             files[id] = name to bytes
         }
+        fun bytes(name: String) = files.values.firstOrNull { it.first == name }?.second
 
         override suspend fun findFileByName(accessToken: String, name: String) =
             files.entries.firstOrNull { it.value.first == name }?.let { DriveFileMetadata(it.key, name, version = it.value.second.size.toString()) }
@@ -426,6 +438,7 @@ class BackupFlowInstrumentedTest {
             files.remove(fileId)
         }
         override suspend fun listRevisions(accessToken: String, fileId: String) = emptyList<com.rhymeai.app.data.sync.DriveRevision>()
+        override suspend fun keepRevisionForever(accessToken: String, fileId: String, revisionId: String) {}
         override suspend fun downloadRevision(accessToken: String, fileId: String, revisionId: String, maxBytes: Long): ByteArray =
             error("no revisions in this fake")
         override suspend fun revokeToken(token: String) {
