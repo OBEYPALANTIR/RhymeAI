@@ -541,11 +541,22 @@ below is the contract it must meet, not verified behaviour.
   more; after failures it retries at 1, 2, 4, 8 … minutes capped at one hour and
   resets on success (`BackupSchedulerTest`).
 - Status model, same cases on both: `notConnected`, `connected(lastBackupAt?)`,
-  `pending`, `backingUp`, `failed(reason, lastBackupAt?)`; Settings shows
+  `pending`, `backingUp`, `failed(reason, lastBackupAt?)` (Android also
+  `paused(remoteSongCount)`, see Restore first); Settings shows
   "Last backed up 2 min ago · Google Drive" or the failure reason with Retry.
 - First-run restore: after Drive connects, or at launch when connected with an
   empty library, a manifest with at least one song offers "Restore your songs?"
   with Restore (merge) and Not now. Never automatic.
+- Restore first (Android; iOS pending): while this device has no songs and the
+  manifest lists any, no automatic run uploads (`BackupGate`); Connect does not
+  back up while the offer is up, Not now leaves Drive untouched and shows
+  "Backup paused: this phone has no songs and Drive has N. Restore to continue.",
+  and Back up now asks before merging Drive's songs with nothing. Recover an
+  earlier backup (Android; iOS pending) lists the manifest's Drive revisions
+  (newest first, at most 50, "Nov 1, 3:14 PM · 12 songs · 8 recordings") and,
+  after a confirmation, runs Restore with the chosen revision as an extra remote
+  input; revisions are never changed or deleted, and a recording whose raw file
+  is gone from Drive is reported, not fatal.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a
