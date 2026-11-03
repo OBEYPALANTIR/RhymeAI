@@ -1609,11 +1609,11 @@ struct BackupCoreTests {
         #expect(try deviceB.context.fetchCount(FetchDescriptor<Recording>()) == 0)
     }
 
-    /// The id a recovery gives an item of a revision (as the service derives it).
-    private static func recoveredId(_ revisionId: String, _ id: String, recording: Bool = false) -> String {
-        let digest = Array(SHA256.hash(data: Data("recovered|\(revisionId)|\(id)".utf8)))
-        let uuid = digest.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress!) as UUID }.uuidString
-        return recording ? uuid.lowercased() : uuid
+    /// Fixed vectors from Java's `UUID.nameUUIDFromBytes`, as Android derives recovered
+    /// ids: a revision recovered on either platform gives the same ids.
+    @Test func recoveredIdsAreTheOnesAndroidDerives() {
+        #expect(BackupService.recoveredId(fileId: "f1", revisionId: "r1", "song-1") == "3ec9dc72-4f40-37c0-a588-f62dc27d13de")
+        #expect(BackupService.recoveredId(fileId: "f1", revisionId: "r1", "take-1") == "257d2f2c-c451-3918-9337-c9393c8691db")
     }
 
     /// An earlier backup with songs and takes, then a current manifest written over it.
@@ -1831,10 +1831,10 @@ struct BackupCoreTests {
         let revision = try #require(try await deviceA.service.probeRevisions().last)
         try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
         let song = try #require(try deviceA.context.fetch(FetchDescriptor<SongProject>()).first)
-        #expect(song.id == Self.recoveredId(revision.id, "s"))
+        #expect(song.id == BackupService.recoveredId(fileId: revision.fileId, revisionId: revision.id, "s"))
 
         // The take that never came is deleted here; its audio then reappears on Drive.
-        deviceA.context.insert(SyncRecordingDeletion(projectId: song.id, recordingId: Self.recoveredId(revision.id, "t2", recording: true), fileName: "t2.m4a",
+        deviceA.context.insert(SyncRecordingDeletion(projectId: song.id, recordingId: BackupService.recoveredId(fileId: revision.fileId, revisionId: revision.id, "t2"), fileName: "t2.m4a",
                                                      deletedAt: Date().epochMilliseconds))
         try deviceA.context.save()
         drive.seedRecording(takes[1], content: audios["t2"]!)
@@ -1850,6 +1850,14 @@ struct BackupCoreTests {
         #expect(deviceA.service.lastReport?.songsDeletedSince == 1 && deviceA.service.lastReport?.recoveredSongs == 0)
         #expect(try deviceA.context.fetchCount(FetchDescriptor<SongProject>()) == 0)
 
+        // A tombstone without a time holds it too, as it holds an ordinary restore.
+        for record in try deviceA.context.fetch(FetchDescriptor<SyncDeletionRecord>()) where record.projectId == song.id { record.deletedAt = 0 }
+        try deviceA.context.save()
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        #expect(deviceA.service.lastReport?.songsHeldWithoutDate == 1 && deviceA.service.lastReport?.songsDeletedSince == 0)
+        #expect(deviceA.service.lastReport?.recoveredSongs == 0)
+        #expect(try deviceA.context.fetchCount(FetchDescriptor<SongProject>()) == 0)
+
         // Another device's deletion of it, in the current backup, holds on a fresh device too.
         _ = try await drive.updateFile(id: manifest.id, mimeType: SyncBlob.driveMimeType,
                                        content: try SyncBlob(deletions: [SyncDeletion(projectId: song.id, deletedAt: Date().epochMilliseconds)], savedByClientId: "a").encodedManifest(),
@@ -1860,38 +1868,92 @@ struct BackupCoreTests {
         #expect(try deviceC.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && deviceC.context.fetchCount(FetchDescriptor<Recording>()) == 0)
     }
 
-    /// Only a gone object, another declared size, or other bytes passes over to the
-    /// next object under a take's name. A quota error stops the run before any
-    /// write; so does cancellation, which is neither a failure nor "missing".
+    /// A recovers with a take unavailable and backs up; B restores, deletes the
+    /// recovered song forever and backs up. A's retry, with the take back on Drive,
+    /// attaches nothing (the song's own deletion decides, though its row is still
+    /// on A) and reports it deleted; A's next backup keeps the deletion.
     @MainActor
-    @Test func recoveryStopsOnQuotaAndCancellationBeforeWritingAndSkipsOnlyGoneObjects() async throws {
+    @Test func aRetryAttachesNoTakeToASongAnotherDeviceDeleted() async throws {
         let drive = FakeDriveClient()
-        let audio = Data("the take".utf8)
-        let take = Self.take("t", of: "s", audio)
-        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "a"),
-                                         current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
-        let listed = try #require(try await drive.findFile(named: take.driveName, accessToken: ""))
-        drive.seedDuplicateRecording(take, content: audio, id: "~good-copy")
-        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
-        let revision = try #require(try await device.service.probeRevisions().last)
+        let audios = ["t1": Data("first".utf8), "t2": Data("second".utf8)]
+        let takes = ["t1", "t2"].map { Self.take($0, of: "s", audios[$0]!) }
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: takes, savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: ["t1": audios["t1"]!])
+        let deviceA = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await deviceA.service.probeRevisions().last)
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        let recovered = try #require(try deviceA.context.fetch(FetchDescriptor<SongProject>()).first).id
+        try await deviceA.service.backupNow(modelContext: deviceA.context)
 
-        drive.downloadFailures[listed.id] = .quotaExceeded
+        let deviceB = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        try await deviceB.service.restoreNow(modelContext: deviceB.context)
+        let copy = try #require(try deviceB.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == recovered })
+        deviceB.context.delete(copy)
+        deviceB.context.insert(SyncDeletionRecord(projectId: recovered, deletedAt: Date().epochMilliseconds + 1000))
+        try deviceB.context.save()
+        try await deviceB.service.backupNow(modelContext: deviceB.context)
+        #expect(try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName))).deletions.contains { $0.projectId == recovered })
+
+        drive.seedRecording(takes[1], content: audios["t2"]!)
+        try await deviceA.service.recoverRevision(revision, modelContext: deviceA.context)
+        #expect(deviceA.service.lastReport?.songsDeletedSince == 1 && deviceA.service.lastReport?.recoveredRecordings == 0)
+        #expect(try deviceA.context.fetchCount(FetchDescriptor<Recording>()) == 1, "no take attached to a deleted song")
+
+        try await deviceA.service.backupNow(modelContext: deviceA.context)
+        let after = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(!after.projects.contains { $0.id == recovered } && after.deletions.contains { $0.projectId == recovered })
+    }
+
+    /// Only a gone object, another declared size, or other bytes passes over to the
+    /// next object under a take's name. A quota error on the second take, after the
+    /// first downloaded, stops the run with nothing in the library (also after a
+    /// relaunch) and no download left behind; so does cancellation, which is neither
+    /// a failure nor "missing"; so does too little free space, before any download.
+    @MainActor
+    @Test func recoveryStopsOnQuotaCancellationAndLowSpaceBeforeWritingAndSkipsOnlyGoneObjects() async throws {
+        let drive = FakeDriveClient()
+        let audios = ["t1": Data("first take".utf8), "t2": Data("second take".utf8)]
+        let takes = ["t1", "t2"].map { Self.take($0, of: "s", audios[$0]!) }
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: takes, savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: audios)
+        let first = try #require(try await drive.findFile(named: takes[0].driveName, accessToken: ""))
+        let second = try #require(try await drive.findFile(named: takes[1].driveName, accessToken: ""))
+        drive.seedDuplicateRecording(takes[1], content: audios["t2"]!, id: "~good-copy")
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let downloads = device.memosRoot.deletingLastPathComponent().appendingPathComponent("recovery-downloads", isDirectory: true)
+        device.service.recoveryDownloadsRoot = downloads
+        let revision = try #require(try await device.service.probeRevisions().last)
+        func nothingWritten(_ harness: BackupHarness) throws -> Bool {
+            try harness.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && harness.context.fetchCount(FetchDescriptor<Recording>()) == 0
+        }
+
+        drive.downloadFailures[second.id] = .quotaExceeded
         await #expect(throws: BackupError.quotaExceeded) { try await device.service.recoverRevision(revision, modelContext: device.context) }
-        #expect(!drive.downloadAttempts.contains("~good-copy"), "a quota error is not passed over")
-        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
+        #expect(drive.downloadAttempts.contains(first.id) && !drive.downloadAttempts.contains("~good-copy"), "a quota error is not passed over")
+        #expect(try nothingWritten(device))
+        #expect(try nothingWritten(try await device.reopened()))
+        #expect(!FileManager.default.fileExists(atPath: downloads.path), "no download is left behind")
         #expect(device.service.lastReport == nil && device.service.backgroundBackupFailureDescription != nil)
 
         let task = Task { @MainActor in try await device.service.recoverRevision(revision, modelContext: device.context) }
         drive.beforeDownload = { task.cancel() }
         await #expect(throws: CancellationError.self) { try await task.value }
         drive.beforeDownload = nil
-        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 0 && device.context.fetchCount(FetchDescriptor<Recording>()) == 0)
-        #expect(device.service.lastReport == nil, "no missing-audio report")
+        #expect(try nothingWritten(device) && device.service.lastReport == nil, "no missing-audio report")
 
-        drive.downloadFailures[listed.id] = .remoteFileMissing
+        device.service.freeSpace = { 1024 }
+        let attempts = drive.downloadAttempts.count
+        await #expect(throws: BackupError.insufficientStorage(needed: 2 * Int64(audios.values.map(\.count).reduce(0, +)) + 11 + 128 * 1024 * 1024)) {
+            try await device.service.recoverRevision(revision, modelContext: device.context)
+        }
+        #expect(drive.downloadAttempts.count == attempts + 1, "only the current manifest was read")
+        #expect(try nothingWritten(device))
+        device.service.freeSpace = { nil }
+
+        drive.downloadFailures[second.id] = .remoteFileMissing
         try await device.service.recoverRevision(revision, modelContext: device.context)
-        #expect(drive.downloadAttempts.suffix(2) == [listed.id, "~good-copy"], "a gone object is passed over for the next")
-        #expect(device.service.lastReport?.recoveredRecordings == 1 && device.service.backgroundBackupFailureDescription == nil)
+        #expect(drive.downloadAttempts.suffix(2) == [second.id, "~good-copy"], "a gone object is passed over for the next")
+        #expect(device.service.lastReport?.recoveredRecordings == 2 && device.service.backgroundBackupFailureDescription == nil)
     }
 
     @MainActor

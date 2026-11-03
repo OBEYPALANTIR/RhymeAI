@@ -28,6 +28,8 @@ enum BackupError: Error, Equatable {
     case tooManyKeptRevisions
     /// A Drive file the request named is gone (404).
     case remoteFileMissing
+    /// Recovery needs about this many bytes free on the device.
+    case insufficientStorage(needed: Int64)
 }
 
 extension BackupError: LocalizedError {
@@ -75,6 +77,8 @@ extension BackupError: LocalizedError {
             return "Google Drive keeps at most 200 versions of a file permanently, and this backup has reached that. Recover one of the versions marked Kept."
         case .remoteFileMissing:
             return "A file in the Google Drive backup is no longer there."
+        case .insufficientStorage(let needed):
+            return "Not enough free space on this device to recover that backup: it needs about \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)). Free up space and try again."
         }
     }
 }
@@ -799,6 +803,9 @@ struct BackupReport: Equatable, Sendable {
     /// Recovered earlier and deleted since (here or on another device): not brought back.
     var songsDeletedSince = 0
     var recordingsDeletedSince = 0
+    /// Held by a deletion record without a time (as an ordinary restore holds them): not brought back.
+    var songsHeldWithoutDate = 0
+    var recordingsHeldWithoutDate = 0
     var missingRecordings: [String] = []
 }
 
@@ -887,6 +894,12 @@ final class BackupService {
     let library: RecordingLibrary
     var recordingRecoveryRoot: URL? { memosRoot }
     private(set) var lastReport: BackupReport?
+    /// Bytes free for important data on the device (tests substitute a figure).
+    var freeSpace: () -> Int64? = {
+        try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
+    }
+    /// Where recovery downloads takes before they enter the library; swept as each recovery starts.
+    var recoveryDownloadsRoot = FileManager.default.temporaryDirectory.appendingPathComponent("writersblock-recovery", isDirectory: true)
 
     convenience init(library: RecordingLibrary) {
         self.init(
@@ -1040,12 +1053,12 @@ final class BackupService {
             }
             let old = try Self.decodeDriveManifest(try await driveClient.downloadRevision(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken))
             try await library.withGate {
-                try await importRevisionHoldingGate(old, revisionId: revision.id, modelContext: modelContext, accessToken: accessToken)
+                try await importRevisionHoldingGate(old, fileId: revision.fileId, revisionId: revision.id, modelContext: modelContext, accessToken: accessToken)
             }
         }
     }
 
-    private func importRevisionHoldingGate(_ old: SyncBlob, revisionId: String, modelContext: ModelContext, accessToken: String) async throws {
+    private func importRevisionHoldingGate(_ old: SyncBlob, fileId: String, revisionId: String, modelContext: ModelContext, accessToken: String) async throws {
         var report = BackupReport()
         library.clearStaging(context: modelContext)
         try await library.reconcile(context: modelContext)
@@ -1059,17 +1072,24 @@ final class BackupService {
         let backupActive = Set(current.projects.map(\.id))
         let backupTrash = Set(current.trashed.map(\.id))
         let attachedIds = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
-        // Any tombstone naming a recovered identity is a deliberate deletion, whatever its time.
+        // Any tombstone naming a recovered identity is a deliberate deletion, whatever its
+        // time; one without a time holds it as it holds an ordinary restore.
         let tombstones = try DeletionStore.all(in: modelContext) + current.deletions
+        let held = try library.held(in: modelContext)
         let stamp = Date(millisecondsSince1970: Date().epochMilliseconds)
 
         var songs: [SongProject] = []
         // Each take to place, with the Drive name its audio is under (the revision's id).
         var takes: [(take: SyncRecording, source: String)] = []
         for song in old.projects {
-            let id = Self.recoveredId(revisionId, song.id).uuidString
+            let id = Self.recoveredId(fileId: fileId, revisionId: revisionId, song.id)
+            // The song's own deletion wins first, whether or not its row is here: no take is attached.
             if tombstones.contains(where: { $0.projectId == id && $0.isSongTombstone }) {
                 report.songsDeletedSince += 1
+                continue
+            }
+            if held.songs.contains(id) {
+                report.songsHeldWithoutDate += 1
                 continue
             }
             let heldHere = active.contains(song.id) || trashed.contains(song.id) || active.contains(id) || trashed.contains(id)
@@ -1083,7 +1103,7 @@ final class BackupService {
             }
             for entry in old.recordings where entry.projectId == song.id {
                 var take = entry
-                take.id = Self.recoveredId(revisionId, entry.id).uuidString.lowercased()
+                take.id = Self.recoveredId(fileId: fileId, revisionId: revisionId, entry.id)
                 take.projectId = id
                 take.uploadedAt = stamp
                 take.precedenceRepaired = false
@@ -1092,15 +1112,26 @@ final class BackupService {
                     report.recordingsDeletedSince += 1
                     continue
                 }
+                if held.contains(projectId: id, recordingId: take.id, displayName: take.fileName) {
+                    report.recordingsHeldWithoutDate += 1
+                    continue
+                }
                 takes.append((take, entry.driveName))
             }
         }
 
+        // Room for every download, the library's staged copy of each, and the largest take again.
+        let total = takes.reduce(Int64(0)) { $0 + $1.take.bytes }
+        let needed = 2 * total + (takes.map(\.take.bytes).max() ?? 0) + 128 * 1024 * 1024
+        if !takes.isEmpty, let free = freeSpace(), free < needed { throw BackupError.insufficientStorage(needed: needed) }
+
         // Everything is downloaded and verified first, to files outside the library;
         // any failure but a gone or mismatched object stops the run before a write.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("recovery-\(UUID().uuidString)", isDirectory: true)
+        // What an interrupted recovery left there goes first (one recovery runs at a time).
+        try? FileManager.default.removeItem(at: recoveryDownloadsRoot)
+        let folder = recoveryDownloadsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
+        defer { try? FileManager.default.removeItem(at: recoveryDownloadsRoot) }
         var downloaded: [(take: SyncRecording, file: URL)] = []
         for (take, source) in takes {
             guard let audio = try await downloadVerified(take, from: remote[source] ?? [], accessToken: accessToken) else {
@@ -1150,10 +1181,14 @@ final class BackupService {
         return nil
     }
 
-    /// The same new id on every attempt to recover one item of one revision.
-    private static func recoveredId(_ revisionId: String, _ id: String) -> UUID {
-        let digest = Array(SHA256.hash(data: Data("recovered|\(revisionId)|\(id)".utf8)))
-        return digest.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress!) as UUID }
+    /// The id a recovery gives one song or recording of one revision, the same on
+    /// every attempt and on both platforms: Java's `UUID.nameUUIDFromBytes` (RFC 4122
+    /// version 3, MD5) of "writersblock-recovery/<fileId>/<revisionId>/<oldId>", lowercase.
+    nonisolated static func recoveredId(fileId: String, revisionId: String, _ id: String) -> String {
+        var bytes = Array(Insecure.MD5.hash(data: Data("writersblock-recovery/\(fileId)/\(revisionId)/\(id)".utf8)))
+        bytes[6] = (bytes[6] & 0x0f) | 0x30
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return bytes.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress!) as UUID }.uuidString.lowercased()
     }
 
     private static func driveDate(_ text: String) -> Date? {
