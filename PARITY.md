@@ -565,9 +565,11 @@ below is the contract it must meet, not verified behaviour.
   3ec9dc72-4f40-37c0-a588-f62dc27d13de). A song is skipped when its own id or its
   recovered id is held here or in any current manifest under the backup's name,
   active or in Trash; every
-  other song becomes a new song with its recordings. A recovered song or take named
-  by a tombstone here (with or without a time) or in any current manifest is not
-  brought back. Takes over the 16 MiB cap are reported, never estimated or
+  other song becomes a new song with its recordings. A recording id listed under
+  more than one song belongs to the first song it is listed under and never moves
+  to another. A recovered song or take named by a tombstone here (with or without
+  a time) or in any current manifest is not brought back; a deletion made outside
+  those records (for example a store reset) is not known to recovery. Takes over the 16 MiB cap are reported, never estimated or
   downloaded, and free space is checked before any take downloads. Only a gone object, another declared size or other bytes passes to
   the next object under a take's name; any other error or cancellation stops the
   run. A retry of the same revision finishes an interrupted run without duplicates

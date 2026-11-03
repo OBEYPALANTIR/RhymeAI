@@ -1091,6 +1091,10 @@ final class BackupService {
         // A revision listing an id twice (a hash-valid manifest can) yields one song and
         // one take per id, the first listed; no recovered id is ever inserted twice.
         var seenSongs = Set<String>(), seenTakes = Set<String>()
+        // A recording id listed under more than one song belongs to the first song it is
+        // listed under, whether or not that song is brought back: it never moves to another.
+        var owner: [String: String] = [:]
+        for entry in old.recordings where owner[entry.id] == nil { owner[entry.id] = entry.projectId }
         for song in old.projects where seenSongs.insert(song.id).inserted {
             let id = Self.recoveredId(fileId: fileId, revisionId: revisionId, song.id)
             // The song's own deletion wins first, whether or not its row is here: no take is attached.
@@ -1111,7 +1115,7 @@ final class BackupService {
             } else {
                 songs.append(SongProject(id: id, title: song.title, lyrics: song.lyrics, theme: song.theme, updatedAt: stamp))
             }
-            for entry in old.recordings where entry.projectId == song.id && seenTakes.insert(entry.id).inserted {
+            for entry in old.recordings where entry.projectId == song.id && owner[entry.id] == song.id && seenTakes.insert(entry.id).inserted {
                 var take = entry
                 take.id = Self.recoveredId(fileId: fileId, revisionId: revisionId, entry.id)
                 take.projectId = id

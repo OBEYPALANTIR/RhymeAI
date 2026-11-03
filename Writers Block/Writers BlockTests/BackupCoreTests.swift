@@ -1964,6 +1964,42 @@ struct BackupCoreTests {
         #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 1)
     }
 
+    /// A recording listed under two songs belongs to the first song it is listed
+    /// under, in either order. After that song is deleted forever (its take with
+    /// it), recovering again leaves the take deleted: the other song never takes it.
+    @MainActor
+    @Test(arguments: [false, true])
+    func aRecordingListedUnderTwoSongsStaysWithItsFirstSongAndStaysDeleted(reversed: Bool) async throws {
+        let drive = FakeDriveClient()
+        let audio = Data("shared take".utf8)
+        let (underA, underB) = (Self.take("r", of: "a", audio), Self.take("r", of: "b", audio))
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("a"), Self.song("b")], recordings: reversed ? [underB, underA] : [underA, underB],
+                                                                  savedByClientId: "x"),
+                                         current: SyncBlob(savedByClientId: "x"), audio: ["r": audio])
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await device.service.probeRevisions().last)
+        let id = { BackupService.recoveredId(fileId: revision.fileId, revisionId: revision.id, $0) }
+        let (ownerSong, otherSong, take) = (id(reversed ? "b" : "a"), id(reversed ? "a" : "b"), id("r"))
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        let row = try #require(try device.context.fetch(FetchDescriptor<Recording>()).first)
+        #expect(row.id == take && row.projectId == ownerSong)
+        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
+
+        // The owning song is deleted forever, and its take with it.
+        let now = Date().epochMilliseconds
+        try? FileManager.default.removeItem(at: device.file(take, ownerSong))
+        device.context.delete(row)
+        if let song = try device.context.fetch(FetchDescriptor<SongProject>()).first(where: { $0.id == ownerSong }) { device.context.delete(song) }
+        device.context.insert(SyncRecordingDeletion(projectId: ownerSong, recordingId: take, fileName: row.displayName, deletedAt: now))
+        device.context.insert(SyncDeletionRecord(projectId: ownerSong, deletedAt: now))
+        try device.context.save()
+
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 0, "the deleted take is not brought back under the other song")
+        #expect(try device.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == [otherSong])
+        #expect(device.service.lastReport?.songsDeletedSince == 1 && device.service.lastReport?.recoveredRecordings == 0)
+    }
+
     /// Only a gone object, another declared size, or other bytes passes over to the
     /// next object under a take's name. A quota error on the second take, after the
     /// first downloaded, stops the run with nothing in the library (also after a
