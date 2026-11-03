@@ -151,7 +151,7 @@ data class RecoverySummary(
     val alreadyHere: Int,
     /** Recovered songs deleted after an earlier recovery of this revision (here or in the backup): they stay deleted. */
     val deletedSongs: Int = 0,
-    /** Of [deletedSongs], those an earlier interrupted run left on this device (not backed up: the deletion wins). */
+    /** Of [deletedSongs], those an earlier interrupted run left on this device (kept out of the backup by the newer deletion unless edited here). */
     val deletedSongsStillHere: Int = 0,
     /** Recovered takes deleted after an earlier recovery of this revision: they stay deleted. */
     val deletedRecordings: Int = 0,

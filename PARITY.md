@@ -565,8 +565,8 @@ below is the contract it must meet, not verified behaviour.
   revision without duplicates; a tombstone with a known time naming a recovered
   song or take, here or in the backup, keeps it deleted, and a deleted recovered
   song gets no takes even when an earlier run's copy is still on the device (that
-  copy stays local and is not backed up, since the newer deletion wins the
-  merge). A tombstone of unknown date also keeps a recovered item from being
+  copy stays local; the newer deletion keeps it out of the backup unless it is
+  edited on the device afterwards). A tombstone of unknown date also keeps a recovered item from being
   placed, but it never wins the ordinary merge, so a copy an earlier partial
   recovery already placed can still be backed up beside it (Android reports such
   items separately from confirmed deletions). Only a same-name raw object that is
@@ -579,12 +579,10 @@ below is the contract it must meet, not verified behaviour.
   to a temporary folder, attaches them through library staging, and saves the
   songs last in one save. Android shows the pause as `BackupStatus.Paused`
   ("Backup paused: this phone has no songs and Drive has N. Restore to
-  continue."); iOS shows it as a failed status with Retry. Android derives
+  continue."); iOS shows it as a failed status with Retry. Both platforms derive
   recovered ids as UUID v3 of `writersblock-recovery/<file id>/<revision
-  id>/<old id>` (fixed vector `f1`/`r1`/`song-1` →
-  `3ec9dc72-4f40-37c0-a588-f62dc27d13de` in `BackupServiceTest`); iOS at that
-  head still hashes `recovered|<revision id>|<old id>` with SHA-256 until it
-  adopts the same vector.
+  id>/<old id>`, pinned by the shared vector `writersblock-recovery/f1/r1/song-1`
+  → `3ec9dc72-4f40-37c0-a588-f62dc27d13de`.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a
