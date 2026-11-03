@@ -29,6 +29,20 @@ struct OneLinerCapture {
     let audioDuration: Double
 }
 
+/// The sheet's recording controls for the recorder's state.
+struct OneLinerCaptureControls: Equatable {
+    /// A finished take of a new capture: its length and Discard take.
+    var takeRow: Bool
+    /// The mic glyph that starts a take.
+    var record: Bool
+
+    init(isEdit: Bool, microphoneBusy: Bool, isRecording: Bool, hasTake: Bool) {
+        // Edit never records, so it never holds a new take.
+        takeRow = !isEdit && !isRecording && hasTake
+        record = !isEdit && !microphoneBusy && !isRecording && !hasTake
+    }
+}
+
 /// Quick capture sheet. Record mode starts the microphone on open and
 /// transcribes on the device into the field; Type and Edit open with the keyboard.
 struct OneLinerCaptureView: View {
@@ -59,7 +73,14 @@ struct OneLinerCaptureView: View {
     private var canSave: Bool {
         mode.isEdit ? !trimmedText.isEmpty : (!trimmedText.isEmpty || recorder.fileURL != nil)
     }
-    private var canRecord: Bool { !mode.isEdit && !microphoneBusy }
+    private var controls: OneLinerCaptureControls {
+        OneLinerCaptureControls(
+            isEdit: mode.isEdit,
+            microphoneBusy: microphoneBusy,
+            isRecording: recorder.isRecording,
+            hasTake: recorder.fileURL != nil
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.standard) {
@@ -91,6 +112,8 @@ struct OneLinerCaptureView: View {
 
             if recorder.isRecording {
                 recordingRow
+            } else if controls.takeRow {
+                takeRow
             }
 
             if let notice = saveError ?? recorder.notice {
@@ -172,6 +195,35 @@ struct OneLinerCaptureView: View {
         .accessibilityLabel("Recording, listening")
     }
 
+    /// The stopped take that Save keeps. Discarding drops only the audio; the words stay.
+    private var takeRow: some View {
+        HStack(spacing: RhymeAITokens.Rhythm.related) {
+            HStack(spacing: RhymeAITokens.Rhythm.related) {
+                Image(systemName: "waveform")
+                    .font(.footnote.weight(.medium))
+                Text("Take")
+                    .font(.footnote)
+                Text(Self.durationText(recorder.takeDuration))
+                    .font(.footnote.monospacedDigit())
+                    .monospaced()
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Take, \(Self.durationText(recorder.takeDuration))")
+
+            Spacer(minLength: 0)
+
+            Button(action: discardTake) {
+                Text("Discard take")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.action)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityHint("Removes the recording. The words stay.")
+        }
+        .foregroundStyle(palette.secondaryInk)
+    }
+
     private var actionRow: some View {
         HStack(spacing: RhymeAITokens.Rhythm.related) {
             Button {
@@ -197,7 +249,7 @@ struct OneLinerCaptureView: View {
                 }
                 .buttonStyle(.rhymePress)
                 .accessibilityLabel("Stop recording")
-            } else if recorder.fileURL == nil && canRecord {
+            } else if controls.record {
                 Button {
                     Task { await startTake() }
                 } label: {
@@ -258,6 +310,14 @@ struct OneLinerCaptureView: View {
         if !(await recorder.start(writingTo: url)), !recorder.isRecording {
             fieldFocused = true
         }
+    }
+
+    /// Removes the stopped take's file, as closing without saving does; the words stay
+    /// and the mic comes back for another take.
+    private func discardTake() {
+        recorder.discard()
+        // A notice about the take ("The take so far is kept") no longer applies.
+        recorder.notice = nil
     }
 
     private func save() {
