@@ -548,41 +548,47 @@ below is the contract it must meet, not verified behaviour.
   empty library, a manifest with at least one song offers "Restore your songs?"
   with Restore (merge) and Not now. Never automatic.
 - Restore first and Recover an earlier backup, shared on both platforms:
-  automatic backup never uploads while the device has no songs (active or in
-  Trash) and the manifest lists any (`BackupGate.decide(localSongCount,
-  remoteSongCount, interactive, userConfirmed)`); Not now leaves Drive untouched
-  and keeps backup paused; Back up now in that state asks before merging Drive's
-  songs with nothing. "Recover an earlier backup" lists the manifest's Drive
-  revisions newest first, the 50 newest plus every kept-forever one (marked
-  Kept), by time and size without downloading them. Choosing one only asks for
-  confirmation; on Recover that revision alone is marked `keepForever` (Drive
-  serves an earlier blob revision only then; at most 200 per file, a full set
-  refuses with "Recover one of the versions marked Kept." and nothing is
-  unpinned), downloaded and imported, and Drive sees no other write. The import
-  skips a song whose id or recovered id is held here or in the current backup
-  (active or Trash) and adds every other song with its takes under deterministic
-  recovered ids, so a stopped recovery is finished by the next one of the same
-  revision without duplicates; a tombstone with a known time naming a recovered
-  song or take, here or in the backup, keeps it deleted, and a deleted recovered
-  song gets no takes even when an earlier run's copy is still on the device (that
-  copy stays local; the newer deletion keeps it out of the backup unless it is
-  edited on the device afterwards). A tombstone of unknown date also keeps a recovered item from being
-  placed, but it never wins the ordinary merge, so a copy an earlier partial
-  recovery already placed can still be backed up beside it (Android reports such
-  items separately from confirmed deletions). Only a same-name raw object that is
-  gone (404), too large or holds other bytes falls through to the next; any other
-  failure stops the run before anything is written. The next ordinary backup
-  uploads what was added.
-  Differences (Android from this source; iOS from PR 177 at `d80186f8`): Android
-  saves the new songs first in one write, then publishes the takes from its own
-  `.recording-recovery-` stage by staged-restore moves; iOS downloads every take
-  to a temporary folder, attaches them through library staging, and saves the
-  songs last in one save. Android shows the pause as `BackupStatus.Paused`
-  ("Backup paused: this phone has no songs and Drive has N. Restore to
-  continue."); iOS shows it as a failed status with Retry. Both platforms derive
-  recovered ids as UUID v3 of `writersblock-recovery/<file id>/<revision
-  id>/<old id>`, pinned by the shared vector `writersblock-recovery/f1/r1/song-1`
-  → `3ec9dc72-4f40-37c0-a588-f62dc27d13de`.
+  no automatic backup uploads while the restore offer waits for an answer, nor
+  while the device has no songs (active or in Trash) and the manifest lists any
+  (`BackupGate`); a library or Drive count that cannot be read never uploads. Not
+  now leaves Drive untouched and keeps backup paused; Back up now in that state
+  asks before merging Drive's songs with nothing. "Recover an earlier backup"
+  lists the manifest's Drive revisions newest first, the 50 newest plus every
+  kept-forever one (marked Kept), by time and size without downloading them.
+  Choosing one only asks for confirmation; on Recover that revision alone is
+  marked `keepForever` (Drive serves an earlier blob revision only then; at most
+  200 per file, a full set refuses with "Recover one of the versions marked
+  Kept." and nothing is unpinned), downloaded and imported, and Drive sees no
+  other write. A revision that lists the same recording id twice (including one
+  recording under two songs) is refused whole as damaged. Before any take
+  downloads, free space is checked (iOS: about twice the takes' total plus the
+  largest take and 128 MiB; Android: the takes' total plus 128 MiB). The import
+  skips a song whose id or recovered id is held here or in any current manifest
+  (active or Trash) and adds every other song with its takes under recovered ids,
+  UUID v3 of `writersblock-recovery/<file id>/<revision id>/<old id>` pinned by
+  the shared vector `writersblock-recovery/f1/r1/song-1` →
+  `3ec9dc72-4f40-37c0-a588-f62dc27d13de`, so a stopped recovery is finished by
+  the next one of the same revision without duplicates. A tombstone with a known
+  time naming a recovered song or take, here or in the backup, keeps it deleted;
+  a recovered song's own tombstone decides first, so a deleted recovered song gets
+  no takes even when an earlier run's copy is still on the device. A tombstone of
+  unknown date also keeps a recovered item from being placed and is reported
+  separately from confirmed deletions. Only a same-name raw object that is gone
+  (404), too large or holds other bytes falls through to the next; any other
+  failure or cancellation stops the run before anything is written. The next
+  ordinary backup uploads what was added.
+  Differences: Android saves the new songs first in one write, then publishes the
+  takes from its own `.recording-recovery-` stage by staged-restore moves; iOS
+  downloads every take to a temporary folder, attaches them through library
+  staging, and saves the songs last in one save. Android shows the pause as
+  `BackupStatus.Paused` ("Backup paused: this phone has no songs and Drive has N.
+  Restore to continue."); iOS shows it as a failed status with Retry ("this
+  device"). iOS also refuses a revision that lists a song id twice. Android notes
+  that a deleted recovered song's copy already on the device stays local (the
+  newer deletion keeps it out of the backup unless it is edited on the device
+  afterwards), and that an unknown-date tombstone never wins the ordinary merge,
+  so a copy an earlier partial recovery already placed can still be backed up
+  beside it.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a
