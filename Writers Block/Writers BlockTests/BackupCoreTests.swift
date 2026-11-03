@@ -1945,6 +1945,25 @@ struct BackupCoreTests {
         #expect(!drive.downloadAttempts.contains(try #require(try await drive.findFile(named: huge.driveName, accessToken: "")).id))
     }
 
+    /// A revision listing the same song (and take) twice gives one song and one take,
+    /// and a later restore does not trip over a duplicate id.
+    @MainActor
+    @Test func aRevisionListingASongTwiceRecoversItOnce() async throws {
+        let drive = FakeDriveClient()
+        let audio = Data("the take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        _ = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s"), Self.song("s", "other words")], recordings: [take, take], savedByClientId: "a"),
+                                         current: SyncBlob(savedByClientId: "a"), audio: [take.id: audio])
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        try await device.service.recoverRevision(try #require(try await device.service.probeRevisions().last), modelContext: device.context)
+        #expect(try device.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["s words"])
+        #expect(try device.context.fetchCount(FetchDescriptor<Recording>()) == 1)
+        #expect(device.service.lastReport?.recoveredSongs == 1 && device.service.lastReport?.recoveredRecordings == 1)
+        try await device.service.backupNow(modelContext: device.context)
+        try await device.service.restoreNow(modelContext: device.context)
+        #expect(try device.context.fetchCount(FetchDescriptor<SongProject>()) == 1)
+    }
+
     /// Only a gone object, another declared size, or other bytes passes over to the
     /// next object under a take's name. A quota error on the second take, after the
     /// first downloaded, stops the run with nothing in the library (also after a
