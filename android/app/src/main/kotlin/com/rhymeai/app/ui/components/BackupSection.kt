@@ -49,7 +49,6 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRevision
-import com.rhymeai.app.data.sync.RevisionContents
 import com.rhymeai.app.data.sync.recoverRevisionConfirmation
 import com.rhymeai.app.data.sync.revisionLabel
 import androidx.compose.foundation.rememberScrollState
@@ -73,8 +72,8 @@ data class BackupSectionState(
     val emptyBackupConfirm: Int? = null,
     /** Drive's earlier backups while "Recover an earlier backup…" is open. */
     val revisions: List<BackupRevision>? = null,
-    /** The chosen earlier backup and what it holds, waiting for "Recover". */
-    val revisionPreview: RevisionContents? = null
+    /** The chosen earlier backup, waiting for "Recover". */
+    val chosenRevision: BackupRevision? = null
 )
 
 class BackupSectionActions(
@@ -90,7 +89,7 @@ class BackupSectionActions(
     val onCancelEmptyBackup: () -> Unit = {},
     val onListRevisions: () -> Unit = {},
     val onCloseRevisions: () -> Unit = {},
-    val onOpenRevision: (BackupRevision) -> Unit = {},
+    val onChooseRevision: (BackupRevision) -> Unit = {},
     val onRecoverRevision: () -> Unit = {}
 )
 
@@ -145,11 +144,11 @@ internal fun BackupSection(
         )
     }
 
-    state.revisionPreview?.let { contents ->
+    state.chosenRevision?.let { revision ->
         AlertDialog(
             onDismissRequest = actions.onCloseRevisions,
             title = { Text("Recover this backup?") },
-            text = { Text(recoverRevisionConfirmation(contents)) },
+            text = { Text(recoverRevisionConfirmation(revision)) },
             confirmButton = {
                 TextButton(onClick = actions.onRecoverRevision, modifier = Modifier.testTag("backup_recover_confirm")) { Text("Recover") }
             },
@@ -168,7 +167,7 @@ internal fun BackupSection(
                         fontSize = 12.sp
                     )
                     revisions.forEach { revision ->
-                        TextButton(onClick = { actions.onOpenRevision(revision) }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
+                        TextButton(onClick = { actions.onChooseRevision(revision) }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
                             Text(revisionLabel(revision), modifier = Modifier.fillMaxWidth())
                         }
                     }

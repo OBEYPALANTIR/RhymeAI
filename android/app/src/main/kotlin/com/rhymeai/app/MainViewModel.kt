@@ -33,10 +33,8 @@ import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRevision
 import com.rhymeai.app.data.sync.RevisionsResult
-import com.rhymeai.app.data.sync.RevisionContents
 import com.rhymeai.app.data.sync.RecoveryResult
 import com.rhymeai.app.data.sync.RecoverySummary
-import com.rhymeai.app.data.sync.RevisionPreviewResult
 import com.rhymeai.app.data.sync.GatedBackupRun
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
@@ -238,9 +236,16 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
     }
 ).joinToString(" ").ifEmpty { null }
 
+/** Whatever a recovery added here reaches Drive through the next backup. */
+internal fun recoveryNeedsBackup(summary: RecoverySummary): Boolean = summary.songsAdded > 0 || summary.recordingsAdded > 0
+
 /** "Recovered 2 songs and 3 recordings. 1 already here." and what was left out, from what was created. */
 internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
     "Recovered ${plural(summary.songsAdded, "song")} and ${plural(summary.recordingsAdded, "recording")}. ${summary.alreadyHere} already here.",
+    (summary.deletedSongs to summary.deletedRecordings).takeIf { it != (0 to 0) }?.let { (songs, takes) ->
+        val parts = listOfNotNull(plural(songs, "song").takeIf { songs > 0 }, plural(takes, "recording").takeIf { takes > 0 })
+        "${parts.joinToString(" and ")} deleted after an earlier recovery stay deleted."
+    },
     when (summary.missingRecordings) {
         0 -> null
         1 -> "1 recording is no longer in your Google Drive and was not recovered."
@@ -954,8 +959,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var backupRevisions by mutableStateOf<List<BackupRevision>?>(null)
         private set
 
-    /** The earlier version waiting for the user's "Recover", with what it holds. */
-    var revisionPreview by mutableStateOf<RevisionContents?>(null)
+    /** The earlier version chosen in the list, waiting for the user's "Recover" (nothing has been asked of Drive yet). */
+    var chosenRevision by mutableStateOf<BackupRevision?>(null)
         private set
 
     /**
@@ -1042,7 +1047,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         restoreOffer = null
         emptyBackupConfirm = null
         backupRevisions = null
-        revisionPreview = null
+        chosenRevision = null
         backupBusyLabel = "Disconnecting…"
         viewModelScope.launch {
             val revoked = backupMutex.withLock { driveSyncService.disconnect() }
@@ -1088,35 +1093,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeBackupRevisions() {
         backupRevisions = null
-        revisionPreview = null
+        chosenRevision = null
     }
 
-    /** Keeps the chosen version (Drive's condition for reading it) and shows what it holds before anything merges. */
-    fun openBackupRevision(revision: BackupRevision) {
+    /** Asks for confirmation; Drive is asked to keep the version only when the user confirms. */
+    fun chooseBackupRevision(revision: BackupRevision) {
         backupRevisions = null
-        backupBusyLabel = "Opening earlier backup…"
-        viewModelScope.launch {
-            val result = backupMutex.withLock { driveSyncService.previewRevision(revision) }
-            backupBusyLabel = null
-            when (result) {
-                is RevisionPreviewResult.Ready -> revisionPreview = result.contents
-                is RevisionPreviewResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
-            }
-        }
+        chosenRevision = revision
     }
 
-    /** Adds the previewed version's missing songs here as new songs; nothing in Drive is changed or deleted. */
+    /** Keeps the chosen version forever, then adds its songs not on this phone as new songs. */
     fun recoverBackupRevision() {
-        val revision = revisionPreview?.revision ?: return
-        revisionPreview = null
+        val revision = chosenRevision ?: return
+        chosenRevision = null
         backupNotice = null
         backupBusyLabel = "Recovering…"
         viewModelScope.launch {
             val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revision) }
             backupBusyLabel = null
             when (result) {
-                // New songs reach Drive through the next ordinary backup (the song list change schedules it).
-                is RecoveryResult.Recovered -> backupNotice = recoveryNotice(result.summary)
+                is RecoveryResult.Recovered -> {
+                    backupNotice = recoveryNotice(result.summary)
+                    // Takes alone change no song list, so the backup is queued here (as Import does).
+                    if (recoveryNeedsBackup(result.summary)) scheduleAutoBackup()
+                }
                 is RecoveryResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
             }
         }
@@ -1680,8 +1680,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val heldRestores = com.rhymeai.app.data.sync.RecordingFileStore.recoverInterruptedRestores(filesDir, onlyHistorical = true)
                     val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir) +
                         voiceMemoService.migrateStaging()
-                    // After migrate's reconcile: an interrupted recovery's staged downloads are no longer referenced.
-                    com.rhymeai.app.data.sync.RecordingFileStore.removeRecoveryStages(filesDir)
+                    // Serialized with recovery (backup lock) and every move (transition lock): only unreferenced
+                    // stages go. A backup or recovery running now cleans up itself, so this one is skipped then.
+                    if (backupMutex.tryLock()) {
+                        try {
+                            com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir)
+                        } finally {
+                            backupMutex.unlock()
+                        }
+                    }
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                     val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
                     val unreadableTrash = com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles

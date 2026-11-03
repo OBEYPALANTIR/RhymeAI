@@ -557,21 +557,27 @@ below is the contract it must meet, not verified behaviour.
   continue.", and Back up now asks before merging Drive's songs with nothing.
 - Recover an earlier backup (Android; iOS pending): lists the manifest's Drive
   revisions newest first, at most 50, by time and size without downloading them.
-  Choosing one marks only that revision `keepForever` (Drive serves an earlier
-  blob revision only then, and keeps at most 200 per file; none is unpinned) and
-  shows its song and recording counts. Recover is a local import: each song of
-  the revision that neither this device nor the current backup holds (active or
-  Trash, by id) becomes a new song, and its recordings are downloaded, verified
-  and attached, all under recovered ids derived from the revision and the old id.
-  Every take is downloaded before anything is written, the staged files are
-  moved (never copied) into place, and a recovery stopped part-way is finished by
-  the next one of the same revision without duplicates; a same-name raw object
-  that is too large or gone is skipped for the next.
-  Nothing in Drive is written during recovery besides the pin; the next ordinary
-  backup uploads the new songs, so no tombstone, Trash entry or other device's
-  edit of the old ids touches them. The result reads "Recovered N songs and M
-  recordings. K already here.", with missing, damaged and oversized recordings
-  reported.
+  Choosing one only asks for confirmation ("This asks Drive to keep that version
+  permanently (nothing is deleted or rewritten), then adds its songs that aren't
+  on this phone as new songs."); on Recover that revision alone is marked
+  `keepForever` (Drive serves an earlier blob revision only then, at most 200 per
+  file; none is unpinned), downloaded and imported, and the result gives the
+  counts. Recover is a local import: each song of the revision that neither this
+  device nor the current backup holds (active or Trash, by id) becomes a new song,
+  with its recordings downloaded, verified and attached, all under recovered ids
+  derived from the revision and the old id. A recovered song or take deleted
+  since (a tombstone here or in the backup) stays deleted. Every take is
+  downloaded before anything is written; only a same-name raw object that is gone
+  (404), too large or different falls through to the next, and any other failure
+  stops the run first. Staged takes are moved, never copied, under their own
+  `.recording-recovery-` stages that ordinary Restore and Import never clear; once
+  placing starts it finishes even if cancelled, and a recovery stopped part-way is
+  finished by the next one of the same revision without duplicates. Nothing in
+  Drive is written during recovery besides the pin; the next ordinary backup
+  (queued whenever songs or takes were added) uploads the new songs, so no
+  tombstone, Trash entry or other device's edit of the old ids touches them. The
+  result reads "Recovered N songs and M recordings. K already here.", with
+  missing, damaged, oversized and still-deleted items reported.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a

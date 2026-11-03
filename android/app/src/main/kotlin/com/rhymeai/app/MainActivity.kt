@@ -400,7 +400,7 @@ class MainActivity : ComponentActivity() {
                                 migrationError = viewModel.migrationError,
                                 emptyBackupConfirm = viewModel.emptyBackupConfirm,
                                 revisions = viewModel.backupRevisions,
-                                revisionPreview = viewModel.revisionPreview
+                                chosenRevision = viewModel.chosenRevision
                             ),
                             backupActions = remember(viewModel) {
                                 BackupSectionActions(
@@ -416,7 +416,7 @@ class MainActivity : ComponentActivity() {
                                     onCancelEmptyBackup = viewModel::cancelEmptyBackup,
                                     onListRevisions = viewModel::listBackupRevisions,
                                     onCloseRevisions = viewModel::closeBackupRevisions,
-                                    onOpenRevision = viewModel::openBackupRevision,
+                                    onChooseRevision = viewModel::chooseBackupRevision,
                                     onRecoverRevision = viewModel::recoverBackupRevision
                                 )
                             },

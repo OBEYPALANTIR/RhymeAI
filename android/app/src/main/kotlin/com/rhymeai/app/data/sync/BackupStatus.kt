@@ -39,11 +39,10 @@ fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(
     return "$time · ${if (size < 1024) "$size bytes" else "${(size + 1023) / 1024} KB"}"
 }
 
-/** What recovering the chosen version does, with what it holds, said before it runs. */
-fun recoverRevisionConfirmation(contents: RevisionContents, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
-    "The backup from ${revisionTime(contents.revision, zone, locale)} holds ${count(contents.songCount, "song")} and " +
-        "${count(contents.recordingCount, "recording")}. Songs from that earlier backup that aren't on this phone are added as new songs. " +
-        "Nothing on Drive is changed or deleted."
+/** What recovering [revision] does, said before anything is asked of Drive (its contents are unknown until then). */
+fun recoverRevisionConfirmation(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
+    "Backup from ${revisionLabel(revision, zone, locale)}. This asks Drive to keep that version permanently " +
+        "(nothing is deleted or rewritten), then adds its songs that aren't on this phone as new songs."
 
 private fun revisionTime(revision: BackupRevision, zone: ZoneId, locale: Locale): String =
     revision.modifiedTime?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, h:mm a", locale).format(Instant.parse(it).atZone(zone)) }.getOrNull() }
