@@ -315,6 +315,122 @@ struct PersistenceTests {
     }
 
     @MainActor
+    @Test func anEmptyLibraryPausesAutomaticBackupsUntilARestore() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: false)
+        backupService.summary = RemoteBackupSummary(songs: 3, recordings: 2)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        let paused = BackupStatus.failed(reason: "Backup paused: this device has no songs and Drive has 3 songs. Restore to continue.", lastBackupAt: nil)
+
+        // Connecting surfaces the offer and starts no backup.
+        await viewModel.connectGoogleDrive()
+        #expect(viewModel.firstRunRestoreOffer?.songs == 3)
+        #expect(viewModel.backupStatus == paused, "no countdown starts behind the offer")
+
+        // "Not now": every automatic trigger stays paused, and the reason shows.
+        viewModel.declineFirstRunRestore()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        viewModel.scheduleAutomaticBackup()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 0 && backupService.backupCalls == 0)
+        #expect(viewModel.backupStatus == paused)
+
+        // "Back up now" asks first and runs only on an explicit confirm.
+        await viewModel.backUpNow()
+        #expect(viewModel.emptyBackupConfirmation == 3)
+        #expect(backupService.backupCalls == 0)
+        await viewModel.backUpNow(confirmedEmptyMerge: true)
+        #expect(viewModel.emptyBackupConfirmation == nil)
+        #expect(backupService.backupCalls == 1)
+
+        // Restoring ends the pause; a library with songs backs up as before.
+        await viewModel.restoreBackupNow()
+        harness.container.mainContext.insert(SongProject(title: "Restored"))
+        try harness.container.mainContext.save()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 1)
+        #expect(viewModel.backupStatus == .connected(lastBackupAt: nil))
+    }
+
+    /// The real triggers, not only `BackupGate.decide`: the scheduled countdown,
+    /// its retry and the background run stay paused; a first song resumes them.
+    @MainActor
+    @Test func scheduledRetryAndBackgroundRunsStayPausedUntilAFirstSong() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        backupService.summary = RemoteBackupSummary(songs: 2, recordings: 0)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        let clock = ManualBackupClock(viewModel)
+        await viewModel.checkFirstRunRestoreOffer(afterConnecting: false)
+        viewModel.declineFirstRunRestore()
+        let paused = BackupStatus.failed(reason: "Backup paused: this device has no songs and Drive has 2 songs. Restore to continue.", lastBackupAt: nil)
+
+        viewModel.scheduleAutomaticBackup()
+        await clock.advance()
+        #expect(clock.requestedDelays == [30] && backupService.backgroundCalls == 0, "the countdown ran and uploaded nothing")
+        backupService.failure = "offline"
+        viewModel.scheduleAutomaticBackup()
+        await clock.advance()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 0)
+        #expect(viewModel.backupStatus == paused, "the pause shows over an older failure")
+        backupService.failure = nil
+
+        // Writing a first song ends the pause; its countdown backs up.
+        viewModel.showWelcome = false
+        viewModel.title = "First here"
+        viewModel.lyrics = "a line"
+        #expect(viewModel.flushCurrentDraft())
+        #expect(viewModel.backupStatus == .pending)
+        await clock.advance { backupService.backgroundCalls == 1 }
+        #expect(backupService.backgroundCalls == 1)
+        #expect(viewModel.backupStatus == .connected(lastBackupAt: nil))
+    }
+
+    /// While the restore offer waits for an answer, no automatic run uploads, even
+    /// with songs here; answering it lets them run again.
+    @MainActor
+    @Test func anOpenRestoreOfferFencesAutomaticRunsEvenWithSongsHere() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: false)
+        backupService.summary = RemoteBackupSummary(songs: 2, recordings: 0)
+        let harness = try Self.makeHarness(backupService: backupService)
+        let viewModel = harness.viewModel
+        let clock = ManualBackupClock(viewModel)
+        harness.container.mainContext.insert(SongProject(title: "Already here"))
+        try harness.container.mainContext.save()
+
+        await viewModel.connectGoogleDrive()
+        #expect(viewModel.firstRunRestoreOffer?.songs == 2)
+        #expect(viewModel.backupStatus == .connected(lastBackupAt: nil), "songs here: not paused, only waiting for the answer")
+        viewModel.scheduleAutomaticBackup()
+        await clock.advance()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 0)
+
+        viewModel.declineFirstRunRestore()
+        await viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 1)
+    }
+
+    @MainActor
+    @Test func aTrashOnlyLibraryBacksUpAndAnUnreadableDriveCountUploadsNothing() async throws {
+        let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        backupService.summary = RemoteBackupSummary(songs: 2, recordings: 0)
+        let trashOnly = try Self.makeHarness(backupService: backupService)
+        trashOnly.container.mainContext.insert(TrashedSongProject(project: SongProject(title: "Binned")))
+        try trashOnly.container.mainContext.save()
+        await trashOnly.viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(backupService.backgroundCalls == 1, "a library with songs in Trash is not a fresh device")
+
+        let unreadable = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        unreadable.summaryError = BackupError.network("offline")
+        let empty = try Self.makeHarness(backupService: unreadable)
+        await empty.viewModel.runCloudBackupOnBackgroundIfPossible()
+        #expect(unreadable.backgroundCalls == 0, "an empty library is not backed up while Drive's count is unknown")
+        #expect(empty.viewModel.backupStatus == .connected(lastBackupAt: nil))
+    }
+
+    @MainActor
     @Test func recordingChangesAndChangesDuringARunShareTheOneDebounce() async throws {
         let backupService = FakeCloudBackupService(isConfigured: true, isConnected: true)
         let harness = try Self.makeHarness(backupService: backupService)
@@ -472,6 +588,7 @@ struct PersistenceTests {
         var isConnected: Bool
         var revokeSucceeds = true
         var summary: RemoteBackupSummary?
+        var summaryError: Error?
         var failure: String?
         private(set) var connectCalls = 0
         private(set) var disconnectCalls = 0
@@ -497,7 +614,10 @@ struct PersistenceTests {
             return revokeSucceeds
         }
 
-        func remoteBackupSummary() async throws -> RemoteBackupSummary? { summary }
+        func remoteBackupSummary() async throws -> RemoteBackupSummary? {
+            if let summaryError { throw summaryError }
+            return summary
+        }
 
         func backupNow(modelContext: ModelContext) async throws {
             backupCalls += 1

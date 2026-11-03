@@ -24,6 +24,9 @@ protocol CloudBackupServicing: AnyObject {
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
+    func probeRevisions() async throws -> [BackupRevision]
+    func prepareRevision(_ revision: BackupRevision) async throws -> RevisionRecovery
+    func recoverRevision(_ recovery: RevisionRecovery, modelContext: ModelContext) async throws
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
     func importArchive(_ data: Data, modelContext: ModelContext) async throws
 }
@@ -38,6 +41,9 @@ extension CloudBackupServicing {
     func disconnect() async -> Bool { true }
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws {}
     func remoteBackupSummary() async throws -> RemoteBackupSummary? { nil }
+    func probeRevisions() async throws -> [BackupRevision] { [] }
+    func prepareRevision(_ revision: BackupRevision) async throws -> RevisionRecovery { throw BackupError.revisionUnavailable }
+    func recoverRevision(_ recovery: RevisionRecovery, modelContext: ModelContext) async throws {}
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
         throw BackupError.notConfigured
     }
@@ -519,6 +525,14 @@ final class EditorViewModel: ObservableObject {
     /// An older passphrase-encrypted backup is on Drive and waits for its passphrase.
     @Published private(set) var legacyBackupNeedsPassphrase: Bool = false
     @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
+    /// "Back up now" with no songs here while Drive has this many: asks before merging.
+    @Published var emptyBackupConfirmation: Int?
+    /// "Recover an earlier backup": Drive's kept manifest revisions, nil until listed.
+    @Published private(set) var backupRevisions: [BackupRevision]?
+    /// The revision being kept forever and opened, before its confirmation.
+    @Published private(set) var preparingRevisionId: String?
+    /// An opened revision waiting for "Recover".
+    @Published var recoveryToConfirm: RevisionRecovery?
     /// Recordings over 16 MiB that stay on this device (not in iCloud or Drive).
     @Published private(set) var oversizedRecordingCount = 0
     /// Files the recordings check left alone because another file holds their place
@@ -545,6 +559,8 @@ final class EditorViewModel: ObservableObject {
     private var automaticBackupFailures = 0
     private var automaticBackupRerunRequested = false
     private var firstRunCheckedThisLaunch = false
+    /// Drive's song count while automatic backups wait for a restore (BackupGate).
+    private var backupPausedForRestore: Int?
     /// Quiet period after the last saved change before an automatic backup.
     var automaticBackupDebounce: TimeInterval = BackupSchedule.debounce
     /// Waits out a debounce or backoff delay; tests substitute a clock they advance.
@@ -584,7 +600,13 @@ final class EditorViewModel: ObservableObject {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
                 recordingsLaunchTask = Task { [weak self] in
-                    guard let self, await self.reconcileRecordings() else { return }
+                    guard let self else { return }
+                    // Audio an interrupted restore, import or recovery left staged goes now;
+                    // anything a row or the staging journal claims stays (T1.7).
+                    if let library = self.recordingLibrary, let context = self.modelContext {
+                        await library.withGate { library.clearStaging(context: context) }
+                    }
+                    guard await self.reconcileRecordings() else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -2745,6 +2767,8 @@ final class EditorViewModel: ObservableObject {
         }
         if cloudBackupIsWorking {
             backupStatus = .backingUp
+        } else if let remoteSongs = backupPausedForRestore {
+            backupStatus = .failed(reason: Self.backupPausedText(remoteSongs: remoteSongs), lastBackupAt: backupService.lastBackupAt)
         } else if let failure = backupService.backgroundBackupFailureDescription {
             backupStatus = .failed(reason: failure, lastBackupAt: backupService.lastBackupAt)
         } else if automaticBackupTask != nil {
@@ -2779,6 +2803,7 @@ final class EditorViewModel: ObservableObject {
         automaticBackupFailures = 0
         automaticBackupRerunRequested = false
         firstRunRestoreOffer = nil
+        backupPausedForRestore = nil
         let revoked = await backupService.disconnect()
         refreshCloudBackupState()
         cloudBackupLastResultIsError = !revoked
@@ -2793,16 +2818,48 @@ final class EditorViewModel: ObservableObject {
         guard let backupService, backupService.isConnected, let context = modelContext,
               firstRunRestoreOffer == nil, afterConnecting || !firstRunCheckedThisLaunch else { return }
         firstRunCheckedThisLaunch = true
+        guard let localSongs = localSongCount(context) else { return }
         if !afterConnecting {
-            let songs = (try? context.fetchCount(FetchDescriptor<SongProject>())) ?? 0
-            let trashed = (try? context.fetchCount(FetchDescriptor<TrashedSongProject>())) ?? 0
-            guard songs + trashed == 0 else { return }
+            guard localSongs == 0 else { return }
         }
         guard let summary = try? await backupService.remoteBackupSummary(), summary.songs > 0 else { return }
         automaticBackupTask?.cancel()
         automaticBackupTask = nil
         firstRunRestoreOffer = FirstRunRestoreOffer(songs: summary.songs, recordings: summary.recordings)
+        // However the offer is dismissed, automatic backups stay paused until a restore.
+        if case .pausedForRestore(let remoteSongs) = BackupGate.decide(localSongCount: localSongs, remoteSongCount: summary.songs, interactive: false, userConfirmed: false) {
+            backupPausedForRestore = remoteSongs
+        }
         refreshCloudBackupState()
+    }
+
+    /// Songs in the library, active or in Trash (a Trash-only library is not a fresh
+    /// device); nil when the library cannot be read.
+    private func localSongCount(_ context: ModelContext) -> Int? {
+        guard let songs = try? context.fetchCount(FetchDescriptor<SongProject>()),
+              let trashed = try? context.fetchCount(FetchDescriptor<TrashedSongProject>()) else { return nil }
+        return songs + trashed
+    }
+
+    /// The gate for this device and Drive; Drive is only asked while the library is
+    /// empty. Nil when the library or Drive's song count cannot be read: an
+    /// automatic run then uploads nothing (an empty library has nothing to lose).
+    private func backupGate(_ context: ModelContext, interactive: Bool, userConfirmed: Bool) async -> BackupGate? {
+        let offerPending = firstRunRestoreOffer != nil
+        if offerPending, !interactive { return BackupGate.decide(localSongCount: 0, remoteSongCount: 0, interactive: false, userConfirmed: false, restoreOfferPending: true) }
+        guard let localSongs = localSongCount(context) else { return nil }
+        guard localSongs == 0, let backupService else { return .proceed }
+        let remoteSongs: Int
+        do {
+            remoteSongs = try await backupService.remoteBackupSummary()?.songs ?? 0
+        } catch {
+            return nil
+        }
+        return BackupGate.decide(localSongCount: localSongs, remoteSongCount: remoteSongs, interactive: interactive, userConfirmed: userConfirmed)
+    }
+
+    static func backupPausedText(remoteSongs: Int) -> String {
+        "Backup paused: this device has no songs and Drive has \(remoteSongs) \(remoteSongs == 1 ? "song" : "songs"). Restore to continue."
     }
 
     func acceptFirstRunRestore() async {
@@ -2818,7 +2875,9 @@ final class EditorViewModel: ObservableObject {
     /// Starts the quiet-period countdown to an automatic backup. Runs coalesce:
     /// a change during a run asks for one more run after it.
     func scheduleAutomaticBackup() {
-        guard let backupService, backupService.isConnected, modelContext != nil, firstRunRestoreOffer == nil else { return }
+        guard let backupService, backupService.isConnected, let context = modelContext, firstRunRestoreOffer == nil else { return }
+        // A first song here ends the pause: this run backs it up (the gate looks again when it starts).
+        if backupPausedForRestore != nil, (localSongCount(context) ?? 0) > 0 { backupPausedForRestore = nil }
         if cloudBackupIsWorking {
             automaticBackupRerunRequested = true
             return
@@ -2835,7 +2894,15 @@ final class EditorViewModel: ObservableObject {
         refreshCloudBackupState()
     }
 
-    func backUpNow() async {
+    /// With no songs here and songs on Drive, asks first (`emptyBackupConfirmation`)
+    /// and runs only once `confirmedEmptyMerge` is passed.
+    func backUpNow(confirmedEmptyMerge: Bool = false) async {
+        emptyBackupConfirmation = nil
+        if let context = modelContext, canRunCloudBackup,
+           case .confirmEmptyMerge(let remoteSongs) = await backupGate(context, interactive: true, userConfirmed: confirmedEmptyMerge) {
+            emptyBackupConfirmation = remoteSongs
+            return
+        }
         await runCloudEditorOperation(
             noun: "Backup",
             changesLibrary: false,
@@ -2855,6 +2922,57 @@ final class EditorViewModel: ObservableObject {
             try await service.restoreNow(modelContext: context)
         }
         voiceMemoService.recordingsChanged()
+    }
+
+    /// Lists the backup's earlier versions kept by Drive, newest first.
+    func loadBackupRevisions() async {
+        guard let backupService, cloudBackupConnected else { return }
+        backupRevisions = nil
+        do {
+            backupRevisions = try await backupService.probeRevisions()
+        } catch {
+            backupRevisions = []
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Couldn't list earlier backups: \(cloudBackupErrorDescription(error))"
+        }
+    }
+
+    /// Keeps the chosen revision forever on Drive and opens it, for the confirmation.
+    func prepareRecovery(_ revision: BackupRevision) async {
+        guard let backupService, preparingRevisionId == nil else { return }
+        preparingRevisionId = revision.id
+        defer { preparingRevisionId = nil }
+        do {
+            recoveryToConfirm = try await backupService.prepareRevision(revision)
+        } catch {
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Couldn't open that backup: \(cloudBackupErrorDescription(error))"
+        }
+    }
+
+    /// Adds an earlier backup's songs and recordings to this device; nothing on Drive is deleted.
+    func recoverBackupRevision(_ recovery: RevisionRecovery) async {
+        recoveryToConfirm = nil
+        await runCloudEditorOperation(
+            noun: "Recovery",
+            success: "",
+            separateDraft: "Recovery complete. Your open edits were saved as a separate local draft."
+        ) { service, context in
+            try await service.recoverRevision(recovery, modelContext: context)
+        }
+        voiceMemoService.recordingsChanged()
+        // The recovered songs go into the next backup.
+        scheduleAutomaticBackup()
+    }
+
+    static func revisionDate(_ revision: BackupRevision) -> String {
+        revision.modifiedAt?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "an unknown date"
+    }
+
+    /// "Nov 1, 3:14 PM · 2 KB": counts are known only once a revision is opened.
+    static func revisionLabel(_ revision: BackupRevision) -> String {
+        [revisionDate(revision), revision.bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     /// Opens the older encrypted backup with a passphrase typed once; it is not kept.
@@ -2955,8 +3073,9 @@ final class EditorViewModel: ObservableObject {
             return
         }
         automaticBackupFailures = 0
+        backupPausedForRestore = nil
         let report = backupService.lastReport
-        cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true)
+        cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true) || !(report?.missingRecordings.isEmpty ?? true)
         cloudBackupStatusText = [recovered ? separateDraft : success, reportNote(report)]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
     }
@@ -2966,6 +3085,14 @@ final class EditorViewModel: ObservableObject {
         var notes: [String] = []
         if report.migratedLegacyBackup {
             notes.append("Your older encrypted backup was moved to the new format.")
+        }
+        if report.recoveredSongs > 0 || report.songsAlreadyHere > 0 || !report.missingRecordings.isEmpty {
+            func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+            notes.append("Recovered \(count(report.recoveredSongs, "song")) and \(count(report.recoveredRecordings, "recording")). \(report.songsAlreadyHere) already here.")
+        }
+        if !report.missingRecordings.isEmpty {
+            let count = report.missingRecordings.count
+            notes.append("\(count) \(count == 1 ? "recording" : "recordings") could not come back because \(count == 1 ? "its" : "their") audio is no longer on Google Drive: \(report.missingRecordings.joined(separator: ", ")).")
         }
         if !report.damagedRecordings.isEmpty {
             let count = report.damagedRecordings.count
@@ -3557,7 +3684,6 @@ final class EditorViewModel: ObservableObject {
               let context = modelContext,
               cloudBackupConfigured,
               cloudBackupConnected,
-              firstRunRestoreOffer == nil,
               !cloudBackupIsWorking else {
             return
         }
@@ -3571,6 +3697,20 @@ final class EditorViewModel: ObservableObject {
         automaticBackupTask = nil
         cloudBackupIsWorking = true
         refreshCloudBackupState()
+        // Restore first: nothing uploads from an empty library over a Drive backup with songs.
+        let gate = await backupGate(context, interactive: false, userConfirmed: false)
+        if gate != .proceed {
+            if case .pausedForRestore(let remoteSongs) = gate { backupPausedForRestore = remoteSongs }
+            cloudBackupIsWorking = false
+            refreshCloudBackupState()
+            // A change saved meanwhile (a first song) gets its own run.
+            if automaticBackupRerunRequested {
+                automaticBackupRerunRequested = false
+                scheduleAutomaticBackup()
+            }
+            return
+        }
+        backupPausedForRestore = nil
         await backupService.backupInBackgroundIfPossible(modelContext: context)
         cloudBackupIsWorking = false
         refreshCloudBackupState()

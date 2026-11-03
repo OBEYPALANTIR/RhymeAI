@@ -75,6 +75,13 @@ final class BackupUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Restore your songs?"].waitForNonExistence(timeout: 5))
 
         createNewSong(in: app)
+        // A blank new song is not saved, so the library is still empty: backups stay paused.
+        openBackup(in: app)
+        XCTAssertTrue(waitForLabel(element("backupProviderStatus", in: app), "Backup paused: this device has no songs and Drive has 2 songs. Restore to continue."))
+        XCTAssertTrue(app.buttons["recoverEarlierBackup"].exists)
+        let title = app.navigationBars["Settings"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        title.press(forDuration: 0.1, thenDragTo: title.withOffset(CGVector(dx: 0, dy: 700)))
+        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 5))
         let drawer = app.buttons["Open songs drawer"]
         XCTAssertTrue(drawer.waitForExistence(timeout: 5))
         drawer.tap()
