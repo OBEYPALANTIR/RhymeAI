@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupStatus
+import com.rhymeai.app.data.sync.emptyBackupConfirmation
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 
@@ -61,7 +62,9 @@ data class BackupSectionState(
     val busyLabel: String? = null,
     val legacyBackupPresent: Boolean = false,
     val migrationInProgress: Boolean = false,
-    val migrationError: String? = null
+    val migrationError: String? = null,
+    /** Drive's song count while Back up now asks before backing up an empty library. */
+    val emptyBackupConfirm: Int? = null
 )
 
 class BackupSectionActions(
@@ -72,7 +75,9 @@ class BackupSectionActions(
     val onMigrate: (String) -> Unit = {},
     val exportFileName: () -> String = { "WritersBlock-backup.zip" },
     val onExport: (Uri) -> Unit = {},
-    val onImport: (Uri) -> Unit = {}
+    val onImport: (Uri) -> Unit = {},
+    val onConfirmEmptyBackup: () -> Unit = {},
+    val onCancelEmptyBackup: () -> Unit = {}
 )
 
 /** Rows in the shared order: status, Connect/Disconnect, Back up now, Restore, Export, Import. */
@@ -109,6 +114,20 @@ internal fun BackupSection(
             textFieldColors = textFieldColors,
             onMigrate = actions.onMigrate,
             onDismiss = { showMigration = false }
+        )
+    }
+
+    state.emptyBackupConfirm?.let { remoteSongs ->
+        AlertDialog(
+            onDismissRequest = actions.onCancelEmptyBackup,
+            title = { Text("Back up an empty library?") },
+            text = { Text(emptyBackupConfirmation(remoteSongs)) },
+            confirmButton = {
+                TextButton(onClick = actions.onConfirmEmptyBackup, modifier = Modifier.testTag("backup_empty_confirm")) { Text("Back up anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = actions.onCancelEmptyBackup, modifier = Modifier.testTag("backup_empty_cancel")) { Text("Cancel") }
+            }
         )
     }
 
@@ -274,7 +293,7 @@ private fun MigrationDialog(
 /** "Restore your songs?" after connecting, or at launch with an empty library. Never restores by itself. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RestoreOfferSheet(offer: BackupProbe, onRestore: () -> Unit, onNotNow: () -> Unit) {
+fun RestoreOfferSheet(offer: BackupProbe, backupPaused: Boolean, onRestore: () -> Unit, onNotNow: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onNotNow, modifier = Modifier.testTag("restore_offer_sheet")) {
         Column(
             modifier = Modifier
@@ -285,7 +304,7 @@ fun RestoreOfferSheet(offer: BackupProbe, onRestore: () -> Unit, onNotNow: () ->
             verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
         ) {
             Text("Restore your songs?", style = MaterialTheme.typography.titleLarge)
-            Text(restoreOfferBody(offer))
+            Text(restoreOfferBody(offer, backupPaused))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md, Alignment.End)
@@ -297,8 +316,9 @@ fun RestoreOfferSheet(offer: BackupProbe, onRestore: () -> Unit, onNotNow: () ->
     }
 }
 
-internal fun restoreOfferBody(offer: BackupProbe): String {
+internal fun restoreOfferBody(offer: BackupProbe, backupPaused: Boolean = false): String {
     val songs = if (offer.projectCount == 1) "1 song" else "${offer.projectCount} songs"
     val recordings = if (offer.recordingCount == 1) "1 recording" else "${offer.recordingCount} recordings"
-    return "We found $songs and $recordings in your Google Drive backup."
+    val found = "We found $songs and $recordings in your Google Drive backup."
+    return if (backupPaused) "$found Not now leaves Drive as it is; backup stays paused until you restore." else found
 }
