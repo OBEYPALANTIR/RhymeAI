@@ -3080,7 +3080,8 @@ final class EditorViewModel: ObservableObject {
             notes.append("Your older encrypted backup was moved to the new format.")
         }
         if report.recoveredSongs > 0 || report.recoveredRecordings > 0 || report.songsAlreadyHere > 0 || report.songsInBackupTrash > 0
-            || report.songsDeletedSince > 0 || report.recordingsDeletedSince > 0 || !report.missingRecordings.isEmpty {
+            || report.songsDeletedSince > 0 || report.recordingsDeletedSince > 0 || report.songsHeldWithoutDate > 0 || report.recordingsHeldWithoutDate > 0
+            || !report.missingRecordings.isEmpty {
             func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
             notes.append("Recovered \(count(report.recoveredSongs, "song")) and \(count(report.recoveredRecordings, "recording")). \(report.songsAlreadyHere) already here.")
             if report.songsInBackupTrash > 0 {
@@ -3088,6 +3089,9 @@ final class EditorViewModel: ObservableObject {
             }
             if report.songsDeletedSince + report.recordingsDeletedSince > 0 {
                 notes.append("\(count(report.songsDeletedSince, "song")) and \(count(report.recordingsDeletedSince, "recording")) recovered before and deleted since \(report.songsDeletedSince + report.recordingsDeletedSince == 1 ? "was" : "were") not brought back.")
+            }
+            if report.songsHeldWithoutDate + report.recordingsHeldWithoutDate > 0 {
+                notes.append("\(count(report.songsHeldWithoutDate, "song")) and \(count(report.recordingsHeldWithoutDate, "recording")) \(report.songsHeldWithoutDate + report.recordingsHeldWithoutDate == 1 ? "is" : "are") held by a deletion record without a date and \(report.songsHeldWithoutDate + report.recordingsHeldWithoutDate == 1 ? "was" : "were") not brought back.")
             }
         }
         if !report.missingRecordings.isEmpty {
