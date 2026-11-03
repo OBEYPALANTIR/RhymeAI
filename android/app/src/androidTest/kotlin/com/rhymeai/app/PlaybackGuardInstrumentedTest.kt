@@ -141,18 +141,20 @@ class PlaybackGuardInstrumentedTest {
     @Test fun pauseThenPlayResumesWhereItStopped() {
         play()
         settle()
+        Thread.sleep(2_000)
         instrumentation.runOnMainSync { service.pausePlayback() }
         assertNull(service.playingFile)
         assertEquals(memo.file, service.pausedFile)
         val pausedAt = service.playbackPositionMs
-        assertTrue("paused at $pausedAt", pausedAt > 0L)
+        assertTrue("paused at $pausedAt", pausedAt >= 2_000L)
 
+        // A restart from zero cannot reach the paused offset within 1.5 s; a resume does.
         play()
-        settle()
+        val deadline = System.currentTimeMillis() + 1_500L
+        while (service.playbackPositionMs < pausedAt && System.currentTimeMillis() < deadline) Thread.sleep(50)
         assertEquals(memo.file, service.playingFile)
         assertNull(service.pausedFile)
-        // Resumed from the pause, not from the start: a second in, it is past where it paused.
-        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs > pausedAt)
+        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs >= pausedAt)
     }
 
     @Test fun onlyAMoveOfThePausedRecordingForgetsItsPosition() {
