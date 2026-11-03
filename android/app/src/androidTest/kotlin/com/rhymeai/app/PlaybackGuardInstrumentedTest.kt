@@ -138,6 +138,33 @@ class PlaybackGuardInstrumentedTest {
         assertNull(service.playingFile)
     }
 
+    @Test fun pauseThenPlayResumesWhereItStopped() {
+        play()
+        settle()
+        instrumentation.runOnMainSync { service.pausePlayback() }
+        assertNull(service.playingFile)
+        assertEquals(memo.file, service.pausedFile)
+        val pausedAt = service.playbackPositionMs
+        assertTrue("paused at $pausedAt", pausedAt > 0L)
+
+        play()
+        settle()
+        assertEquals(memo.file, service.playingFile)
+        assertNull(service.pausedFile)
+        // Resumed from the pause, not from the start: a second in, it is past where it paused.
+        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs > pausedAt)
+    }
+
+    @Test fun onlyAMoveOfThePausedRecordingForgetsItsPosition() {
+        play()
+        settle()
+        instrumentation.runOnMainSync { service.pausePlayback() }
+        runBlocking { service.stopPlayingIds(setOf("5d1c9e3a-2b4f-4a6e-9c8d-7e6f5a4b3c2d")) }
+        assertEquals(memo.file, service.pausedFile)
+        runBlocking { service.stopPlayingIds(setOf(id)) }
+        assertNull(service.pausedFile)
+    }
+
     @Test fun stopWhileThePlaybackIsStillBeingCheckedWins() {
         playUntilChecking()
         instrumentation.runOnMainSync { service.stopPlayback() }
