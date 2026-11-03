@@ -11,6 +11,7 @@ import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
+import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SecureKeyStore
 import com.rhymeai.app.data.recording.RecordingCatalog
@@ -134,7 +135,7 @@ sealed class RevisionsResult {
 data class RecoverySummary(
     val songsAdded: Int,
     val recordingsAdded: Int,
-    /** Songs of the revision this device or the current backup already holds (same id, or same title, lyrics and theme here). */
+    /** Songs of the revision this device or the current backup already holds, by their id or their recovered id. */
     val alreadyHere: Int,
     /** Recordings whose raw file is no longer in Drive. */
     val missingRecordings: Int = 0,
@@ -408,7 +409,7 @@ class RealDriveClient internal constructor(
                     }
                     val contentLength = conn.contentLengthLong
                     if (contentLength > maxBytes) {
-                        throw DriveNetworkException("Drive download exceeds the allowed size")
+                        throw DriveDownloadTooLargeException()
                     }
                     conn.inputStream.readBytesBounded(maxBytes)
                 } finally {
@@ -643,6 +644,9 @@ open class DriveNetworkException(message: String, cause: Throwable? = null) : Ex
 
 class DriveHttpException(val statusCode: Int, message: String) : DriveNetworkException(message)
 
+/** A download larger than the caller's bound (another object under the same name, or a damaged one). */
+class DriveDownloadTooLargeException : DriveNetworkException("Drive download exceeds the allowed size")
+
 internal fun InputStream.readBytesBounded(maxBytes: Long): ByteArray {
     require(maxBytes in 0..Int.MAX_VALUE.toLong()) { "Invalid Drive download limit" }
     val output = ByteArrayOutputStream(minOf(DEFAULT_BUFFER_SIZE.toLong(), maxBytes).toInt())
@@ -654,7 +658,7 @@ internal fun InputStream.readBytesBounded(maxBytes: Long): ByteArray {
         if (count == 0) continue
         total = Math.addExact(total, count.toLong())
         if (total > maxBytes) {
-            throw DriveNetworkException("Drive download exceeds the allowed size")
+            throw DriveDownloadTooLargeException()
         }
         output.write(buffer, 0, count)
     }
@@ -772,6 +776,16 @@ object RecordingSyncPlanner {
 
 object RecordingFileStore {
     internal const val RESTORE_STAGE_PREFIX = ".recording-restore-"
+    /** Verified downloads of a recovery, waiting to be moved into place (a restore stage, so its paths are valid recording paths). */
+    internal const val RECOVERY_STAGE_PREFIX = RESTORE_STAGE_PREFIX + "recovery-"
+
+    /**
+     * Removes recovery staging folders. Call only after a reconcile: a publication stopped
+     * mid-way then has its record rolled back, so a staged file is never referenced.
+     */
+    internal fun removeRecoveryStages(filesDir: File) {
+        filesDir.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith(RECOVERY_STAGE_PREFIX) }.forEach { it.deleteRecursively() }
+    }
 
     internal data class StagedRecording(
         val entry: RecordingManifestEntry,
@@ -1039,7 +1053,8 @@ class DriveSyncService(
     private val driveClient: DriveClient,
     private val authorizer: DriveAuthorizer,
     private val clientId: () -> String,
-    private val now: () -> Long = System::currentTimeMillis
+    private val now: () -> Long = System::currentTimeMillis,
+    private val usableSpace: (File) -> Long = File::getUsableSpace
 ) {
     companion object {
         /** SecureKeyStore entry of the pre-v4 passphrase; only read to migrate, then removed. */
@@ -1092,78 +1107,129 @@ class DriveSyncService(
     suspend fun restore(repository: ProjectRepository): SyncResult = run(repository, Mode.RESTORE, null)
 
     /**
-     * Adds the songs of one earlier manifest version to this device as new songs with new ids,
-     * each with its recordings (downloaded from Drive and given new ids). A song this device or
-     * the current backup holds (active or in Trash) is left out and counted as already here, so
-     * no tombstone, Trash entry or other device's edit can touch what is added, and nothing
-     * existing changes. Drive is only read, except that the chosen revision is kept forever
+     * Adds the songs of one earlier manifest version to this device as new songs, each with its
+     * recordings, under recovered ids (new ids derived from the revision and the old id). A song
+     * this device or the current backup holds (active or in Trash) is left out and counted as
+     * already here, so no tombstone, Trash entry or other device's edit of the old id touches
+     * what is added, and nothing existing changes. A run stopped part-way is finished by the next
+     * recovery of the same revision: it finds its songs by their recovered ids and attaches the
+     * takes still missing. Drive is only read, except that the chosen revision is kept forever
      * (Drive's condition for reading it). The next backup uploads the new songs as new entries.
      */
     suspend fun recoverRevision(repository: ProjectRepository, revision: BackupRevision): RecoveryResult =
         authorized({ RecoveryResult.Failed(it) }) { token ->
+            // An interrupted recovery: its stopped publications are settled first, then its staged downloads go.
+            RecordingTransitions.reconcile(repository, filesDir)
+            RecordingFileStore.removeRecoveryStages(filesDir)
             val old = SyncMerger.resolve(SyncMerger.gather(downloadKeptRevision(token, revision)))
-            RecoveryResult.Recovered(importAsNewSongs(token, old, repository, readRemote(token, null).blob))
+            RecoveryResult.Recovered(importAsNewSongs(token, revision, old, repository, readRemote(token, null).blob))
         }
 
-    private suspend fun importAsNewSongs(token: String, old: SyncBlob, repository: ProjectRepository, current: SyncBlob?): RecoverySummary {
-        val active = repository.projectsFlow.first()
-        val trashed = repository.trashedProjectsFlow.first()
-        val heldIds = (active.map { it.id } + trashed.map { it.project.id } +
-            current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
-        // The same words here under another id (an earlier recovery of this revision) count as here too.
-        val heldContent = (active + trashed.map { it.project }).mapTo(HashSet()) { Triple(it.title, it.lyrics, it.theme) }
-        val wanted = old.projects.filterNot { it.id in heldIds || Triple(it.title, it.lyrics, it.theme) in heldContent }
+    private suspend fun importAsNewSongs(
+        token: String,
+        revision: BackupRevision,
+        old: SyncBlob,
+        repository: ProjectRepository,
+        current: SyncBlob?
+    ): RecoverySummary {
+        val activeHere = repository.projectsFlow.first().mapTo(HashSet()) { it.id }
+        val trashedHere = repository.trashedProjectsFlow.first().mapTo(HashSet()) { it.project.id }
+        val remoteIds = (current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
+        fun recoveredId(oldId: String) =
+            java.util.UUID.nameUUIDFromBytes("writersblock-recovery/${revision.fileId}/${revision.revisionId}/$oldId".toByteArray()).toString()
         val at = now()
-        val newIds = wanted.associate { it.id to java.util.UUID.randomUUID().toString() }
-        val takes = old.recordings.filter { it.projectId in newIds }
-        val skippedLarge = takes.count { !it.isTransferable }
-        val transferable = takes.filter { it.isTransferable }
-
-        // Every take is downloaded and verified before anything is written here, so a failed
-        // download leaves this device as it was and a retry starts over cleanly.
-        val rawByName = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).groupBy { it.name }
-        val needed = requireTransferableRecordings(transferable)
-        if (filesDir.usableSpace < needed + MIN_FREE_AFTER_RECORDING_RESTORE_BYTES) {
+        // Old song id to recovered id, for songs added now or added by an earlier, interrupted run.
+        val recovering = HashMap<String, String>()
+        val added = mutableListOf<SongProject>()
+        var alreadyHere = 0
+        for (song in old.projects) {
+            val newId = recoveredId(song.id)
+            when {
+                song.id in activeHere || song.id in trashedHere || song.id in remoteIds -> alreadyHere++
+                newId in activeHere -> {
+                    alreadyHere++
+                    recovering[song.id] = newId
+                }
+                newId in trashedHere || newId in remoteIds -> alreadyHere++
+                else -> {
+                    recovering[song.id] = newId
+                    added += song.copy(id = newId, updatedAt = at, precedenceRepaired = false)
+                }
+            }
+        }
+        // A take already placed, or deleted here after an earlier recovery, is not placed again.
+        val heldRecordings = repository.recordingRecords().mapTo(HashSet()) { it.id }
+        val deletedRecordings = repository.syncDeletions().mapNotNullTo(HashSet()) { it.recordingId }
+        val takes = old.recordings.mapNotNull { entry ->
+            val projectId = recovering[entry.projectId] ?: return@mapNotNull null
+            val id = recoveredId(entry.id)
+            if (id in heldRecordings || id in deletedRecordings) return@mapNotNull null
+            entry to entry.copy(
+                projectId = projectId, id = id, driveName = RecordingManifestEntry.driveNameFor(projectId, entry.fileName),
+                uploadedAt = at, precedenceRepaired = false
+            )
+        }
+        val skippedLarge = takes.count { !it.first.isTransferable }
+        val transferable = takes.filter { it.first.isTransferable }
+        // Peak storage is the staged downloads: publishing moves each staged file into place, never copies it.
+        val needed = requireTransferableRecordings(transferable.map { it.first })
+        if (usableSpace(filesDir) < needed + MIN_FREE_AFTER_RECORDING_RESTORE_BYTES) {
             throw DriveNetworkException("Not enough storage to recover recordings safely")
         }
-        val stage = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RESTORE_STAGE_PREFIX).toFile()
+        val rawByName = driveClient.listFilesByNamePrefix(token, BackupManifest.RECORDING_PREFIX).groupBy { it.name }
+        val stage = Files.createTempDirectory(filesDir.toPath(), RecordingFileStore.RECOVERY_STAGE_PREFIX).toFile()
         try {
             var missing = 0
             var damaged = 0
-            val staged = transferable.mapNotNull { entry ->
+            // Every take is downloaded and verified before anything is written here.
+            val staged = transferable.mapNotNull { (entry, fresh) ->
                 val candidates = rawByName[BackupManifest.recordingDriveName(entry.id)].orEmpty()
                     .sortedBy { if (it.appProperties["sha256"] == entry.sha256) 0 else 1 }
-                if (candidates.isEmpty()) {
-                    missing++
-                    return@mapNotNull null
+                when (val bytes = downloadVerified(token, candidates, entry)) {
+                    RawDownload.Gone -> { missing++; null }
+                    RawDownload.Damaged -> { damaged++; null }
+                    is RawDownload.Verified -> RecordingFileStore.stageRestore(stage, fresh, bytes.bytes)
                 }
-                val bytes = candidates.firstNotNullOfOrNull { file ->
-                    driveClient.downloadFile(token, file.id, entry.sizeBytes)
-                        .takeIf { it.size.toLong() == entry.sizeBytes && BackupManifest.sha256Hex(it) == entry.sha256 }
-                }
-                if (bytes == null) {
-                    damaged++
-                    return@mapNotNull null
-                }
-                entry to File(stage, "take-${entry.id}").apply { writeBytes(bytes) }
             }
-            repository.addProjects(wanted.map { it.copy(id = newIds.getValue(it.id), updatedAt = at, precedenceRepaired = false) })
-            var added = 0
-            for ((entry, file) in staged) {
-                val projectId = newIds.getValue(entry.projectId)
-                val fresh = entry.copy(
-                    projectId = projectId,
-                    id = RecordingManifestEntry.newRecordingId(),
-                    driveName = RecordingManifestEntry.driveNameFor(projectId, entry.fileName),
-                    uploadedAt = at,
-                    precedenceRepaired = false
-                )
-                if (RecordingFileStore.importVerified(repository, filesDir, fresh, file.readBytes(), RecordingRecord.IMPORTED)) added++
-            }
-            return RecoverySummary(wanted.size, added, old.projects.size - wanted.size, missing, damaged, skippedLarge)
+            // Songs in one write, then each take moved into place; both steps skip what an earlier run did.
+            repository.addProjects(added)
+            val placed = RecordingFileStore.commitStagedRestores(repository, filesDir, staged)
+            return RecoverySummary(added.size, placed.size, alreadyHere, missing, damaged, skippedLarge)
         } finally {
             stage.deleteRecursively()
         }
+    }
+
+    private sealed class RawDownload {
+        data object Gone : RawDownload()
+        data object Damaged : RawDownload()
+        class Verified(val bytes: ByteArray) : RawDownload()
+    }
+
+    /**
+     * The first candidate whose bytes match [entry]'s size and hash. A candidate that is gone,
+     * too large or different is skipped for the next; any other failure (network, quota) stops
+     * the run before anything is written, and an expired authorization surfaces as it is.
+     */
+    private suspend fun downloadVerified(token: String, candidates: List<DriveFileMetadata>, entry: RecordingManifestEntry): RawDownload {
+        var gone = 0
+        var failure: DriveNetworkException? = null
+        for (file in candidates) {
+            val bytes = try {
+                driveClient.downloadFile(token, file.id, entry.sizeBytes)
+            } catch (_: DriveDownloadTooLargeException) {
+                continue
+            } catch (e: DriveHttpException) {
+                if (e.statusCode == 404) gone++ else failure = e
+                continue
+            } catch (e: DriveNetworkException) {
+                failure = e
+                continue
+            }
+            if (bytes.size.toLong() == entry.sizeBytes && BackupManifest.sha256Hex(bytes) == entry.sha256) return RawDownload.Verified(bytes)
+        }
+        failure?.let { throw it }
+        return if (gone == candidates.size) RawDownload.Gone else RawDownload.Damaged
     }
 
     /** Drive's revisions of the manifest, newest first, at most [MAX_LISTED_REVISIONS]; nothing is downloaded or changed. */
@@ -1724,7 +1790,7 @@ class DriveSyncService(
         } catch (e: ArithmeticException) {
             throw DriveNetworkException("Recording transfer exceeds the allowed size", e)
         }
-        if (filesDir.usableSpace < requiredFreeBytes) {
+        if (usableSpace(filesDir) < requiredFreeBytes) {
             throw DriveNetworkException("Not enough storage to restore recordings safely")
         }
 

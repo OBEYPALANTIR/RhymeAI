@@ -561,8 +561,12 @@ below is the contract it must meet, not verified behaviour.
   blob revision only then, and keeps at most 200 per file; none is unpinned) and
   shows its song and recording counts. Recover is a local import: each song of
   the revision that neither this device nor the current backup holds (active or
-  Trash, by id, or here by the same title, lyrics and theme) becomes a new song
-  with a new id, and its recordings are downloaded and attached under new ids.
+  Trash, by id) becomes a new song, and its recordings are downloaded, verified
+  and attached, all under recovered ids derived from the revision and the old id.
+  Every take is downloaded before anything is written, the staged files are
+  moved (never copied) into place, and a recovery stopped part-way is finished by
+  the next one of the same revision without duplicates; a same-name raw object
+  that is too large or gone is skipped for the next.
   Nothing in Drive is written during recovery besides the pin; the next ordinary
   backup uploads the new songs, so no tombstone, Trash entry or other device's
   edit of the old ids touches them. The result reads "Recovered N songs and M

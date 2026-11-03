@@ -1680,6 +1680,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val heldRestores = com.rhymeai.app.data.sync.RecordingFileStore.recoverInterruptedRestores(filesDir, onlyHistorical = true)
                     val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir) +
                         voiceMemoService.migrateStaging()
+                    // After migrate's reconcile: an interrupted recovery's staged downloads are no longer referenced.
+                    com.rhymeai.app.data.sync.RecordingFileStore.removeRecoveryStages(filesDir)
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                     val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
                     val unreadableTrash = com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles
