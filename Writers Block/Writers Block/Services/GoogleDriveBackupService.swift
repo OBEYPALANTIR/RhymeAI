@@ -1060,11 +1060,18 @@ final class BackupService {
 
     private func importRevisionHoldingGate(_ old: SyncBlob, fileId: String, revisionId: String, modelContext: ModelContext, accessToken: String) async throws {
         var report = BackupReport()
+        // What an interrupted recovery downloaded goes first, before free space is measured.
+        try? FileManager.default.removeItem(at: recoveryDownloadsRoot)
         library.clearStaging(context: modelContext)
         try await library.reconcile(context: modelContext)
+        // Every manifest under the backup's name counts (a race can leave more than one):
+        // a song or tombstone held only by an older one is still held.
         var current = SyncBlob()
-        if let file = try await manifestFiles(accessToken: accessToken).max(by: { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }) {
-            current = try await downloadManifest(file, accessToken: accessToken)
+        for file in try await manifestFiles(accessToken: accessToken) {
+            let blob = try await downloadManifest(file, accessToken: accessToken)
+            current.projects += blob.projects
+            current.trashed += blob.trashed
+            current.deletions += blob.deletions
         }
         let remote = try await recordingFiles(accessToken: accessToken)
         let active = Set(try modelContext.fetch(FetchDescriptor<SongProject>()).map(\.id))
@@ -1120,15 +1127,21 @@ final class BackupService {
             }
         }
 
+        // A take over the size cap (or of no size) is never transferred: it is reported, not estimated.
+        for (take, _) in takes where !(1...SyncRecording.maxBytes).contains(take.bytes) { report.missingRecordings.append(take.fileName) }
+        takes = takes.filter { (1...SyncRecording.maxBytes).contains($0.take.bytes) }
         // Room for every download, the library's staged copy of each, and the largest take again.
-        let total = takes.reduce(Int64(0)) { $0 + $1.take.bytes }
-        let needed = 2 * total + (takes.map(\.take.bytes).max() ?? 0) + 128 * 1024 * 1024
-        if !takes.isEmpty, let free = freeSpace(), free < needed { throw BackupError.insufficientStorage(needed: needed) }
+        if !takes.isEmpty, let free = freeSpace() {
+            let total = takes.reduce(Int64(0)) { $0 + $1.take.bytes }  // each at most 16 MiB
+            let (doubled, overflowA) = total.multipliedReportingOverflow(by: 2)
+            let (withLargest, overflowB) = doubled.addingReportingOverflow(takes.map(\.take.bytes).max() ?? 0)
+            let (needed, overflowC) = withLargest.addingReportingOverflow(128 * 1024 * 1024)
+            if overflowA || overflowB || overflowC { throw BackupError.insufficientStorage(needed: .max) }
+            if free < needed { throw BackupError.insufficientStorage(needed: needed) }
+        }
 
         // Everything is downloaded and verified first, to files outside the library;
         // any failure but a gone or mismatched object stops the run before a write.
-        // What an interrupted recovery left there goes first (one recovery runs at a time).
-        try? FileManager.default.removeItem(at: recoveryDownloadsRoot)
         let folder = recoveryDownloadsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: recoveryDownloadsRoot) }

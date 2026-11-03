@@ -561,11 +561,14 @@ below is the contract it must meet, not verified behaviour.
   rewritten), downloads and decodes it, and imports it locally. Each song and
   recording gets a recovered id, Java `UUID.nameUUIDFromBytes` of
   "writersblock-recovery/<fileId>/<revisionId>/<oldId>" in lowercase, so both
-  platforms derive the same ids. A song is skipped when its own id or its
-  recovered id is held here or in the current backup, active or in Trash; every
+  platforms derive the same ids (fixed vector: ".../f1/r1/song-1" is
+  3ec9dc72-4f40-37c0-a588-f62dc27d13de). A song is skipped when its own id or its
+  recovered id is held here or in any current manifest under the backup's name,
+  active or in Trash; every
   other song becomes a new song with its recordings. A recovered song or take named
-  by a tombstone here (with or without a time) or in the current backup is not
-  brought back. Only a gone object, another declared size or other bytes passes to
+  by a tombstone here (with or without a time) or in any current manifest is not
+  brought back. Takes over the 16 MiB cap are reported, never estimated or
+  downloaded, and free space is checked before any take downloads. Only a gone object, another declared size or other bytes passes to
   the next object under a take's name; any other error or cancellation stops the
   run. A retry of the same revision finishes an interrupted run without duplicates
   and leaves edits to recovered songs alone. Recovery writes no manifest; the next
@@ -576,9 +579,10 @@ below is the contract it must meet, not verified behaviour.
   one already kept, and refuse to pin once 200 are kept. A recovered song's own
   tombstone decides before any of its takes is attached, whether or not its row is
   here; tombstones without a time are reported apart from dated deletions.
-  Differences: iOS checks free space first (about twice the takes' total plus the
-  largest take and 128 MiB), downloads every take to a temporary folder before
-  anything is written, then attaches the takes through the library's staging and
+  Differences: the free-space budget is about twice the takes' total plus the
+  largest take and 128 MiB on iOS, the takes' total plus 128 MiB on Android. iOS
+  downloads every take to a temporary folder (cleared as each recovery starts)
+  before anything is written, attaches them through the library's staging and
   saves the songs last; Android saves the songs first, then publishes the takes.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
