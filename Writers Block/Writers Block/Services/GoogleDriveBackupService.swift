@@ -30,6 +30,8 @@ enum BackupError: Error, Equatable {
     case remoteFileMissing
     /// Recovery needs about this many bytes free on the device.
     case insufficientStorage(needed: Int64)
+    /// An earlier backup that lists a song or a recording id twice.
+    case damagedRevision
 }
 
 extension BackupError: LocalizedError {
@@ -77,6 +79,8 @@ extension BackupError: LocalizedError {
             return "Google Drive keeps at most 200 versions of a file permanently, and this backup has reached that. Recover one of the versions marked Kept."
         case .remoteFileMissing:
             return "A file in the Google Drive backup is no longer there."
+        case .damagedRevision:
+            return "This earlier backup is damaged and cannot be recovered."
         case .insufficientStorage(let needed):
             return "Not enough free space on this device to recover that backup: it needs about \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)). Free up space and try again."
         }
@@ -1052,6 +1056,10 @@ final class BackupService {
                 try await driveClient.keepRevisionForever(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken)
             }
             let old = try Self.decodeDriveManifest(try await driveClient.downloadRevision(fileId: revision.fileId, revisionId: revision.id, accessToken: accessToken))
+            // One entry per song id and per recording id, as Android requires: anything else is refused whole.
+            guard Set(old.projects.map(\.id)).count == old.projects.count, Set(old.recordings.map(\.id)).count == old.recordings.count else {
+                throw BackupError.damagedRevision
+            }
             try await library.withGate {
                 try await importRevisionHoldingGate(old, fileId: revision.fileId, revisionId: revision.id, modelContext: modelContext, accessToken: accessToken)
             }
@@ -1088,14 +1096,7 @@ final class BackupService {
         var songs: [SongProject] = []
         // Each take to place, with the Drive name its audio is under (the revision's id).
         var takes: [(take: SyncRecording, source: String)] = []
-        // A revision listing an id twice (a hash-valid manifest can) yields one song and
-        // one take per id, the first listed; no recovered id is ever inserted twice.
-        var seenSongs = Set<String>(), seenTakes = Set<String>()
-        // A recording id listed under more than one song belongs to the first song it is
-        // listed under, whether or not that song is brought back: it never moves to another.
-        var owner: [String: String] = [:]
-        for entry in old.recordings where owner[entry.id] == nil { owner[entry.id] = entry.projectId }
-        for song in old.projects where seenSongs.insert(song.id).inserted {
+        for song in old.projects {
             let id = Self.recoveredId(fileId: fileId, revisionId: revisionId, song.id)
             // The song's own deletion wins first, whether or not its row is here: no take is attached.
             if tombstones.contains(where: { $0.projectId == id && $0.isSongTombstone }) {
@@ -1115,7 +1116,7 @@ final class BackupService {
             } else {
                 songs.append(SongProject(id: id, title: song.title, lyrics: song.lyrics, theme: song.theme, updatedAt: stamp))
             }
-            for entry in old.recordings where entry.projectId == song.id && owner[entry.id] == song.id && seenTakes.insert(entry.id).inserted {
+            for entry in old.recordings where entry.projectId == song.id {
                 var take = entry
                 take.id = Self.recoveredId(fileId: fileId, revisionId: revisionId, entry.id)
                 take.projectId = id
@@ -1169,13 +1170,12 @@ final class BackupService {
             try library.commitRestored(try Data(contentsOf: file), entry: take, origin: .restored, context: modelContext)
             try? FileManager.default.removeItem(at: file)
         }
-        var inserted = Set<String>()
-        for song in songs where inserted.insert(song.id).inserted { modelContext.insert(song) }
+        songs.forEach(modelContext.insert)
         if modelContext.hasChanges { try modelContext.save() }
         try await library.reconcile(context: modelContext)
 
         let attached = Set(try modelContext.fetch(FetchDescriptor<Recording>()).map(\.id))
-        report.recoveredSongs = inserted.count
+        report.recoveredSongs = songs.count
         report.recoveredRecordings = downloaded.filter { attached.contains($0.take.id) }.count
         report.missingRecordings += downloaded.filter { !attached.contains($0.take.id) }.map(\.take.fileName)
         lastReport = report

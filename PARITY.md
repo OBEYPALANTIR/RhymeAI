@@ -565,9 +565,10 @@ below is the contract it must meet, not verified behaviour.
   3ec9dc72-4f40-37c0-a588-f62dc27d13de). A song is skipped when its own id or its
   recovered id is held here or in any current manifest under the backup's name,
   active or in Trash; every
-  other song becomes a new song with its recordings. A recording id listed under
-  more than one song belongs to the first song it is listed under and never moves
-  to another. A recovered song or take named by a tombstone here (with or without
+  other song becomes a new song with its recordings. A revision that lists the same
+  recording id twice (including one recording under two songs) is refused whole as
+  damaged ("This earlier backup is damaged and cannot be recovered." on iOS). A
+  recovered song or take named by a tombstone here (with or without
   a time) or in any current manifest is not brought back; a deletion made outside
   those records (for example a store reset) is not known to recovery. Takes over the 16 MiB cap are reported, never estimated or
   downloaded, and free space is checked before any take downloads. Only a gone object, another declared size or other bytes passes to
@@ -581,7 +582,8 @@ below is the contract it must meet, not verified behaviour.
   one already kept, and refuse to pin once 200 are kept. A recovered song's own
   tombstone decides before any of its takes is attached, whether or not its row is
   here; tombstones without a time are reported apart from dated deletions.
-  Differences: the free-space budget is about twice the takes' total plus the
+  Differences: iOS also refuses a revision that lists a song id twice (Android's
+  manifest validation checks recording ids only). The free-space budget is about twice the takes' total plus the
   largest take and 128 MiB on iOS, the takes' total plus 128 MiB on Android. iOS
   downloads every take to a temporary folder (cleared as each recovery starts)
   before anything is written, attaches them through the library's staging and
