@@ -141,6 +141,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val player = remember { OneLinerPlayer() }
     DisposableEffect(player) { onDispose { player.stop() } }
     var query by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
     val captures = viewModel.oneLinerCaptures
     var sendingLine by remember { mutableStateOf<OneLiner?>(null) }
     val lines = viewModel.oneLiners
@@ -302,6 +303,8 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             onPick = { project ->
                 sendingLine = null
                 viewModel.sendOneLinerToSong(line, project) { message ->
+                    // The closing picker hands focus back to the search field; a finished send leaves none.
+                    focusManager.clearFocus()
                     scope.launch { snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short) }
                 }
             },

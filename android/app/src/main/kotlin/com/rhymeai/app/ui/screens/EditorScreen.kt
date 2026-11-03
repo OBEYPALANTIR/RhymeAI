@@ -1753,7 +1753,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     viewModel = viewModel,
                     rhymeContext = rhymeContext,
                     onSuggestionInserted = { dismissAssistantSheet() },
-                    onModelSetup = { viewModel.showSettingsDialog = true },
+                    onModelSetup = viewModel::openModelSetup,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

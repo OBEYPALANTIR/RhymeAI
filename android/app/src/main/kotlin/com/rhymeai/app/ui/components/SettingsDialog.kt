@@ -175,6 +175,8 @@ internal fun SettingsDialog(
     onRhymeHighlightChange: (Boolean) -> Unit = {},
     isBeatGridEnabled: Boolean = false,
     onBeatGridChange: (Boolean) -> Unit = {},
+    /** Opened from "Set up model": AI setup starts expanded. */
+    initialAiSetupExpanded: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -216,7 +218,7 @@ internal fun SettingsDialog(
     var saved by remember { mutableStateOf(false) }
     var applyingAISettings by remember { mutableStateOf(false) }
     var applyAIError by remember { mutableStateOf<String?>(null) }
-    var aiSetupExpanded by remember { mutableStateOf(false) }
+    var aiSetupExpanded by remember { mutableStateOf(initialAiSetupExpanded) }
     var aboutExpanded by remember { mutableStateOf(false) }
     var modelExpanded by remember { mutableStateOf(false) }
 

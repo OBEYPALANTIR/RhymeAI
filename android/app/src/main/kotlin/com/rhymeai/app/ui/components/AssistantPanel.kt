@@ -114,7 +114,7 @@ fun AssistantPanel(
     rhymeContext: RhymeContext,
     modifier: Modifier = Modifier,
     onSuggestionInserted: () -> Unit = {},
-    onModelSetup: () -> Unit = { viewModel.showSettingsDialog = true }
+    onModelSetup: () -> Unit = viewModel::openModelSetup
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val appearance = LocalAppAppearance.current
@@ -169,13 +169,11 @@ fun AssistantPanel(
             ) {
                 Icon(Icons.Default.Edit, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(DesignTokens.Rhythm.tight))
-                FeatureHelpLabel(
+                Text(
                     text = "Context & Theme",
-                    help = FeatureHelp.CONTEXT_THEME,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurface,
-                    fontSizeSp = 16,
-                    fontWeight = FontWeight.Medium
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurface
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
@@ -184,6 +182,12 @@ fun AssistantPanel(
                     fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant,
                     modifier = Modifier.widthIn(max = 140.dp)
+                )
+                // Help sits at the trailing edge beside the chevron, so the row's body only toggles.
+                HelpButton(
+                    onClick = { activeHelp = FeatureHelp.CONTEXT_THEME },
+                    tint = colorScheme.onSurfaceVariant,
+                    contentDescription = "Context & Theme help"
                 )
                 Icon(
                     Icons.Default.KeyboardArrowDown,

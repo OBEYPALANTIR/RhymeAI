@@ -426,7 +426,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var restoringDraft by mutableStateOf(false)
         private set
-    val recentProject: SongProject? get() = projects.maxByOrNull { it.updatedAt }
+    /** Welcome's Continue: the song last open in the editor (persisted as the current song). */
+    val recentProject: SongProject? get() = continueSong(projects, currentProjectId)
 
     // One Liners: a pool of stray lines beside the songs. The widget snapshot follows every change.
     val oneLinersStore = com.rhymeai.app.data.repository.OneLinersStore(application) {
@@ -766,6 +767,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _selectedModel = value
         }
     var showSettingsDialog by mutableStateOf(false)
+    /** Settings was opened by "Set up model": it opens with AI setup expanded. */
+    var settingsOpensAiSetup by mutableStateOf(false)
+        private set
+
+    fun openModelSetup() {
+        settingsOpensAiSetup = true
+        showSettingsDialog = true
+    }
+
+    fun dismissSettings() {
+        showSettingsDialog = false
+        settingsOpensAiSetup = false
+    }
     var cloudAISharingRequest by mutableStateOf<CloudAISharingRequest?>(null)
         private set
     internal var aiSettingsLoaded by mutableStateOf(false)
@@ -3443,3 +3457,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cancelEditorAIWork()
     }
 }
+
+/** The song last open in the editor, else the most recently updated one. */
+internal fun continueSong(projects: List<SongProject>, lastOpenedId: String?): SongProject? =
+    projects.firstOrNull { it.id == lastOpenedId } ?: projects.maxByOrNull { it.updatedAt }
