@@ -112,10 +112,14 @@ class PlaybackGuardInstrumentedTest {
         instrumentation.waitForIdleSync()
     }
 
-    /** Waits until playback reaches [positionMs] or [timeoutMs] passes. */
-    private fun awaitPosition(positionMs: Long, timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (service.playbackPositionMs < positionMs && System.currentTimeMillis() < deadline) Thread.sleep(50)
+    /** Waits until playback reaches [positionMs]; false when [timeoutMs] passes first. */
+    private fun awaitPosition(positionMs: Long, timeoutMs: Long): Boolean {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (service.playbackPositionMs < positionMs) {
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) return false
+            Thread.sleep(50)
+        }
+        return true
     }
 
     private fun play(target: VoiceMemo = memo) = instrumentation.runOnMainSync { service.play(target) }
@@ -146,7 +150,7 @@ class PlaybackGuardInstrumentedTest {
 
     @Test fun pauseThenPlayResumesWhereItStopped() {
         play()
-        awaitPosition(2_000L, timeoutMs = 8_000L)
+        assertTrue("playback never reached 2 s", awaitPosition(2_000L, timeoutMs = 8_000L))
         instrumentation.runOnMainSync { service.pausePlayback() }
         assertNull(service.playingFile)
         assertEquals(memo.file, service.pausedFile)
@@ -156,7 +160,7 @@ class PlaybackGuardInstrumentedTest {
         // A restart from zero cannot reach the paused offset within 1.5 s; a resume does. Half a
         // second later the player's own ticks (not the value set at prepare) must still be past it.
         play()
-        awaitPosition(pausedAt, timeoutMs = 1_500L)
+        assertTrue("did not resume at $pausedAt", awaitPosition(pausedAt, timeoutMs = 1_500L))
         Thread.sleep(500)
         assertEquals(memo.file, service.playingFile)
         assertNull(service.pausedFile)
