@@ -326,7 +326,7 @@ class ProjectRepository internal constructor(
                     }
                 }
             }
-            if (project != null) prefs[PROJECTS_KEY] = json.encodeToString(next)
+            if (project != null) prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
             if (project != null && createIfMissing) {
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - project.id
@@ -355,7 +355,7 @@ class ProjectRepository internal constructor(
     }
 
     suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        val encoded = withContext(Dispatchers.Default) { explicitJson.encodeToString(projects) }
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
@@ -375,7 +375,7 @@ class ProjectRepository internal constructor(
     }
 
     suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) = projectSaveMutex.withLock {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        val encoded = withContext(Dispatchers.Default) { explicitJson.encodeToString(projects) }
         dataStore.edit { prefs ->
             trashedProjectsStore.requireWritable(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
@@ -402,8 +402,8 @@ class ProjectRepository internal constructor(
             val nextTrash = listOf(TrashedSongProject(project, now, now + TRASH_RETENTION_MILLIS)) +
                 trash.filterNot { it.project.id == id }
             val wasCurrent = prefs[CURRENT_PROJECT_ID_KEY] == id
-            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             if (wasCurrent) {
@@ -425,10 +425,10 @@ class ProjectRepository internal constructor(
             val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
             val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active.filterNot { it.id == id }
             val nextTrash = trash.filterNot { it.project.id == id }
-            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             committed = TrashTransition(nextActive, nextTrash)
         }
         committed
@@ -525,7 +525,7 @@ class ProjectRepository internal constructor(
             if (trash.none { it.project.id == id }) return@edit
             val nextTrash = trash.filterNot { it.project.id == id }
             val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - id)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + id
@@ -564,7 +564,7 @@ class ProjectRepository internal constructor(
             if (expired.isNotEmpty()) {
                 val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
                 val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(retained)
+                prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(retained)
                 prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - expired.toSet())
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + expired
@@ -649,8 +649,8 @@ class ProjectRepository internal constructor(
             }
             return if (timed.trashedAt != null && timed.trashedAt <= 0L) timed.copy(trashedAt = repairs.getValue("rtrash:${r.id}")) else timed
         }
-        projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = json.encodeToString(it) }
-        trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(it) }
+        projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = explicitJson.encodeToString(it) }
+        trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(it) }
         records.map(::record).let { if (it != records) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(it) }
         return inputs.map { blob ->
             blob.copy(
@@ -809,8 +809,8 @@ class ProjectRepository internal constructor(
                 // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
                 // in the same edit, not erased; one that lost with a real time is a genuine deletion.
                 keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
-                prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
-                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextProjects)
+                prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
