@@ -113,6 +113,8 @@ class VoiceMemoService(private val context: Context) {
     /** The memo Pause left off in; Play on it resumes at [playbackPositionMs]. */
     var pausedFile by mutableStateOf<File?>(null)
         private set
+    /** The id of [pausedFile], so only a move of that recording forgets the paused position. */
+    private var pausedRecordingId: String? = null
 
     // --- Private resource handles ---
 
@@ -755,11 +757,13 @@ class VoiceMemoService(private val context: Context) {
     /** Stops playback and remembers where, so Play on the same memo resumes there. */
     fun pausePlayback() {
         val file = playingFile
+        val id = playingRecordingId
         // The position is read only once the player started (before that it may be preparing).
         val at = if (positionJob != null) runCatching { player?.currentPosition?.toLong() }.getOrNull() else null
         stopPlayback()
         if (file != null && at != null && at > 0L) {
             pausedFile = file
+            pausedRecordingId = id
             playbackPositionMs = at
         }
     }
@@ -770,6 +774,7 @@ class VoiceMemoService(private val context: Context) {
         playingFile = null
         playingRecordingId = null
         pausedFile = null
+        pausedRecordingId = null
         positionJob?.cancel()
         positionJob = null
         playbackPositionMs = 0L
@@ -788,7 +793,10 @@ class VoiceMemoService(private val context: Context) {
         playJob?.takeIf { it.isActive }?.cancel()
         if (playingRecordingId in ids) stopPlayback()
         // A paused memo whose bytes move resumes from the start, never at a stale path.
-        pausedFile = null
+        if (pausedRecordingId in ids) {
+            pausedFile = null
+            pausedRecordingId = null
+        }
     }
 
     // ---------------------------------------------------------------------------
