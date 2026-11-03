@@ -2881,4 +2881,59 @@ class BackupServiceTest {
         assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, listed.first()))
         assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, drive.pinnedRevisions().size)
     }
+
+    @Test
+    fun aRecoveredSongAnotherDeviceDeletedGetsNoTakesOnThisDevicesRetryAndStaysDeleted() = runBlocking<Unit> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        // This device stops after storing the songs (no takes yet).
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        // Device B recovers the same revision, deletes its copy of "one" forever, and backs up.
+        val (other, otherSide) = secondDevice("b")
+        assertIs<RecoveryResult.Recovered>(otherSide.second.recoverRevision(other, chosen))
+        val oneId = recoveredId(chosen, "one")
+        clock += 5_000L
+        assertNotNull(other.moveProjectToTrash(oneId, clock))
+        other.permanentlyDeleteTrashedProject(oneId, now = clock)
+        assertIs<SyncResult.Success>(otherSide.second.backUp(other))
+        assertTrue(remote().deletions.any { it.isSongTombstone && it.projectId == oneId })
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(1, summary.deletedSongs)
+        assertEquals(1, summary.recordingsAdded)
+        assertTrue(fresh.recordingRecords().none { it.projectId == oneId })
+        // The next backup keeps the deletion winning: no song and no take of it reach Drive.
+        clock += 1_000L
+        assertIs<SyncResult.Success>(freshService.backUp(fresh))
+        assertTrue(remote().projects.none { it.id == oneId })
+        assertTrue(remote().recordings.none { it.projectId == oneId })
+        assertTrue(remote().deletions.any { it.isSongTombstone && it.projectId == oneId })
+    }
+
+    @Test
+    fun aDeletionOfUnknownDateKeepsARecoveredSongOutAndIsReportedAsSuch() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val chosen = openOldest(freshService)
+        // The current backup names the recovered copy of "two" in a deletion without a time.
+        val text = String(BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion(recoveredId(chosen, "two"), deletedAt = 1L))), 3_000L, "other"))
+        val body = JsonObject(Json.parseToJsonElement(text).jsonObject - BackupManifest.HASH_KEY).let { body ->
+            JsonObject(body + ("deletions" to kotlinx.serialization.json.JsonArray(body.getValue("deletions").jsonArray.map { JsonObject(it.jsonObject - "deletedAt") })))
+        }
+        val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray())
+        assertFalse(remote().deletions.single().timeKnown)
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 1, recordingsAdded = 1, alreadyHere = 0, unknownDateDeletions = 1), summary)
+        assertEquals(listOf("one"), fresh.projectsFlow.first().map { it.title })
+        assertEquals(
+            "Recovered 1 song and 1 recording. 0 already here. 1 could not be placed because an earlier deletion of unknown date names it.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
+    }
 }

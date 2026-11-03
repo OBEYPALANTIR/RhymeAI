@@ -246,6 +246,9 @@ internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
         val parts = listOfNotNull(plural(songs, "song").takeIf { songs > 0 }, plural(takes, "recording").takeIf { takes > 0 })
         "${parts.joinToString(" and ")} deleted after an earlier recovery stay deleted."
     },
+    summary.unknownDateDeletions.takeIf { it > 0 }?.let {
+        "$it could not be placed because an earlier deletion of unknown date names ${if (it == 1) "it" else "them"}."
+    },
     when (summary.missingRecordings) {
         0 -> null
         1 -> "1 recording is no longer in your Google Drive and was not recovered."
@@ -1687,6 +1690,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir)
                         } finally {
                             backupMutex.unlock()
+                        }
+                    } else {
+                        // Queued, not blocking maintenance: runs once the backup or recovery releases the lock.
+                        viewModelScope.launch(Dispatchers.IO) {
+                            backupMutex.withLock { com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir) }
                         }
                     }
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)

@@ -563,7 +563,9 @@ below is the contract it must meet, not verified behaviour.
   (active or Trash) and adds every other song with its takes under deterministic
   recovered ids, so a stopped recovery is finished by the next one of the same
   revision without duplicates; any tombstone naming a recovered song or take,
-  here or in the backup, keeps it deleted. Only a same-name raw object that is
+  here or in the backup, keeps it deleted, and a deleted recovered song gets no
+  takes even when an earlier run's copy is still on the device (Android reports
+  a deletion of unknown date separately from a confirmed one). Only a same-name raw object that is
   gone (404), too large or holds other bytes falls through to the next; any other
   failure stops the run before anything is written. The next ordinary backup
   uploads what was added.
