@@ -156,6 +156,14 @@ final class OneLinerRecorder {
             return false
         }
         guard let started else { return failToStart() }
+        // A write that failed during the hand-off found no recording to stop (failTake
+        // needs isRecording); from here on the main actor sees any later failure.
+        if failed.withLock({ $0 }) {
+            started.cancel()
+            _ = failToStart()
+            notice = Self.writeFailureNotice
+            return false
+        }
         file = started.file
         request = started.request
         task = started.task
