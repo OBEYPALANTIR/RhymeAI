@@ -32,6 +32,12 @@ class OneLinerCaptureSession(val mode: Mode, val recorder: OneLinerRecorder = On
     var appliedTranscript = ""
     /** The opening action (mic or keyboard) already ran; a recreated sheet does not run it again. */
     var opened = false
+
+    /** Drops a new capture's take so the writer can record again; the words stay. Never during a save, which holds the take. */
+    fun discardTake() {
+        if (saving || mode is Mode.Edit) return
+        recorder.discard()
+    }
 }
 
 /**
