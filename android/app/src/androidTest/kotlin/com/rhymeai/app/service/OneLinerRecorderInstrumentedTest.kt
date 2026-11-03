@@ -71,20 +71,25 @@ class OneLinerRecorderInstrumentedTest {
 
     @Test fun stopWhileTheMicOpensCancelsTheStartAndReleasesIt() {
         val file = File(dir, "cancelled.wav")
+        val retry = File(dir, "retry.wav")
         var answered = false
         var stopped = false
-        var stillOpening = true
+        var claimedWhileOpening: Any? = null
         instrumentation.runOnMainSync {
             recorder.start(file, context) { answered = true }
             stopped = recorder.stop()
-            stillOpening = recorder.isStarting
+            // A retry while the cancelled open is still out does nothing: one open at a time.
+            recorder.start(retry, context) { answered = true }
+            claimedWhileOpening = MicrophoneOwner.current
         }
         assertTrue(stopped)
-        assertFalse(stillOpening)
+        assertTrue(claimedWhileOpening === recorder)
         val deadline = SystemClock.uptimeMillis() + 10_000
-        while (MicrophoneOwner.current != null && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(25)
+        while (recorder.isStarting && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(25)
         instrumentation.waitForIdleSync()
+        assertFalse(recorder.isStarting)
         assertNull(MicrophoneOwner.current)
+        assertFalse(retry.exists())
         assertFalse(answered)
         assertFalse(recorder.isRecording)
         assertNull(recorder.takeFile)
