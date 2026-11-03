@@ -477,6 +477,15 @@ nonisolated enum GGUFModelService {
     static let samplerTopK: Int32 = 40
     static let samplerTopP: Float = 0.95
     static let samplerTemperature: Float = 0.8
+    // Bind the selected decoding policy to verified weights, including registered imports.
+    static func usesV7Sampling(verifiedSHA256: String?) -> Bool {
+#if os(macOS)
+        return verifiedSHA256 == GGUFDownloadCatalog.mac12BV7SHA256
+#else
+        return false
+#endif
+    }
+
     static let addSpecialTokens = true
     static let parseSpecialTokens = true
     static let cachePolicy = "clear_kv_per_request_keep_model_resident"
@@ -784,8 +793,13 @@ actor GGUFLlamaService: LocalGGUFRunner {
                 reason: Task.isCancelled ? "cancelled" : terminationReason
             )
         }
-        let sampler = try makeSampler(seed: seed)
+        let usesV7Sampling = GGUFModelService.usesV7Sampling(verifiedSHA256: residentStore.get()?.verifiedSHA256)
+        let sampler = try makeSampler(seed: seed, usesV7Sampling: usesV7Sampling)
         defer { llama_sampler_free(sampler) }
+        if usesV7Sampling {
+            // Repetition lookback includes prompt tokens, as in the selected evaluation.
+            for token in tokens { llama_sampler_accept(sampler, token) }
+        }
 
         var generatedTokenCount = 0
         var firstTokenAtNs: UInt64?
@@ -938,9 +952,14 @@ actor GGUFLlamaService: LocalGGUFRunner {
         }
     }
 
-    private func makeSampler(seed: UInt32) throws -> UnsafeMutablePointer<llama_sampler> {
+    private func makeSampler(seed: UInt32, usesV7Sampling: Bool) throws -> UnsafeMutablePointer<llama_sampler> {
         guard let chain = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
             throw AIServiceError.localModelUnavailable(reason: "Failed to create llama sampler.")
+        }
+        if usesV7Sampling {
+            llama_sampler_chain_add(chain, llama_sampler_init_penalties(64, 1.1, 0, 0))
+            llama_sampler_chain_add(chain, llama_sampler_init_greedy())
+            return chain
         }
         llama_sampler_chain_add(chain, llama_sampler_init_top_k(GGUFModelService.samplerTopK))
         llama_sampler_chain_add(chain, llama_sampler_init_top_p(GGUFModelService.samplerTopP, 1))

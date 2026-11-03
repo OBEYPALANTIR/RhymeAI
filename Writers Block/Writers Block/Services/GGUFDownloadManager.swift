@@ -21,46 +21,74 @@ enum GGUFDownloadCatalog {
     // - E4B: v2.1, trained 2026-10-06 on teacher-data-v2 plus the shipped rewrite/synonym rows.
     nonisolated static let huggingFaceRevision = "990bc8e01700f05d0cea805a66b43a7424a4b36b"
 
-    nonisolated static let options: [GGUFDownloadOption] = [
-        GGUFDownloadOption(
-            id: "gemma-4-e2b",
-            title: "RhymeAI Gemma 4 E2B",
-            subtitle: "Recommended for iPhone and iPad",
-            size: "3.43 GB",
-            fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 3_427_880_800,
-            sha256: "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
-            url: requiredURL(
-                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
+    nonisolated static let options: [GGUFDownloadOption] = {
+        var options = [
+            GGUFDownloadOption(
+                id: "gemma-4-e2b",
+                title: "RhymeAI Gemma 4 E2B",
+                subtitle: "Recommended for iPhone and iPad",
+                size: "3.43 GB",
+                fileName: "gemma-4-E2B-it-rhymeai-Q4_K_M.gguf",
+                expectedBytes: 3_427_880_800,
+                sha256: "902e5d83a86393f064b1c8abc1a9d25fec5b3634683317792b02856c01c604e0",
+                url: requiredURL(
+                    "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E2B-it-rhymeai-Q4_K_M.gguf?download=true"
+                ),
+                isRecommended: true
             ),
-            isRecommended: true
-        ),
-        GGUFDownloadOption(
-            id: "gemma-4-e4b",
-            title: "RhymeAI Gemma 4 E4B",
-            subtitle: "For devices with at least 10 GB memory",
-            size: "5.34 GB",
-            fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
-            expectedBytes: 5_335_292_800,
-            sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
+            GGUFDownloadOption(
+                id: "gemma-4-e4b",
+                title: "RhymeAI Gemma 4 E4B",
+                subtitle: "For devices with at least 10 GB memory",
+                size: "5.34 GB",
+                fileName: "gemma-4-E4B-it-rhymeai-Q4_K_M.gguf",
+                expectedBytes: 5_335_292_800,
+                sha256: "6d6b7890655943a3dba1a4212f6668537503a9e085f55fbdeeb40265c5e91944",
+                url: requiredURL(
+                    "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
+                ),
+                isRecommended: false
+            ),
+        ]
+#if os(macOS)
+        options.append(GGUFDownloadOption(
+            id: "gemma-4-12b-v7",
+            title: "RhymeAI Gemma 4 12B v7",
+            subtitle: "Mac only · 16 GB memory advised",
+            size: "7.38 GB",
+            fileName: "gemma-4-12B-it-rhymeai-v7-Q4_K_M.gguf",
+            expectedBytes: 7_381_382_976,
+            sha256: mac12BV7SHA256,
             url: requiredURL(
-                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(huggingFaceRevision)/gemma-4-E4B-it-rhymeai-Q4_K_M.gguf?download=true"
+                "https://huggingface.co/Shayde182/rhymeai-gemma-4-gguf/resolve/\(mac12BV7Revision)/gemma-4-12B-it-rhymeai-v7-Q4_K_M.gguf?download=true"
             ),
             isRecommended: false
-        ),
-    ]
+        ))
+#endif
+        return options
+    }()
+
+#if os(macOS)
+    nonisolated static let mac12BV7Revision = "9a8f239e371bee273402c603f81e042821c64154"
+    nonisolated static let mac12BV7SHA256 = "b4da9dba8ca8dd8bd7fb1c327d4e7acff0c7390f5ff7f89526135adf3b169310"
+#endif
 
     nonisolated static func option(id: String?) -> GGUFDownloadOption? {
         options.first { $0.id == id }
     }
 
-    /// Mirrors Android `RAM_THRESHOLD_E4B_BYTES` and `gemmaModelNeedsMoreMemory`: only E4B
-    /// needs more than the app's minimum, and it thrashes on an 8 GB device.
+    /// Preserve the E4B advisory shared with Android; the Mac-only 12B has its own threshold.
     nonisolated static let ramThresholdE4BBytes: UInt64 = 10 * 1024 * 1024 * 1024
     nonisolated static let needsMoreMemoryMessage = "May be slow on this device — needs more memory"
 
     nonisolated static func needsMoreMemory(_ option: GGUFDownloadOption, totalRAMBytes: UInt64) -> Bool {
-        option.fileName == options[1].fileName && totalRAMBytes < ramThresholdE4BBytes
+#if os(macOS)
+        if option.id == "gemma-4-12b-v7" {
+            // Capacity advisory; actual latency depends on the Mac and available memory.
+            return totalRAMBytes < 16 * 1024 * 1024 * 1024
+        }
+#endif
+        return option.fileName == options[1].fileName && totalRAMBytes < ramThresholdE4BBytes
     }
 
     nonisolated private static func requiredURL(_ string: String) -> URL {
