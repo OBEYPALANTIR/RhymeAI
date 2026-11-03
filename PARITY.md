@@ -546,15 +546,32 @@ below is the contract it must meet, not verified behaviour.
 - First-run restore: after Drive connects, or at launch when connected with an
   empty library, a manifest with at least one song offers "Restore your songs?"
   with Restore (merge) and Not now. Never automatic.
-  Restore first (`BackupGate`): while the offer is open no automatic backup runs,
-  and while the library (active plus Trash) is empty and Drive's manifest lists
-  songs none runs either (the status reads "Backup paused: … Restore to
-  continue."; Back up now asks before merging Drive's songs with nothing).
-  Recover an earlier backup lists the manifest's Drive revisions (newest first, up
-  to 50), marks the chosen one Keep Forever so Drive serves it, and imports each
-  song whose id is held nowhere (here or in the current backup, active or Trash)
-  as a new song with new ids and its recordings, with no Drive write or deletion;
-  held songs are skipped and counted as already here.
+- Restore first (`BackupGate`, both): no automatic run uploads while the restore
+  offer waits for an answer, nor while this device has no songs (active or in
+  Trash) and the manifest lists any; Not now shows "Backup paused: this device
+  (Android: phone) has no songs and Drive has N. Restore to continue.", and Back
+  up now asks before merging Drive's songs with nothing. A library or Drive count
+  that cannot be read never uploads; iOS shows that reason with Retry. Known
+  difference: iOS shows the pause as the `failed` status (with Retry), Android as
+  its own `paused` case.
+- Recover an earlier backup (both): lists the manifest's Drive revisions newest
+  first by time and size, at most 50 plus every one already kept, reading no
+  content. Choosing one only asks; on Recover the app marks that revision
+  `keepForever` (Drive serves an earlier blob only then, and keeps at most 200 per
+  file; nothing is unpinned, deleted or rewritten), downloads and decodes it, and
+  imports it locally: a song is skipped when its own id or its recovered id (derived
+  from the revision and the old id) is held here or in the current backup, active
+  or in Trash; every other song becomes a new song with its recordings under
+  recovered ids. A recovered song or take named by a tombstone here or in the
+  current backup is not brought back. Every take is downloaded and verified before
+  anything is written; only a gone object, another declared size or other bytes
+  passes to the next object under that name, and any other error or cancellation
+  stops the run. Takes are attached before the songs are saved, so a retry of the
+  same revision finishes an interrupted run without duplicates and leaves edits to
+  recovered songs alone. Recovery writes no manifest; the next ordinary backup
+  uploads the new songs. Result: "Recovered N songs and M recordings. K already
+  here.", with songs in the backup's Trash, deleted since, and missing recordings
+  named.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a
