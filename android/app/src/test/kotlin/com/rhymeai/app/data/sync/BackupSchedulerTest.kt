@@ -158,4 +158,124 @@ class BackupSchedulerTest {
         assertFalse(resumesAfterConsent(connected = false, pending = "restore", connect = "connect"))
         assertFalse(resumesAfterConsent(connected = false, pending = null, connect = "connect"))
     }
+
+    /** The real scheduler driving the real gated run, with Drive and the library faked. */
+    private class GatedHarness(scope: TestScope) {
+        var localSongs: Int? = 0
+        var driveSongs = 7
+        var probeFailure: SyncResult? = null
+        var backupResult: SyncResult = SyncResult.Success(SyncBlob())
+        var probes = 0
+        val backups = mutableListOf<Long>()
+        val gated = mutableListOf<Pair<BackupGate.Decision, Int>>()
+        val run = GatedBackupRun(
+            localSongCount = { localSongs },
+            probe = {
+                probes++
+                probeFailure?.let { ProbeResult.Failed(it) } ?: ProbeResult.Ready(BackupProbe(driveSongs, 0, legacyBackupPresent = false))
+            },
+            backUp = { backups += scope.testScheduler.currentTime; backupResult },
+            onGated = { decision, remote -> gated += decision to remote },
+            onResult = { result, _ ->
+                when (result) {
+                    is SyncResult.Success -> BackupRunOutcome.SUCCEEDED
+                    is SyncResult.NetworkError -> BackupRunOutcome.RETRY
+                    else -> BackupRunOutcome.STOP
+                }
+            }
+        )
+        val scheduler = BackupScheduler(
+            scope = scope.backgroundScope,
+            clock = { scope.testScheduler.currentTime },
+            isConnected = { true },
+            onPending = {}
+        ) { interactive -> run(interactive) }
+    }
+
+    @Test
+    fun aScheduledRunOnAnEmptyPhoneOverADriveWithSongsUploadsNothing() = runTest {
+        val h = GatedHarness(this)
+        h.scheduler.schedule()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(1, h.probes)
+        assertEquals(emptyList(), h.backups)
+        assertEquals(listOf(BackupGate.Decision.PAUSE to 7), h.gated)
+    }
+
+    @Test
+    fun aRetryAfterAFailedProbeIsGatedAgain() = runTest {
+        val h = GatedHarness(this)
+        h.probeFailure = SyncResult.NetworkError("offline")
+        h.scheduler.schedule()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(1, h.scheduler.failures)
+        h.probeFailure = null
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertEquals(2, h.probes)
+        assertEquals(emptyList(), h.backups)
+        assertEquals(listOf(BackupGate.Decision.PAUSE to 7), h.gated)
+    }
+
+    @Test
+    fun leavingTheAppOnAnEmptyPhoneUploadsNothing() = runTest {
+        val h = GatedHarness(this)
+        advanceTimeBy(BackupScheduler.BACKGROUND_MIN_INTERVAL_MILLIS + 1)
+        h.scheduler.onBackground()
+        runCurrent()
+        assertEquals(emptyList(), h.backups)
+        assertEquals(listOf(BackupGate.Decision.PAUSE to 7), h.gated)
+    }
+
+    @Test
+    fun backUpNowAsksFirstAndRunsOnceOnlyAfterTheExplicitConfirmation() = runTest {
+        val h = GatedHarness(this)
+        h.scheduler.runNow(interactive = true)
+        runCurrent()
+        assertEquals(listOf(BackupGate.Decision.CONFIRM to 7), h.gated)
+        assertEquals(emptyList(), h.backups)
+
+        h.run.confirmOnce()
+        h.scheduler.runNow(interactive = true)
+        runCurrent()
+        assertEquals(1, h.backups.size)
+        // The confirmation covered that run only: the next automatic one is paused again.
+        h.scheduler.schedule()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(1, h.backups.size)
+        assertEquals(BackupGate.Decision.PAUSE to 7, h.gated.last())
+    }
+
+    @Test
+    fun songsHereOrInTrashResumeBackupWithoutAskingDrive() = runTest {
+        val h = GatedHarness(this)
+        advanceTimeBy(BackupScheduler.BACKGROUND_MIN_INTERVAL_MILLIS + 1)
+        h.scheduler.onBackground()
+        runCurrent()
+        assertEquals(emptyList(), h.backups)
+        // After Restore (or a song kept only in Trash) the library is not empty: backups resume.
+        h.localSongs = 1
+        h.scheduler.schedule()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(1, h.backups.size)
+        assertEquals(1, h.probes)
+    }
+
+    @Test
+    fun aLibraryNotReadYetNeverUploadsOrAsksDrive() = runTest {
+        val h = GatedHarness(this)
+        h.localSongs = null
+        advanceTimeBy(BackupScheduler.BACKGROUND_MIN_INTERVAL_MILLIS + 1)
+        h.scheduler.onBackground()
+        runCurrent()
+        h.scheduler.runNow(interactive = true)
+        runCurrent()
+        assertEquals(0, h.probes)
+        assertEquals(emptyList(), h.backups)
+        assertEquals(emptyList(), h.gated)
+    }
 }

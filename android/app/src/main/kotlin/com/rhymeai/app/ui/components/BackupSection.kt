@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRevision
+import com.rhymeai.app.data.sync.RevisionContents
 import com.rhymeai.app.data.sync.recoverRevisionConfirmation
 import com.rhymeai.app.data.sync.revisionLabel
 import androidx.compose.foundation.rememberScrollState
@@ -71,7 +72,9 @@ data class BackupSectionState(
     /** Drive's song count while Back up now asks before backing up an empty library. */
     val emptyBackupConfirm: Int? = null,
     /** Drive's earlier backups while "Recover an earlier backup…" is open. */
-    val revisions: List<BackupRevision>? = null
+    val revisions: List<BackupRevision>? = null,
+    /** The chosen earlier backup and what it holds, waiting for "Recover". */
+    val revisionPreview: RevisionContents? = null
 )
 
 class BackupSectionActions(
@@ -87,7 +90,8 @@ class BackupSectionActions(
     val onCancelEmptyBackup: () -> Unit = {},
     val onListRevisions: () -> Unit = {},
     val onCloseRevisions: () -> Unit = {},
-    val onRecoverRevision: (String) -> Unit = {}
+    val onOpenRevision: (BackupRevision) -> Unit = {},
+    val onRecoverRevision: () -> Unit = {}
 )
 
 /** Rows in the shared order: status, Connect/Disconnect, Back up now, Restore, Export, Import. */
@@ -141,29 +145,25 @@ internal fun BackupSection(
         )
     }
 
-    var chosenRevision by remember { mutableStateOf<BackupRevision?>(null) }
-    chosenRevision?.let { revision ->
+    state.revisionPreview?.let { contents ->
         AlertDialog(
-            onDismissRequest = { chosenRevision = null },
+            onDismissRequest = actions.onCloseRevisions,
             title = { Text("Recover this backup?") },
-            text = { Text(recoverRevisionConfirmation(revision)) },
+            text = { Text(recoverRevisionConfirmation(contents)) },
             confirmButton = {
-                TextButton(
-                    onClick = { chosenRevision = null; actions.onRecoverRevision(revision.revisionId) },
-                    modifier = Modifier.testTag("backup_recover_confirm")
-                ) { Text("Recover") }
+                TextButton(onClick = actions.onRecoverRevision, modifier = Modifier.testTag("backup_recover_confirm")) { Text("Recover") }
             },
-            dismissButton = { TextButton(onClick = { chosenRevision = null }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = actions.onCloseRevisions) { Text("Cancel") } }
         )
     }
-    if (chosenRevision == null) state.revisions?.let { revisions ->
+    state.revisions?.let { revisions ->
         AlertDialog(
             onDismissRequest = actions.onCloseRevisions,
             title = { Text("Recover an earlier backup") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     revisions.forEach { revision ->
-                        TextButton(onClick = { chosenRevision = revision }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
+                        TextButton(onClick = { actions.onOpenRevision(revision) }, modifier = Modifier.fillMaxWidth().testTag("backup_revision")) {
                             Text(revisionLabel(revision), modifier = Modifier.fillMaxWidth())
                         }
                     }

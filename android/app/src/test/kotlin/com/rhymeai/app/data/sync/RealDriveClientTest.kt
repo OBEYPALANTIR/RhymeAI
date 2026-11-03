@@ -86,13 +86,28 @@ class RealDriveClientTest {
         val client = RealDriveClient("$base/drive", "$base/upload", "$base/revoke")
 
         assertEquals(
-            listOf(DriveRevision("r1", "2026-11-01T10:00:00Z"), DriveRevision("r2", "2026-11-02T10:00:00Z")),
+            listOf(DriveRevision("r1", "2026-11-01T10:00:00Z", 9L), DriveRevision("r2", "2026-11-02T10:00:00Z")),
             client.listRevisions("token", "file-1")
         )
         assertEquals("manifest bytes", String(client.downloadRevision("token", "file-1", "r2", 100L)))
         assertTrue(requests.take(2).all { it.target.startsWith("/drive/files/file-1/revisions?") })
         assertTrue("pageToken=p2" in requests[1].target)
         assertEquals("/drive/files/file-1/revisions/r2?alt=media", requests.last().target)
+    }
+
+    @Test
+    fun aRefusedOrMissingRevisionSaysSoAndIsNotCalledAQuota() = runBlocking {
+        var status = 403
+        serve { status to """{"error":{"code":403,"message":"Only revisions marked keepForever can be downloaded."}}""" }
+        val client = RealDriveClient("$base/drive", "$base/upload", "$base/revoke")
+
+        val refused = runCatching { client.downloadRevision("token", "f", "r", 100L) }.exceptionOrNull()
+        assertTrue(refused is DriveHttpException && refused.statusCode == 403)
+        assertEquals("Google Drive refused: Opening the earlier backup failed (403): Only revisions marked keepForever can be downloaded.", refused.message)
+
+        status = 404
+        val gone = runCatching { client.downloadRevision("token", "f", "r", 100L) }.exceptionOrNull()
+        assertEquals("This earlier backup is no longer in Google Drive.", gone?.message)
     }
 
     @Test

@@ -17,27 +17,33 @@ sealed class BackupStatus {
 }
 
 /**
- * Restore first: a device with no songs never backs up automatically over a Drive
- * that lists songs (a reinstall, before Restore). Back up now asks first.
+ * Restore first: a device with no songs (active or in Trash) never backs up automatically
+ * over a Drive that lists songs (a reinstall, before Restore). Back up now asks first.
+ * A library that could not be read yet ([localSongCount] null) never backs up.
  */
 object BackupGate {
     enum class Decision { RUN, PAUSE, CONFIRM }
 
-    fun decide(localSongCount: Int, remoteSongCount: Int, interactive: Boolean, userConfirmed: Boolean): Decision = when {
+    fun decide(localSongCount: Int?, remoteSongCount: Int, interactive: Boolean, userConfirmed: Boolean): Decision = when {
+        localSongCount == null -> Decision.PAUSE
         localSongCount > 0 || remoteSongCount == 0 || userConfirmed -> Decision.RUN
         interactive -> Decision.CONFIRM
         else -> Decision.PAUSE
     }
 }
 
-/** "Nov 1, 3:14 PM · 12 songs · 8 recordings" for one earlier Drive backup. */
-fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
-    "${revisionTime(revision, zone, locale)} · ${count(revision.songCount, "song")} · ${count(revision.recordingCount, "recording")}"
+/** "Nov 1, 3:14 PM · 14 KB" for one earlier Drive backup (its contents are read only once it is chosen). */
+fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
+    val time = revisionTime(revision, zone, locale)
+    val size = revision.sizeBytes ?: return time
+    return "$time · ${if (size < 1024) "$size bytes" else "${(size + 1023) / 1024} KB"}"
+}
 
-/** What recovering [revision] does, said before it runs. */
-fun recoverRevisionConfirmation(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
-    "The ${count(revision.songCount, "song")} and ${count(revision.recordingCount, "recording")} in the backup from " +
-        "${revisionTime(revision, zone, locale)} will be merged into this phone. Songs already here stay, and nothing in Google Drive is deleted."
+/** What recovering the chosen version does, with what it holds, said before it runs. */
+fun recoverRevisionConfirmation(contents: RevisionContents, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
+    "The backup from ${revisionTime(contents.revision, zone, locale)} holds ${count(contents.songCount, "song")} and " +
+        "${count(contents.recordingCount, "recording")}. They will be merged into this phone and your current backup; songs already here stay. " +
+        "Nothing in Google Drive is deleted, and Drive will keep this earlier version."
 
 private fun revisionTime(revision: BackupRevision, zone: ZoneId, locale: Locale): String =
     revision.modifiedTime?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, h:mm a", locale).format(Instant.parse(it).atZone(zone)) }.getOrNull() }

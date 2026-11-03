@@ -33,6 +33,9 @@ import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
 import com.rhymeai.app.data.sync.BackupRevision
 import com.rhymeai.app.data.sync.RevisionsResult
+import com.rhymeai.app.data.sync.RevisionContents
+import com.rhymeai.app.data.sync.RevisionPreviewResult
+import com.rhymeai.app.data.sync.GatedBackupRun
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
 import com.rhymeai.app.data.sync.actionAfterAuthorization
@@ -203,7 +206,8 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         else -> "${result.unmovedLegacySongs} older songs could not be moved; the older backup was kept."
     },
     if (action == BackupAction.Restore || action == BackupAction.Recover) {
-        "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.merged.recordings.size, "recording")}."
+        // Recordings here after the restore: listed ones minus those missing from Drive or failing their checksum.
+        "Restored ${plural(result.merged.projects.size, "song")} and ${plural((result.merged.recordings.size - result.missingRecordings - result.damagedRecordings).coerceAtLeast(0), "recording")}."
     } else null,
     when (result.skippedLargeRecordings) {
         0 -> null
@@ -928,8 +932,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var backupRevisions by mutableStateOf<List<BackupRevision>?>(null)
         private set
 
-    /** One run's explicit "Back up anyway" for an empty library over a Drive with songs. */
-    private var emptyBackupConfirmed = false
+    /** The earlier version waiting for the user's "Recover", with what it holds. */
+    var revisionPreview by mutableStateOf<RevisionContents?>(null)
+        private set
 
     /**
      * Set when Drive authorization requires the user to approve a consent screen.
@@ -942,50 +947,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The passphrase of a migration waiting for Drive consent: memory only, cleared when used or replaced. */
     private var pendingMigrationPassphrase: String? = null
+    /** Every scheduled, retried, background, connect and Back up now run passes [BackupGate] here. */
+    private val gatedBackup = GatedBackupRun(
+        localSongCount = ::localSongCount,
+        probe = { backupMutex.withLock { driveSyncService.probe(repo) } },
+        backUp = {
+            backupStatus = BackupStatus.BackingUp
+            backupMutex.withLock { driveSyncService.backUp(repo) }
+        },
+        onGated = { decision, remoteSongs ->
+            backupStatus = BackupStatus.Paused(remoteSongs)
+            if (decision == BackupGate.Decision.CONFIRM) emptyBackupConfirm = remoteSongs
+        },
+        onResult = { result, interactive ->
+            when (handleBackupResult(result, BackupAction.BackUp, interactive)) {
+                true -> BackupRunOutcome.RETRY
+                false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
+            }
+        }
+    )
+
     private val backupScheduler = BackupScheduler(
         scope = viewModelScope,
         clock = System::currentTimeMillis,
         isConnected = ::isBackupConnected,
         onPending = { if (backupStatus !is BackupStatus.Failed && backupStatus !is BackupStatus.Paused) backupStatus = BackupStatus.Pending }
-    ) { interactive -> runBackup(interactive) }
+    ) { interactive -> gatedBackup(interactive) }
 
-    /** Every scheduled, background, connect and Back up now run passes [BackupGate] here first. */
-    private suspend fun runBackup(interactive: Boolean): BackupRunOutcome {
-        val confirmed = emptyBackupConfirmed
-        emptyBackupConfirmed = false
-        // Only an empty library asks Drive first; a library with songs always backs up.
-        if (projects.isEmpty() && !confirmed) {
-            when (val probe = backupMutex.withLock { driveSyncService.probe(repo) }) {
-                is ProbeResult.Failed ->
-                    return if (handleBackupResult(probe.result, BackupAction.BackUp, interactive)) BackupRunOutcome.RETRY else BackupRunOutcome.STOP
-                is ProbeResult.Ready -> {
-                    val remoteSongs = probe.probe.projectCount
-                    when (BackupGate.decide(0, remoteSongs, interactive, userConfirmed = false)) {
-                        BackupGate.Decision.RUN -> Unit
-                        BackupGate.Decision.PAUSE -> {
-                            backupStatus = BackupStatus.Paused(remoteSongs)
-                            return BackupRunOutcome.STOP
-                        }
-                        BackupGate.Decision.CONFIRM -> {
-                            backupStatus = BackupStatus.Paused(remoteSongs)
-                            emptyBackupConfirm = remoteSongs
-                            return BackupRunOutcome.STOP
-                        }
-                    }
-                }
-            }
-        }
-        backupStatus = BackupStatus.BackingUp
-        val result = backupMutex.withLock { driveSyncService.backUp(repo) }
-        return when (handleBackupResult(result, BackupAction.BackUp, interactive)) {
-            true -> BackupRunOutcome.RETRY
-            false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
-        }
+    /** Songs stored here, active plus Trash; null when the library cannot be read (nothing then uploads). */
+    private suspend fun localSongCount(): Int? = try {
+        repo.projectsFlow.first().size + repo.trashedProjectsFlow.first().size
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
     }
 
     /** An empty library over a Drive with songs pauses automatic backup until Restore. */
-    private fun pausesBackup(remoteSongs: Int) =
-        BackupGate.decide(projects.size, remoteSongs, interactive = false, userConfirmed = false) == BackupGate.Decision.PAUSE
+    private suspend fun pausesBackup(remoteSongs: Int) =
+        BackupGate.decide(localSongCount(), remoteSongs, interactive = false, userConfirmed = false) == BackupGate.Decision.PAUSE
 
     private fun isBackupConnected(): Boolean = backupPrefs.getBoolean(KEY_CONNECTED, false)
 
@@ -1018,8 +1018,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         legacyBackupPresent = false
         restoreOffer = null
         emptyBackupConfirm = null
-        emptyBackupConfirmed = false
         backupRevisions = null
+        revisionPreview = null
         backupBusyLabel = "Disconnecting…"
         viewModelScope.launch {
             val revoked = backupMutex.withLock { driveSyncService.disconnect() }
@@ -1065,16 +1065,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeBackupRevisions() {
         backupRevisions = null
+        revisionPreview = null
     }
 
-    /** Merges one earlier Drive version into this device through the Restore path; Drive's revisions stay as they are. */
-    fun recoverBackupRevision(revisionId: String) {
+    /** Keeps the chosen version (Drive's condition for reading it) and shows what it holds before anything merges. */
+    fun openBackupRevision(revision: BackupRevision) {
         backupRevisions = null
+        backupBusyLabel = "Opening earlier backup…"
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.previewRevision(revision) }
+            backupBusyLabel = null
+            when (result) {
+                is RevisionPreviewResult.Ready -> revisionPreview = result.contents
+                is RevisionPreviewResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
+            }
+        }
+    }
+
+    /** Merges the previewed version into this device; nothing in Drive is deleted. */
+    fun recoverBackupRevision() {
+        val revision = revisionPreview?.revision ?: return
+        revisionPreview = null
         backupNotice = null
         backupBusyLabel = "Recovering…"
         backupStatus = BackupStatus.BackingUp
         viewModelScope.launch {
-            val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revisionId) }
+            val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revision) }
             backupBusyLabel = null
             handleBackupResult(result, BackupAction.Recover, interactive = true)
         }
@@ -1090,14 +1106,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val offer = restoreOffer ?: return
         restoreOffer = null
         if (!isBackupConnected()) return
-        if (pausesBackup(offer.projectCount)) backupStatus = BackupStatus.Paused(offer.projectCount)
-        else startBackup(interactive = false)
+        viewModelScope.launch {
+            if (pausesBackup(offer.projectCount)) backupStatus = BackupStatus.Paused(offer.projectCount)
+            else startBackup(interactive = false)
+        }
     }
 
     /** Back up now's explicit confirmation to back up an empty library over Drive's songs. */
     fun confirmEmptyBackup() {
         emptyBackupConfirm = null
-        emptyBackupConfirmed = true
+        gatedBackup.confirmOnce()
         startBackup(interactive = true)
     }
 

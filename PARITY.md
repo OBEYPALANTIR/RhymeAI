@@ -547,16 +547,23 @@ below is the contract it must meet, not verified behaviour.
 - First-run restore: after Drive connects, or at launch when connected with an
   empty library, a manifest with at least one song offers "Restore your songs?"
   with Restore (merge) and Not now. Never automatic.
-- Restore first (Android; iOS pending): while this device has no songs and the
-  manifest lists any, no automatic run uploads (`BackupGate`); Connect does not
-  back up while the offer is up, Not now leaves Drive untouched and shows
-  "Backup paused: this phone has no songs and Drive has N. Restore to continue.",
-  and Back up now asks before merging Drive's songs with nothing. Recover an
-  earlier backup (Android; iOS pending) lists the manifest's Drive revisions
-  (newest first, at most 50, "Nov 1, 3:14 PM · 12 songs · 8 recordings") and,
-  after a confirmation, runs Restore with the chosen revision as an extra remote
-  input; revisions are never changed or deleted, and a recording whose raw file
-  is gone from Drive is reported, not fatal.
+- Restore first (Android; iOS pending): while this device has no songs, active
+  or in Trash, and the manifest lists any, no automatic run uploads
+  (`BackupGate`, applied by `GatedBackupRun` to every scheduled, retried,
+  background and Back up now run; a library that cannot be read never uploads).
+  Connect does not back up while the offer is up, Not now leaves Drive untouched
+  and shows "Backup paused: this phone has no songs and Drive has N. Restore to
+  continue.", and Back up now asks before merging Drive's songs with nothing.
+- Recover an earlier backup (Android; iOS pending): lists the manifest's Drive
+  revisions newest first, at most 50, by time and size without downloading them.
+  Choosing one marks only that revision `keepForever` (Drive serves an earlier
+  blob revision only then, and keeps at most 200 per file; none is unpinned) and
+  shows its song and recording counts. Recover merges its songs and recordings
+  (not its old Trash or tombstones) into the device and the current manifest
+  through the Restore merge with no Drive deletion of any kind; a song or
+  recording neither the device nor the current manifest holds is stamped with
+  the recovery time so a current tombstone cannot remove it again. A recording
+  whose raw file is gone is reported, not fatal.
 - Disconnect revokes the grant at `https://oauth2.googleapis.com/revoke`
   (Android with the current access token, then drops Play Services' cached
   token; iOS with the refresh token) and always clears local state. Only a
