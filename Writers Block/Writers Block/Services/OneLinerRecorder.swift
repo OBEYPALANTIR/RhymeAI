@@ -4,6 +4,13 @@ import Observation
 import os
 import Speech
 
+/// The words heard in one take. The take is part of the value, so the same words
+/// heard again in a new take still count as a change.
+struct OneLinerTranscript: Equatable {
+    var take: UInt64 = 0
+    var text = ""
+}
+
 /// Records one quick line to an .m4a while on-device speech recognition
 /// transcribes it live. One AVAudioEngine tap feeds both, so the file and the
 /// words come from the same microphone input. Shares the memo service's serial
@@ -15,8 +22,8 @@ final class OneLinerRecorder {
     private(set) var isStarting = false
     private(set) var isRecording = false
     private(set) var startedAt: Date?
-    /// Latest live transcription of this take; empty until words arrive.
-    private(set) var transcript = ""
+    /// Latest live transcription of the current take; empty until words arrive.
+    private(set) var transcript = OneLinerTranscript()
     /// Recent input levels 0...1, oldest first, for the level bars.
     private(set) var levels: [Float] = Array(repeating: 0, count: OneLinerRecorder.levelCount)
     /// The take this recorder holds (recording or finished); nil when there is none.
@@ -37,6 +44,10 @@ final class OneLinerRecorder {
     /// Each start, stop and discard moves it on; a start that finds it moved after
     /// an await was cancelled and undoes what it set up.
     @ObservationIgnored private var generation: UInt64 = 0
+    /// The take speech and level results must belong to. A new take and a discard move
+    /// it on, so a superseded or discarded take's late words are dropped; a stop does not,
+    /// so a stopped take's final words still land.
+    @ObservationIgnored private var currentTake: UInt64 = 0
     /// The file a start is creating, known before the engine runs so a failed or
     /// cancelled start can remove it.
     @ObservationIgnored private var pendingURL: URL?
@@ -131,6 +142,7 @@ final class OneLinerRecorder {
             return failToStart()
         }
 
+        let take = beginTake()
         if let recognizer {
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.requiresOnDeviceRecognition = true
@@ -138,11 +150,7 @@ final class OneLinerRecorder {
             self.request = request
             task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
                 guard let text = result?.bestTranscription.formattedString else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, self.isRecording else { return }
-                    self.transcript = text
-                    self.liveActivity.update(transcript: text, levels: self.levels)
-                }
+                Task { @MainActor [weak self] in self?.receive(transcript: text, forTake: take) }
             }
         } else {
             notice = "Live transcription isn't available on this device. The audio is still saved."
@@ -156,7 +164,7 @@ final class OneLinerRecorder {
             request: request,
             failed: writeFailed,
             level: { [weak self] level in
-                Task { @MainActor [weak self] in self?.pushLevel(level) }
+                Task { @MainActor [weak self] in self?.pushLevel(level, forTake: take) }
             },
             writeFailed: { [weak self] in
                 Task { @MainActor [weak self] in self?.failTake(owner: owner) }
@@ -173,7 +181,6 @@ final class OneLinerRecorder {
         observeInterruptions()
         fileURL = url
         pendingURL = nil
-        transcript = ""
         takeDuration = 0
         let now = Date()
         startedAt = now
@@ -216,12 +223,30 @@ final class OneLinerRecorder {
 
     static let writeFailureNotice = "Recording stopped because the audio couldn't be saved. The words so far are kept."
 
-    /// Stops or cancels, and removes the take's file.
+    /// Stops or cancels, and removes the take's file. Its words still on the way are dropped.
     func discard() {
         generation &+= 1
+        currentTake &+= 1
+        // finish() would still deliver the audio already queued; a discarded take's words are not wanted.
+        task?.cancel()
         tearDown(endingActivityAs: .discarded)
         removeTakeFiles()
         takeDuration = 0
+    }
+
+    /// Opens a new take's transcript; results for any earlier take are dropped from here.
+    func beginTake() -> UInt64 {
+        currentTake &+= 1
+        transcript = OneLinerTranscript(take: currentTake, text: "")
+        return currentTake
+    }
+
+    /// A speech result, kept only while `take` is still this recorder's take
+    /// (recording, or stopped and not yet discarded or replaced).
+    func receive(transcript text: String, forTake take: UInt64) {
+        guard take == currentTake else { return }
+        transcript.text = text
+        if isRecording { liveActivity.update(transcript: text, levels: levels) }
     }
 
     /// `endingActivityAs` nil leaves the Live Activity for `endActivity`.
@@ -294,11 +319,11 @@ final class OneLinerRecorder {
         }
     }
 
-    private func pushLevel(_ level: Float) {
-        guard isRecording else { return }
+    private func pushLevel(_ level: Float, forTake take: UInt64) {
+        guard take == currentTake, isRecording else { return }
         levels.removeFirst()
         levels.append(level)
-        liveActivity.update(transcript: transcript, levels: levels)
+        liveActivity.update(transcript: transcript.text, levels: levels)
     }
 
     // The tap runs on the audio render thread, so it is built outside the main actor.

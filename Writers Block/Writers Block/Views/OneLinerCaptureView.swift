@@ -61,6 +61,8 @@ struct OneLinerCaptureView: View {
     @State private var text = ""
     /// The field's text when the current take started; the transcript follows it.
     @State private var textBeforeTake = ""
+    /// The field as the transcript last left it; any other text is the writer's edit.
+    @State private var transcribedText = ""
     @State private var saved = false
     @State private var saveError: String?
     /// This sheet's place in the router's open captures.
@@ -134,8 +136,9 @@ struct OneLinerCaptureView: View {
         .presentationDetents([.fraction(0.62), .large])
         .presentationDragIndicator(.visible)
         .onChange(of: recorder.transcript) { _, transcript in
-            guard !transcript.isEmpty else { return }
-            text = textBeforeTake.isEmpty ? transcript : textBeforeTake + " " + transcript
+            guard let next = Self.fieldText(current: text, lastTranscribed: transcribedText, beforeTake: textBeforeTake, transcript: transcript.text) else { return }
+            text = next
+            transcribedText = next
         }
         // Leaving the app ends the take where it is (and cancels one still starting),
         // so the microphone and the clock never run on in the background.
@@ -306,6 +309,7 @@ struct OneLinerCaptureView: View {
 
     private func startTake() async {
         textBeforeTake = trimmedText
+        transcribedText = text
         let url = pendingRoot.appendingPathComponent("\(UUID().uuidString.lowercased()).m4a")
         if !(await recorder.start(writingTo: url)), !recorder.isRecording {
             fieldFocused = true
@@ -344,6 +348,14 @@ struct OneLinerCaptureView: View {
         saved = true
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         dismiss()
+    }
+
+    /// The field after a transcript update: the words from before the take, then the
+    /// take's words. Nil when there are no words yet, or when the writer changed the
+    /// field since the transcript last set it; their edit wins for the rest of the take.
+    static func fieldText(current: String, lastTranscribed: String, beforeTake: String, transcript: String) -> String? {
+        guard !transcript.isEmpty, current == lastTranscribed else { return nil }
+        return beforeTake.isEmpty ? transcript : beforeTake + " " + transcript
     }
 
     /// "0:04", "1:12".
