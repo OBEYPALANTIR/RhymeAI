@@ -23,6 +23,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
 import com.rhymeai.app.ui.components.buildAnalysisText
 import com.rhymeai.app.ui.components.colorSyllableUnderlines
+import com.rhymeai.app.ui.components.colouringFollowsEveryKeystroke
 import com.rhymeai.app.ui.screens.lyricStatsFor
 import com.rhymeai.app.ui.theme.rhymePalette
 import org.junit.After
@@ -225,10 +226,18 @@ class SyllableUnderlineMotionUiTest {
                 type(text)
                 repeat(3) { frame(); counts += saturatedPixels(capture()).count }
             }
-            Log.i("SyllableCost", "words=$targetWords deleteRetypeColouredPixels rest=$rest frames=$counts")
+            settleWithBackgroundWork()
+            val recoloured = saturatedPixels(capture()).count
+            Log.i("SyllableCost", "words=$targetWords deleteRetypeColouredPixels rest=$rest frames=$counts recoloured=$recoloured")
             assertTrue("nothing coloured at rest", rest > 100)
-            // Dropping to plain text or losing the underlines removes most coloured pixels in view.
-            assertTrue("a frame lost its colours or underlines at $targetWords words: $rest -> $counts", counts.all { it >= rest * 0.8 })
+            if (colouringFollowsEveryKeystroke(lyricStatsFor(song).wordCount)) {
+                // Dropping to plain text or losing the underlines removes most coloured pixels in view.
+                assertTrue("a frame lost its colours or underlines at $targetWords words: $rest -> $counts", counts.all { it >= rest * 0.8 })
+            } else {
+                // Past the live limit the words go plain while typing; the underlines stay.
+                assertTrue("underlines vanished while typing at $targetWords words: $rest -> $counts", counts.all { it >= rest * 0.2 })
+                assertTrue("colours did not return after the pause: $rest -> $recoloured", recoloured >= rest * 0.9)
+            }
         }
     }
 

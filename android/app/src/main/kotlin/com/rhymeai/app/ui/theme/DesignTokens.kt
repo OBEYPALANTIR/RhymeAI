@@ -63,6 +63,13 @@ object DesignTokens {
         val metadataLineHeight = 16.sp
         val syllableUnderlineGap = 2.dp
         val syllableUnderlineWidth = 3.dp
+
+        // Above this, laying out the coloured lyric on every keystroke costs whole frames, so the
+        // colours drop to plain while typing and return after a pause (counter and underlines stay live).
+        const val liveColouringMaxWords = 2_000
+
+        /** Milliseconds of no typing before a long song's colours return. */
+        const val deferredColouringPauseMillis = 180L
     }
 
     object EditorChrome {
