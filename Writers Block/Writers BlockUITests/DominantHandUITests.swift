@@ -4,7 +4,13 @@ import XCTest
 /// button sits outermost at that hand's physical edge, the wide pill inside it,
 /// in left-to-right and right-to-left layouts alike.
 final class DominantHandUITests: XCTestCase {
-    private static let forceRightToLeft = ["-NSForceRightToLeftWritingDirection", "YES"]
+    /// Both flags: the writing direction alone does not mirror an iOS layout.
+    private static let forceRightToLeft = [
+        "-AppleTextDirection", "YES",
+        "-NSForceRightToLeftWritingDirection", "YES",
+    ]
+    /// How close the round button must sit to its hand's screen edge.
+    private static let edgeTolerance: CGFloat = 40
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -14,30 +20,30 @@ final class DominantHandUITests: XCTestCase {
     func testLeftHandMirrorsTheEditorAndOneLinersClusters() throws {
         let app = launch(hand: "left")
         assertMicIsPhysically(left: true, in: app)
-        let type = openOneLiners(app)
-        XCTAssertLessThan(type.frame.maxX, app.buttons["Record a one liner"].frame.minX, "Type should be left of Record")
+        assertOneLinersCluster(left: true, in: app)
     }
 
     @MainActor
     func testRightHandKeepsTheClustersTrailing() throws {
         let app = launch(hand: "right")
         assertMicIsPhysically(left: false, in: app)
-        let type = openOneLiners(app)
-        XCTAssertGreaterThan(type.frame.minX, app.buttons["Record a one liner"].frame.maxX, "Type should be right of Record")
+        assertOneLinersCluster(left: false, in: app)
     }
 
     @MainActor
     func testLeftHandStaysPhysicallyLeftInRightToLeftLayout() throws {
         let app = launch(hand: "left", extraArguments: Self.forceRightToLeft)
+        assertLayoutIsMirrored(app, element: app.buttons["Open songs drawer"])
         assertMicIsPhysically(left: true, in: app)
-        let type = openOneLiners(app)
-        XCTAssertLessThan(type.frame.maxX, app.buttons["Record a one liner"].frame.minX, "RTL: Type should stay left of Record")
+        assertOneLinersCluster(left: true, in: app, mirrored: true)
     }
 
     @MainActor
     func testRightHandStaysPhysicallyRightInRightToLeftLayout() throws {
         let app = launch(hand: "right", extraArguments: Self.forceRightToLeft)
+        assertLayoutIsMirrored(app, element: app.buttons["Open songs drawer"])
         assertMicIsPhysically(left: false, in: app)
+        assertOneLinersCluster(left: false, in: app, mirrored: true)
     }
 
     @MainActor
@@ -57,7 +63,20 @@ final class DominantHandUITests: XCTestCase {
 
     @MainActor
     func testLeftHandedRecordingPillGrowsTowardTheCentreOnScreen() throws {
-        let app = launch(hand: "left", extraArguments: ["--ui-test-fake-voice-recording"])
+        try assertLeftHandedRecordingPillGrowsTowardTheCentre(extraArguments: [])
+    }
+
+    @MainActor
+    func testLeftHandedRecordingPillGrowsTowardTheCentreInRightToLeftLayout() throws {
+        try assertLeftHandedRecordingPillGrowsTowardTheCentre(extraArguments: Self.forceRightToLeft, mirrored: true)
+    }
+
+    // MARK: - Helpers
+
+    @MainActor
+    private func assertLeftHandedRecordingPillGrowsTowardTheCentre(extraArguments: [String], mirrored: Bool = false) throws {
+        let app = launch(hand: "left", extraArguments: ["--ui-test-fake-voice-recording"] + extraArguments)
+        if mirrored { assertLayoutIsMirrored(app, element: app.buttons["Open songs drawer"]) }
         let mic = app.buttons["micButton"]
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
         mic.tap()
@@ -67,15 +86,13 @@ final class DominantHandUITests: XCTestCase {
         XCTAssertTrue(timer.waitForExistence(timeout: 5), "The recording timer should show")
         Thread.sleep(forTimeInterval: 1)  // the pill finishes stretching
         let width = app.frame.width
+        XCTAssertLessThanOrEqual(mic.frame.minX, Self.edgeTolerance, "The stop button should stay at the left edge")
         XCTAssertGreaterThan(timer.frame.minX, mic.frame.maxX - 1, "The pill should grow right, toward the centre")
-        XCTAssertGreaterThanOrEqual(mic.frame.minX, 0)
         XCTAssertLessThanOrEqual(timer.frame.maxX, width, "The recording pill ran off screen")
         XCTAssertLessThanOrEqual(app.buttons["unblockButton"].frame.maxX, width, "UnBlock was pushed off screen")
 
         app.buttons["Stop recording"].tap()
     }
-
-    // MARK: - Helpers
 
     @MainActor
     private func launch(hand: String?, extraArguments: [String] = []) -> XCUIApplication {
@@ -87,6 +104,15 @@ final class DominantHandUITests: XCTestCase {
         let tip = app.buttons["Continue"]
         if tip.waitForExistence(timeout: 1.5) { tip.tap() }
         return app
+    }
+
+    /// Precondition for the right-to-left cases: a control unrelated to the
+    /// setting (a top-leading button) really did move to the right half, so
+    /// the layout is mirrored and the physical-side assertions mean something.
+    @MainActor
+    private func assertLayoutIsMirrored(_ app: XCUIApplication, element: XCUIElement, line: UInt = #line) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), line: line)
+        XCTAssertGreaterThan(element.frame.midX, app.frame.width / 2, "The layout is not mirrored: \(element) stayed on the left", line: line)
     }
 
     @MainActor
@@ -110,24 +136,35 @@ final class DominantHandUITests: XCTestCase {
         let mic = app.buttons["micButton"]
         let unblock = app.buttons["unblockButton"]
         XCTAssertTrue(mic.waitForExistence(timeout: 5), line: line)
-        let half = app.frame.width / 2
+        let width = app.frame.width
         if left {
             XCTAssertLessThan(mic.frame.maxX, unblock.frame.minX, "The mic should be left of UnBlock", line: line)
-            XCTAssertLessThan(mic.frame.minX, half, "The cluster should sit at the left edge", line: line)
+            XCTAssertLessThanOrEqual(mic.frame.minX, Self.edgeTolerance, "The mic should sit at the left edge", line: line)
         } else {
             XCTAssertGreaterThan(mic.frame.minX, unblock.frame.maxX, "The mic should be right of UnBlock", line: line)
-            XCTAssertGreaterThan(mic.frame.maxX, half, "The cluster should sit at the right edge", line: line)
+            XCTAssertGreaterThanOrEqual(mic.frame.maxX, width - Self.edgeTolerance, "The mic should sit at the right edge", line: line)
         }
     }
 
+    /// Type is the round button: outermost, within 40pt of the hand's edge.
     @MainActor
-    private func openOneLiners(_ app: XCUIApplication) -> XCUIElement {
+    private func assertOneLinersCluster(left: Bool, in app: XCUIApplication, mirrored: Bool = false, line: UInt = #line) {
         app.buttons["Open songs drawer"].tap()
         let entry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND identifier != %@", "One Liners", "editorOneLinersButton")).firstMatch
-        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        XCTAssertTrue(entry.waitForExistence(timeout: 5), line: line)
         entry.tap()
+        if mirrored { assertLayoutIsMirrored(app, element: app.buttons["Back to songs"], line: line) }
+
         let type = app.buttons["Type a one liner"]
-        XCTAssertTrue(type.waitForExistence(timeout: 5))
-        return type
+        let record = app.buttons["Record a one liner"]
+        XCTAssertTrue(type.waitForExistence(timeout: 5), line: line)
+        let width = app.frame.width
+        if left {
+            XCTAssertLessThan(type.frame.maxX, record.frame.minX, "Type should be left of Record", line: line)
+            XCTAssertLessThanOrEqual(type.frame.minX, Self.edgeTolerance, "Type should sit at the left edge", line: line)
+        } else {
+            XCTAssertGreaterThan(type.frame.minX, record.frame.maxX, "Type should be right of Record", line: line)
+            XCTAssertGreaterThanOrEqual(type.frame.maxX, width - Self.edgeTolerance, "Type should sit at the right edge", line: line)
+        }
     }
 }
