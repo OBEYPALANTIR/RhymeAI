@@ -431,7 +431,7 @@ final class EditorViewModel: ObservableObject {
     private var suggestionsRequestID: UUID?
     private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
-    private var countTask: Task<Void, Never>?
+    private(set) var countTask: Task<Void, Never>?
     /// Counts the header's words and syllables, or nil once its task is cancelled; tests substitute a slow or instant one.
     var countLyrics: @Sendable (String) -> (words: Int, syllables: Int)? = { lyrics in
         guard let syllables = SyllableCounter.cancellableLyricSyllableCount(lyrics) else { return nil }
