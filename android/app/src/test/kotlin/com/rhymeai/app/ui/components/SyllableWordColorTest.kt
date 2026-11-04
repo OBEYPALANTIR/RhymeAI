@@ -14,6 +14,7 @@ import com.rhymeai.app.ui.theme.SyllableRoseOnLight
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
 import com.rhymeai.app.ui.theme.editorWordCountColor
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyllableWordColorTest {
@@ -139,5 +140,18 @@ class SyllableWordColorTest {
             analysis.map { it.start to it.endExclusive },
             colorSyllableUnderlines(analysis, isDark = true).map { it.start to it.endExclusive }
         )
+    }
+
+    @Test
+    fun underlinesDescribeTheCurrentTextAfterEveryConsecutiveEdit() {
+        val header = "[Chorus]\n"
+        var text = header + "Burning bright in the night light"
+        while (text != header) {
+            val spans = analyzeSyllableUnderlines(text, enabled = true)
+            val words = Regex("[A-Za-z]+").findAll(text.removePrefix(header)).map { it.range.first + header.length }.toList()
+            assertEquals(text, words, spans.map { it.start })
+            assertTrue(text, spans.all { it.endExclusive <= text.length })
+            text = text.dropLast(1)
+        }
     }
 }

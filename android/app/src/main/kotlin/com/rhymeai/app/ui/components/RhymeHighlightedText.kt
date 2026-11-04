@@ -2,11 +2,7 @@ package com.rhymeai.app.ui.components
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -23,8 +19,6 @@ import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.RhymePhonetics
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 private val wordPattern = LyricTokenizer.wordPattern
 
@@ -112,22 +106,18 @@ internal fun rememberAnalysisText(
         return remember(text) { AnnotatedString(text) }
     }
 
-    var result by remember(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
-        mutableStateOf(AnnotatedString(text))
+    // Built in composition for the text being drawn: a background pass left the plain text
+    // showing for a frame or two after every keystroke. Per-word analyses are cached.
+    return remember(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
+        buildAnalysisText(
+            text = text,
+            baseTextColor = baseTextColor,
+            rhymePalette = palette,
+            isDark = isDark,
+            rhymeEnabled = enabled,
+            syllablesEnabled = syllablesEnabled
+        )
     }
-    LaunchedEffect(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
-        result = withContext(Dispatchers.Default) {
-            buildAnalysisText(
-                text = text,
-                baseTextColor = baseTextColor,
-                rhymePalette = palette,
-                isDark = isDark,
-                rhymeEnabled = enabled,
-                syllablesEnabled = syllablesEnabled
-            )
-        }
-    }
-    return result
 }
 
 internal fun buildAnalysisText(
