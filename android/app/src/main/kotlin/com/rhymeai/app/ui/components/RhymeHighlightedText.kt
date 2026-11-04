@@ -20,6 +20,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
+import com.rhymeai.app.util.DictionaryMemo
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.util.RhymePhonetics
@@ -51,34 +52,16 @@ private data class DocumentAnalysis(
 )
 
 private object WordAnalysisCache {
-    private const val CAPACITY = 4096
-    private val entries = LinkedHashMap<String, WordAnalysis>()
-
-    private var dictionary: PronunciationDictionary? = null
+    private val entries = DictionaryMemo<WordAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 64)
 
     fun analysisFor(word: String): WordAnalysis {
         val key = word.lowercase()
-        synchronized(entries) {
-            // Rhyme keys made before the pronunciation dictionary finished loading used the spelling fallback.
-            if (dictionary !== PronunciationDictionary.shared) {
-                dictionary = PronunciationDictionary.shared
-                entries.clear()
-            }
-            entries[key]?.let { return it }
+        return entries.getOrPut(key) {
+            WordAnalysis(
+                rhymeKeys = RhymePhonetics.rhymeKeys(key, maxDepth = 2),
+                syllableCount = SyllableCounter.count(key)
+            )
         }
-
-        val computed = WordAnalysis(
-            rhymeKeys = RhymePhonetics.rhymeKeys(key, maxDepth = 2),
-            syllableCount = SyllableCounter.count(key)
-        )
-        synchronized(entries) {
-            entries[key]?.let { return it }
-            if (entries.size >= CAPACITY) {
-                entries.clear()
-            }
-            entries[key] = computed
-        }
-        return computed
     }
 }
 
@@ -86,29 +69,16 @@ private object WordAnalysisCache {
 private class LineAnalysis(val tokens: List<Token>, val words: List<WordAnalysis>)
 
 private object LineAnalysisCache {
-    private const val CAPACITY = 2048
     private val empty = LineAnalysis(emptyList(), emptyList())
-    private val entries = HashMap<String, LineAnalysis>()
 
-    private var dictionary: PronunciationDictionary? = null
+    // Bounded by characters, and a huge pasted paragraph is analysed directly rather than kept.
+    private val entries = DictionaryMemo<LineAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 2_000)
 
-    fun analysisFor(line: String): LineAnalysis {
-        synchronized(entries) {
-            if (dictionary !== PronunciationDictionary.shared) {
-                dictionary = PronunciationDictionary.shared
-                entries.clear()
-            }
-            entries[line]?.let { return it }
-        }
-        val computed = if (SectionMap.headerTitle(line) != null) empty else {
+    fun analysisFor(line: String): LineAnalysis = entries.getOrPut(line) {
+        if (SectionMap.headerTitle(line) != null) empty else {
             val tokens = wordPattern.findAll(line).map { Token(it.value, it.range.first, it.range.last + 1) }.toList()
             LineAnalysis(tokens, tokens.map { WordAnalysisCache.analysisFor(it.text) })
         }
-        synchronized(entries) {
-            if (entries.size >= CAPACITY) entries.clear()
-            entries[line] = computed
-        }
-        return computed
     }
 }
 
@@ -218,17 +188,8 @@ internal fun shiftAnalysis(previous: AnnotatedString, text: String): AnnotatedSt
     return AnnotatedString(text, spans)
 }
 
-internal fun buildAnalysisText(
-    text: String,
-    baseTextColor: Color,
-    rhymePalette: List<Color>,
-    isDark: Boolean,
-    rhymeEnabled: Boolean,
-    syllablesEnabled: Boolean
-): AnnotatedString {
-    val documentAnalysis = DocumentAnalysisCache.analysisFor(
-        DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
-    ) {
+private fun analyseDocument(request: DocumentAnalysisRequest, text: String, rhymeEnabled: Boolean): DocumentAnalysis =
+    DocumentAnalysisCache.analysisFor(request) {
         val tokens = ArrayList<Token>()
         val analyses = ArrayList<WordAnalysis>()
         var lineStart = 0
@@ -256,6 +217,22 @@ internal fun buildAnalysisText(
             }
         )
     }
+
+internal fun buildAnalysisText(
+    text: String,
+    baseTextColor: Color,
+    rhymePalette: List<Color>,
+    isDark: Boolean,
+    rhymeEnabled: Boolean,
+    syllablesEnabled: Boolean
+): AnnotatedString {
+    var request: DocumentAnalysisRequest
+    var documentAnalysis: DocumentAnalysis
+    // Rebuilt if the pronunciation dictionary finished loading while this pass ran.
+    do {
+        request = DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
+        documentAnalysis = analyseDocument(request, text, rhymeEnabled)
+    } while (request.dictionary !== PronunciationDictionary.shared)
     val tokens = documentAnalysis.tokens
     val analyses = documentAnalysis.words
     val familyKeys = documentAnalysis.familyKeys

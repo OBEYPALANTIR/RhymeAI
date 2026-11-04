@@ -2,8 +2,10 @@ package com.rhymeai.app.util
 
 object SyllableCounter {
     private val whitespaceSplitPattern = Regex("\\s+")
-    private const val WORD_CACHE_CAPACITY = 8192
-    private const val LINE_CACHE_CAPACITY = 2048
+    // Bounded by characters, not entries: one huge pasted paragraph edited repeatedly must not pile up.
+    private const val MEMO_CHARACTERS = 200_000
+    private const val MAX_MEMO_LINE_CHARACTERS = 2_000
+    private const val MAX_MEMO_WORD_CHARACTERS = 64
 
     /**
      * One lyric line, counted once. [tokens] holds start, endExclusive and syllables for each
@@ -12,25 +14,17 @@ object SyllableCounter {
     class LyricLine internal constructor(val words: Int, val syllables: Int, val tokens: IntArray)
 
     private val emptyLine = LyricLine(0, 0, IntArray(0))
-    private val lock = Any()
-    private var cachedDictionary: PronunciationDictionary? = null
-    private val wordCounts = HashMap<String, Int>()
-    private val lines = HashMap<String, LyricLine>()
+    private val wordCounts = DictionaryMemo<Int>(MEMO_CHARACTERS, MAX_MEMO_WORD_CHARACTERS)
+    private val lines = DictionaryMemo<LyricLine>(MEMO_CHARACTERS, MAX_MEMO_LINE_CHARACTERS)
+
+    /** Characters of lyric lines the per-line memo currently keeps. */
+    internal val retainedLineCharacters: Int get() = lines.retainedCharacters
 
     /** Syllables in [word]. One memo, keyed by the normalised word, serves the counter, underlines and colouring. */
     fun count(word: String): Int {
         val key = ProsodyAnalyzer.normalizeWord(word)
         if (key.isEmpty()) return 0
-        synchronized(lock) {
-            dropIfDictionaryChanged()
-            wordCounts[key]?.let { return it }
-        }
-        val counted = ProsodyAnalyzer.countWord(key)
-        synchronized(lock) {
-            if (wordCounts.size >= WORD_CACHE_CAPACITY) wordCounts.clear()
-            wordCounts[key] = counted
-        }
-        return counted
+        return wordCounts.getOrPut(key) { ProsodyAnalyzer.countWord(key) }
     }
 
     /** The syllables of every word in [text], from the word memo (no stress or IPA work). */
@@ -41,12 +35,8 @@ object SyllableCounter {
     }
 
     /** [line] (no newline) counted once and memoised, so an edit re-counts only the lines it changed. */
-    fun lyricLine(line: String): LyricLine {
-        synchronized(lock) {
-            dropIfDictionaryChanged()
-            lines[line]?.let { return it }
-        }
-        val counted = if (SectionMap.headerTitle(line) != null) emptyLine else {
+    fun lyricLine(line: String): LyricLine = lines.getOrPut(line) {
+        if (SectionMap.headerTitle(line) != null) emptyLine else {
             val tokens = LyricTokenizer.alphanumericWordPattern.findAll(line).toList()
             val triples = IntArray(tokens.size * 3)
             tokens.forEachIndexed { index, match ->
@@ -56,11 +46,6 @@ object SyllableCounter {
             }
             LyricLine(wordCount(line), countText(line), triples)
         }
-        synchronized(lock) {
-            if (lines.size >= LINE_CACHE_CAPACITY) lines.clear()
-            lines[line] = counted
-        }
-        return counted
     }
 
     /** Calls [action] with each line's start offset in [lyrics] and its memoised count. */
@@ -85,15 +70,5 @@ object SyllableCounter {
         var total = 0
         forEachLyricLine(lyrics) { _, line -> total += line.words }
         return total
-    }
-
-    // Counts made before the pronunciation dictionary finished loading used the spelling fallback.
-    private fun dropIfDictionaryChanged() {
-        val dictionary = PronunciationDictionary.shared
-        if (dictionary !== cachedDictionary) {
-            cachedDictionary = dictionary
-            wordCounts.clear()
-            lines.clear()
-        }
     }
 }
