@@ -52,14 +52,35 @@ struct AppAppearanceTests {
         _ = cache.path(for: .paper, layer: .paperRules, in: phoneSize)
         #expect(cache.generatedPathCount == 1)
 
-        _ = cache.path(for: .paper, layer: .paperFibers, in: phoneSize)
-        _ = cache.path(for: .graphite, layer: .graphiteGrain, in: phoneSize)
+        _ = cache.path(for: .paper, layer: .grain, in: phoneSize)
+        _ = cache.path(for: .graphite, layer: .grain, in: phoneSize)
         _ = cache.path(
             for: .paper,
             layer: .paperRules,
             in: CGRect(x: 0, y: 0, width: 852, height: 393)
         )
         #expect(cache.generatedPathCount == 4)
+    }
+
+    @Test
+    func grainPlacesOneStableMarkPerGridCell() {
+        // 16pt rows; 16pt columns on Ink, 22pt elsewhere.
+        let rect = CGRect(x: 0, y: 0, width: 352, height: 160)
+        func markCount(_ path: CGPath) -> Int {
+            var count = 0
+            path.applyWithBlock { element in
+                if element.pointee.type == .moveToPoint { count += 1 }
+            }
+            return count
+        }
+
+        #expect(markCount(AppearanceTexturePathCache.grainPath(appearance: .ink, in: rect)) == 22 * 10)
+        #expect(markCount(AppearanceTexturePathCache.grainPath(appearance: .paper, in: rect)) == 16 * 10)
+        #expect(markCount(AppearanceTexturePathCache.grainPath(appearance: .graphite, in: rect)) == 16 * 10)
+        #expect(
+            AppearanceTexturePathCache.grainPath(appearance: .paper, in: rect)
+                == AppearanceTexturePathCache.grainPath(appearance: .paper, in: rect)
+        )
     }
 
     @Test
