@@ -447,6 +447,47 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(undone.locations == [0: 0, 4: 3, 8: 7])
     }
 
+    @Test func editsOnTwoLinesTheDelegateMissedEachKeepTheirOwnCharacters() async throws {
+        // "yellow" is split on the first line and "follow" loses its "f" on the second.
+        let old = "yellow music\nfollow music"
+        let new = "yel low music\nollow music"
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 6), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 7, length: 5), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 13, length: 6), foreground: nil, underline: .green),
+            LyricsColorSpan(range: NSRange(location: 20, length: 5), foreground: nil, underline: .purple)
+        ]
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: old, to: new)
+        #expect(moved.spans.map(\.range) == [
+            NSRange(location: 0, length: 3), NSRange(location: 4, length: 3), NSRange(location: 8, length: 5),
+            NSRange(location: 14, length: 5), NSRange(location: 20, length: 5)
+        ])
+        #expect(moved.spans.map(\.underline) == [.red, .red, .blue, .green, .purple])
+        #expect(moved.locations == [0: 0, 7: 8, 13: 14, 20: 20])
+
+        // In the editor, every surviving line keeps its layer through the same edit.
+        let editor = Editor(old)
+        await editor.analyse()
+        let layers = (editor.underlines.line(at: 0), editor.underlines.line(at: 7),
+                      editor.underlines.line(at: 13), editor.underlines.line(at: 20))
+        editor.textView.text = new
+        editor.coordinator.textViewDidChange(editor.textView)
+        #expect(editor.underlines.line(at: 0) === layers.0)
+        #expect(editor.underlines.line(at: 8) === layers.1)
+        #expect(editor.underlines.line(at: 14) === layers.2)
+        #expect(editor.underlines.line(at: 20) === layers.3)
+        #expect(editor.underlines.line(at: 4) != nil)
+    }
+
+    @Test func repeatedWordsEditedAtBothEndsKeepTheirPlaces() {
+        let spans = [0, 3, 6, 9].map {
+            LyricsColorSpan(range: NSRange(location: $0, length: 2), foreground: nil, underline: .red)
+        }
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "la la\nla la", to: "lo la\nla le")
+        #expect(moved.spans.map(\.range) == [0, 3, 6, 9].map { NSRange(location: $0, length: 2) })
+        #expect(moved.locations == [0: 0, 3: 3, 6: 6, 9: 9])
+    }
+
     // MARK: - Motion
 
     @Test func aDeletionEasesTheLineToItsNewWidthOnTheFeedbackTier() async throws {
