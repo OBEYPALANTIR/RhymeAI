@@ -194,6 +194,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.floatingChromeShadow
 import com.rhymeai.app.ui.theme.outlineStrongColorFor
 import com.rhymeai.app.ui.theme.selectionColorFor
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
@@ -1435,6 +1436,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 scaleX = unBlockPressScale.value
                                 scaleY = unBlockPressScale.value
                             }
+                            .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.primary,
@@ -1491,6 +1493,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 scaleX = micPressScale.value
                                 scaleY = micPressScale.value
                             }
+                            .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
