@@ -10,47 +10,44 @@ struct EditorAnalysisCueTests {
 
     /// Each deletion updates the header's counts with no debounce, and the
     /// previous counts stay until the new ones are ready: never zero in between.
+    /// The rhyme context's debounce is held shut for the whole test, so counts
+    /// that waited on it (as they did behind its 120ms sleep) would never land.
     @Test @MainActor func headerCountsFollowEachDeletionWithoutAnEmptyState() async throws {
-        // An instant stand-in counter (characters for syllables), so only
-        // scheduling separates the edit from its counts.
         let viewModel = EditorViewModel()
         viewModel.newProject()
+        let debounceWaits = HookBox(0)
+        viewModel.derivedStateDebounce = { _ in
+            debounceWaits.value += 1
+            try await Task.sleep(for: .seconds(3_600))
+        }
+        // An instant stand-in counter (characters for syllables).
         let count: @Sendable (String) -> (words: Int, syllables: Int) = { text in
             (SyllableCounter.lyricWordCount(text), text.utf16.count)
         }
         viewModel.countLyrics = count
         var seen: [(words: Int, syllables: Int)] = []
-        var latencies: [Duration] = []
+        // A sanity bound only: a loaded machine can be slow, never stuck.
         func settle(on text: String) async throws {
             let expected = count(text)
-            let start = ContinuousClock.now
-            while (viewModel.wordCount, viewModel.syllableCount) != expected, ContinuousClock.now < start + .seconds(30) {
+            let deadline = ContinuousClock.now + .seconds(30)
+            while (viewModel.wordCount, viewModel.syllableCount) != expected, ContinuousClock.now < deadline {
                 seen.append((viewModel.wordCount, viewModel.syllableCount))
                 try await Task.sleep(for: .milliseconds(1))
             }
-            latencies.append(ContinuousClock.now - start)
             #expect((viewModel.wordCount, viewModel.syllableCount) == expected)
         }
-        var text = "yellow music follow music mellow music"
-        viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
-        try await settle(on: text)
-        seen = []
-        latencies = []
 
-        // Delete one character at a time and time every edit (each must
-        // settle within 30s). Other suites running at once can starve the
-        // executors for seconds, so the bound is on the fastest edit, which
-        // stops the loop: the old refresh slept 120ms before every count, so
-        // under it no edit, however idle the machine, could come in under 110ms.
-        while text.count > 1, latencies.allSatisfy({ $0 >= .milliseconds(110) }) {
-            text.removeLast()
+        viewModel.onLyricsChanged("yellow music", timestampMilliseconds: 0)
+        try await settle(on: "yellow music")
+        seen = []
+        for text in ["yellow musi", "yellow mus", "yellow mu", "yellow m", "yellow"] {
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
             try await settle(on: text)
         }
 
         #expect(seen.allSatisfy { $0.words > 0 && $0.syllables > 0 })
-        // The old refresh slept 120ms before counting, a floor no edit could beat.
-        #expect(latencies.min()! < .milliseconds(110), "\(latencies)")
+        // The debounce was in force throughout, and the counts never waited on it.
+        #expect(debounceWaits.value > 0)
     }
 
     /// A slow count for an older text that finishes after the newer text's

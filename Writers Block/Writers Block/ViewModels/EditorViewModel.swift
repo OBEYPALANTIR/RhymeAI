@@ -432,6 +432,8 @@ final class EditorViewModel: ObservableObject {
     private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
     private(set) var countTask: Task<Void, Never>?
+    /// Waits out the rhyme context's debounce; tests hold it to show the header counts never wait on it.
+    var derivedStateDebounce: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     /// Counts the header's words and syllables, or nil once its task is cancelled; tests substitute a slow or instant one.
     var countLyrics: @Sendable (String) -> (words: Int, syllables: Int)? = { lyrics in
         guard let syllables = SyllableCounter.cancellableLyricSyllableCount(lyrics) else { return nil }
@@ -922,8 +924,9 @@ final class EditorViewModel: ObservableObject {
 
     private func scheduleDerivedStateRefresh() {
         derivedStateTask?.cancel()
+        let debounce = derivedStateDebounce
         derivedStateTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await debounce(.milliseconds(120))
             guard !Task.isCancelled, let self else { return }
             let lyrics = self.lyrics
             let cursorPosition = self.cursorPosition
