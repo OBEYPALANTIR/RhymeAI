@@ -115,7 +115,7 @@ class LyricSyllableColourUiTest {
 
     private fun settle() {
         composeRule.waitForIdle()
-        // Lyric analysis is debounced and built off the main thread.
+        // Let appearance and focus transitions and the underline easing finish before sampling.
         SystemClock.sleep(700)
         composeRule.waitForIdle()
     }
