@@ -335,42 +335,51 @@ struct OneLinersView: View {
 
     // MARK: - Floating actions
 
+    /// Shaped like the editor's UnBlock + mic cluster: the wide Record pill
+    /// inside, the round Type button outermost at the trailing edge.
     private var floatingActions: some View {
-        HStack(spacing: RhymeAITokens.Rhythm.related) {
-            Button {
-                openCapture(.type)
-            } label: {
-                Image(systemName: "keyboard")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(palette.primaryInk)
-                    .frame(width: RhymeAITokens.Rhythm.primary, height: RhymeAITokens.Rhythm.primary)
-                    .background(palette.surface, in: Circle())
-                    .overlay(Circle().strokeBorder(palette.outline, lineWidth: 1))
-                    .chromeShadow()
-            }
-            .buttonStyle(.rhymePress)
-            .accessibilityLabel("Type a one liner")
-
-            Button {
-                viewModel.voiceMemoService.stopPlayback()
-                openCapture(.record)
-            } label: {
-                HStack(spacing: RhymeAITokens.Rhythm.related) {
-                    Image(systemName: "mic.fill")
-                        .font(.title3.weight(.medium))
-                    Text("Record")
-                        .font(.body.weight(.semibold))
-                }
-                .padding(.horizontal, RhymeAITokens.Rhythm.standard)
-                .frame(minHeight: RhymeAITokens.Rhythm.primary)
-                .appearanceActionSurface(cornerRadius: RhymeAITokens.Rhythm.primary / 2)
-                .chromeShadow()
-            }
-            .buttonStyle(.rhymePress)
-            .accessibilityLabel("Record a one liner")
+        HStack(spacing: RhymeAITokens.Spacing.sm) {
+            recordButton
+            typeButton
         }
-        .padding(.trailing, RhymeAITokens.Rhythm.standard)
-        .padding(.bottom, RhymeAITokens.Rhythm.related)
+        .padding(.horizontal, RhymeAITokens.Spacing.md)
+        .padding(.bottom, RhymeAITokens.Spacing.md)
+    }
+
+    private var typeButton: some View {
+        Button {
+            openCapture(.type)
+        } label: {
+            Image(systemName: "keyboard")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(palette.primaryInk)
+                .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
+                .background(palette.surface, in: Circle())
+                .overlay(Circle().strokeBorder(palette.outline, lineWidth: 1))
+                .chromeShadow()
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel("Type a one liner")
+    }
+
+    private var recordButton: some View {
+        Button {
+            viewModel.voiceMemoService.stopPlayback()
+            openCapture(.record)
+        } label: {
+            HStack(spacing: RhymeAITokens.Spacing.xs) {
+                Image(systemName: "mic.fill")
+                    .font(.title3.weight(.medium))
+                Text("Record")
+                    .font(.body.weight(.semibold))
+            }
+            .padding(.horizontal, RhymeAITokens.Spacing.md)
+            .frame(minWidth: EditorViewConstants.UnBlockChrome.expandedButtonWidth, minHeight: RhymeAITokens.Touch.comfortable)
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
+            .chromeShadow()
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel("Record a one liner")
     }
 
     /// A Record or Type from outside opens its capture; while one is opening or open
