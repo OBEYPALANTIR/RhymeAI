@@ -263,8 +263,10 @@ opacity:
   saved-status: 0.80
   disabled-export: 0.40
   paper-rule-texture: 0.055
-  paper-fiber-texture: 0.024
-  graphite-grain-texture: 0.018
+  paper-fiber-texture: 0.045
+  paper-edge-vignette: 0.02
+  ink-grain-texture: 0.03
+  graphite-grain-texture: 0.04
 elevation:
   flat: 0px
   android-icon-tonal: 4px
@@ -314,7 +316,7 @@ effects:
   unblock-scribble-stroke: 1.6px
   android-syllable-underline-width: 3px
   android-syllable-underline-gap: 2px
-  texture: "iOS draws Paper rules and fibers and Graphite grain; Android draws Graphite grain only. Ink is untextured."
+  texture: "Both platforms draw a grain on every appearance: Paper fibre with an edge vignette, Ink a finer grain, Graphite grain. iOS Paper also draws rules."
 components:
   app-screen:
     backgroundColor: "{colors.background}"
@@ -608,7 +610,7 @@ Lyric analysis colours and underlines are drawn in the editor's own text on both
 
 Lyric analysis is shown in colour on both platforms. Rhyme families tint the word in its family colour at semibold weight; when rhyme colouring and syllable cues are both on, syllable count appears as an underline in the syllable colour, and when rhyme colouring is off the syllable cue instead tints the whole word (semibold) so the foreground colour is never double-claimed. There is no Analysis Style setting on either platform: the Ink Marks presentation (underline patterns and font weights in place of hue) has been removed from both, and a stored Ink Marks choice from an older version is discarded on iOS and ignored on Android.
 
-Texture is part of the appearance. On iOS, Paper draws faint ruled lines every 28pt (primary ink at 5.5%) plus sparse fibre marks (2.4%), Graphite draws a fine grain (1.8%), and Ink is plain; the texture is removed when Reduce Transparency or Increase Contrast is on. Android draws only the Graphite grain (1.8%), removed when the system high-contrast-text setting is on; Android Paper is untextured.
+Texture is part of the appearance on both platforms. Every appearance draws a grain of short diagonal marks on a 16 by 22 (dp/pt) grid, one cached path drawn behind the content: Paper fibre at 4.5% in the strong outline colour plus a 2% radial edge vignette, Ink a finer grain at 3% on 16-unit columns in the outline colour, Graphite at 4%. iOS Paper also keeps its faint ruled lines every 28pt (primary ink at 5.5%). The texture is removed when Reduce Transparency or Increase Contrast is on (iOS) or the system high-contrast-text setting is on (Android).
 
 ## Typography
 
@@ -686,21 +688,20 @@ Settings is a native sheet on iOS (on a regular width it requests at least 420pt
 
 ## Elevation & Depth
 
-The interface is flat. Surfaces are separated by a 1px border and a small tonal step, not by blur; shadows are confined to the few places listed below.
+Depth comes from tone first, then a few shadows, never blur. Surfaces sit on a three-step scale with a job for each step: *page* (the surface colour, no border, no shadow), *raised* (the low surface tone, no border; option cards, drawer rows, One Liners rows and search fields, with a 1-unit inset top highlight on rows for a pressed-paper feel), and *floating* (the high surface tone, a 1-unit hairline at 35% of the outline, and a soft ink shadow at 6–10%; the welcome Continue and One Liners cards). Containers no longer carry a plain 1px border; borders that remain mean state (selected, active, primary tint), and Increase Contrast / high-contrast text puts a strong 1-unit border back on raised and floating surfaces. The drawer panel sits on the high surface tone (`surfaceDim` on Android) so its rows read as lighter slabs.
 
 On iOS most bordered surfaces go through `liquidGlassSurface`, which draws an opaque palette fill with a 1px border: resting surfaces use the surface colour and the outline colour; interactive surfaces use the raised surface colour and the strong outline. With Increase Contrast on, those borders all use the strong outline. A few controls draw their own 1px border instead and do not react to Increase Contrast: the custom segmented control, the Word Inspector chips, and the welcome app icon. There is no `.ultraThinMaterial`, `.glassEffect`, or blur in the iOS app, and `liquidGlassGroup` is a no-op.
 
 Shadows on iOS are limited to five places:
 
 - The welcome app icon: primary ink at 14%, radius 18, y 8.
-- The UnBlock pill: primary ink at 26%, radius 12, y 4.
-- The mic button and recording pill: primary ink at 18%, radius 12, y 4.
+- The floating chrome (UnBlock pill, mic button and recording pill, and the One Liners Record pill and Type button): a two-layer ink shadow, a contact layer (primary ink at 12%, radius 1, y 1) and an ambient layer (primary ink at 8%, radius 12, y 6). Graphite uses black instead of its warm ink so the shadow does not glow. Increase Contrast or Reduce Transparency keep only the contact layer.
 - The songs drawer panel: black at 35%, radius 26, x 10. The shadow is attached to the panel background only; it was deliberately removed from the drawer's content because it rendered as grey smudges under every control on the light appearances. A black shadow does not show on Graphite's canvas, so the panel also has a 1pt hairline in the palette outline colour on its trailing edge.
 - Floating toasts in the drawer and recordings screen: black at 30%, radius 14, y 4.
 
 Cards, rows, suggestion cards, chips, settings groups, the assistant panel, and the editor have no shadow.
 
-On Android, depth is Material tonal colour plus 1dp borders. The drawer and settings page set tonal elevation to 0. The only elevations set explicitly in the UI code are the welcome app icon (4dp tonal, 6dp shadow) and the recordings selection bar (3dp tonal). The floating actions are flat fills. Stock Material components — alert dialogs, dropdown menus, modal bottom sheets, and snackbars — keep their default Material elevation.
+On Android the same scale lives in `ui/theme/Surfaces.kt` (`SurfaceLevel`, `Modifier.raisedSurface`, `Modifier.floatingChromeShadow`). The floating chrome shadow is the same two layers, tinted with the ink colour through the shadow's spot and ambient colours; because the platform multiplies those alphas (spot 0.19, ambient 0.039) the code divides each by its own multiplier to reach the strengths above, and on API 26–27, which ignore shadow colours, every lift falls back to the stock 1dp contact shadow. Animations off or high-contrast text keep only the contact layer. The drawer and settings page still set tonal elevation to 0; the welcome app icon keeps its 6dp shadow and the recordings selection bar its 3dp tonal step. Stock Material components — alert dialogs, dropdown menus, modal bottom sheets, and snackbars — keep their default Material elevation.
 
 Scrims are functional. The palette scrim is the ink colour at 42% on Ink and Paper and black at 55% on Graphite. The iOS songs drawer uses the palette scrim.
 
