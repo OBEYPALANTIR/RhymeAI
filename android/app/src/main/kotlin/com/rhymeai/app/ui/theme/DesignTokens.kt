@@ -98,6 +98,23 @@ object DesignTokens {
         val expandedWidth = 584.dp
     }
 
+    /** Surface scale: page (flat), raised (tonal slab), floating (hairline + soft ink shadow). */
+    object Elevation {
+        val hairline = 1.dp
+        // outlineVariant is the strong outline in every appearance; at full ink it reads as a box.
+        const val hairlineAlpha = 0.35f
+        val floatingShadow = 3.dp
+        // Visible shadow strength; Surfaces.kt compensates for the platform's shadow alpha.
+        const val floatingShadowAlpha = 0.10f
+        val contactShadow = 1.dp
+        const val contactShadowAlpha = 0.12f
+        val ambientShadow = 12.dp
+        const val ambientShadowAlpha = 0.08f
+        val rowHighlight = 1.dp
+        const val rowHighlightAlpha = 0.6f
+        val rowGap = 2.dp
+    }
+
     object Radius {
         val xs = 6.dp
         val sm = 8.dp
