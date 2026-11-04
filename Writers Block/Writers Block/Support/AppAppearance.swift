@@ -94,6 +94,10 @@ struct AppAppearancePalette {
     let canvas: Color
     let surface: Color
     let raisedSurface: Color
+    /// Raised rows and cards: a half step off the page.
+    let surfaceLow: Color
+    /// Floating cards and the drawer panel.
+    let surfaceHigh: Color
     let primaryInk: Color
     let secondaryInk: Color
     let outline: Color
@@ -108,11 +112,15 @@ struct AppAppearancePalette {
     let warning: Color
     let error: Color
     let recording: Color
+    /// Shadow tint: the ink on the light appearances; black on Graphite, where a cream shadow would read as a glow.
+    let shadowInk: Color
 
     fileprivate static let ink = AppAppearancePalette(
         canvas: Color(hex: 0xFCFCF8),
         surface: Color(hex: 0xFCFCF8),
         raisedSurface: Color(hex: 0xE5E5DE),
+        surfaceLow: Color(hex: 0xF7F7F2),
+        surfaceHigh: Color(hex: 0xE5E5DE),
         primaryInk: Color(hex: 0x050505),
         secondaryInk: Color(hex: 0x4D4D48),
         outline: Color(hex: 0xB5B5AD),
@@ -126,13 +134,16 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.ink.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.ink.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.ink.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.ink.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.ink.statusRecordingHexValue),
+        shadowInk: Color(hex: 0x050505)
     )
 
     fileprivate static let paper = AppAppearancePalette(
         canvas: Color(hex: 0xF3EEDF),
         surface: Color(hex: 0xF8F3E6),
         raisedSurface: Color(hex: 0xDDD4BF),
+        surfaceLow: Color(hex: 0xEFE8D7),
+        surfaceHigh: Color(hex: 0xDDD4BF),
         primaryInk: Color(hex: 0x302E2A),
         secondaryInk: Color(hex: 0x5D574E),
         outline: Color(hex: 0xB7AC94),
@@ -146,13 +157,16 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.paper.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.paper.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.paper.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.paper.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.paper.statusRecordingHexValue),
+        shadowInk: Color(hex: 0x302E2A)
     )
 
     fileprivate static let graphite = AppAppearancePalette(
         canvas: Color(hex: 0x171716),
         surface: Color(hex: 0x1C1C1B),
         raisedSurface: Color(hex: 0x2B2B28),
+        surfaceLow: Color(hex: 0x20201E),
+        surfaceHigh: Color(hex: 0x2B2B28),
         primaryInk: Color(hex: 0xF6F2E8),
         secondaryInk: Color(hex: 0xC4BEB3),
         outline: Color(hex: 0x484843),
@@ -166,7 +180,8 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.graphite.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.graphite.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.graphite.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.graphite.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.graphite.statusRecordingHexValue),
+        shadowInk: Color.black
     )
 }
 

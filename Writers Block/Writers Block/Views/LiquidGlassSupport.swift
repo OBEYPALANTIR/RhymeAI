@@ -201,7 +201,89 @@ private struct AppearanceActionSurfaceModifier: ViewModifier {
     }
 }
 
+/// Depth by tone: the page, a raised slab a half step off it, and a floating
+/// card with a hairline and a soft ink shadow. Android mirror: `SurfaceLevel`.
+enum SurfaceLevel {
+    case page
+    case raised
+    case floating
+}
+
+private struct SurfaceLevelModifier<S: InsettableShape>: ViewModifier {
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    let level: SurfaceLevel
+    let shape: S
+
+    func body(content: Content) -> some View {
+        let palette = appearance.palette
+        let increasedContrast = colorSchemeContrast == .increased
+
+        content
+            // Fill and shadow live on the background only, so text and glyphs cast none.
+            .background {
+                switch level {
+                case .page:
+                    shape.fill(palette.surface)
+                case .raised:
+                    shape.fill(palette.surfaceLow)
+                        // Pressed-paper edge: a 1pt highlight along the top, fading by the corners' end.
+                        .overlay {
+                            shape.inset(by: 0.5)
+                                .stroke(palette.surface.opacity(0.6), lineWidth: 1)
+                                .mask(alignment: .top) {
+                                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                        .frame(height: RhymeAITokens.Radius.md)
+                                }
+                        }
+                case .floating:
+                    shape.fill(palette.surfaceHigh)
+                        .shadow(color: palette.shadowInk.opacity(0.08), radius: 3, y: 2)
+                }
+            }
+            .overlay {
+                // Tone alone is too faint a boundary under Increase Contrast.
+                if increasedContrast, level != .page {
+                    shape.strokeBorder(palette.outlineStrong, lineWidth: 1)
+                } else if level == .floating {
+                    shape.strokeBorder(palette.outline, lineWidth: RhymeAITokens.Spacing.hairline)
+                }
+            }
+    }
+}
+
+/// Two-layer shadow for the floating chrome (UnBlock, mic, Record / Type):
+/// a tight contact shadow plus a wide ambient one. Increase Contrast and
+/// Reduce Transparency keep only the contact shadow.
+private struct ChromeShadowModifier: ViewModifier {
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        let ink = appearance.palette.shadowInk
+        let contactOnly = reduceTransparency || colorSchemeContrast == .increased
+
+        content
+            .shadow(color: ink.opacity(0.12), radius: 1, y: 1)
+            .shadow(color: contactOnly ? .clear : ink.opacity(0.08), radius: 12, y: 6)
+    }
+}
+
 extension View {
+    func surfaceLevel<S: InsettableShape>(_ level: SurfaceLevel, shape: S) -> some View {
+        modifier(SurfaceLevelModifier(level: level, shape: shape))
+    }
+
+    func surfaceLevel(_ level: SurfaceLevel, cornerRadius: CGFloat) -> some View {
+        surfaceLevel(level, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    func chromeShadow() -> some View {
+        modifier(ChromeShadowModifier())
+    }
+
     func liquidGlassSurface(
         cornerRadius: CGFloat,
         tint: Color? = nil,
