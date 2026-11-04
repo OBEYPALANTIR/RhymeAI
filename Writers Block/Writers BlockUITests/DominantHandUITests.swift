@@ -9,7 +9,9 @@ final class DominantHandUITests: XCTestCase {
         "-AppleTextDirection", "YES",
         "-NSForceRightToLeftWritingDirection", "YES",
     ]
-    /// How close the round button must sit to its hand's screen edge.
+    /// How close the round button must sit to its hand's edge of the content
+    /// it floats over: the editor column (beside the inline assistant on iPad)
+    /// or the One Liners list (capped at 740pt on a regular width).
     private static let edgeTolerance: CGFloat = 40
 
     override func setUpWithError() throws {
@@ -86,7 +88,7 @@ final class DominantHandUITests: XCTestCase {
         XCTAssertTrue(timer.waitForExistence(timeout: 5), "The recording timer should show")
         Thread.sleep(forTimeInterval: 1)  // the pill finishes stretching
         let width = app.frame.width
-        XCTAssertLessThanOrEqual(mic.frame.minX, Self.edgeTolerance, "The stop button should stay at the left edge")
+        XCTAssertLessThanOrEqual(mic.frame.minX - editorColumn(in: app).minX, Self.edgeTolerance, "The stop button should stay at the left edge")
         XCTAssertGreaterThan(timer.frame.minX, mic.frame.maxX - 1, "The pill should grow right, toward the centre")
         XCTAssertLessThanOrEqual(timer.frame.maxX, width, "The recording pill ran off screen")
         XCTAssertLessThanOrEqual(app.buttons["unblockButton"].frame.maxX, width, "UnBlock was pushed off screen")
@@ -136,13 +138,13 @@ final class DominantHandUITests: XCTestCase {
         let mic = app.buttons["micButton"]
         let unblock = app.buttons["unblockButton"]
         XCTAssertTrue(mic.waitForExistence(timeout: 5), line: line)
-        let width = app.frame.width
+        let column = editorColumn(in: app)
         if left {
             XCTAssertLessThan(mic.frame.maxX, unblock.frame.minX, "The mic should be left of UnBlock", line: line)
-            XCTAssertLessThanOrEqual(mic.frame.minX, Self.edgeTolerance, "The mic should sit at the left edge", line: line)
+            XCTAssertLessThanOrEqual(mic.frame.minX - column.minX, Self.edgeTolerance, "The mic should sit at the left edge", line: line)
         } else {
             XCTAssertGreaterThan(mic.frame.minX, unblock.frame.maxX, "The mic should be right of UnBlock", line: line)
-            XCTAssertGreaterThanOrEqual(mic.frame.maxX, width - Self.edgeTolerance, "The mic should sit at the right edge", line: line)
+            XCTAssertLessThanOrEqual(column.maxX - mic.frame.maxX, Self.edgeTolerance, "The mic should sit at the right edge", line: line)
         }
     }
 
@@ -158,13 +160,31 @@ final class DominantHandUITests: XCTestCase {
         let type = app.buttons["Type a one liner"]
         let record = app.buttons["Record a one liner"]
         XCTAssertTrue(type.waitForExistence(timeout: 5), line: line)
-        let width = app.frame.width
+        // The cluster floats over the list, which spans the window on a
+        // compact width and is capped at 740pt and centred on a regular one.
+        let list = app.collectionViews.containing(NSPredicate(format: "label == %@", "No one liners yet.")).firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "The One Liners list is missing", line: line)
+        let content = list.frame
+        if app.horizontalSizeClass == .compact {
+            XCTAssertEqual(content.width, app.frame.width, accuracy: 1, "A compact list should span the window", line: line)
+        }
         if left {
             XCTAssertLessThan(type.frame.maxX, record.frame.minX, "Type should be left of Record", line: line)
-            XCTAssertLessThanOrEqual(type.frame.minX, Self.edgeTolerance, "Type should sit at the left edge", line: line)
+            XCTAssertLessThanOrEqual(type.frame.minX - content.minX, Self.edgeTolerance, "Type should sit at the left edge", line: line)
         } else {
             XCTAssertGreaterThan(type.frame.minX, record.frame.maxX, "Type should be right of Record", line: line)
-            XCTAssertGreaterThanOrEqual(type.frame.maxX, width - Self.edgeTolerance, "Type should sit at the right edge", line: line)
+            XCTAssertLessThanOrEqual(content.maxX - type.frame.maxX, Self.edgeTolerance, "Type should sit at the right edge", line: line)
         }
+    }
+
+    /// The editor column's horizontal extent, from its top bar's outermost
+    /// controls (the songs drawer and Settings buttons sit at its two edges,
+    /// in either layout direction). On iPad the inline assistant takes the
+    /// rest of the window, so the window edge is not the column edge.
+    @MainActor
+    private func editorColumn(in app: XCUIApplication) -> (minX: CGFloat, maxX: CGFloat) {
+        let drawer = app.buttons["Open songs drawer"].frame
+        let settings = app.buttons["Settings"].frame
+        return (min(drawer.minX, settings.minX), max(drawer.maxX, settings.maxX))
     }
 }
