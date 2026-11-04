@@ -462,8 +462,8 @@ struct LyricsTextView: UIViewRepresentable {
         }
 
         func refreshUnderlines(_ textView: UITextView, movedSpans: [Int: Int]? = nil, animated: Bool) {
-            // Composition leaves the spans as they were; the frames follow when it ends.
-            guard textView.markedTextRange == nil else { return }
+            // Measuring touches neither the storage nor the selection, so the
+            // lines follow marked text too; the analysis waits for the commit.
             underlineView?.update(
                 Self.underlineSegments(for: appliedColorSpans, in: textView),
                 movedLocations: movedSpans,
@@ -481,15 +481,31 @@ struct LyricsTextView: UIViewRepresentable {
         /// into or against a word lengthen it, and any other insertion splits it.
         private func reconcileColorsAfterEdit(_ textView: UITextView) {
             defer { pendingColorEdit = nil }
-            guard let edit = pendingColorEdit,
-                  appliedColorText == edit.source,
-                  let foreground = appliedForeground,
-                  edit.range.location <= edit.source.utf16.count,
-                  edit.range.length <= edit.source.utf16.count - edit.range.location else { return }
-            let expectedText = (edit.source as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
-            guard expectedText == textView.text else { return }
+            let text: String = textView.text
+            guard let source = appliedColorText, let foreground = appliedForeground, source != text else { return }
+            var edit = Self.edit(from: source, to: text)
+            if let pending = pendingColorEdit, pending.source == source,
+               NSMaxRange(pending.range) <= source.utf16.count,
+               (source as NSString).replacingCharacters(in: pending.range, with: pending.replacement) == text {
+                edit = (pending.range, pending.replacement)
+            }
             let moved = Self.spansMoved(appliedColorSpans, by: edit.range, replacement: edit.replacement)
-            installColors(moved.spans, for: textView.text, on: textView, foreground: foreground, movedSpans: moved.locations)
+            installColors(moved.spans, for: text, on: textView, foreground: foreground, movedSpans: moved.locations)
+        }
+
+        /// The one replacement that turns `old` into `new`. Marked text,
+        /// dictation and some system edits change the text without asking the
+        /// delegate first, so the edit is read off the two texts.
+        static func edit(from old: String, to new: String) -> (range: NSRange, replacement: String) {
+            let before = Array(old.utf16)
+            let after = Array(new.utf16)
+            var prefix = 0
+            while prefix < before.count, prefix < after.count, before[prefix] == after[prefix] { prefix += 1 }
+            var suffix = 0
+            while suffix < before.count - prefix, suffix < after.count - prefix,
+                  before[before.count - 1 - suffix] == after[after.count - 1 - suffix] { suffix += 1 }
+            let replacement = (new as NSString).substring(with: NSRange(location: prefix, length: after.count - prefix - suffix))
+            return (NSRange(location: prefix, length: before.count - prefix - suffix), replacement)
         }
 
         static func spansMoved(
@@ -504,17 +520,16 @@ struct LyricsTextView: UIViewRepresentable {
             let fullReplacement = NSRange(location: 0, length: replacementLength)
             let extendsWord = replacementLength > 0
                 && LyricRegex.word.firstMatch(in: replacement, range: fullReplacement)?.range == fullReplacement
-            var adjusted: [LyricsColorSpan] = []
-            var locations: [Int: Int] = [:]
+            // Each moved span remembers the start it had before the edit.
+            var adjusted: [(source: Int, span: LyricsColorSpan)] = []
             adjusted.reserveCapacity(spans.count + 1)
             func keep(_ span: LyricsColorSpan, from start: Int, to end: Int) {
                 guard end > start else { return }
-                if locations[span.range.location] == nil { locations[span.range.location] = start }
-                adjusted.append(LyricsColorSpan(
+                adjusted.append((span.range.location, LyricsColorSpan(
                     range: NSRange(location: start, length: end - start),
                     foreground: span.foreground,
                     underline: span.underline
-                ))
+                )))
             }
 
             for span in spans {
@@ -536,20 +551,24 @@ struct LyricsTextView: UIViewRepresentable {
                     )
                 }
             }
-            // An edit joining two words can leave their spans touching; never overlapping.
+            // An edit joining two words can leave their spans touching; never
+            // overlapping. Identity follows the clipped start, so a line keeps its layer.
             var previousEnd = 0
-            adjusted = adjusted.compactMap { span in
+            var moved: [LyricsColorSpan] = []
+            var locations: [Int: Int] = [:]
+            for (source, span) in adjusted {
                 let start = max(span.range.location, previousEnd)
                 let end = NSMaxRange(span.range)
-                guard end > start else { return nil }
+                guard end > start else { continue }
                 previousEnd = end
-                return LyricsColorSpan(
+                if locations[source] == nil { locations[source] = start }
+                moved.append(LyricsColorSpan(
                     range: NSRange(location: start, length: end - start),
                     foreground: span.foreground,
                     underline: span.underline
-                )
+                ))
             }
-            return (adjusted, locations)
+            return (moved, locations)
         }
 
         /// `sectionLabelForeground` draws section header lines ("[Verse 1]",
