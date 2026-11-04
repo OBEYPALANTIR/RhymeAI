@@ -884,15 +884,20 @@ class NewFeatureUiTest {
                 composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
             }
         } finally {
-            // The pin's own writes land first, so the restore is the last word.
-            runCatching {
+            try {
+                // The pin's own writes land first, so the restore is the last word.
                 composeRule.waitUntil(timeoutMillis = 5_000) {
                     runBlocking { repo.selectedProviderFlow.first() == AIProvider.LOCAL.name && repo.modelIdFlow.first() == vm.selectedModel.id }
                 }
-            }
-            runBlocking {
-                repo.saveSelectedProvider(providerBefore)
-                repo.saveModelId(modelBefore)
+            } finally {
+                // Closing the Activity clears the ViewModel, so a write still in flight after a
+                // timed-out wait cannot land on top of the restore.
+                scenario?.close()
+                scenario = null
+                runBlocking {
+                    repo.saveSelectedProvider(providerBefore)
+                    repo.saveModelId(modelBefore)
+                }
             }
         }
     }
