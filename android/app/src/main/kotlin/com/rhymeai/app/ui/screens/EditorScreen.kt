@@ -1,5 +1,9 @@
 package com.rhymeai.app.ui.screens
 
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.ui.AbsoluteAlignment
+import com.rhymeai.app.data.model.DominantHand
 import android.Manifest
 import android.content.pm.PackageManager
 import com.rhymeai.app.BuildConfig
@@ -138,7 +142,6 @@ import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -169,7 +172,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -183,10 +185,10 @@ import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
-import com.rhymeai.app.ui.components.KeepLabelOrder
-import com.rhymeai.app.ui.components.ProvideChromeHand
 import com.rhymeai.app.ui.components.RewriteChipBar
 import com.rhymeai.app.ui.components.chromeEdge
+import com.rhymeai.app.ui.components.chromeEdgePadding
+import com.rhymeai.app.ui.components.chromeSide
 import com.rhymeai.app.ui.components.rememberAnalysisText
 import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.WordInspectorSheet
@@ -1323,11 +1325,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 exit = fadeOut(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
                 modifier = Modifier.align(chromeEdge(viewModel.dominantHand))
             ) {
-                ProvideChromeHand(viewModel.dominantHand) {
+                val chromeLeft = viewModel.dominantHand == DominantHand.LEFT
                 KeyboardSafeActionArea(
-                    modifier = Modifier.padding(end = DesignTokens.Rhythm.standard),
+                    modifier = Modifier.chromeEdgePadding(viewModel.dominantHand, DesignTokens.Rhythm.standard),
                     extra = DesignTokens.Rhythm.section,
-                    horizontalAlignment = Alignment.End
+                    horizontalAlignment = chromeSide(viewModel.dominantHand)
                 ) {
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
@@ -1426,11 +1428,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring() else snap() }
                 ) { recording -> if (recording) 1f else 0f }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-                ) {
-                    // UnBlock collapses into a pencil circle while recording.
+                // UnBlock collapses into a pencil circle while recording.
+                val unBlockButton: @Composable () -> Unit = {
                     val unBlockInteractionSource = remember { MutableInteractionSource() }
                     val unBlockPressScale = rememberPressScale(unBlockInteractionSource)
                     Box(
@@ -1459,7 +1458,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        KeepLabelOrder {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center
@@ -1486,10 +1484,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 }
                             }
                         }
-                        }
                     }
+                }
 
-                    // Animated mic/pill — expands into the recording spectralizer.
+                // Animated mic/pill — expands into the recording spectralizer, toward the centre.
+                val micButton: @Composable () -> Unit = {
                     val micPillInteractionSource = remember { MutableInteractionSource() }
                     val micPressScale = rememberPressScale(micPillInteractionSource)
                     Box(
@@ -1544,25 +1543,31 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                     ) {
                         // Spectralizer content fades in from the same spring progress.
+                        val glyphGap = DesignTokens.EditorChrome.fabSize
+                        val innerGap = DesignTokens.EditorChrome.recordingContentStartPadding
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.recordingContentGap),
+                            horizontalArrangement = Arrangement.Absolute.spacedBy(DesignTokens.EditorChrome.recordingContentGap),
                             modifier = Modifier
-                                .align(Alignment.CenterStart)
+                                .align(if (chromeLeft) AbsoluteAlignment.CenterRight else AbsoluteAlignment.CenterLeft)
                                 .fillMaxWidth()
-                                .padding(start = DesignTokens.EditorChrome.recordingContentStartPadding, end = DesignTokens.EditorChrome.fabSize)
+                                .absolutePadding(
+                                    left = if (chromeLeft) glyphGap else innerGap,
+                                    right = if (chromeLeft) innerGap else glyphGap
+                                )
                                 .graphicsLayer {
                                     alpha = ((recProgress.value - DesignTokens.EditorChrome.recordingBarsFadeStart) /
                                         DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
                                 }
                         ) {
-                            // Newest bar beside the mic glyph, which the left hand puts on the left.
-                            val meterMirrored = LocalLayoutDirection.current == LayoutDirection.Rtl
+                            // Glyph, elapsed time, then meter outward from the glyph; the newest bar
+                            // stays beside the glyph, so the left hand mirrors the meter.
+                            val meter: @Composable RowScope.() -> Unit = {
                             Canvas(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(DesignTokens.EditorChrome.recordingMeterHeight)
-                                    .graphicsLayer { scaleX = if (meterMirrored) -1f else 1f }
+                                    .graphicsLayer { scaleX = if (chromeLeft) -1f else 1f }
                             ) {
                                 waveformRevision
                                 val pitch = size.width / amplitudeBars.size
@@ -1579,6 +1584,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     )
                                 }
                             }
+                            }
+                            val elapsed: @Composable () -> Unit = {
                             Text(
                                 text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
                                     memoService.recordingElapsedMs
@@ -1587,11 +1594,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 fontWeight = FontWeight.Medium,
                                 color = colorScheme.onSurface
                             )
+                            }
+                            if (chromeLeft) { elapsed(); meter() } else { meter(); elapsed() }
                         }
 
                         Box(
                             modifier = Modifier
-                                .align(Alignment.CenterEnd)
+                                .align(if (chromeLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight)
                                 .size(DesignTokens.EditorChrome.fabSize),
                             contentAlignment = Alignment.Center
                         ) {
@@ -1615,6 +1624,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         }
                     }
                 }
+
+                // Physical order: the round mic is always outermost at the writer's edge.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Absolute.spacedBy(DesignTokens.Spacing.sm)
+                ) {
+                    if (chromeLeft) { micButton(); unBlockButton() } else { unBlockButton(); micButton() }
                 }
                 }
             }

@@ -1176,6 +1176,10 @@ class ProjectRepositoryTest {
 
             repository.saveDominantHand(com.rhymeai.app.data.model.DominantHand.RIGHT)
             assertEquals(com.rhymeai.app.data.model.DominantHand.RIGHT, repository.dominantHandFlow.first())
+
+            // A value this version doesn't know (a newer build, a corrupt write) reads as Right.
+            dataStore.edit { it[stringPreferencesKey("dominant_hand")] = "ambidextrous" }
+            assertEquals(com.rhymeai.app.data.model.DominantHand.RIGHT, repository.dominantHandFlow.first())
         } finally {
             scope.cancel()
             directory.deleteRecursively()
