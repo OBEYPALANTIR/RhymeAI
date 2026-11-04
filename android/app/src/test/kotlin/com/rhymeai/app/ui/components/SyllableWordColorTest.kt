@@ -154,4 +154,23 @@ class SyllableWordColorTest {
             text = text.dropLast(1)
         }
     }
+
+    @Test
+    fun underlineMotionContinuesEachWordAcrossOneEdit() {
+        fun match(old: String, new: String) = matchUnderlineSpans(
+            old, analyzeSyllableUnderlines(old, enabled = true).map { it.start },
+            new, analyzeSyllableUnderlines(new, enabled = true).map { it.start until it.endExclusive }
+        ).toList()
+
+        assertEquals(listOf(0, 1), match("night light", "night ligh"))   // shortens the last word
+        assertEquals(listOf(0, 1), match("night light", "nigh light"))   // later words shift left
+        assertEquals(listOf(0, 1), match("a light", "a xlight"))         // typed at a word's start
+        assertEquals(listOf(0), match("nig ht", "night"))                // "ht" has no continuation: it fades
+        assertEquals(listOf(0, -1), match("night", "night l"))           // a new word grows from nothing
+        assertEquals(listOf(0), match("night", "light"))                 // a retyped letter keeps the line
+        assertEquals(listOf(-1, 0, 1), match("a light", "b a light"))    // a word typed before shifts the rest
+        assertEquals(listOf(1), match("a light", "light"))               // a word deleted before: "a" fades
+        assertEquals(listOf(0, 1), match("a light", "a ight"))           // a word's first letter deleted
+        assertEquals(listOf(0, -1), match("night", "nig ht"))            // a space splits a word
+    }
 }
