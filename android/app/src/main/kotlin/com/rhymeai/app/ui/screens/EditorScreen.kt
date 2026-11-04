@@ -221,11 +221,19 @@ internal data class LyricStatsSnapshot(
     val syllableCount: Int
 )
 
-/** The header counter for the text on screen; never a stale or empty value between edits. */
-internal fun lyricStatsFor(lyrics: String) = LyricStatsSnapshot(
-    wordCount = SyllableCounter.lyricWordCount(lyrics),
-    syllableCount = SyllableCounter.lyricSyllableCount(lyrics)
-)
+/**
+ * The header counter for the text on screen; never a stale or empty value between edits. Lines
+ * come from the shared per-line memo, so a keystroke re-counts only the line it changed.
+ */
+internal fun lyricStatsFor(lyrics: String): LyricStatsSnapshot {
+    var words = 0
+    var syllables = 0
+    SyllableCounter.forEachLyricLine(lyrics) { _, line ->
+        words += line.words
+        syllables += line.syllables
+    }
+    return LyricStatsSnapshot(wordCount = words, syllableCount = syllables)
+}
 
 private const val FAKE_RECORDING_EXTRA = "com.rhymeai.app.FAKE_RECORDING"
 

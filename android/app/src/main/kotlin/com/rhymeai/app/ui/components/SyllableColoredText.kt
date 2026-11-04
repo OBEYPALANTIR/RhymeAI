@@ -17,13 +17,9 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.TextLayoutResult
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.syllableColor
-import com.rhymeai.app.util.LyricTokenizer
-import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-
-private val wordPattern = LyricTokenizer.alphanumericWordPattern
 
 @Immutable
 data class SyllableUnderlineSpan(
@@ -39,22 +35,17 @@ data class SyllableUnderlineAnalysis(
     val syllableCount: Int
 )
 
+/** Each word's underline in [text]; words come from the shared per-line memo, so an edit re-reads only its lines. */
 fun analyzeSyllableUnderlines(text: String, enabled: Boolean): List<SyllableUnderlineAnalysis> {
     if (!enabled || text.isEmpty()) return emptyList()
-
-    val headerRanges = SectionMap.headerRanges(text)
-    return wordPattern.findAll(text)
-        .filterNot { match ->
-            SectionMap.intersectsHeader(match.range, headerRanges)
+    val result = ArrayList<SyllableUnderlineAnalysis>()
+    SyllableCounter.forEachLyricLine(text) { lineStart, line ->
+        val tokens = line.tokens
+        for (i in tokens.indices step 3) {
+            result += SyllableUnderlineAnalysis(lineStart + tokens[i], lineStart + tokens[i + 1], tokens[i + 2])
         }
-        .map { match ->
-            SyllableUnderlineAnalysis(
-                start = match.range.first,
-                endExclusive = match.range.last + 1,
-                syllableCount = SyllableCounter.count(match.value)
-            )
-        }
-        .toList()
+    }
+    return result
 }
 
 fun colorSyllableUnderlines(
