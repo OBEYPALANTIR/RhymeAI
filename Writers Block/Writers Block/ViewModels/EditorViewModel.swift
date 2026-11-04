@@ -324,6 +324,7 @@ final class EditorViewModel: ObservableObject {
                 // A request answers the lyrics and cursor it was built from
                 // (Android cancels on text and selection changes too).
                 cancelSuggestions()
+                scheduleCountRefresh()
             }
             scheduleDerivedStateRefresh()
         }
@@ -430,6 +431,7 @@ final class EditorViewModel: ObservableObject {
     private var suggestionsRequestID: UUID?
     private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
+    private var countTask: Task<Void, Never>?
     private var rewriteRejectedCandidates: Set<String> = []
 
     // MARK: - Word Inspector
@@ -876,6 +878,7 @@ final class EditorViewModel: ObservableObject {
         rewriteTask?.cancel()
         suggestionsTask?.cancel()
         derivedStateTask?.cancel()
+        countTask?.cancel()
         inspectorSynonymsTask?.cancel()
         inspectorAnalysisTask?.cancel()
         // Stop any in-progress recording or playback so AVAudioSession is
@@ -887,9 +890,24 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Rhyme Context
 
     private nonisolated struct LyricsDerivedState: Sendable {
-        let wordCount: Int
-        let syllableCount: Int
         let rhymeContext: RhymeContext
+    }
+
+    /// The header counts follow every edit with no debounce: the previous
+    /// counts stay on screen until the new text's are ready, never zero.
+    private func scheduleCountRefresh() {
+        countTask?.cancel()
+        let lyrics = self.lyrics
+        countTask = Task { @MainActor [weak self] in
+            let counts = await Task.detached(priority: .userInitiated) {
+                (words: SyllableCounter.lyricWordCount(lyrics), syllables: SyllableCounter.lyricSyllableCount(lyrics))
+            }.value
+            guard !Task.isCancelled, let self, self.lyrics == lyrics,
+                  counts.words != self.wordCount || counts.syllables != self.syllableCount else { return }
+            self.objectWillChange.send()
+            self.wordCount = counts.words
+            self.syllableCount = counts.syllables
+        }
     }
 
     private func scheduleDerivedStateRefresh() {
@@ -902,8 +920,6 @@ final class EditorViewModel: ObservableObject {
             let rhymeScheme = self.activeRhymeScheme
             let derived = await Task.detached(priority: .userInitiated) {
                 LyricsDerivedState(
-                    wordCount: SyllableCounter.lyricWordCount(lyrics),
-                    syllableCount: SyllableCounter.lyricSyllableCount(lyrics),
                     rhymeContext: Self.computeRhymeContext(
                         lyrics: lyrics,
                         cursorPosition: cursorPosition,
@@ -918,8 +934,6 @@ final class EditorViewModel: ObservableObject {
                 return
             }
             self.objectWillChange.send()
-            self.wordCount = derived.wordCount
-            self.syllableCount = derived.syllableCount
             self.rhymeContext = derived.rhymeContext
         }
     }

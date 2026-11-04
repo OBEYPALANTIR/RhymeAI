@@ -8,6 +8,34 @@ struct EditorAnalysisCueTests {
         #expect(compactEditorStatsText(wordCount: 42, syllableCount: 108) == "42w · 108s")
     }
 
+    /// Each deletion updates the header's counts with no debounce, and the
+    /// previous counts stay until the new ones are ready: never zero in between.
+    @Test @MainActor func headerCountsFollowEachDeletionWithoutAnEmptyState() async throws {
+        let viewModel = EditorViewModel()
+        viewModel.newProject()
+        var seen: [(words: Int, syllables: Int)] = []
+        // Generous: a cold pronunciation dictionary loads slowly while the other suites run.
+        func settle(on text: String, within limit: Duration = .seconds(30)) async throws {
+            let expected = (SyllableCounter.lyricWordCount(text), SyllableCounter.lyricSyllableCount(text))
+            let deadline = ContinuousClock.now + limit
+            while (viewModel.wordCount, viewModel.syllableCount) != expected, ContinuousClock.now < deadline {
+                seen.append((viewModel.wordCount, viewModel.syllableCount))
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            #expect((viewModel.wordCount, viewModel.syllableCount) == expected)
+        }
+        viewModel.onLyricsChanged("yellow music", timestampMilliseconds: 0)
+        try await settle(on: "yellow music")
+        seen = []
+
+        for text in ["yellow musi", "yellow mus", "yellow"] {
+            viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
+            try await settle(on: text)
+        }
+
+        #expect(seen.allSatisfy { $0.words > 0 && $0.syllables > 0 })
+    }
+
     @Test func rhymeFamiliesAreColouredAndSyllablesUnderlinedOnlyAlongsideThem() async {
         let text = "light night"
         let rhymeOnly = await LyricsHighlighting.spans(
