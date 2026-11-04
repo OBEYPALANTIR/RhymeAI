@@ -405,6 +405,48 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(moved.locations == [0: 0, 13: 7])
     }
 
+    @Test func splitsJoinsAndReplacementsTheDelegateMissedKeepTheSurvivingCharacters() {
+        let yellowMusic = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 6), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 7, length: 5), foreground: nil, underline: .blue)
+        ]
+        func moved(_ spans: [LyricsColorSpan], _ old: String, _ new: String) -> (ranges: [NSRange], underlines: [Color?], locations: [Int: Int]) {
+            let result = LyricsTextView.Coordinator.spansMoved(spans, from: old, to: new)
+            return (result.spans.map(\.range), result.spans.map(\.underline), result.locations)
+        }
+
+        // A split: both halves of "yellow" keep its colour; "music" shifts.
+        let split = moved(yellowMusic, "yellow music", "yel low music")
+        #expect(split.ranges == [NSRange(location: 0, length: 3), NSRange(location: 4, length: 3), NSRange(location: 8, length: 5)])
+        #expect(split.underlines == [.red, .red, .blue])
+        #expect(split.locations == [0: 0, 7: 8])
+
+        // A join: each word's characters keep their own colour inside the joined word.
+        let join = moved(yellowMusic, "yellow music", "yellowmusic")
+        #expect(join.ranges == [NSRange(location: 0, length: 6), NSRange(location: 6, length: 5)])
+        #expect(join.underlines == [.red, .blue])
+        #expect(join.locations == [0: 0, 7: 6])
+
+        // A replacement across the space: both surviving fragments stay.
+        let helloWorld = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 5), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 6, length: 5), foreground: nil, underline: .blue)
+        ]
+        let replaced = moved(helloWorld, "hello world", "helxrld")
+        #expect(replaced.ranges == [NSRange(location: 0, length: 4), NSRange(location: 4, length: 3)])
+        #expect(replaced.underlines == [.red, .blue])
+        #expect(replaced.locations == [0: 0, 6: 4])
+
+        // A split, then its undo: the line runs unbroken under the rejoined word.
+        let splitSpans = zip(split.ranges, split.underlines).map {
+            LyricsColorSpan(range: $0.0, foreground: nil, underline: $0.1)
+        }
+        let undone = moved(splitSpans, "yel low music", "yellow music")
+        #expect(undone.ranges == [NSRange(location: 0, length: 3), NSRange(location: 3, length: 3), NSRange(location: 7, length: 5)])
+        #expect(undone.underlines == [.red, .red, .blue])
+        #expect(undone.locations == [0: 0, 4: 3, 8: 7])
+    }
+
     // MARK: - Motion
 
     @Test func aDeletionEasesTheLineToItsNewWidthOnTheFeedbackTier() async throws {

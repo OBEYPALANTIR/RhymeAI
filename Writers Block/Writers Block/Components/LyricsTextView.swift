@@ -580,8 +580,25 @@ struct LyricsTextView: UIViewRepresentable {
             var previous = (-1, -1)
             for anchor in anchors + [(before.count, after.count)] {
                 let gapOld = anchor.0 - previous.0 - 1
-                if gapOld > 0, gapOld == anchor.1 - previous.1 - 1 {
+                let gapNew = anchor.1 - previous.1 - 1
+                if gapOld > 0, gapOld == gapNew {
                     for offset in 1...gapOld { pairs.append((previous.0 + offset, previous.1 + offset)) }
+                } else if gapOld > 0, gapNew > 0 {
+                    // A split or join: the characters that survive keep their
+                    // colour, re-cut at the new words' edges.
+                    let gapWords = words[(previous.1 + 1)..<anchor.1]
+                    let pieces = movedPieces(Array(replaced[(previous.0 + 1)..<anchor.0]), by: edit.range, replacement: edit.replacement)
+                    for piece in pieces {
+                        for word in gapWords {
+                            let kept = NSIntersectionRange(piece.span.range, word)
+                            guard kept.length > 0 else { continue }
+                            adjusted.append((piece.source, LyricsColorSpan(
+                                range: kept,
+                                foreground: piece.span.foreground,
+                                underline: piece.span.underline
+                            )))
+                        }
+                    }
                 }
                 if anchor.0 < before.count { pairs.append(anchor) }
                 previous = anchor
@@ -603,6 +620,15 @@ struct LyricsTextView: UIViewRepresentable {
             by range: NSRange,
             replacement: String
         ) -> (spans: [LyricsColorSpan], locations: [Int: Int]) {
+            clipped(movedPieces(spans, by: range, replacement: replacement))
+        }
+
+        /// Each span's surviving pieces after one replacement, with the start it had before.
+        private static func movedPieces(
+            _ spans: [LyricsColorSpan],
+            by range: NSRange,
+            replacement: String
+        ) -> [(source: Int, span: LyricsColorSpan)] {
             let editStart = range.location
             let editEnd = NSMaxRange(range)
             let replacementLength = replacement.utf16.count
@@ -641,7 +667,7 @@ struct LyricsTextView: UIViewRepresentable {
                     )
                 }
             }
-            return clipped(adjusted)
+            return adjusted
         }
 
         /// An edit joining two words can leave their spans touching; never
