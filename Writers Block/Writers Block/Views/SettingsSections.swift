@@ -425,6 +425,7 @@ struct SettingsEditorSection: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.appAppearanceStyle) private var appearance
     @Binding var activeHelp: FeatureHelp?
+    @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
@@ -436,6 +437,22 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Stress + IPA", help: .stressIPA, isOn: binding(viewModel.isStressPreviewEnabled, setter: viewModel.saveIsStressPreviewEnabled))
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
+
+            // Puts UnBlock + mic and the One Liners Record + Type on this side.
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                Text("Dominant hand")
+                    .font(.subheadline)
+                RhymeSegmentedControl(
+                    options: DominantHand.allCases,
+                    selection: Binding(
+                        get: { DominantHand.resolve(dominantHandRawValue) },
+                        set: { dominantHandRawValue = $0.rawValue }
+                    ),
+                    accessibilityIdentifier: "dominantHandPicker",
+                    label: "Dominant hand",
+                    title: \.displayName
+                )
+            }
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
