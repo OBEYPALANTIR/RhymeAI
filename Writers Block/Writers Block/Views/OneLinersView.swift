@@ -346,6 +346,7 @@ struct OneLinersView: View {
                     .frame(width: RhymeAITokens.Rhythm.primary, height: RhymeAITokens.Rhythm.primary)
                     .background(palette.surface, in: Circle())
                     .overlay(Circle().strokeBorder(palette.outline, lineWidth: 1))
+                    .chromeShadow()
             }
             .buttonStyle(.rhymePress)
             .accessibilityLabel("Type a one liner")
@@ -363,7 +364,7 @@ struct OneLinersView: View {
                 .padding(.horizontal, RhymeAITokens.Rhythm.standard)
                 .frame(minHeight: RhymeAITokens.Rhythm.primary)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Rhythm.primary / 2)
-                .shadow(color: palette.primaryInk.opacity(0.16), radius: 10, y: 4)
+                .chromeShadow()
             }
             .buttonStyle(.rhymePress)
             .accessibilityLabel("Record a one liner")
