@@ -88,7 +88,7 @@ final class DominantHandUITests: XCTestCase {
         XCTAssertTrue(timer.waitForExistence(timeout: 5), "The recording timer should show")
         Thread.sleep(forTimeInterval: 1)  // the pill finishes stretching
         let width = app.frame.width
-        XCTAssertLessThanOrEqual(mic.frame.minX - editorColumn(in: app).minX, Self.edgeTolerance, "The stop button should stay at the left edge")
+        assertEdgeGap(mic.frame.minX - editorColumn(in: app).minX, "The stop button should stay at the left edge")
         XCTAssertGreaterThan(timer.frame.minX, mic.frame.maxX - 1, "The pill should grow right, toward the centre")
         XCTAssertLessThanOrEqual(timer.frame.maxX, width, "The recording pill ran off screen")
         XCTAssertLessThanOrEqual(app.buttons["unblockButton"].frame.maxX, width, "UnBlock was pushed off screen")
@@ -106,6 +106,13 @@ final class DominantHandUITests: XCTestCase {
         let tip = app.buttons["Continue"]
         if tip.waitForExistence(timeout: 1.5) { tip.tap() }
         return app
+    }
+
+    /// A button's distance inside its edge: never past the edge (negative,
+    /// which would mean it is anchored somewhere else) and at most 40pt in.
+    private func assertEdgeGap(_ gap: CGFloat, _ message: String, line: UInt = #line) {
+        XCTAssertGreaterThanOrEqual(gap, 0, "\(message) (\(gap)pt past the edge)", line: line)
+        XCTAssertLessThanOrEqual(gap, Self.edgeTolerance, "\(message) (\(gap)pt in from the edge)", line: line)
     }
 
     /// Precondition for the right-to-left cases: a control unrelated to the
@@ -141,10 +148,10 @@ final class DominantHandUITests: XCTestCase {
         let column = editorColumn(in: app)
         if left {
             XCTAssertLessThan(mic.frame.maxX, unblock.frame.minX, "The mic should be left of UnBlock", line: line)
-            XCTAssertLessThanOrEqual(mic.frame.minX - column.minX, Self.edgeTolerance, "The mic should sit at the left edge", line: line)
+            assertEdgeGap(mic.frame.minX - column.minX, "The mic should sit at the left edge", line: line)
         } else {
             XCTAssertGreaterThan(mic.frame.minX, unblock.frame.maxX, "The mic should be right of UnBlock", line: line)
-            XCTAssertLessThanOrEqual(column.maxX - mic.frame.maxX, Self.edgeTolerance, "The mic should sit at the right edge", line: line)
+            assertEdgeGap(column.maxX - mic.frame.maxX, "The mic should sit at the right edge", line: line)
         }
     }
 
@@ -170,10 +177,10 @@ final class DominantHandUITests: XCTestCase {
         }
         if left {
             XCTAssertLessThan(type.frame.maxX, record.frame.minX, "Type should be left of Record", line: line)
-            XCTAssertLessThanOrEqual(type.frame.minX - content.minX, Self.edgeTolerance, "Type should sit at the left edge", line: line)
+            assertEdgeGap(type.frame.minX - content.minX, "Type should sit at the left edge", line: line)
         } else {
             XCTAssertGreaterThan(type.frame.minX, record.frame.maxX, "Type should be right of Record", line: line)
-            XCTAssertLessThanOrEqual(content.maxX - type.frame.maxX, Self.edgeTolerance, "Type should sit at the right edge", line: line)
+            assertEdgeGap(content.maxX - type.frame.maxX, "Type should sit at the right edge", line: line)
         }
     }
 
