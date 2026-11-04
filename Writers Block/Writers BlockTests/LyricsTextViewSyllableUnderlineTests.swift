@@ -524,6 +524,38 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(moved.locations == Dictionary(uniqueKeysWithValues: locations.map { ($0, $0) }))
     }
 
+    @Test func aWordCountChangeBeyondTheEditLimitIsNotAligned() {
+        // 2,000 words replaced by 22,000: refused on the counts alone, before any table.
+        let oldWords = (0..<2_000).map { NSRange(location: $0 * 6, length: 5) }
+        let newWords = (0..<22_000).map { NSRange(location: $0 * 6, length: 5) }
+        let anchors = LyricsTextView.Coordinator.anchoredWords(
+            Array(repeating: "music", count: 2_000), at: oldWords,
+            Array(repeating: "music", count: 22_000), at: newWords
+        )
+        #expect(anchors == nil)
+    }
+
+    @Test func anEditPastTheLimitKeepsOnlyTheUnchangedEnds() {
+        // "cat yellow dog" -> "yellowish yellow cat" plus 512 more words: too
+        // many word edits to align, and no characters survive at either end.
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 3), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 4, length: 6), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 11, length: 3), foreground: nil, underline: .green)
+        ]
+        let new = "yellowish yellow cat" + String(repeating: " x", count: 512)
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "cat yellow dog", to: new)
+        #expect(moved.spans.isEmpty)
+        #expect(moved.locations.isEmpty)
+
+        // With an unchanged first word, only that word survives, unstretched.
+        let kept = LyricsTextView.Coordinator.spansMoved(
+            spans, from: "cat yellow dog", to: "cat " + String(repeating: "x ", count: 520) + "end"
+        )
+        #expect(kept.spans.map(\.range) == [NSRange(location: 0, length: 3)])
+        #expect(kept.locations == [0: 0])
+    }
+
     @Test func fragmentsAJoinLeftStillAnchorTheirWord() {
         // "cat yel low dog": the space is deleted, then before any analysis
         // the line is rewritten around the joined word.
