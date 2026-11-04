@@ -157,10 +157,8 @@ class SyllableWordColorTest {
 
     @Test
     fun underlineMotionContinuesEachWordAcrossOneEdit() {
-        fun match(old: String, new: String) = matchUnderlineSpans(
-            old, analyzeSyllableUnderlines(old, enabled = true).map { it.start },
-            new, analyzeSyllableUnderlines(new, enabled = true).map { it.start until it.endExclusive }
-        ).toList()
+        fun spans(text: String) = colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled = true), isDark = false)
+        fun match(old: String, new: String) = matchUnderlineSpans(TextEdit(old, new), spans(old), spans(new)).toList()
 
         assertEquals(listOf(0, 1), match("night light", "night ligh"))   // shortens the last word
         assertEquals(listOf(0, 1), match("night light", "nigh light"))   // later words shift left
@@ -172,5 +170,14 @@ class SyllableWordColorTest {
         assertEquals(listOf(1), match("a light", "light"))               // a word deleted before: "a" fades
         assertEquals(listOf(0, 1), match("a light", "a ight"))           // a word's first letter deleted
         assertEquals(listOf(0, -1), match("night", "nig ht"))            // a space splits a word
+    }
+
+    @Test
+    fun editSizeSeparatesTypingFromPastesAndSongSwitches() {
+        val verse = "The harbor lights are burning low\n"
+        assertEquals(1, TextEdit(verse, verse.dropLast(2) + "\n").size)
+        assertEquals(verse.length * 3, TextEdit("", verse.repeat(3)).size)        // paste into an empty song
+        assertTrue(TextEdit("", verse.repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
+        assertTrue(TextEdit(verse.repeat(8), "Another song entirely\n".repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
     }
 }

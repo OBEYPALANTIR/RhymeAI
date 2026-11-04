@@ -1188,7 +1188,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val syllableUnderlineSpans = remember(syllableUnderlineAnalysis, syllableIsDark) {
                         colorSyllableUnderlines(syllableUnderlineAnalysis, syllableIsDark)
                     }
-                    val syllableUnderlineMotion = rememberSyllableUnderlineMotion()
+                    val syllableUnderlineMotion = rememberSyllableUnderlineMotion(viewModel.openRevision)
                     val inlineRewriteRange = viewModel.inlineRewriteRange
                     val rewriteHighlightRange = if (viewModel.hasActiveRewrite) {
                         inlineRewriteRange
