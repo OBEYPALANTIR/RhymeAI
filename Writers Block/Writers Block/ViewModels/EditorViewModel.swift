@@ -432,6 +432,11 @@ final class EditorViewModel: ObservableObject {
     private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
     private var countTask: Task<Void, Never>?
+    /// Counts the header's words and syllables, or nil once its task is cancelled; tests substitute a slow or instant one.
+    var countLyrics: @Sendable (String) -> (words: Int, syllables: Int)? = { lyrics in
+        guard let syllables = SyllableCounter.cancellableLyricSyllableCount(lyrics) else { return nil }
+        return (SyllableCounter.lyricWordCount(lyrics), syllables)
+    }
     private var rewriteRejectedCandidates: Set<String> = []
 
     // MARK: - Word Inspector
@@ -895,14 +900,19 @@ final class EditorViewModel: ObservableObject {
 
     /// The header counts follow every edit with no debounce: the previous
     /// counts stay on screen until the new text's are ready, never zero.
+    /// Each edit cancels the count still running for the text before it.
     private func scheduleCountRefresh() {
         countTask?.cancel()
         let lyrics = self.lyrics
+        let count = countLyrics
         countTask = Task { @MainActor [weak self] in
-            let counts = await Task.detached(priority: .userInitiated) {
-                (words: SyllableCounter.lyricWordCount(lyrics), syllables: SyllableCounter.lyricSyllableCount(lyrics))
-            }.value
-            guard !Task.isCancelled, let self, self.lyrics == lyrics,
+            let work = Task.detached(priority: .userInitiated) { count(lyrics) }
+            let counts = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            guard let counts, !Task.isCancelled, let self, self.lyrics == lyrics,
                   counts.words != self.wordCount || counts.syllables != self.syllableCount else { return }
             self.objectWillChange.send()
             self.wordCount = counts.words
