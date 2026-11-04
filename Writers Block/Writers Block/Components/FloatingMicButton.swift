@@ -52,11 +52,7 @@ struct FloatingMicButton: View {
             Color.clear
                 .frame(width: interpolatedWidth, height: pillHeight)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
-                .shadow(
-                    color: appearance.palette.primaryInk.opacity(0.18),
-                    radius: RhymeAITokens.Spacing.sm,
-                    y: RhymeAITokens.Spacing.xxs
-                )
+                .chromeShadow()
 
             // Content layer: idle glyph on the right, recording controls
             // growing leftward. Both are pinned to the trailing edge so the

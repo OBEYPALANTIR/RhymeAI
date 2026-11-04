@@ -17,7 +17,6 @@ enum EditorViewConstants {
         static let hiddenWordmarkOpacity: Double = 0
         static let transitionScale: CGFloat = 0.92
         static let surfaceFallbackOpacity: Double = 0.35
-        static let shadowOpacity: Double = 0.26
     }
 
     enum AssistantSheet {
@@ -555,7 +554,7 @@ struct EditorView: View {
                     minHeight: RhymeAITokens.Touch.comfortable
                 )
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
-                .shadow(color: appearance.palette.primaryInk.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+                .chromeShadow()
             }
             .buttonStyle(.rhymePress)
             .accessibilityLabel(inlineAssistantIsOpen ? "Hide AI suggestions" : "Open AI suggestions")
