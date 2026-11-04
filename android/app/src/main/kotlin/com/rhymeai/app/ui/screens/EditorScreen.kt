@@ -194,6 +194,7 @@ import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
 import com.rhymeai.app.ui.components.colorSyllableUnderlines
+import com.rhymeai.app.ui.components.rememberSyllableUnderlineMotion
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
@@ -1179,6 +1180,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val syllableUnderlineSpans = remember(syllableUnderlineAnalysis, syllableIsDark) {
                         colorSyllableUnderlines(syllableUnderlineAnalysis, syllableIsDark)
                     }
+                    val syllableUnderlineMotion = rememberSyllableUnderlineMotion()
                     val inlineRewriteRange = viewModel.inlineRewriteRange
                     val rewriteHighlightRange = if (viewModel.hasActiveRewrite) {
                         inlineRewriteRange
@@ -1265,7 +1267,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     }
                                 )
                                 .syllableUnderlines(
+                                    text = viewModel.lyrics,
                                     spans = syllableUnderlineSpans,
+                                    motion = syllableUnderlineMotion,
+                                    animate = animationsEnabled,
                                     // Read at draw time: the field's layout for this frame's text, not the last one.
                                     textLayoutResult = { lyricsTextLayout },
                                     underlineGap = syllableUnderlineGap,
