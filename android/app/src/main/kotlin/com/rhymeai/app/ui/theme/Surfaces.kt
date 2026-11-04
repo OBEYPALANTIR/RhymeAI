@@ -1,5 +1,6 @@
 package com.rhymeai.app.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
@@ -19,9 +20,15 @@ import com.rhymeai.app.data.model.AppAppearance
 /** What a container is for: the page itself, a slab on it, or something lifted over it. */
 enum class SurfaceLevel { Page, Raised, Floating }
 
-// The platform multiplies shadow colour alpha by the theme's spotShadowAlpha (0.19 by default),
-// so a token's visible strength is divided back out here.
+// API 28+ multiplies each shadow colour's alpha by the theme's own multiplier (the app theme keeps
+// the platform defaults: spot 0.19, ambient 0.039), so each is divided back out separately. The
+// ambient light can never exceed its multiplier, so a token's strength is carried by the spot.
 private const val PlatformSpotShadowAlpha = 0.19f
+private const val PlatformAmbientShadowAlpha = 0.039f
+
+internal fun inkShadowAlphas(visibleAlpha: Float): Pair<Float, Float> =
+    (visibleAlpha / PlatformSpotShadowAlpha).coerceAtMost(1f) to
+        (visibleAlpha / PlatformAmbientShadowAlpha).coerceAtMost(1f)
 
 /** Ink for shadows: the appearance's own ink on light pages, true ink under Graphite (never a glow). */
 @Composable
@@ -29,8 +36,19 @@ fun shadowInk(): Color =
     if (LocalAppAppearance.current == AppAppearance.GRAPHITE) Ink else MaterialTheme.colorScheme.onSurface
 
 private fun Modifier.inkShadow(elevation: Dp, shape: Shape, ink: Color, visibleAlpha: Float): Modifier {
-    val color = ink.copy(alpha = (visibleAlpha / PlatformSpotShadowAlpha).coerceAtMost(1f))
-    return shadow(elevation, shape, clip = false, ambientColor = color, spotColor = color)
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+        // API 26-27 ignore shadow colours and draw black at the platform alphas, so any lift is
+        // the stock 1dp contact shadow (Material's resting card); never the heavier 3dp or 12dp.
+        return shadow(DesignTokens.Elevation.contactShadow, shape, clip = false)
+    }
+    val (spot, ambient) = inkShadowAlphas(visibleAlpha)
+    return shadow(
+        elevation,
+        shape,
+        clip = false,
+        ambientColor = ink.copy(alpha = ambient),
+        spotColor = ink.copy(alpha = spot)
+    )
 }
 
 /**
@@ -70,6 +88,7 @@ fun Modifier.floatingChromeShadow(shape: Shape): Modifier {
     val ink = shadowInk()
     val tokens = DesignTokens.Elevation
     val contact = inkShadow(tokens.contactShadow, shape, ink, tokens.contactShadowAlpha)
-    val calm = !LocalAnimationsEnabled.current || LocalHighTextContrastEnabled.current
+    val calm = !LocalAnimationsEnabled.current || LocalHighTextContrastEnabled.current ||
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.P
     return if (calm) contact else contact.inkShadow(tokens.ambientShadow, shape, ink, tokens.ambientShadowAlpha)
 }
