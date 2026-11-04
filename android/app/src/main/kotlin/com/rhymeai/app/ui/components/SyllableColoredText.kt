@@ -60,11 +60,11 @@ fun colorSyllableUnderlines(
 
 fun Modifier.syllableUnderlines(
     spans: List<SyllableUnderlineSpan>,
-    textLayoutResult: TextLayoutResult?,
+    textLayoutResult: () -> TextLayoutResult?,
     underlineGap: Float,
     strokeWidth: Float
 ): Modifier = drawBehind {
-    val layout = textLayoutResult ?: return@drawBehind
+    val layout = textLayoutResult() ?: return@drawBehind
     if (spans.isEmpty()) return@drawBehind
 
     spans.forEach { span ->
