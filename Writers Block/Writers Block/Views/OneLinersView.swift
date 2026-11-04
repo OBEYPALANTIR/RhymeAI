@@ -17,6 +17,7 @@ struct OneLinersView: View {
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
     @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
+    @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var searchFocused: Bool
     @State private var capture: OneLinerCaptureMode?
     @State private var sendingLine: OneLiner?
@@ -53,7 +54,7 @@ struct OneLinersView: View {
                     .padding(.top, RhymeAITokens.Rhythm.standard)
 
                 list
-                    .overlay(alignment: dominantHand.clusterAlignment) { floatingActions }
+                    .overlay(alignment: dominantHand.clusterAlignment(in: layoutDirection)) { floatingActions }
 
                 Text("Swipe right to send to a song, left to trash. Used lines stay.")
                     .font(.caption)
@@ -342,7 +343,7 @@ struct OneLinersView: View {
     /// inside, the round Type button outermost at the dominant hand's edge.
     private var floatingActions: some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
-            if dominantHand == .left {
+            if dominantHand.usesLeadingEdge(in: layoutDirection) {
                 typeButton
                 recordButton
             } else {

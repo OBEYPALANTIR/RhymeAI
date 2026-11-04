@@ -19,8 +19,9 @@ struct FloatingMicButton: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let service: VoiceMemoService
-    /// Left-handed layout: the stop button stays at the leading edge and the
-    /// pill grows to the right, toward the screen's centre.
+    /// The cluster sits on the leading edge (left hand in a left-to-right
+    /// layout, right hand in a right-to-left one): the stop button stays at the
+    /// leading edge and the pill grows toward the trailing side, the centre.
     var growsTowardTrailing = false
     /// Called at record time to obtain (or lazily create) the project for this recording.
     let ensureProjectId: () -> String?
