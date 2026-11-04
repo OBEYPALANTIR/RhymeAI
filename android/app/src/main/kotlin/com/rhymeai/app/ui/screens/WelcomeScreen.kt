@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Keyboard
@@ -141,7 +142,7 @@ fun WelcomeScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (recentSongTitle != null) {
-                    WelcomeCard(Icons.Default.FolderOpen, "Continue $recentSongTitle", "Return to your writing", onContinue, level = SurfaceLevel.Floating)
+                    WelcomeCard(Icons.Default.MusicNote, "Continue $recentSongTitle", "Return to your writing", onContinue, level = SurfaceLevel.Floating)
                 }
                 WelcomeCard(
                     icon = Icons.Default.Add,
