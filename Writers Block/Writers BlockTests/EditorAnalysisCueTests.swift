@@ -37,8 +37,11 @@ struct EditorAnalysisCueTests {
         seen = []
         latencies = []
 
-        // Delete one character at a time. Other suites can starve the
-        // executors for seconds, so stop at the first edit counted quickly.
+        // Delete one character at a time and time every edit (each must
+        // settle within 30s). Other suites running at once can starve the
+        // executors for seconds, so the bound is on the fastest edit, which
+        // stops the loop: the old refresh slept 120ms before every count, so
+        // under it no edit, however idle the machine, could come in under 110ms.
         while text.count > 1, latencies.allSatisfy({ $0 >= .milliseconds(110) }) {
             text.removeLast()
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
@@ -50,38 +53,52 @@ struct EditorAnalysisCueTests {
         #expect(latencies.min()! < .milliseconds(110), "\(latencies)")
     }
 
-    /// A slow count for an older text that finishes after a newer one is
-    /// cancelled and dropped; the header ends on the newest text's counts.
+    /// A slow count for an older text that finishes after the newer text's
+    /// counts are on screen is dropped, and its work was told to stop.
     @Test @MainActor func aSlowCountForAnOlderTextNeverOverwritesANewerOne() async throws {
         let viewModel = EditorViewModel()
         viewModel.newProject()
-        let cancelledSlowCount = UncheckedBox(false)
+        let slowStarted = DispatchSemaphore(value: 0)
+        let releaseSlow = DispatchSemaphore(value: 0)
+        let slowSawCancellation = HookBox(false)
         viewModel.countLyrics = { text in
-            if text == "slow long line" {
-                for _ in 0..<50 {
-                    if Task.isCancelled {
-                        cancelledSlowCount.value = true
-                        return nil
-                    }
-                    Thread.sleep(forTimeInterval: 0.004)
-                }
-                return (100, 100)
+            guard text == "slow long line" else {
+                return (SyllableCounter.lyricWordCount(text), text.utf16.count)
             }
-            return (SyllableCounter.lyricWordCount(text), SyllableCounter.lyricSyllableCount(text))
+            slowStarted.signal()
+            releaseSlow.wait()
+            slowSawCancellation.value = Task.isCancelled
+            // Answers anyway, so only the view model can keep it off the header.
+            return (100, 100)
+        }
+        func wait(_ semaphore: DispatchSemaphore) async {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    semaphore.wait()
+                    continuation.resume()
+                }
+            }
         }
 
+        // Given the older text's count running
         viewModel.onLyricsChanged("slow long line", timestampMilliseconds: 0)
-        viewModel.onLyricsChanged("quick", timestampMilliseconds: 0)
-        var seen: [Int] = []
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline {
-            seen.append(viewModel.wordCount)
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        let slowTask = try #require(viewModel.countTask)
+        await wait(slowStarted)
 
+        // When a newer text is counted and published first
+        viewModel.onLyricsChanged("quick", timestampMilliseconds: 0)
+        let quickTask = try #require(viewModel.countTask)
+        await quickTask.value
         #expect(viewModel.wordCount == 1)
-        #expect(!seen.contains(100))
-        #expect(cancelledSlowCount.value)
+
+        // And the older count then finishes
+        releaseSlow.signal()
+        await slowTask.value
+
+        // Then the header still shows the newer text's counts
+        #expect(viewModel.wordCount == 1)
+        #expect(viewModel.syllableCount == 5)
+        #expect(slowSawCancellation.value)
     }
 
     @Test func rhymeFamiliesAreColouredAndSyllablesUnderlinedOnlyAlongsideThem() async {
@@ -130,8 +147,3 @@ struct EditorAnalysisCueTests {
     }
 }
 
-/// A flag the counter closure flips from its detached task.
-private final class UncheckedBox<Value>: @unchecked Sendable {
-    var value: Value
-    init(_ value: Value) { self.value = value }
-}
