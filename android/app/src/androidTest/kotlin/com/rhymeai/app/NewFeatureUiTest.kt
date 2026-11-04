@@ -47,10 +47,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.util.PronunciationDictionary
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.After
@@ -854,23 +857,43 @@ class NewFeatureUiTest {
     @Test
     fun rewriteActionsOpenReviewBarAndCancelBackToChipBar() {
         // On-device rewrites: a cloud provider left selected would ask for sharing consent first.
-        scenario?.onActivity { ViewModelProvider(it)[MainViewModel::class.java].saveProvider(AIProvider.LOCAL) }
-        composeRule.onNodeWithText("New Song").performClick()
+        // Pinned once loading has applied the stored choice, and that choice is put back afterwards.
+        lateinit var vm: MainViewModel
+        scenario?.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.aiSettingsLoaded }
+        val repo = ProjectRepository(InstrumentationRegistry.getInstrumentation().targetContext)
+        val providerBefore = runBlocking { repo.selectedProviderFlow.first() }
+        val modelBefore = runBlocking { repo.modelIdFlow.first() }
+        composeRule.runOnIdle { vm.saveProvider(AIProvider.LOCAL) }
+        try {
+            composeRule.onNodeWithText("New Song").performClick()
 
-        val lyrics = "yellow music\nfollow music"
-        val selection = TextRange(0, "yellow music".length)
-        composeRule.onNodeWithTag("lyricsEditor").performClick()
-        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
-        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+            val lyrics = "yellow music\nfollow music"
+            val selection = TextRange(0, "yellow music".length)
+            composeRule.onNodeWithTag("lyricsEditor").performClick()
+            composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+            composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
 
-        listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
-            composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
-            composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
-            if (action == "Punch Up") {
-                captureRootScreenshot("rewrite-review-punch-up.png")
+            listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
+                composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
+                composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+                if (action == "Punch Up") {
+                    captureRootScreenshot("rewrite-review-punch-up.png")
+                }
+                composeRule.onNode(hasText("Cancel") and hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))).performClick()
+                composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
             }
-            composeRule.onNode(hasText("Cancel") and hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))).performClick()
-            composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        } finally {
+            // The pin's own writes land first, so the restore is the last word.
+            runCatching {
+                composeRule.waitUntil(timeoutMillis = 5_000) {
+                    runBlocking { repo.selectedProviderFlow.first() == AIProvider.LOCAL.name && repo.modelIdFlow.first() == vm.selectedModel.id }
+                }
+            }
+            runBlocking {
+                repo.saveSelectedProvider(providerBefore)
+                repo.saveModelId(modelBefore)
+            }
         }
     }
 

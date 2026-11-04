@@ -2,6 +2,8 @@ package com.rhymeai.app
 
 import android.app.Application
 import android.os.SystemClock
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.repository.ProjectRepository
@@ -42,6 +44,8 @@ class GemmaDownloadSelectionInstrumentedTest {
     private val repo = ProjectRepository(app)
     private val providerBefore = runBlocking { repo.selectedProviderFlow.first() }
     private val modelBefore = runBlocking { repo.modelIdFlow.first() }
+    // Owned, so teardown can clear it and no selection write of its own lands after the restore.
+    private val store = ViewModelStore()
 
     @Before
     fun setUp() {
@@ -56,7 +60,7 @@ class GemmaDownloadSelectionInstrumentedTest {
             expectedBytes = file.length(),
             sha256 = sha256
         )
-        onMain { viewModel = MainViewModel(app) }
+        onMain { viewModel = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[MainViewModel::class.java] }
         waitUntil { viewModel.aiSettingsLoaded }
         onMain { viewModel.saveProvider(AIProvider.LOCAL) }
     }
@@ -64,9 +68,18 @@ class GemmaDownloadSelectionInstrumentedTest {
     @After
     fun tearDown() {
         file.delete()
-        runBlocking {
-            repo.saveSelectedProvider(providerBefore)
-            repo.saveModelId(modelBefore)
+        try {
+            // saveProvider/saveModel write in the background: wait until the store holds the view model's
+            // choice, then clear the view model, so the restore below is the last write.
+            if (::viewModel.isInitialized) waitUntil("The AI choice reached the store") {
+                runBlocking { repo.selectedProviderFlow.first() == viewModel.selectedProvider.name && repo.modelIdFlow.first() == viewModel.selectedModel.id }
+            }
+        } finally {
+            onMain { store.clear() }
+            runBlocking {
+                repo.saveSelectedProvider(providerBefore)
+                repo.saveModelId(modelBefore)
+            }
         }
     }
 
