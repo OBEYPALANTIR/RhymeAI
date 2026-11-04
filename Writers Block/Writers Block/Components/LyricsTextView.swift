@@ -512,11 +512,11 @@ struct LyricsTextView: UIViewRepresentable {
         /// Moves the spans across an edit read off the two texts. The region
         /// between their common prefix and suffix, widened to whole words, can
         /// hold several separate edits (two words edited, a split and a join,
-        /// an autocorrection and a space), so its characters are aligned along
-        /// their longest common run: each old span keeps the characters that
-        /// survive, and each new word takes the colours of the spans whose
-        /// characters it holds, with no gap between them. A new word holding
-        /// none waits for the analysis.
+        /// an autocorrection and a space). Unchanged words there keep their
+        /// spans first; in each gap between them, each old span keeps the
+        /// characters that survive, and each new word takes the colours of the
+        /// spans whose characters it holds. A new word holding none waits for
+        /// the analysis.
         static func spansMoved(
             _ spans: [LyricsColorSpan],
             from old: String,
@@ -554,14 +554,101 @@ struct LyricsTextView: UIViewRepresentable {
                 }
             }
             let words = LyricRegex.word.matches(in: new, range: NSRange(location: start, length: newEnd - start)).map(\.range)
+            let full = NSRange(location: 0, length: oldText.length)
+            let before = replaced.map { oldText.substring(with: NSIntersectionRange($0.range, full)) }
+            let after = words.map { newText.substring(with: $0) }
 
-            // Where each old span's surviving characters land, as runs in the new text.
-            var pieces: [(source: Int, span: LyricsColorSpan)] = []
-            let oldUnits = Array(old.utf16[old.utf16.index(old.utf16.startIndex, offsetBy: start)..<old.utf16.index(old.utf16.startIndex, offsetBy: oldEnd)])
-            let newUnits = Array(new.utf16[new.utf16.index(new.utf16.startIndex, offsetBy: start)..<new.utf16.index(new.utf16.startIndex, offsetBy: newEnd)])
-            let columns = newUnits.count + 1
-            if oldUnits.count * newUnits.count <= 250_000 {
+            // Unchanged words anchor first: matched by text, in order, the most
+            // of them, and among equal counts the ones that moved least, so a
+            // repeated word pairs with itself rather than a neighbour.
+            var anchors: [(Int, Int)] = []
+            if before.count * after.count <= 250_000 {
+                let columns = after.count + 1
+                let weight = (oldEnd - start + newEnd - start + 1) * (min(before.count, after.count) + 1)
+                func moved(_ i: Int, _ j: Int) -> Int {
+                    abs((replaced[i].range.location - start) - (words[j].location - start))
+                }
+                var score = [Int](repeating: 0, count: (before.count + 1) * columns)
+                for i in stride(from: before.count - 1, through: 0, by: -1) {
+                    for j in stride(from: after.count - 1, through: 0, by: -1) {
+                        var best = max(score[(i + 1) * columns + j], score[i * columns + j + 1])
+                        if before[i] == after[j] {
+                            best = max(best, score[(i + 1) * columns + j + 1] + weight - moved(i, j))
+                        }
+                        score[i * columns + j] = best
+                    }
+                }
+                var i = 0, j = 0
+                while i < before.count, j < after.count {
+                    if before[i] == after[j], score[i * columns + j] == score[(i + 1) * columns + j + 1] + weight - moved(i, j) {
+                        anchors.append((i, j))
+                        i += 1
+                        j += 1
+                    } else if score[i * columns + j] == score[(i + 1) * columns + j] {
+                        i += 1
+                    } else {
+                        j += 1
+                    }
+                }
+            }
+            for (oldIndex, newIndex) in anchors {
+                adjusted.append((replaced[oldIndex].range.location, replaced[oldIndex].with(range: words[newIndex])))
+            }
+
+            // Between anchors, the characters that survive carry their colours.
+            var previous = (-1, -1)
+            for anchor in anchors + [(before.count, after.count)] {
+                let gapSpans = Array(replaced[(previous.0 + 1)..<anchor.0])
+                let gapWords = words[(previous.1 + 1)..<anchor.1]
+                if !gapSpans.isEmpty, !gapWords.isEmpty {
+                    let oldLower = previous.0 >= 0 ? NSMaxRange(replaced[previous.0].range) : start
+                    let oldUpper = anchor.0 < before.count ? replaced[anchor.0].range.location : oldEnd
+                    let newLower = previous.1 >= 0 ? NSMaxRange(words[previous.1]) : start
+                    let newUpper = anchor.1 < after.count ? words[anchor.1].location : newEnd
+                    let surviving = survivingPieces(
+                        gapSpans,
+                        old: oldText, in: NSRange(location: oldLower, length: max(oldUpper - oldLower, 0)),
+                        new: newText, in: NSRange(location: newLower, length: max(newUpper - newLower, 0))
+                    )
+                    for word in gapWords {
+                        let held = surviving.pieces.compactMap { piece -> (source: Int, span: LyricsColorSpan)? in
+                            let kept = NSIntersectionRange(piece.span.range, word)
+                            return kept.length > 0 ? (piece.source, piece.span.with(range: kept)) : nil
+                        }.sorted { $0.span.range.location < $1.span.range.location }
+                        for (index, piece) in held.enumerated() {
+                            guard surviving.aligned else {
+                                adjusted.append(piece)
+                                continue
+                            }
+                            // An aligned word is coloured gap-free by the spans it holds.
+                            let lower = index == 0 ? word.location : piece.span.range.location
+                            let upper = index + 1 < held.count ? held[index + 1].span.range.location : NSMaxRange(word)
+                            adjusted.append((piece.source, piece.span.with(range: NSRange(location: lower, length: upper - lower))))
+                        }
+                    }
+                }
+                previous = anchor
+            }
+            adjusted.sort { $0.span.range.location < $1.span.range.location }
+            return clipped(adjusted)
+        }
+
+        /// Where each span's characters in `oldRange` land in `newRange`, as
+        /// runs. Aligned along the longest common run of characters when the
+        /// gap is small enough (`aligned`); otherwise only the gap's common
+        /// prefix and suffix survive, and nothing is stretched.
+        private static func survivingPieces(
+            _ spans: [LyricsColorSpan],
+            old: NSString, in oldRange: NSRange,
+            new: NSString, in newRange: NSRange
+        ) -> (pieces: [(source: Int, span: LyricsColorSpan)], aligned: Bool) {
+            let oldUnits = (0..<oldRange.length).map { old.character(at: oldRange.location + $0) }
+            let newUnits = (0..<newRange.length).map { new.character(at: newRange.location + $0) }
+            var landing = [Int?](repeating: nil, count: oldUnits.count)
+            let aligned = oldUnits.count * newUnits.count <= 250_000
+            if aligned {
                 // table[i * columns + j]: longest common run of oldUnits[i...] and newUnits[j...].
+                let columns = newUnits.count + 1
                 var table = [UInt16](repeating: 0, count: (oldUnits.count + 1) * columns)
                 for i in stride(from: oldUnits.count - 1, through: 0, by: -1) {
                     for j in stride(from: newUnits.count - 1, through: 0, by: -1) {
@@ -570,11 +657,10 @@ struct LyricsTextView: UIViewRepresentable {
                             : max(table[(i + 1) * columns + j], table[i * columns + j + 1])
                     }
                 }
-                var landing = [Int?](repeating: nil, count: oldUnits.count)
                 var i = 0, j = 0
                 while i < oldUnits.count, j < newUnits.count {
                     if oldUnits[i] == newUnits[j] {
-                        landing[i] = start + j
+                        landing[i] = newRange.location + j
                         i += 1
                         j += 1
                     } else if table[(i + 1) * columns + j] >= table[i * columns + j + 1] {
@@ -583,41 +669,36 @@ struct LyricsTextView: UIViewRepresentable {
                         j += 1
                     }
                 }
-                for span in replaced {
-                    let lower = max(span.range.location, start) - start
-                    let upper = min(NSMaxRange(span.range), oldEnd) - start
-                    var run: NSRange?
-                    for index in lower..<max(lower, upper) {
-                        guard let target = landing[index] else { continue }
-                        if let current = run, NSMaxRange(current) == target {
-                            run = NSRange(location: current.location, length: current.length + 1)
-                        } else {
-                            if let current = run { pieces.append((span.range.location, span.with(range: current))) }
-                            run = NSRange(location: target, length: 1)
-                        }
-                    }
-                    if let current = run { pieces.append((span.range.location, span.with(range: current))) }
-                }
             } else {
-                // shortcut: a region this large (two far-apart edits the delegate
-                // missed) moves through one replacement; align per anchored gap if it shows up.
-                pieces = movedPieces(replaced, by: edit.range, replacement: edit.replacement)
-            }
-
-            // Each new word takes the colours of the pieces it holds, gap-free.
-            for word in words {
-                let held = pieces.compactMap { piece -> (source: Int, span: LyricsColorSpan)? in
-                    let kept = NSIntersectionRange(piece.span.range, word)
-                    return kept.length > 0 ? (piece.source, piece.span.with(range: kept)) : nil
-                }.sorted { $0.span.range.location < $1.span.range.location }
-                for (index, piece) in held.enumerated() {
-                    let lower = index == 0 ? word.location : piece.span.range.location
-                    let upper = index + 1 < held.count ? held[index + 1].span.range.location : NSMaxRange(word)
-                    adjusted.append((piece.source, piece.span.with(range: NSRange(location: lower, length: upper - lower))))
+                var prefix = 0
+                while prefix < oldUnits.count, prefix < newUnits.count, oldUnits[prefix] == newUnits[prefix] {
+                    landing[prefix] = newRange.location + prefix
+                    prefix += 1
+                }
+                var suffix = 0
+                while suffix < oldUnits.count - prefix, suffix < newUnits.count - prefix,
+                      oldUnits[oldUnits.count - 1 - suffix] == newUnits[newUnits.count - 1 - suffix] {
+                    landing[oldUnits.count - 1 - suffix] = newRange.location + newUnits.count - 1 - suffix
+                    suffix += 1
                 }
             }
-            adjusted.sort { $0.span.range.location < $1.span.range.location }
-            return clipped(adjusted)
+            var pieces: [(source: Int, span: LyricsColorSpan)] = []
+            for span in spans {
+                let lower = max(span.range.location, oldRange.location) - oldRange.location
+                let upper = min(NSMaxRange(span.range), NSMaxRange(oldRange)) - oldRange.location
+                var run: NSRange?
+                for index in lower..<max(lower, upper) {
+                    guard let target = landing[index] else { continue }
+                    if let current = run, NSMaxRange(current) == target {
+                        run = NSRange(location: current.location, length: current.length + 1)
+                    } else {
+                        if let current = run { pieces.append((span.range.location, span.with(range: current))) }
+                        run = NSRange(location: target, length: 1)
+                    }
+                }
+                if let current = run { pieces.append((span.range.location, span.with(range: current))) }
+            }
+            return (pieces, aligned)
         }
 
         static func spansMoved(
