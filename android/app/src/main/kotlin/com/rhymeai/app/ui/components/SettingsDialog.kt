@@ -111,6 +111,7 @@ import androidx.compose.ui.unit.sp
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
@@ -175,6 +176,8 @@ internal fun SettingsDialog(
     onRhymeHighlightChange: (Boolean) -> Unit = {},
     isBeatGridEnabled: Boolean = false,
     onBeatGridChange: (Boolean) -> Unit = {},
+    dominantHand: DominantHand = DominantHand.RIGHT,
+    onDominantHandChange: (DominantHand) -> Unit = {},
     /** Opened from "Set up model": AI setup starts expanded. */
     initialAiSetupExpanded: Boolean = false,
     onDismiss: () -> Unit
@@ -431,6 +434,21 @@ internal fun SettingsDialog(
                     // ── Editor tab ────────────────────────────────────────────
                     // The six toggles previously living in the assistant panel,
                     // now here so the panel stays focused on generation controls.
+                    Text(
+                        "Dominant hand",
+                        fontSize = DesignTokens.Typography.caption,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.onSurface,
+                        modifier = Modifier.semantics { heading() }
+                    )
+                    Spacer(Modifier.height(DesignTokens.Spacing.sm))
+                    SlidingSegmentedControl(
+                        labels = DominantHand.entries.map { it.displayName },
+                        selectedIndex = DominantHand.entries.indexOf(dominantHand),
+                        onSelect = { onDominantHandChange(DominantHand.entries[it]) },
+                        modifier = Modifier.fillMaxWidth().testTag("dominantHandSelector")
+                    )
+                    Spacer(Modifier.height(DesignTokens.Rhythm.related))
                     EditorTogglesSection(
                         useWholeSongContext = useWholeSongContext,
                         onWholeSongContextChange = onWholeSongContextChange,

@@ -1160,6 +1160,29 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun dominantHandDefaultsToRightAndRoundTripsThroughAFreshRepository() = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-dominant-hand").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+        try {
+            val repository = ProjectRepository(dataStore, testKeyStore())
+            assertEquals(com.rhymeai.app.data.model.DominantHand.RIGHT, repository.dominantHandFlow.first())
+
+            repository.saveDominantHand(com.rhymeai.app.data.model.DominantHand.LEFT)
+            assertEquals(
+                com.rhymeai.app.data.model.DominantHand.LEFT,
+                ProjectRepository(dataStore, testKeyStore()).dominantHandFlow.first()
+            )
+
+            repository.saveDominantHand(com.rhymeai.app.data.model.DominantHand.RIGHT)
+            assertEquals(com.rhymeai.app.data.model.DominantHand.RIGHT, repository.dominantHandFlow.first())
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun storedInkMarksStyleFromAnOlderVersionLeavesColorAnalysisSettingsIntact() = runBlocking {
         val directory = kotlin.io.path.createTempDirectory("rhymeai-legacy-ink-marks").toFile()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

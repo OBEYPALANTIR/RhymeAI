@@ -113,6 +113,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.rhymeai.app.MainViewModel
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.OneLiner
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.OneLinersStore
@@ -125,6 +126,8 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.components.KeepLabelOrder
+import com.rhymeai.app.ui.components.ProvideChromeHand
 import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.floatingChromeShadow
@@ -290,14 +293,17 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 SnackbarHost(snackbarHostState, Modifier.padding(horizontal = DesignTokens.Spacing.lg))
-                // The editor's UnBlock + mic geometry: trailing edge, round button outermost.
-                CaptureButtons(
-                    onType = { openCapture(CaptureMode.Type) },
-                    onRecord = { openCapture(CaptureMode.Record) },
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(end = DesignTokens.Rhythm.standard, bottom = DesignTokens.Rhythm.section)
-                )
+                // The editor's UnBlock + mic geometry: trailing edge (leading for the left hand).
+                val hand = viewModel.dominantHand
+                ProvideChromeHand(hand) {
+                    CaptureButtons(
+                        onType = { openCapture(CaptureMode.Type) },
+                        onRecord = { openCapture(CaptureMode.Record) },
+                        modifier = Modifier
+                            .align(if (hand == DominantHand.LEFT) Alignment.Start else Alignment.End)
+                            .padding(end = DesignTokens.Rhythm.standard, bottom = DesignTokens.Rhythm.section)
+                    )
+                }
             }
         }
     }
@@ -483,13 +489,15 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
                 .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                 .semantics { contentDescription = "Record a one liner" }
         ) {
-            Row(
-                Modifier.padding(horizontal = DesignTokens.Rhythm.section),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-            ) {
-                Icon(Icons.Default.Mic, contentDescription = null)
-                Text("Record", fontWeight = FontWeight.SemiBold)
+            KeepLabelOrder {
+                Row(
+                    Modifier.padding(horizontal = DesignTokens.Rhythm.section),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = null)
+                    Text("Record", fontWeight = FontWeight.SemiBold)
+                }
             }
         }
         Surface(

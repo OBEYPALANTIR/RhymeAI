@@ -12,6 +12,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.RhymeComplexity
@@ -750,6 +751,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _appAppearance
     var appearanceLoaded by mutableStateOf(false)
         private set
+    private var _dominantHand by mutableStateOf(DominantHand.RIGHT)
+    val dominantHand: DominantHand
+        get() = _dominantHand
     private var _selectedProvider by mutableStateOf(AIProvider.LOCAL)
     var selectedProvider: AIProvider
         get() = _selectedProvider
@@ -1543,6 +1547,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
             appearanceLoaded = true
+            _dominantHand = runCatching { repo.dominantHandFlow.first() }.getOrDefault(DominantHand.RIGHT)
             LaunchTestHooks.beforeLoading?.await()
             var established = false
             try {
@@ -1886,6 +1891,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw e
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Failed to save appearance"
+            }
+        }
+    }
+
+    fun setDominantHand(hand: DominantHand) {
+        if (_dominantHand == hand) return
+        _dominantHand = hand
+        viewModelScope.launch {
+            try {
+                repo.saveDominantHand(hand)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Failed to save dominant hand"
             }
         }
     }
