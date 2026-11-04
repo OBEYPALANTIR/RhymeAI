@@ -70,8 +70,8 @@ class SyllableWordColorTest {
                     span.item.color
                 )
             }
-            val gap = analysed.spanStyles.first { it.start == lyric.indexOf(" ") }
-            assertEquals(base, gap.item.color)
+            // Gaps carry no style: they take the field's own (base) colour.
+            assertTrue(analysed.spanStyles.none { lyric.indexOf(" ") in it.start until it.end })
         }
     }
 
@@ -116,10 +116,10 @@ class SyllableWordColorTest {
             syllablesEnabled = true
         )
 
-        fun colourOf(word: String) = analysed.spanStyles.single { it.start == text.indexOf(word) }.item.color
+        fun colourOf(word: String) = analysed.spanStyles.singleOrNull { it.start == text.indexOf(word) }?.item?.color
         assertEquals(Color.Magenta, colourOf("light"))
         assertEquals(Color.Magenta, colourOf("tonight"))
-        assertEquals(base, colourOf("hold"))
+        assertEquals(null, colourOf("hold")) // unstyled: the field's base colour
         assertEquals(
             listOf(SyllableEmeraldOnLight, SyllableEmeraldOnLight, SyllableEmeraldOnLight, SyllableBlueOnLight),
             colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled = true), isDark = false).map { it.color }
@@ -179,5 +179,24 @@ class SyllableWordColorTest {
         assertEquals(verse.length * 3, TextEdit("", verse.repeat(3)).size)        // paste into an empty song
         assertTrue(TextEdit("", verse.repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
         assertTrue(TextEdit(verse.repeat(8), "Another song entirely\n".repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
+    }
+
+    @Test
+    fun earlierColouringIsCarriedAcrossAnEditUntilTheNewOneLands() {
+        val text = "hold the light tonight"
+        val analysed = buildAnalysisText(text, base, listOf(Color.Magenta, Color.Cyan), isDark = false, rhymeEnabled = true, syllablesEnabled = true)
+        fun colourAt(annotated: AnnotatedString, word: String) =
+            annotated.spanStyles.lastOrNull { annotated.text.indexOf(word) in it.start until it.end }?.item?.color ?: base
+
+        val deleted = shiftAnalysis(analysed, "hold the ligh tonight")
+        assertEquals("hold the ligh tonight", deleted.text)
+        assertEquals(Color.Magenta, colourAt(deleted, "ligh"))
+        assertEquals(Color.Magenta, colourAt(deleted, "tonight"))
+        assertEquals(base, colourAt(deleted, "hold"))
+
+        val typedBefore = shiftAnalysis(analysed, "so hold the light tonight")
+        assertEquals(Color.Magenta, colourAt(typedBefore, "light"))
+        assertEquals(base, colourAt(typedBefore, "hold"))
+        assertTrue(typedBefore.spanStyles.all { it.start < it.end && it.end <= typedBefore.text.length })
     }
 }

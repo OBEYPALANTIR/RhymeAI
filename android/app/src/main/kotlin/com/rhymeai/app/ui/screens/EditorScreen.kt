@@ -1266,16 +1266,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                         )
                                     }
                                 )
-                                .syllableUnderlines(
-                                    text = viewModel.lyrics,
-                                    spans = syllableUnderlineSpans,
-                                    motion = syllableUnderlineMotion,
-                                    animate = animationsEnabled,
-                                    // Read at draw time: the field's layout for this frame's text, not the last one.
-                                    textLayoutResult = { lyricsTextLayout },
-                                    underlineGap = syllableUnderlineGap,
-                                    strokeWidth = syllableUnderlineWidth
-                                )
                                 .onFocusChanged { lyricsFocused = it.isFocused },
                             decorationBox = { innerTextField ->
                                 Box {
@@ -1291,6 +1281,23 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                         )
                         }
+                        // Over the field in its own layer: an easing underline redraws only itself, never the
+                        // whole lyric's text. It sits below each row, clear of the glyphs and the cursor.
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .graphicsLayer()
+                                .syllableUnderlines(
+                                    text = viewModel.lyrics,
+                                    spans = syllableUnderlineSpans,
+                                    motion = syllableUnderlineMotion,
+                                    animate = animationsEnabled,
+                                    // Read at draw time: the field's layout for this frame's text, not the last one.
+                                    textLayoutResult = { lyricsTextLayout },
+                                    underlineGap = syllableUnderlineGap,
+                                    strokeWidth = syllableUnderlineWidth
+                                )
+                        )
                     }
 
                     // Extra space lets the last line settle around the same point while typing.

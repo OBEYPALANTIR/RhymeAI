@@ -106,13 +106,26 @@ class SyllableUnderlineMotionUiTest {
 
     @Test fun bulkPasteSnapsInsteadOfGrowingEveryWord() {
         val pasted = (lyric + "\n").repeat(12).trimEnd()
-        type(pasted)
+        type(pasted, cursor = lyric.length) // caret stays on the first line, so the editor does not scroll
         frame()
         val first = saturatedPixels(capture())
-        repeat(12) { frame() }
-        val later = saturatedPixels(capture())
-        assertTrue("nothing drawn after the paste", first.count > 0)
-        assertTrue("underlines kept moving after a ${pasted.length}-character paste", first.differenceFrom(later) <= 30)
+        // Repeated words rhyme, so their colouring lands later: compare the underline rows only.
+        settleWithBackgroundWork()
+        val settled = saturatedPixels(capture())
+        onMain { vm.isSyllableColoringEnabled = false }
+        settleWithBackgroundWork()
+        val withoutUnderlines = saturatedPixels(capture())
+        val rows = (0 until settled.height).filter { y ->
+            (0 until settled.width).count { x -> settled[x, y] && !withoutUnderlines[x, y] } >= 10
+        }
+        fun underlinePixels(pixels: Pixels) = rows.sumOf { y -> (0 until pixels.width).count { x -> pixels[x, y] } }
+        // Easing every word would start each line from nothing; a snap draws them whole at once. (The
+        // landed colouring may embolden rhymes and nudge a line by a pixel or two, hence the margin.)
+        assertTrue("no underline rows after the paste", rows.size > 12)
+        assertTrue(
+            "underlines grew in after a ${pasted.length}-character paste: ${underlinePixels(first)} of ${underlinePixels(settled)}",
+            underlinePixels(first) >= underlinePixels(settled) * 0.9
+        )
     }
 
     @Test fun switchingSyllablesOffMidFadeClearsTheFadingLine() {
@@ -177,6 +190,48 @@ class SyllableUnderlineMotionUiTest {
         assertTrue("composition did not lengthen the line: $rest -> $final", final.right > rest.right + 3)
     }
 
+    @Test fun colouringStaysOnTheFrameAfterAnEditAndUpdatesWhenItLands() {
+        onMain { vm.isSyllableColoringEnabled = false } // rhyme colours only: every coloured pixel is a word
+        type("Burning bright in the night light")
+        settleWithBackgroundWork()
+        val before = saturatedPixels(capture()).count
+        type("Burning bright in the night lamp") // "lamp" leaves the bright/night/light family
+        frame()
+        val firstFrame = saturatedPixels(capture()).count
+        // The background colouring may land as soon as the next frame; wait until "lamp" goes plain.
+        var landed = firstFrame
+        val until = SystemClock.uptimeMillis() + 5_000
+        while (landed >= before - 20 && SystemClock.uptimeMillis() < until) {
+            SystemClock.sleep(20)
+            frame()
+            landed = saturatedPixels(capture()).count
+        }
+        assertTrue("rhyme colours missing before the edit", before > 100)
+        assertTrue("the frame after the edit dropped to plain text: $before -> $firstFrame", firstFrame >= before * 0.6)
+        assertTrue("the new colouring never landed: $before -> $landed", landed < before - 20)
+        assertTrue("bright/night lost their colour: $landed", landed >= before * 0.4)
+    }
+
+    @Test fun longSongsKeepColoursAndUnderlinesThroughDeleteAndRetype() {
+        val verse = "The harbor lights are burning low tonight\nI keep on walking through the city in the rain\n" +
+            "Beautiful and unforgettable the night\nEvery single word I write is just the same\n"
+        for (targetWords in listOf(600, 5_000)) {
+            val song = buildString { while (lyricStatsFor(toString()).wordCount < targetWords) append(verse) }.trimEnd()
+            type(song)
+            settleWithBackgroundWork()
+            val rest = saturatedPixels(capture()).count
+            val counts = mutableListOf<Int>()
+            for (text in listOf(song.dropLast(1), song, song.dropLast(1), song)) {
+                type(text)
+                repeat(3) { frame(); counts += saturatedPixels(capture()).count }
+            }
+            Log.i("SyllableCost", "words=$targetWords deleteRetypeColouredPixels rest=$rest frames=$counts")
+            assertTrue("nothing coloured at rest", rest > 100)
+            // Dropping to plain text or losing the underlines removes most coloured pixels in view.
+            assertTrue("a frame lost its colours or underlines at $targetWords words: $rest -> $counts", counts.all { it >= rest * 0.8 })
+        }
+    }
+
     /** Logs what one keystroke costs each analysis, and one whole editor frame, for two song sizes. */
     @Test fun perKeystrokeCost() {
         val verse = "The harbor lights are burning low tonight\nI keep on walking through the city in the rain\n" +
@@ -190,7 +245,7 @@ class SyllableUnderlineMotionUiTest {
         for (targetWords in listOf(600, 5_000)) {
             val song = buildString { while (lyricStatsFor(toString()).wordCount < targetWords) append(verse) }
             type(song)
-            settle()
+            settleWithBackgroundWork()
             val stats = mutableListOf<Double>()
             val underlines = mutableListOf<Double>()
             val colouring = mutableListOf<Double>()
@@ -211,13 +266,15 @@ class SyllableUnderlineMotionUiTest {
                     vm.isRhymeHighlightEnabled = rhymes
                     vm.isSyllableColoringEnabled = syllables
                 }
-                settle()
+                settleWithBackgroundWork()
                 val samples = List(9) { index ->
                     text = if (index % 2 == 0) text.dropLast(1) else text + "e"
                     type(text)
-                    timed { frame() }
+                    // The keystroke frame, then 30 frames (20 ms apart) while any deferred colouring lands.
+                    timed { frame() } to timed { settleFrames() }
                 }
-                "rhymes=$rhymes,syllables=$syllables" to median(samples)
+                "rhymes=$rhymes,syllables=$syllables" to
+                    "keystroke=${median(samples.map { it.first })} afterPause=${median(samples.map { it.second })}"
             }
             Log.i(
                 "SyllableCost",
@@ -287,9 +344,9 @@ class SyllableUnderlineMotionUiTest {
         return requireNotNull(connection) { "no input connection for the lyric field" }
     }
 
-    private fun type(text: String) {
+    private fun type(text: String, cursor: Int = text.length) {
         clock += 10_000 // a separate undo step per edit
-        onMain { vm.onLyricsChanged(TextFieldValue(text, TextRange(text.length)), timestampMilliseconds = clock) }
+        onMain { vm.onLyricsChanged(TextFieldValue(text, TextRange(cursor)), timestampMilliseconds = clock) }
     }
 
     private fun frame() = composeRule.mainClock.advanceTimeByFrame()
@@ -297,6 +354,23 @@ class SyllableUnderlineMotionUiTest {
     // Frame by frame: an animation takes its start time from the first frame it sees.
     private fun settle() {
         repeat(40) { frame() }
+        composeRule.waitForIdle()
+    }
+
+    private fun settleFrames() {
+        repeat(30) {
+            frame()
+            SystemClock.sleep(20)
+        }
+        composeRule.waitForIdle()
+    }
+
+    // Frames while the colouring is built on a background thread, until it has had time to land.
+    private fun settleWithBackgroundWork() {
+        repeat(40) {
+            frame()
+            SystemClock.sleep(25)
+        }
         composeRule.waitForIdle()
     }
 

@@ -128,14 +128,22 @@ class SyllableUnderlineMotion internal constructor(private val scope: CoroutineS
     private var lines: List<UnderlineLine> = emptyList()
     private val fading = mutableListOf<UnderlineLine>()
     private var easeNextLayout = false
+    private var geometry: UnderlineGeometry? = null
 
-    private class UnderlineLine(var color: Color) {
+    /** What [UnderlineGeometry] reads and records on a word's line. */
+    internal interface Measured {
+        val segments: FloatArray
+        var measuredIn: ParagraphKey?
+    }
+
+    private class UnderlineLine(var color: Color) : Measured {
         var target = -1f // full length on the layout in segmentsFor; -1 until measured
         var length: Animatable<Float, AnimationVector1D>? = null // null draws target
         var overflow = 0f // how far a shrinking line may run past its word, on the row it already had
         var snap = false
-        var segments = FloatArray(0) // left, right, y for each text row, as last measured
+        override var segments = FloatArray(0) // left, right, y for each text row, as last measured
         var segmentsFor: TextLayoutResult? = null
+        override var measuredIn: ParagraphKey? = null // the paragraph and field metrics the segments were measured in
         var alpha: Animatable<Float, AnimationVector1D>? = null
         var fade: Job? = null
 
@@ -158,7 +166,8 @@ class SyllableUnderlineMotion internal constructor(private val scope: CoroutineS
         lines.forEachIndexed { index, line ->
             if (laidOut && line.segmentsFor !== layout) {
                 val span = newSpans[index]
-                remeasure(line, underlineSegments(layout, span.start, span.endExclusive, underlineGap), ease)
+                val geometry = geometry?.takeIf { it.layout === layout } ?: UnderlineGeometry(layout, underlineGap).also { geometry = it }
+                remeasure(line, geometry.segments(span.start, span.endExclusive, line), ease)
                 line.segmentsFor = layout
             }
             drawSegments(line.segments, line.drawnLength(), line.color, 1f, strokeWidth)
@@ -274,30 +283,84 @@ fun Modifier.syllableUnderlines(
     motion.draw(this, layout, text, spans, animate, underlineGap, strokeWidth)
 }
 
-/** One (left, right, y) triple per text row the word [start, endExclusive) occupies. */
-private fun underlineSegments(
-    layout: TextLayoutResult,
-    start: Int,
-    endExclusive: Int,
-    underlineGap: Float
-): FloatArray {
-    if (start >= endExclusive || endExclusive > layout.layoutInput.text.length) return FloatArray(0)
-    val firstRow = layout.getLineForOffset(start)
-    val lastRow = layout.getLineForOffset(endExclusive - 1)
-    val segments = FloatArray((lastRow - firstRow + 1) * 3)
-    var size = 0
-    for (row in firstRow..lastRow) {
-        val segmentStart = if (row == firstRow) start else layout.getLineStart(row)
-        val segmentEnd = if (row == lastRow) endExclusive else layout.getLineEnd(row)
-        if (segmentEnd <= segmentStart) continue
-        val startBox = layout.getBoundingBox(segmentStart)
-        val endBox = layout.getBoundingBox(segmentEnd - 1)
-        if (endBox.right <= startBox.left) continue
-        segments[size++] = startBox.left
-        segments[size++] = endBox.right
-        segments[size++] = maxOf(startBox.bottom, endBox.bottom) + underlineGap
+/** A hard line's text and styles plus the field metrics: what fixes where its words sit across a row. */
+internal data class ParagraphKey(val text: String, val styles: List<Any>, val environment: List<Any>)
+
+/**
+ * Where words' underlines lie on one layout. Asking the platform layout for glyph positions costs
+ * more the more styled spans the lyric carries, so a word whose paragraph is unchanged since it was
+ * last measured keeps its horizontal geometry and only re-reads the heights of its rows.
+ */
+private class UnderlineGeometry(val layout: TextLayoutResult, private val underlineGap: Float) {
+    private val text = layout.layoutInput.text
+    private val environment: List<Any> = with(layout.layoutInput) {
+        listOf(constraints.maxWidth, style, density.density, density.fontScale)
     }
-    return if (size == segments.size) segments else segments.copyOf(size)
+    private val paragraphStarts: IntArray = buildList {
+        add(0)
+        var newline = text.text.indexOf('\n')
+        while (newline >= 0) {
+            add(newline + 1)
+            newline = text.text.indexOf('\n', newline + 1)
+        }
+    }.toIntArray()
+    private val keys = arrayOfNulls<ParagraphKey>(paragraphStarts.size)
+    private val stylesByParagraph = arrayOfNulls<MutableList<Any>>(paragraphStarts.size)
+
+    init {
+        text.spanStyles.forEach { range ->
+            var paragraph = paragraphOf(range.start)
+            while (paragraph < paragraphStarts.size && paragraphStarts[paragraph] < range.end) {
+                val start = paragraphStarts[paragraph]
+                val styles = stylesByParagraph[paragraph] ?: mutableListOf<Any>().also { stylesByParagraph[paragraph] = it }
+                styles += range.start - start
+                styles += range.end - start
+                styles += range.item
+                paragraph++
+            }
+        }
+    }
+
+    private fun paragraphOf(offset: Int): Int {
+        val index = paragraphStarts.binarySearch(offset)
+        return if (index >= 0) index else -index - 2
+    }
+
+    private fun keyOf(paragraph: Int): ParagraphKey = keys[paragraph] ?: run {
+        val end = if (paragraph + 1 < paragraphStarts.size) paragraphStarts[paragraph + 1] - 1 else text.length
+        ParagraphKey(text.text.substring(paragraphStarts[paragraph], end), stylesByParagraph[paragraph].orEmpty(), environment)
+            .also { keys[paragraph] = it }
+    }
+
+    /** One (left, right, y) triple per text row the word [start, endExclusive) occupies. */
+    fun segments(start: Int, endExclusive: Int, line: SyllableUnderlineMotion.Measured): FloatArray {
+        if (start >= endExclusive || endExclusive > text.length) return FloatArray(0)
+        val firstRow = layout.getLineForOffset(start)
+        val lastRow = layout.getLineForOffset(endExclusive - 1)
+        val key = keyOf(paragraphOf(start))
+        val previous = line.segments
+        val reuse = line.measuredIn == key && previous.size == (lastRow - firstRow + 1) * 3
+        line.measuredIn = key
+        if (reuse) {
+            return FloatArray(previous.size) { i ->
+                if (i % 3 == 2) layout.getLineBottom(firstRow + i / 3) + underlineGap else previous[i]
+            }
+        }
+        val segments = FloatArray((lastRow - firstRow + 1) * 3)
+        var size = 0
+        for (row in firstRow..lastRow) {
+            val segmentStart = if (row == firstRow) start else layout.getLineStart(row)
+            val segmentEnd = if (row == lastRow) endExclusive else layout.getLineEnd(row)
+            if (segmentEnd <= segmentStart) continue
+            val left = layout.getBoundingBox(segmentStart).left
+            val right = layout.getBoundingBox(segmentEnd - 1).right
+            if (right <= left) continue
+            segments[size++] = left
+            segments[size++] = right
+            segments[size++] = layout.getLineBottom(row) + underlineGap
+        }
+        return if (size == segments.size) segments else segments.copyOf(size)
+    }
 }
 
 private fun FloatArray.totalLength(): Float {
