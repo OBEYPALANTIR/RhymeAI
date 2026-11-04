@@ -14,8 +14,8 @@ object SyllableCounter {
     class LyricLine internal constructor(val words: Int, val syllables: Int, val tokens: IntArray)
 
     private val emptyLine = LyricLine(0, 0, IntArray(0))
-    private val wordCounts = DictionaryMemo<Int>(MEMO_CHARACTERS, MAX_MEMO_WORD_CHARACTERS)
-    private val lines = DictionaryMemo<LyricLine>(MEMO_CHARACTERS, MAX_MEMO_LINE_CHARACTERS)
+    private val wordCounts = pronunciationMemo<Int>(MEMO_CHARACTERS, MAX_MEMO_WORD_CHARACTERS)
+    private val lines = pronunciationMemo<LyricLine>(MEMO_CHARACTERS, MAX_MEMO_LINE_CHARACTERS)
 
     /** Characters of lyric lines the per-line memo currently keeps. */
     internal val retainedLineCharacters: Int get() = lines.retainedCharacters
@@ -24,7 +24,7 @@ object SyllableCounter {
     fun count(word: String): Int {
         val key = ProsodyAnalyzer.normalizeWord(word)
         if (key.isEmpty()) return 0
-        return wordCounts.getOrPut(key) { ProsodyAnalyzer.countWord(key) }
+        return wordCounts.getOrPut(key) { dictionary -> ProsodyAnalyzer.countWord(key, dictionary) }
     }
 
     /** The syllables of every word in [text], from the word memo (no stress or IPA work). */
@@ -34,8 +34,11 @@ object SyllableCounter {
         return text.split(whitespaceSplitPattern).count { it.isNotBlank() }
     }
 
-    /** [line] (no newline) counted once and memoised, so an edit re-counts only the lines it changed. */
-    fun lyricLine(line: String): LyricLine = lines.getOrPut(line) {
+    /**
+     * [line] (no newline) counted once and memoised, so an edit re-counts only the lines it changed.
+     * [index] (the line's position in the lyric) lets a very long line keep its latest count.
+     */
+    fun lyricLine(line: String, index: Int = -1): LyricLine = lines.getOrPut(line, index) {
         if (SectionMap.headerTitle(line) != null) emptyLine else {
             val tokens = LyricTokenizer.alphanumericWordPattern.findAll(line).toList()
             val triples = IntArray(tokens.size * 3)
@@ -51,10 +54,11 @@ object SyllableCounter {
     /** Calls [action] with each line's start offset in [lyrics] and its memoised count. */
     inline fun forEachLyricLine(lyrics: String, action: (lineStart: Int, line: LyricLine) -> Unit) {
         var lineStart = 0
+        var index = 0
         while (true) {
             val newline = lyrics.indexOf('\n', lineStart)
             val lineEnd = if (newline < 0) lyrics.length else newline
-            action(lineStart, lyricLine(lyrics.substring(lineStart, lineEnd)))
+            action(lineStart, lyricLine(lyrics.substring(lineStart, lineEnd), index++))
             if (newline < 0) return
             lineStart = newline + 1
         }

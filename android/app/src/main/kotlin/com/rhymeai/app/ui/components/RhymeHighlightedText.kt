@@ -20,12 +20,12 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
-import com.rhymeai.app.util.DictionaryMemo
 import com.rhymeai.app.util.LyricTokenizer
 import com.rhymeai.app.util.PronunciationDictionary
-import com.rhymeai.app.util.RhymePhonetics
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
+import com.rhymeai.app.util.pronunciationMemo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -52,13 +52,13 @@ private data class DocumentAnalysis(
 )
 
 private object WordAnalysisCache {
-    private val entries = DictionaryMemo<WordAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 64)
+    private val entries = pronunciationMemo<WordAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 64)
 
     fun analysisFor(word: String): WordAnalysis {
         val key = word.lowercase()
-        return entries.getOrPut(key) {
+        return entries.getOrPut(key) { dictionary ->
             WordAnalysis(
-                rhymeKeys = RhymePhonetics.rhymeKeys(key, maxDepth = 2),
+                rhymeKeys = ProsodyAnalyzer.rhymeKeys(key, maxDepth = 2, dictionary = dictionary),
                 syllableCount = SyllableCounter.count(key)
             )
         }
@@ -72,9 +72,10 @@ private object LineAnalysisCache {
     private val empty = LineAnalysis(emptyList(), emptyList())
 
     // Bounded by characters, and a huge pasted paragraph is analysed directly rather than kept.
-    private val entries = DictionaryMemo<LineAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 2_000)
+    private val entries = pronunciationMemo<LineAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 2_000)
 
-    fun analysisFor(line: String): LineAnalysis = entries.getOrPut(line) {
+    /** [index] (the line's position in the lyric) lets a very long line keep its latest analysis. */
+    fun analysisFor(line: String, index: Int): LineAnalysis = entries.getOrPut(line, index) {
         if (SectionMap.headerTitle(line) != null) empty else {
             val tokens = wordPattern.findAll(line).map { Token(it.value, it.range.first, it.range.last + 1) }.toList()
             LineAnalysis(tokens, tokens.map { WordAnalysisCache.analysisFor(it.text) })
@@ -193,10 +194,11 @@ private fun analyseDocument(request: DocumentAnalysisRequest, text: String, rhym
         val tokens = ArrayList<Token>()
         val analyses = ArrayList<WordAnalysis>()
         var lineStart = 0
+        var index = 0
         while (true) {
             val newline = text.indexOf('\n', lineStart)
             val lineEnd = if (newline < 0) text.length else newline
-            val line = LineAnalysisCache.analysisFor(text.substring(lineStart, lineEnd))
+            val line = LineAnalysisCache.analysisFor(text.substring(lineStart, lineEnd), index++)
             line.tokens.forEach { tokens += Token(it.text, lineStart + it.start, lineStart + it.end) }
             analyses += line.words
             if (newline < 0) break
