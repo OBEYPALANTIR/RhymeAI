@@ -483,13 +483,14 @@ struct LyricsTextView: UIViewRepresentable {
             defer { pendingColorEdit = nil }
             let text: String = textView.text
             guard let source = appliedColorText, let foreground = appliedForeground, source != text else { return }
-            var edit = Self.edit(from: source, to: text)
+            let moved: (spans: [LyricsColorSpan], locations: [Int: Int])
             if let pending = pendingColorEdit, pending.source == source,
                NSMaxRange(pending.range) <= source.utf16.count,
                (source as NSString).replacingCharacters(in: pending.range, with: pending.replacement) == text {
-                edit = (pending.range, pending.replacement)
+                moved = Self.spansMoved(appliedColorSpans, by: pending.range, replacement: pending.replacement)
+            } else {
+                moved = Self.spansMoved(appliedColorSpans, from: source, to: text)
             }
-            let moved = Self.spansMoved(appliedColorSpans, by: edit.range, replacement: edit.replacement)
             installColors(moved.spans, for: text, on: textView, foreground: foreground, movedSpans: moved.locations)
         }
 
@@ -506,6 +507,95 @@ struct LyricsTextView: UIViewRepresentable {
                   before[before.count - 1 - suffix] == after[after.count - 1 - suffix] { suffix += 1 }
             let replacement = (new as NSString).substring(with: NSRange(location: prefix, length: after.count - prefix - suffix))
             return (NSRange(location: prefix, length: before.count - prefix - suffix), replacement)
+        }
+
+        /// Moves the spans across an edit read off the two texts. The region
+        /// between their common prefix and suffix, widened to whole words, can
+        /// hold several separate edits (or an autocorrection and a space), so
+        /// its words are matched by text along their longest common run, and
+        /// the unmatched words between two matches take the places of the ones
+        /// they replaced when their counts agree. Other unmatched words wait
+        /// for the analysis.
+        static func spansMoved(
+            _ spans: [LyricsColorSpan],
+            from old: String,
+            to new: String
+        ) -> (spans: [LyricsColorSpan], locations: [Int: Int]) {
+            let edit = edit(from: old, to: new)
+            let oldText = old as NSString
+            let newText = new as NSString
+            func isWordUnit(_ unit: unichar) -> Bool {
+                (65...90).contains(unit) || (97...122).contains(unit) || unit == 39 || unit == 0x2019 || unit == 0x02BC
+            }
+            var start = edit.range.location
+            var oldEnd = NSMaxRange(edit.range)
+            var newEnd = start + (edit.replacement as NSString).length
+            while start > 0, isWordUnit(oldText.character(at: start - 1)) { start -= 1 }
+            while oldEnd < oldText.length, isWordUnit(oldText.character(at: oldEnd)) {
+                oldEnd += 1
+                newEnd += 1
+            }
+            let delta = newText.length - oldText.length
+
+            var adjusted: [(source: Int, span: LyricsColorSpan)] = []
+            var replaced: [LyricsColorSpan] = []
+            for span in spans {
+                if NSMaxRange(span.range) <= start {
+                    adjusted.append((span.range.location, span))
+                } else if span.range.location >= oldEnd {
+                    adjusted.append((span.range.location, LyricsColorSpan(
+                        range: NSRange(location: span.range.location + delta, length: span.range.length),
+                        foreground: span.foreground,
+                        underline: span.underline
+                    )))
+                } else {
+                    replaced.append(span)
+                }
+            }
+            let words = LyricRegex.word.matches(in: new, range: NSRange(location: start, length: newEnd - start)).map(\.range)
+            let before = replaced.map { oldText.substring(with: NSIntersectionRange($0.range, NSRange(location: 0, length: oldText.length))) }
+            let after = words.map { newText.substring(with: $0) }
+
+            // Longest common run of words, then same-count gaps paired in order.
+            var table = Array(repeating: Array(repeating: 0, count: after.count + 1), count: before.count + 1)
+            for i in stride(from: before.count - 1, through: 0, by: -1) {
+                for j in stride(from: after.count - 1, through: 0, by: -1) {
+                    table[i][j] = before[i] == after[j] ? table[i + 1][j + 1] + 1 : max(table[i + 1][j], table[i][j + 1])
+                }
+            }
+            var anchors: [(Int, Int)] = []
+            var i = 0, j = 0
+            while i < before.count, j < after.count {
+                if before[i] == after[j] {
+                    anchors.append((i, j))
+                    i += 1
+                    j += 1
+                } else if table[i + 1][j] >= table[i][j + 1] {
+                    i += 1
+                } else {
+                    j += 1
+                }
+            }
+            var pairs: [(Int, Int)] = []
+            var previous = (-1, -1)
+            for anchor in anchors + [(before.count, after.count)] {
+                let gapOld = anchor.0 - previous.0 - 1
+                if gapOld > 0, gapOld == anchor.1 - previous.1 - 1 {
+                    for offset in 1...gapOld { pairs.append((previous.0 + offset, previous.1 + offset)) }
+                }
+                if anchor.0 < before.count { pairs.append(anchor) }
+                previous = anchor
+            }
+            for (oldIndex, newIndex) in pairs {
+                let span = replaced[oldIndex]
+                adjusted.append((span.range.location, LyricsColorSpan(
+                    range: words[newIndex],
+                    foreground: span.foreground,
+                    underline: span.underline
+                )))
+            }
+            adjusted.sort { $0.span.range.location < $1.span.range.location }
+            return clipped(adjusted)
         }
 
         static func spansMoved(
@@ -551,8 +641,14 @@ struct LyricsTextView: UIViewRepresentable {
                     )
                 }
             }
-            // An edit joining two words can leave their spans touching; never
-            // overlapping. Identity follows the clipped start, so a line keeps its layer.
+            return clipped(adjusted)
+        }
+
+        /// An edit joining two words can leave their spans touching; never
+        /// overlapping. Identity follows the clipped start, so a line keeps its layer.
+        private static func clipped(
+            _ adjusted: [(source: Int, span: LyricsColorSpan)]
+        ) -> (spans: [LyricsColorSpan], locations: [Int: Int]) {
             var previousEnd = 0
             var moved: [LyricsColorSpan] = []
             var locations: [Int: Int] = [:]
