@@ -290,10 +290,13 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 SnackbarHost(snackbarHostState, Modifier.padding(horizontal = DesignTokens.Spacing.lg))
+                // The editor's UnBlock + mic geometry: trailing edge, round button outermost.
                 CaptureButtons(
                     onType = { openCapture(CaptureMode.Type) },
                     onRecord = { openCapture(CaptureMode.Record) },
-                    modifier = Modifier.padding(bottom = DesignTokens.Rhythm.standard)
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(end = DesignTokens.Rhythm.standard, bottom = DesignTokens.Rhythm.section)
                 )
             }
         }
@@ -470,18 +473,7 @@ private fun LineRow(
 @Composable
 private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: Modifier = Modifier) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignTokens.Rhythm.related)) {
-        Surface(
-            onClick = onType,
-            shape = CircleShape,
-            color = colorScheme.surface,
-            border = BorderStroke(1.dp, colorScheme.outline),
-            modifier = Modifier.size(DesignTokens.Rhythm.primary)
-                .floatingChromeShadow(CircleShape)
-                .semantics { contentDescription = "Type a one liner" }
-        ) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Keyboard, contentDescription = null) }
-        }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
         Surface(
             onClick = onRecord,
             shape = RoundedCornerShape(DesignTokens.Radius.pill),
@@ -499,6 +491,17 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
                 Icon(Icons.Default.Mic, contentDescription = null)
                 Text("Record", fontWeight = FontWeight.SemiBold)
             }
+        }
+        Surface(
+            onClick = onType,
+            shape = CircleShape,
+            color = colorScheme.surface,
+            border = BorderStroke(1.dp, colorScheme.outline),
+            modifier = Modifier.size(DesignTokens.Rhythm.primary)
+                .floatingChromeShadow(CircleShape)
+                .semantics { contentDescription = "Type a one liner" }
+        ) {
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Keyboard, contentDescription = null) }
         }
     }
 }
