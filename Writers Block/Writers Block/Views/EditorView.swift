@@ -142,6 +142,7 @@ struct EditorView: View {
     @State private var unblockWordmarkWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
     @State private var unblockCollapsed: Bool = false
     @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
     /// Starts unbounded so a full-screen iPad never flashes the single column.
@@ -478,11 +479,11 @@ struct EditorView: View {
             VStack {
                 Spacer()
                 editorActionCluster
-                    .frame(maxWidth: .infinity, alignment: dominantHand == .left ? .leading : .trailing)
+                    .frame(maxWidth: .infinity, alignment: clusterOnLeadingEdge ? .leading : .trailing)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.md)
             }
-            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor(in: layoutDirection)).combined(with: .opacity))
         }
     }
 
@@ -499,13 +500,13 @@ struct EditorView: View {
             VStack {
                 Spacer()
                 editorActionCluster
-                    .frame(maxWidth: .infinity, alignment: dominantHand == .left ? .leading : .trailing)
+                    .frame(maxWidth: .infinity, alignment: clusterOnLeadingEdge ? .leading : .trailing)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor(in: layoutDirection)).combined(with: .opacity))
         }
     }
 
@@ -525,10 +526,13 @@ struct EditorView: View {
 
     private var dominantHand: DominantHand { DominantHand.resolve(dominantHandRawValue) }
 
+    /// The dominant hand's physical edge, as a semantic edge for this layout direction.
+    private var clusterOnLeadingEdge: Bool { dominantHand.usesLeadingEdge(in: layoutDirection) }
+
     /// The round mic sits outermost at the dominant hand's edge, UnBlock inside it.
     private var editorActionCluster: some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
-            if dominantHand == .left {
+            if clusterOnLeadingEdge {
                 micButton
                 unblockButton
             } else {
@@ -542,7 +546,7 @@ struct EditorView: View {
     private var micButton: some View {
         FloatingMicButton(
             service: viewModel.voiceMemoService,
-            growsTowardTrailing: dominantHand == .left,
+            growsTowardTrailing: clusterOnLeadingEdge,
             ensureProjectId: { viewModel.ensureProjectForRecording() }
         )
     }
