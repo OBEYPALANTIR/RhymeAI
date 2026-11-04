@@ -58,7 +58,11 @@ class PronunciationDictionary private constructor(
         val shared: PronunciationDictionary
             get() = sharedDictionary
 
+        // Every Activity creation starts a load on IO; without this guard the second parse ran
+        // alongside the first (two copies of ~130k entries in flight) and could exhaust the heap.
+        @Synchronized
         fun initialize(inputStream: InputStream) {
+            if (sharedDictionary.wordCount > 0) return
             sharedDictionary = inputStream.bufferedReader().useLines { lines ->
                 fromLines(lines).also { dictionary ->
                     check(dictionary.entries.isNotEmpty()) { "Pronunciation dictionary is empty" }
