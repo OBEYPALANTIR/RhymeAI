@@ -368,6 +368,43 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(inserted.replacement == "にほ")
     }
 
+    @Test func twoSeparateEditsTheDelegateMissedKeepTheWordBetweenThem() {
+        // "yellow music follow" -> "ellow music ollow": a letter gone from each end word.
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 6), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 7, length: 5), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 13, length: 6), foreground: nil, underline: .green)
+        ]
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "yellow music follow", to: "ellow music ollow")
+        #expect(moved.spans.map(\.range) == [
+            NSRange(location: 0, length: 5), NSRange(location: 6, length: 5), NSRange(location: 12, length: 5)
+        ])
+        #expect(moved.spans.map(\.underline) == [.red, .blue, .green])
+        #expect(moved.locations == [0: 0, 7: 6, 13: 12])
+    }
+
+    @Test func anAutocorrectionAndASpaceKeepTheWholeWordUnderlined() {
+        // "yellow musci" -> "yellow music ": the corrected word keeps its span, at its full length.
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 6), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 7, length: 5), foreground: nil, underline: .blue)
+        ]
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "yellow musci", to: "yellow music ")
+        #expect(moved.spans.map(\.range) == [NSRange(location: 0, length: 6), NSRange(location: 7, length: 5)])
+        #expect(moved.locations == [0: 0, 7: 7])
+    }
+
+    @Test func aWordTheDelegateMissedDeletingLosesOnlyItsOwnSpan() {
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 6), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 7, length: 5), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 13, length: 6), foreground: nil, underline: .green)
+        ]
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "yellow music follow", to: "yellow follow")
+        #expect(moved.spans.map(\.range) == [NSRange(location: 0, length: 6), NSRange(location: 7, length: 6)])
+        #expect(moved.locations == [0: 0, 13: 7])
+    }
+
     // MARK: - Motion
 
     @Test func aDeletionEasesTheLineToItsNewWidthOnTheFeedbackTier() async throws {
