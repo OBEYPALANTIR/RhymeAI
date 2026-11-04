@@ -9,18 +9,22 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 
@@ -76,6 +80,31 @@ internal fun KeyboardSafeActionArea(
         content()
     }
 }
+/**
+ * Floating chrome for the writer's [hand]: left mirrors it, so "end" is the screen's left edge and
+ * the round button sits outermost there. Callers align the cluster itself with [chromeEdge].
+ * shortcut: forces Rtl, so under an RTL locale both hands land on the left; resolve against the
+ * locale if the app ships RTL languages.
+ */
+@Composable
+internal fun ProvideChromeHand(hand: DominantHand, content: @Composable () -> Unit) {
+    if (hand == DominantHand.LEFT) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl, content = content)
+    } else {
+        content()
+    }
+}
+
+/** Inside mirrored chrome, keeps a label's icon-then-word order (UnBlock, Record). */
+@Composable
+internal fun KeepLabelOrder(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr, content = content)
+}
+
+/** The bottom corner the floating chrome cluster sits in for [hand]. */
+internal fun chromeEdge(hand: DominantHand): Alignment =
+    if (hand == DominantHand.LEFT) Alignment.BottomStart else Alignment.BottomEnd
+
 /**
  * Wraps [content] in a [Column] that sits above the system navigation bar.
  *

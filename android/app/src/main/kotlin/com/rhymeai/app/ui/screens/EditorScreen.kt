@@ -138,6 +138,7 @@ import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -168,6 +169,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -181,7 +183,10 @@ import com.rhymeai.app.ui.components.AssistantPanel
 import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
+import com.rhymeai.app.ui.components.KeepLabelOrder
+import com.rhymeai.app.ui.components.ProvideChromeHand
 import com.rhymeai.app.ui.components.RewriteChipBar
+import com.rhymeai.app.ui.components.chromeEdge
 import com.rhymeai.app.ui.components.rememberAnalysisText
 import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.WordInspectorSheet
@@ -1316,8 +1321,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 visible = fabRowVisible,
                 enter = fadeIn(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
                 exit = fadeOut(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
-                modifier = Modifier.align(Alignment.BottomEnd)
+                modifier = Modifier.align(chromeEdge(viewModel.dominantHand))
             ) {
+                ProvideChromeHand(viewModel.dominantHand) {
                 KeyboardSafeActionArea(
                     modifier = Modifier.padding(end = DesignTokens.Rhythm.standard),
                     extra = DesignTokens.Rhythm.section,
@@ -1453,6 +1459,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
+                        KeepLabelOrder {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center
@@ -1478,6 +1485,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     UnBlockWordmark()
                                 }
                             }
+                        }
                         }
                     }
 
@@ -1548,10 +1556,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                         DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
                                 }
                         ) {
+                            // Newest bar beside the mic glyph, which the left hand puts on the left.
+                            val meterMirrored = LocalLayoutDirection.current == LayoutDirection.Rtl
                             Canvas(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(DesignTokens.EditorChrome.recordingMeterHeight)
+                                    .graphicsLayer { scaleX = if (meterMirrored) -1f else 1f }
                             ) {
                                 waveformRevision
                                 val pitch = size.width / amplitudeBars.size
@@ -1603,6 +1614,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                         }
                     }
+                }
                 }
                 }
             }

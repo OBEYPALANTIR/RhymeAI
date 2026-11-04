@@ -439,6 +439,8 @@ class MainActivity : ComponentActivity() {
                             onRhymeHighlightChange = { viewModel.isRhymeHighlightEnabled = it; viewModel.persistEditorToggles() },
                             isBeatGridEnabled = viewModel.isBeatGridEnabled,
                             onBeatGridChange = { viewModel.isBeatGridEnabled = it; viewModel.persistEditorToggles() },
+                            dominantHand = viewModel.dominantHand,
+                            onDominantHandChange = viewModel::setDominantHand,
                             initialAiSetupExpanded = viewModel.settingsOpensAiSetup,
                             onDismiss = viewModel::dismissSettings
                         )
