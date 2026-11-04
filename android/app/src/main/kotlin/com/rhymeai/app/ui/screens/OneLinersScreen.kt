@@ -126,8 +126,8 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
-import com.rhymeai.app.ui.components.KeepLabelOrder
-import com.rhymeai.app.ui.components.ProvideChromeHand
+import com.rhymeai.app.ui.components.chromeEdgePadding
+import com.rhymeai.app.ui.components.chromeSide
 import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.floatingChromeShadow
@@ -295,15 +295,15 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 SnackbarHost(snackbarHostState, Modifier.padding(horizontal = DesignTokens.Spacing.lg))
                 // The editor's UnBlock + mic geometry: trailing edge (leading for the left hand).
                 val hand = viewModel.dominantHand
-                ProvideChromeHand(hand) {
-                    CaptureButtons(
-                        onType = { openCapture(CaptureMode.Type) },
-                        onRecord = { openCapture(CaptureMode.Record) },
-                        modifier = Modifier
-                            .align(if (hand == DominantHand.LEFT) Alignment.Start else Alignment.End)
-                            .padding(end = DesignTokens.Rhythm.standard, bottom = DesignTokens.Rhythm.section)
-                    )
-                }
+                CaptureButtons(
+                    hand = hand,
+                    onType = { openCapture(CaptureMode.Type) },
+                    onRecord = { openCapture(CaptureMode.Record) },
+                    modifier = Modifier
+                        .align(chromeSide(hand))
+                        .chromeEdgePadding(hand, DesignTokens.Rhythm.standard)
+                        .padding(bottom = DesignTokens.Rhythm.section)
+                )
             }
         }
     }
@@ -477,9 +477,9 @@ private fun LineRow(
 }
 
 @Composable
-private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: Modifier = Modifier) {
+private fun CaptureButtons(hand: DominantHand, onType: () -> Unit, onRecord: () -> Unit, modifier: Modifier = Modifier) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)) {
+    val record: @Composable () -> Unit = {
         Surface(
             onClick = onRecord,
             shape = RoundedCornerShape(DesignTokens.Radius.pill),
@@ -489,17 +489,17 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
                 .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                 .semantics { contentDescription = "Record a one liner" }
         ) {
-            KeepLabelOrder {
-                Row(
-                    Modifier.padding(horizontal = DesignTokens.Rhythm.section),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-                ) {
-                    Icon(Icons.Default.Mic, contentDescription = null)
-                    Text("Record", fontWeight = FontWeight.SemiBold)
-                }
+            Row(
+                Modifier.padding(horizontal = DesignTokens.Rhythm.section),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = null)
+                Text("Record", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+    val type: @Composable () -> Unit = {
         Surface(
             onClick = onType,
             shape = CircleShape,
@@ -511,6 +511,10 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
         ) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Keyboard, contentDescription = null) }
         }
+    }
+    // Physical order: the round Type button is always outermost at the writer's edge.
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Absolute.spacedBy(DesignTokens.Spacing.sm)) {
+        if (hand == DominantHand.LEFT) { type(); record() } else { record(); type() }
     }
 }
 
