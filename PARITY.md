@@ -740,7 +740,7 @@ Six small touches from the owner's "More life" board, on the DESIGN.md ladder (1
 
 ## Dominant hand setting
 
-- Settings → Editor → "Dominant hand: Right / Left", persisted (default Right). Right keeps the floating chrome on the trailing edge; Left mirrors it to the leading edge with the same paddings (21pt/dp side, 34pt/dp above the safe area, 8pt/dp gap): the round button outermost at the left edge and the wide pill inside, for the editor's mic + UnBlock and One Liners' Type + Record. The expanded recording pill grows toward the centre with the newest meter bar beside the mic. Toolbar, drawer, welcome cards, rewrite bar and assistant sheet do not move. Android: landed on `feat/depth-android` (`ProjectRepository.dominantHandFlow`, `ProvideChromeHand`), unit-verified round trip in `ProjectRepositoryTest` and bounds-verified in `DominantHandUiTest`. iOS: in progress in parallel.
+- Settings → Editor → "Dominant hand: Right / Left", persisted (default Right). Right keeps the floating chrome on the trailing edge; Left mirrors it to the leading edge with the same paddings (21pt/dp side, 34pt/dp above the safe area, 8pt/dp gap): the round button outermost at the left edge and the wide pill inside, for the editor's mic + UnBlock and One Liners' Type + Record. The expanded recording pill grows toward the centre with the newest meter bar beside the mic. Toolbar, drawer, welcome cards, rewrite bar and assistant sheet do not move. Android: landed on `feat/depth-android` (`ProjectRepository.dominantHandFlow`; `chromeEdge` / `chromeEdgePadding` place it physically, so an RTL locale does not flip it), unit-verified round trip in `ProjectRepositoryTest` and bounds-verified in `DominantHandUiTest`. iOS: in progress in parallel.
 
 ## Open parity checks
 
