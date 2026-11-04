@@ -16,6 +16,7 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
@@ -25,6 +26,7 @@ import com.rhymeai.app.util.RhymePhonetics
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private val wordPattern = LyricTokenizer.wordPattern
@@ -140,13 +142,16 @@ private object DocumentAnalysisCache {
 /**
  * The lyric coloured by rhyme family or syllable count. The colouring is built off the main
  * thread for each new text; until it lands, the last colouring is carried across the edit
- * ([shiftAnalysis]), so no frame shows the words uncoloured.
+ * ([shiftAnalysis]), so no frame shows the words uncoloured. A song longer than
+ * [DesignTokens.Editor.liveColouringMaxWords] instead shows plain text while typing and is
+ * recoloured once typing pauses.
  */
 @Composable
 internal fun rememberAnalysisText(
     text: String,
     enabled: Boolean,
-    syllablesEnabled: Boolean = false
+    syllablesEnabled: Boolean = false,
+    wordCount: Int = 0
 ): AnnotatedString {
     val baseTextColor = MaterialTheme.colorScheme.onBackground
     val isDark = LocalAppAppearance.current.isDark
@@ -160,8 +165,10 @@ internal fun rememberAnalysisText(
     var latest by remember(baseTextColor, palette, isDark, enabled, syllablesEnabled) {
         mutableStateOf(AnnotatedString(""))
     }
+    val live = colouringFollowsEveryKeystroke(wordCount)
     LaunchedEffect(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
         if (latest.text == text) return@LaunchedEffect
+        if (!live) delay(DesignTokens.Editor.deferredColouringPauseMillis)
         // A newer text cancels this job, so whatever lands is for the text on screen.
         latest = withContext(Dispatchers.Default) {
             buildAnalysisText(
@@ -177,10 +184,14 @@ internal fun rememberAnalysisText(
     val current = latest
     return when {
         current.text == text -> current
-        current.text.isEmpty() -> remember(text) { AnnotatedString(text) }
+        current.text.isEmpty() || !live -> remember(text) { AnnotatedString(text) }
         else -> remember(current, text) { shiftAnalysis(current, text) }
     }
 }
+
+/** Whether a lyric of [wordCount] words is recoloured on every keystroke or only after a pause. */
+internal fun colouringFollowsEveryKeystroke(wordCount: Int): Boolean =
+    wordCount <= DesignTokens.Editor.liveColouringMaxWords
 
 /**
  * [previous] colouring carried onto [text] across the one edit between them: styles before the

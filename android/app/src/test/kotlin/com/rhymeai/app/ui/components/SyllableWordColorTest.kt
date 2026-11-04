@@ -199,4 +199,14 @@ class SyllableWordColorTest {
         assertEquals(base, colourAt(typedBefore, "hold"))
         assertTrue(typedBefore.spanStyles.all { it.start < it.end && it.end <= typedBefore.text.length })
     }
+
+    @Test
+    fun songsPastTheLiveLimitRecolourOnlyAfterTypingPauses() {
+        val limit = com.rhymeai.app.ui.theme.DesignTokens.Editor.liveColouringMaxWords
+        assertTrue(colouringFollowsEveryKeystroke(0))
+        assertTrue(colouringFollowsEveryKeystroke(620))
+        assertTrue(colouringFollowsEveryKeystroke(limit))
+        assertEquals(false, colouringFollowsEveryKeystroke(limit + 1))
+        assertEquals(false, colouringFollowsEveryKeystroke(5_022))
+    }
 }

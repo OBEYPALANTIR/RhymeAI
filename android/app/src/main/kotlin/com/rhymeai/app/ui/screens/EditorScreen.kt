@@ -1204,7 +1204,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val analysisText = rememberAnalysisText(
                         text = viewModel.lyrics,
                         enabled = analysisTextActive && viewModel.isRhymeHighlightEnabled,
-                        syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
+                        syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled,
+                        wordCount = measuredLyricStats.wordCount
                     )
                     val analysisTransformation = remember(analysisTextActive, analysisText) {
                         lyricAnalysisTransformation(analysisTextActive, analysisText)
