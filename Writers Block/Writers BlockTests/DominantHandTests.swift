@@ -21,10 +21,22 @@ struct DominantHandTests {
     }
 
     @Test
-    func unknownValuesFallBackToRightAndLeftMirrorsTheCluster() {
+    func unknownValuesFallBackToRight() {
         #expect(DominantHand.resolve("ambidextrous") == .right)
         #expect(DominantHand.allCases.map(\.displayName) == ["Right", "Left"])
-        #expect(DominantHand.right.clusterAlignment == .bottomTrailing)
-        #expect(DominantHand.left.clusterAlignment == .bottomLeading)
+    }
+
+    @Test
+    func handednessStaysPhysicalInBothLayoutDirections() {
+        // Left-to-right: leading is the left edge.
+        #expect(DominantHand.left.usesLeadingEdge(in: .leftToRight))
+        #expect(!DominantHand.right.usesLeadingEdge(in: .leftToRight))
+        #expect(DominantHand.left.clusterAlignment(in: .leftToRight) == .bottomLeading)
+        #expect(DominantHand.right.clusterAlignment(in: .leftToRight) == .bottomTrailing)
+        // Right-to-left: leading is the right edge, so Left uses trailing.
+        #expect(!DominantHand.left.usesLeadingEdge(in: .rightToLeft))
+        #expect(DominantHand.right.usesLeadingEdge(in: .rightToLeft))
+        #expect(DominantHand.left.clusterAlignment(in: .rightToLeft) == .bottomTrailing)
+        #expect(DominantHand.right.clusterAlignment(in: .rightToLeft) == .bottomLeading)
     }
 }

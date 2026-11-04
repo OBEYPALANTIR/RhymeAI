@@ -18,10 +18,21 @@ enum DominantHand: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
-    /// Where the floating cluster sits along the bottom edge.
-    var clusterAlignment: Alignment { self == .left ? .bottomLeading : .bottomTrailing }
+    /// Handedness is physical: Left is the screen's left edge in every
+    /// locale. In a right-to-left layout the leading edge is on the right, so
+    /// the cluster's semantic edge (and its HStack order) flips with it.
+    func usesLeadingEdge(in direction: LayoutDirection) -> Bool {
+        (self == .left) != (direction == .rightToLeft)
+    }
 
-    var clusterAnchor: UnitPoint { self == .left ? .bottomLeading : .bottomTrailing }
+    /// Where the floating cluster sits along the bottom edge.
+    func clusterAlignment(in direction: LayoutDirection) -> Alignment {
+        usesLeadingEdge(in: direction) ? .bottomLeading : .bottomTrailing
+    }
+
+    func clusterAnchor(in direction: LayoutDirection) -> UnitPoint {
+        usesLeadingEdge(in: direction) ? .bottomLeading : .bottomTrailing
+    }
 
     static func resolve(_ rawValue: String?) -> Self {
         rawValue.flatMap(Self.init(rawValue:)) ?? .right
