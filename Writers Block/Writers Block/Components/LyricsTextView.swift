@@ -575,7 +575,24 @@ struct LyricsTextView: UIViewRepresentable {
 
             // Unchanged words anchor first (`anchoredWords`); each keeps its
             // spans, and their layers, at its new place.
-            let anchors = anchoredWords(before, at: oldWords, after, at: words)
+            // Too large to align: only the region's common prefix and suffix
+            // survive, nothing is stretched, and the rest waits for the analysis.
+            guard let anchors = anchoredWords(before, at: oldWords, after, at: words) else {
+                let surviving = survivingPieces(
+                    replaced.map { ($0.range.location, $0) },
+                    old: oldText, in: NSRange(location: start, length: oldEnd - start),
+                    new: newText, in: NSRange(location: start, length: newEnd - start),
+                    aligns: false
+                )
+                for word in words {
+                    for piece in surviving.pieces {
+                        let kept = NSIntersectionRange(piece.span.range, word)
+                        if kept.length > 0 { adjusted.append((piece.source, piece.span.with(range: kept))) }
+                    }
+                }
+                adjusted.sort { $0.span.range.location < $1.span.range.location }
+                return clipped(adjusted)
+            }
             for (oldIndex, newIndex) in anchors {
                 let shift = words[newIndex].location - oldWords[oldIndex].location
                 for (source, span) in wordSpans[oldIndex] {
@@ -626,19 +643,21 @@ struct LyricsTextView: UIViewRepresentable {
         /// moved least, so a repeated word pairs with itself. Any alignment
         /// with E word edits stays within E of the diagonal, so the table is
         /// a band that widens until it holds the best alignment: the cost is
-        /// (old + new words) x edits, not old x new. Past `maximumEdits`
-        /// nothing anchors and the gap's characters carry what survives.
+        /// (old + new words) x edits, not old x new, and never wider than
+        /// `maximumEdits`. Nil past that: the edit is too large to align.
         static func anchoredWords(
             _ before: [String], at oldWords: [NSRange],
             _ after: [String], at newWords: [NSRange],
             maximumEdits: Int = 512
-        ) -> [(Int, Int)] {
+        ) -> [(Int, Int)]? {
             let n = before.count, m = after.count
+            // The word counts alone need more edits than the limit: nothing is allocated.
+            guard abs(n - m) <= maximumEdits else { return nil }
             guard n > 0, m > 0 else { return [] }
             let span = (oldWords.last.map(NSMaxRange) ?? 0) + (newWords.last.map(NSMaxRange) ?? 0) + 1
             let weight = span * (min(n, m) + 1)
             func moved(_ i: Int, _ j: Int) -> Int { abs(oldWords[i].location - newWords[j].location) }
-            var band = max(abs(n - m), 8)
+            var band = min(max(abs(n - m), 8), maximumEdits)
             while true {
                 let width = 2 * band + 1
                 func cell(_ i: Int, _ j: Int) -> Int { i * width + (j - i + band) }
@@ -669,7 +688,7 @@ struct LyricsTextView: UIViewRepresentable {
                 }
                 let edits = n + m - 2 * anchors.count
                 if edits <= band { return anchors }
-                if band >= maximumEdits { return [] }
+                if band >= maximumEdits { return nil }
                 band = min(band * 2, maximumEdits)
             }
         }
@@ -681,12 +700,13 @@ struct LyricsTextView: UIViewRepresentable {
         private static func survivingPieces(
             _ spans: [(source: Int, span: LyricsColorSpan)],
             old: NSString, in oldRange: NSRange,
-            new: NSString, in newRange: NSRange
+            new: NSString, in newRange: NSRange,
+            aligns: Bool = true
         ) -> (pieces: [(source: Int, span: LyricsColorSpan)], aligned: Bool) {
             let oldUnits = (0..<oldRange.length).map { old.character(at: oldRange.location + $0) }
             let newUnits = (0..<newRange.length).map { new.character(at: newRange.location + $0) }
             var landing = [Int?](repeating: nil, count: oldUnits.count)
-            let aligned = oldUnits.count * newUnits.count <= 250_000
+            let aligned = aligns && oldUnits.count * newUnits.count <= 250_000
             if aligned {
                 // table[i * columns + j]: longest common run of oldUnits[i...] and newUnits[j...].
                 let columns = newUnits.count + 1
