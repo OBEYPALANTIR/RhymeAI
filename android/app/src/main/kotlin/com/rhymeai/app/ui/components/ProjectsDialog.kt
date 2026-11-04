@@ -16,7 +16,6 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -127,7 +126,9 @@ import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.motion.OffsetMotionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.raisedSurface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -252,7 +253,7 @@ fun ProjectsDrawer(
     val filteredProjects = remember(sortedProjects, searchQuery) { searchProjects(sortedProjects, searchQuery) }
     val isSearching = searchQuery.isNotBlank()
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = colorScheme.outlineVariant,
+        unfocusedBorderColor = Color.Transparent,
         focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
@@ -312,7 +313,9 @@ fun ProjectsDrawer(
                     modifier = Modifier
                         .graphicsLayer { translationX = -screenWidthPx * 0.3f * trashRevealProgress }
                         .fillMaxSize()
-                        .appWritingSurface()
+                        // surfaceDim is surfaceContainerHigh under Ink and Paper; under Graphite it is the
+                        // darkest tone, so the song slabs still sit above the panel instead of in wells.
+                        .appWritingSurface(baseColor = colorScheme.surfaceDim)
                         .imePadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
@@ -435,7 +438,7 @@ fun ProjectsDrawer(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.Elevation.rowGap)
                             ) {
                                 if (projects.isEmpty()) {
                                     item {
@@ -904,18 +907,21 @@ private fun ProjectDrawerRow(
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.updatedAt))
     }
     val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
+    val rowShape = RoundedCornerShape(DesignTokens.Radius.xl)
 
     Card(
         onClick = { onLoadProject(project) },
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = DesignTokens.Touch.minTarget),
-        shape = RoundedCornerShape(DesignTokens.Radius.xl),
+            .heightIn(min = DesignTokens.Touch.minTarget)
+            .raisedSurface(SurfaceLevel.Raised, rowShape, topHighlight = !isActive),
+        shape = rowShape,
         colors = CardDefaults.cardColors(
+            // The active song keeps its state tint over the slab.
             containerColor = if (isActive) {
                 colorScheme.primaryContainer
             } else {
-                colorScheme.surfaceContainer
+                Color.Transparent
             },
             contentColor = if (isActive) {
                 colorScheme.onPrimaryContainer
@@ -1681,15 +1687,16 @@ private fun OneLinersDrawerCard(oneLiners: List<OneLiner>, onClick: () -> Unit, 
     val count = if (oneLiners.size == 1) "1 line" else "${oneLiners.size} lines"
     val subtitle = oneLiners.firstOrNull()?.let { "$count · ${it.text.ifEmpty { "Voice line" }}" }
         ?: "$count · Catch a line before it slips away."
+    val shape = RoundedCornerShape(DesignTokens.Radius.lg)
     Surface(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = DesignTokens.Touch.minTarget)
+            .raisedSurface(SurfaceLevel.Raised, shape, topHighlight = true)
             .semantics { contentDescription = "One Liners, $subtitle" },
-        shape = RoundedCornerShape(DesignTokens.Radius.lg),
-        color = colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, colorScheme.outline)
+        shape = shape,
+        color = Color.Transparent
     ) {
         Row(
             modifier = Modifier.padding(DesignTokens.Spacing.sm),
