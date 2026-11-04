@@ -190,7 +190,7 @@ private struct WelcomeCard<Actions: View>: View {
             Button(action: action) {
                 row
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
-                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+                    .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
             }
             .buttonStyle(.rhymePress)
         } else {
@@ -207,7 +207,8 @@ private struct WelcomeCard<Actions: View>: View {
                     .padding(.bottom, compact ? RhymeAITokens.Spacing.md : RhymeAITokens.Spacing.lg)
             }
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+            // The card with its own actions (One Liners) floats above the raised options.
+            .surfaceLevel(.floating, cornerRadius: RhymeAITokens.Radius.lg)
         }
     }
 
