@@ -231,7 +231,17 @@ object ProsodyAnalyzer {
         )
     }
 
-    fun countWord(word: String): Int = analyzeWord(word).syllableCount
+    /** [analyzeWord]'s syllable count without building its stress pattern or IPA. */
+    fun countWord(
+        word: String,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): Int {
+        val normalized = normalizeWord(word)
+        if (normalized.isEmpty()) return 0
+        val phones = dictionary.pronunciations(normalized).firstOrNull()
+            ?: return fallbackStressPattern(normalized).size
+        return stressPatternForPhones(phones).size
+    }
 
     fun countText(text: String): Int = analyzeLine(text).syllableCount
 
