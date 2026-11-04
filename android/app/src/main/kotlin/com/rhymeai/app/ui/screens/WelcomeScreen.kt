@@ -31,13 +31,14 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Card
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -51,7 +52,9 @@ import com.rhymeai.app.R
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.raisedSurface
 
 @Composable
 fun WelcomeScreen(
@@ -138,7 +141,7 @@ fun WelcomeScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (recentSongTitle != null) {
-                    WelcomeCard(Icons.Default.FolderOpen, "Continue $recentSongTitle", "Return to your writing", onContinue)
+                    WelcomeCard(Icons.Default.FolderOpen, "Continue $recentSongTitle", "Return to your writing", onContinue, level = SurfaceLevel.Floating)
                 }
                 WelcomeCard(
                     icon = Icons.Default.Add,
@@ -162,7 +165,8 @@ fun WelcomeScreen(
                     icon = Icons.Default.FormatQuote,
                     title = "One Liners",
                     subtitle = "Catch a line before it goes",
-                    onClick = { onOneLiners(OneLinerAction.OPEN) }
+                    onClick = { onOneLiners(OneLinerAction.OPEN) },
+                    level = SurfaceLevel.Floating
                 ) {
                     WelcomeCardAction(Icons.Default.Mic, "Record", "Record a one liner") { onOneLiners(OneLinerAction.RECORD) }
                     WelcomeCardAction(Icons.Default.Keyboard, "Type", "Type a one liner") { onOneLiners(OneLinerAction.TYPE) }
@@ -178,20 +182,22 @@ private fun WelcomeCard(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
+    level: SurfaceLevel = SurfaceLevel.Raised,
     actions: (@Composable RowScope.() -> Unit)? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(DesignTokens.Radius.xxl)
 
-    OutlinedCard(
+    Card(
         onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(DesignTokens.Radius.xxl),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = colorScheme.surfaceContainerLow,
+            .fillMaxWidth()
+            .raisedSurface(level, shape),
+        shape = shape,
+        colors = CardDefaults.cardColors(
+            containerColor = Color.Transparent,
             contentColor = colorScheme.onSurface
-        ),
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        )
     ) {
         Column {
             Row(

@@ -63,6 +63,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -124,7 +125,10 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.floatingChromeShadow
+import com.rhymeai.app.ui.theme.raisedSurface
 import com.rhymeai.app.ui.theme.recordingAccentColor
 import java.io.File
 import kotlinx.coroutines.delay
@@ -222,6 +226,13 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     } else null,
                     placeholder = { Text("Search one liners") },
                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                    // Raised: a tonal slab; the stroke appears only for focus.
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedBorderColor = colorScheme.primary,
+                        unfocusedContainerColor = colorScheme.surfaceContainerLow,
+                        focusedContainerColor = colorScheme.surfaceContainerLow
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = DesignTokens.Rhythm.related)
@@ -242,7 +253,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         top = DesignTokens.Rhythm.related,
                         bottom = DesignTokens.Rhythm.primary + DesignTokens.Rhythm.section * 2
                     ),
-                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Elevation.rowGap)
                 ) {
                     when {
                         lines.isEmpty() -> item(key = "empty") {
@@ -387,10 +398,11 @@ private fun LineRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val voiceOnly = line.text.isEmpty()
+    val shape = RoundedCornerShape(DesignTokens.Radius.lg)
     Surface(
-        shape = RoundedCornerShape(DesignTokens.Radius.lg),
-        color = colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        modifier = Modifier.raisedSurface(SurfaceLevel.Raised, shape, topHighlight = true),
+        shape = shape,
+        color = Color.Transparent
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = DesignTokens.Rhythm.related, vertical = DesignTokens.Spacing.sm),
@@ -464,7 +476,9 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
             shape = CircleShape,
             color = colorScheme.surface,
             border = BorderStroke(1.dp, colorScheme.outline),
-            modifier = Modifier.size(DesignTokens.Rhythm.primary).semantics { contentDescription = "Type a one liner" }
+            modifier = Modifier.size(DesignTokens.Rhythm.primary)
+                .floatingChromeShadow(CircleShape)
+                .semantics { contentDescription = "Type a one liner" }
         ) {
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Keyboard, contentDescription = null) }
         }
@@ -473,7 +487,9 @@ private fun CaptureButtons(onType: () -> Unit, onRecord: () -> Unit, modifier: M
             shape = RoundedCornerShape(DesignTokens.Radius.pill),
             color = recordingAccentColor(colorScheme.isDarkScheme()),
             contentColor = colorScheme.background,
-            modifier = Modifier.heightIn(min = DesignTokens.Rhythm.primary).semantics { contentDescription = "Record a one liner" }
+            modifier = Modifier.heightIn(min = DesignTokens.Rhythm.primary)
+                .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
+                .semantics { contentDescription = "Record a one liner" }
         ) {
             Row(
                 Modifier.padding(horizontal = DesignTokens.Rhythm.section),
