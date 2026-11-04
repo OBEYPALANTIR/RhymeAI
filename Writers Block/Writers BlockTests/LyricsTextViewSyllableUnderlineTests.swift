@@ -510,16 +510,40 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(moved.locations.isEmpty)
     }
 
-    @Test func manyUnchangedWordsBetweenTwoEditsAllKeepTheirSpans() {
-        let old = "yellow " + String(repeating: "music ", count: 82) + "follow"
-        let new = "xellow " + String(repeating: "music ", count: 82) + "follot"
-        let locations = [0] + (0..<82).map { 7 + 6 * $0 } + [7 + 6 * 82]
+    @Test(arguments: [499, 2_000])
+    func manyUnchangedWordsBetweenTwoEditsAllKeepTheirSpans(count: Int) {
+        let old = "yellow " + String(repeating: "music ", count: count) + "follow"
+        let new = "xellow " + String(repeating: "music ", count: count) + "follot"
+        let last = 7 + 6 * count
+        let locations = [0] + (0..<count).map { 7 + 6 * $0 } + [last]
         let spans = locations.map {
-            LyricsColorSpan(range: NSRange(location: $0, length: $0 == 0 || $0 == 499 ? 6 : 5), foreground: nil, underline: .red)
+            LyricsColorSpan(range: NSRange(location: $0, length: $0 == 0 || $0 == last ? 6 : 5), foreground: nil, underline: .red)
         }
         let moved = LyricsTextView.Coordinator.spansMoved(spans, from: old, to: new)
         #expect(moved.spans.map(\.range) == spans.map(\.range))
         #expect(moved.locations == Dictionary(uniqueKeysWithValues: locations.map { ($0, $0) }))
+    }
+
+    @Test func fragmentsAJoinLeftStillAnchorTheirWord() {
+        // "cat yel low dog": the space is deleted, then before any analysis
+        // the line is rewritten around the joined word.
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 3), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 4, length: 3), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 8, length: 3), foreground: nil, underline: .purple),
+            LyricsColorSpan(range: NSRange(location: 12, length: 3), foreground: nil, underline: .green)
+        ]
+        let joined = LyricsTextView.Coordinator.spansMoved(spans, by: NSRange(location: 7, length: 1), replacement: "")
+        #expect(joined.spans.map(\.range) == [
+            NSRange(location: 0, length: 3), NSRange(location: 4, length: 3),
+            NSRange(location: 7, length: 3), NSRange(location: 11, length: 3)
+        ])
+
+        let moved = LyricsTextView.Coordinator.spansMoved(joined.spans, from: "cat yellow dog", to: "yellowish yellow cat")
+
+        #expect(moved.spans.map(\.range) == [NSRange(location: 10, length: 3), NSRange(location: 13, length: 3)])
+        #expect(moved.spans.map(\.underline) == [.blue, .purple])
+        #expect(moved.locations == [4: 10, 7: 13])
     }
 
     // MARK: - Motion
