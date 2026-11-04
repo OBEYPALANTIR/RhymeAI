@@ -488,6 +488,40 @@ struct LyricsTextViewSyllableUnderlineTests {
         #expect(moved.locations == [0: 0, 3: 3, 6: 6, 9: 9])
     }
 
+    @Test func anUnchangedWordAnchorsBeforeCharactersAreAligned() {
+        // "cat yellow dog" -> "yellowish yellow cat": only "yellow" survives as itself.
+        let spans = [
+            LyricsColorSpan(range: NSRange(location: 0, length: 3), foreground: nil, underline: .red),
+            LyricsColorSpan(range: NSRange(location: 4, length: 6), foreground: nil, underline: .blue),
+            LyricsColorSpan(range: NSRange(location: 11, length: 3), foreground: nil, underline: .green)
+        ]
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: "cat yellow dog", to: "yellowish yellow cat")
+        #expect(moved.spans.map(\.range) == [NSRange(location: 10, length: 6)])
+        #expect(moved.spans.map(\.underline) == [.blue])
+        #expect(moved.locations == [4: 10])
+    }
+
+    @Test func aReplacementTooLargeToAlignColoursNothingItDidNotKeep() {
+        let spans = [LyricsColorSpan(range: NSRange(location: 0, length: 501), foreground: nil, underline: .red)]
+        let moved = LyricsTextView.Coordinator.spansMoved(
+            spans, from: String(repeating: "a", count: 501), to: String(repeating: "b", count: 500)
+        )
+        #expect(moved.spans.isEmpty)
+        #expect(moved.locations.isEmpty)
+    }
+
+    @Test func manyUnchangedWordsBetweenTwoEditsAllKeepTheirSpans() {
+        let old = "yellow " + String(repeating: "music ", count: 82) + "follow"
+        let new = "xellow " + String(repeating: "music ", count: 82) + "follot"
+        let locations = [0] + (0..<82).map { 7 + 6 * $0 } + [7 + 6 * 82]
+        let spans = locations.map {
+            LyricsColorSpan(range: NSRange(location: $0, length: $0 == 0 || $0 == 499 ? 6 : 5), foreground: nil, underline: .red)
+        }
+        let moved = LyricsTextView.Coordinator.spansMoved(spans, from: old, to: new)
+        #expect(moved.spans.map(\.range) == spans.map(\.range))
+        #expect(moved.locations == Dictionary(uniqueKeysWithValues: locations.map { ($0, $0) }))
+    }
+
     // MARK: - Motion
 
     @Test func aDeletionEasesTheLineToItsNewWidthOnTheFeedbackTier() async throws {
