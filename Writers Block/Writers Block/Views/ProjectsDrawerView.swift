@@ -233,8 +233,9 @@ struct ProjectsDrawerView: View {
                         // The shadow belongs to the panel surface. Applied to
                         // the content it also rendered under every control,
                         // which read as grey smudges on the light appearances.
+                        // The panel floats on the high surface over the scrim.
                         .background {
-                            AppWritingBackground()
+                            appearance.palette.surfaceHigh
                                 .shadow(color: .black.opacity(0.35), radius: 26, x: 10, y: 0)
                                 // A black shadow vanishes on Graphite's canvas; the
                                 // hairline keeps the panel edge in every appearance.
@@ -444,7 +445,8 @@ struct ProjectsDrawerView: View {
                 .padding(.bottom, RhymeAITokens.Spacing.xs)
 
             ScrollView {
-                LazyVStack(spacing: RhymeAITokens.Spacing.sm) {
+                // Rows are slabs separated by tone, 2pt apart, not by strokes.
+                LazyVStack(spacing: 2) {
                     if projects.isEmpty {
                         emptyState(systemImage: "music.note", title: "No saved songs yet.", caption: "Create New Song starts a blank page.")
                     } else if filteredProjects.isEmpty {
@@ -544,7 +546,7 @@ struct ProjectsDrawerView: View {
             .padding(.horizontal, RhymeAITokens.Spacing.sm)
             .padding(.vertical, RhymeAITokens.Spacing.sm)
             .frame(minHeight: RhymeAITokens.Touch.comfortable)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
+            .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
         }
         .buttonStyle(.rhymePress)
         .accessibilityElement(children: .combine)
@@ -885,7 +887,7 @@ struct ProjectsDrawerView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .frame(minHeight: RhymeAITokens.Touch.minimum)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+        .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
     }
 
     private func projectRow(_ project: SongProject) -> some View {
@@ -970,6 +972,7 @@ struct ProjectsDrawerView: View {
         .padding(.vertical, RhymeAITokens.Spacing.sm)
         .padding(.leading, RhymeAITokens.Spacing.md)
         .padding(.trailing, RhymeAITokens.Spacing.xs)
+        .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
     }
 
     /// Glyph and text in the appearance's secondary ink (not the system grey),

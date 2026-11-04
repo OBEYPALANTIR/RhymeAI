@@ -173,7 +173,7 @@ struct OneLinersView: View {
         }
         .padding(.horizontal, RhymeAITokens.Rhythm.standard)
         .frame(minHeight: RhymeAITokens.Touch.minimum)
-        .background(palette.raisedSurface, in: Capsule())
+        .surfaceLevel(.raised, shape: Capsule())
     }
 
     // MARK: - List
@@ -187,8 +187,14 @@ struct OneLinersView: View {
             } else {
                 ForEach(filteredLines, id: \.id) { line in
                     row(line)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparatorTint(palette.raisedSurface)
+                        // A raised slab per line, 2pt apart, inset so the text keeps its 21pt margin.
+                        .listRowBackground(
+                            Color.clear
+                                .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
+                                .padding(.vertical, 1)
+                                .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                        )
+                        .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(
                             top: RhymeAITokens.Rhythm.related,
                             leading: RhymeAITokens.Rhythm.standard,
