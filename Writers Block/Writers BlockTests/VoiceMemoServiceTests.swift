@@ -623,7 +623,9 @@ struct PendingTakeTests {
     @Test func pauseThenPlayResumesWhereItStopped() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pause-\(UUID()).m4a")
         defer { try? FileManager.default.removeItem(at: url) }
-        try AudioFixtures.long(seconds: 30, at: url)
+        // Ten minutes: on a loaded CI runner the short waits below have run past a
+        // 30 s clip, and a clip that finishes drops the position this test reads.
+        try AudioFixtures.long(seconds: 600, at: url)
         let service = VoiceMemoService(stagingRoot: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         #expect(service.playbackPosition(at: url) == nil)
 
@@ -635,7 +637,7 @@ struct PendingTakeTests {
         service.togglePlayback(url: url)
         #expect(!service.isPlaying)
         let paused = try #require(service.playbackPosition(at: url), "a paused memo keeps its position")
-        #expect(paused.elapsed > 0.2 && abs(paused.duration - 30) < 1)
+        #expect(paused.elapsed > 0.2 && abs(paused.duration - 600) < 1)
         try await Task.sleep(for: .milliseconds(300))
         #expect(service.playbackPosition(at: url)?.elapsed == paused.elapsed, "paused means the clock stands still")
 
