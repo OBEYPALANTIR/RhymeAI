@@ -875,8 +875,10 @@ struct EditorView: View {
                 insertion: .opacity.animation(RhymeAITokens.Motion.state),
                 removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
             ))
+            // Kept on the column: on the scroll view it also animates the content
+            // height, which clamps the restored scroll offset back to the top.
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
         }
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
         // New Song: once the drawer or welcome has left, the caret is already
         // in the title, so the first keystroke is the song's name.
         .task(id: viewModel.editorOpen) {
