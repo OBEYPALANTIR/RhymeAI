@@ -47,7 +47,8 @@ final class LocalGenerationRuntimeTests: XCTestCase {
         viewModel.lyrics = "[Verse]\nRopes tap time against the mast\nBlue light gathers on the water"
         viewModel.cursorPosition = (viewModel.lyrics as NSString).length
         let input = viewModel.suggestionInputForTest()
-        XCTAssertNil(input.targetRhymeLine)
+        // The suggestion is the stanza's third line, A in ABAB, so it rhymes with the first.
+        XCTAssertEqual(input.targetRhymeLine, "Ropes tap time against the mast")
 
         var records: [[String: Any]] = []
         for phase in ["cold", "warm"] {
