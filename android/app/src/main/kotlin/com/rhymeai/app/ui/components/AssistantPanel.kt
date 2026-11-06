@@ -89,6 +89,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.MainViewModel
@@ -114,7 +115,7 @@ fun AssistantPanel(
     rhymeContext: RhymeContext,
     modifier: Modifier = Modifier,
     onSuggestionInserted: () -> Unit = {},
-    onModelSetup: () -> Unit = { viewModel.showSettingsDialog = true }
+    onModelSetup: () -> Unit = viewModel::openModelSetup
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val appearance = LocalAppAppearance.current
@@ -169,21 +170,28 @@ fun AssistantPanel(
             ) {
                 Icon(Icons.Default.Edit, null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(DesignTokens.Rhythm.tight))
-                FeatureHelpLabel(
-                    text = "Context & Theme",
-                    help = FeatureHelp.CONTEXT_THEME,
-                    onHelp = { activeHelp = it },
-                    color = colorScheme.onSurface,
-                    fontSizeSp = 16,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(Modifier.weight(1f))
                 Text(
-                    if (viewModel.theme.isBlank()) "Optional" else viewModel.theme,
-                    maxLines = 1,
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant,
-                    modifier = Modifier.widthIn(max = 140.dp)
+                    text = "Context & Theme",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurface
+                )
+                // Weighted, so Help and the chevron are measured first and never squeezed out.
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    Text(
+                        if (viewModel.theme.isBlank()) "Optional" else viewModel.theme,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(max = 140.dp)
+                    )
+                }
+                // Help sits at the trailing edge beside the chevron, so the row's body only toggles.
+                HelpButton(
+                    onClick = { activeHelp = FeatureHelp.CONTEXT_THEME },
+                    tint = colorScheme.onSurfaceVariant,
+                    contentDescription = "Context & Theme help"
                 )
                 Icon(
                     Icons.Default.KeyboardArrowDown,

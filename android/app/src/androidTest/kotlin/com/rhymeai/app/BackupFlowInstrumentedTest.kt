@@ -36,10 +36,12 @@ import com.rhymeai.app.ui.components.BackupSectionActions
 import com.rhymeai.app.ui.components.BackupSectionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.RhymeAITheme
+import com.rhymeai.app.util.PronunciationDictionary
 import com.rhymeai.app.data.sync.backupStatusLine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -173,6 +175,12 @@ class BackupFlowInstrumentedTest {
     private var savedTrash: List<TrashedSongProject> = emptyList()
     private var scenario: ActivityScenario<MainActivity>? = null
 
+    // Each launch while the dictionary is still loading starts another full load; this class relaunches
+    // fast enough to stack them past the 192 MB heap. Loaded once here, no launch loads it again.
+    @Before fun loadDictionaryOnce() {
+        if (PronunciationDictionary.shared.wordCount == 0) context.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+    }
+
     private fun launchConnectedWithEmptyLibrary(): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
         repo = ProjectRepository(context)
@@ -203,6 +211,17 @@ class BackupFlowInstrumentedTest {
 
     private fun prefs() = context.getSharedPreferences("rhymeai_backup", Context.MODE_PRIVATE)
 
+    /** Not now on the empty phone: backup pauses and Drive keeps its bytes; a song saved here then ends the pause. */
+    private fun declineThenEndThePauseWithASongHere(vm: MainViewModel) {
+        val before = drive.bytes(BackupManifest.FILE_NAME)
+        compose.onNodeWithText("Not now").performClick()
+        waitUntil { vm.backupStatus == BackupStatus.Paused(2) }
+        assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
+        runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
+        instrumentation.runOnMainSync { vm.backUpNow() }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
+    }
+
     @After fun restore() {
         scenario?.close()
         BackupTestHooks.driveClient = null
@@ -217,7 +236,9 @@ class BackupFlowInstrumentedTest {
     @Test fun firstRunSheetOffersTheBackupAndRestoreMergesIt() {
         launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("We found 2 songs and 0 recordings in your Google Drive backup.").assertIsDisplayed()
+        compose.onNodeWithText(
+            "We found 2 songs and 0 recordings in your Google Drive backup. Not now leaves Drive as it is; backup stays paused until you restore."
+        ).assertIsDisplayed()
         compose.onNodeWithText("Not now").assertIsDisplayed()
         compose.onNodeWithText("Restore").performClick()
 
@@ -242,11 +263,28 @@ class BackupFlowInstrumentedTest {
         assertEquals(BackupStatus.NotConnected, vm.backupStatus)
     }
 
+    /** Not now reads the library before it pauses; a Disconnect in that gap must stay Not connected. */
+    @Test fun disconnectRightAfterNotNowStaysNotConnected() {
+        val vm = launchConnectedWithEmptyLibrary()
+        waitForText("Restore your songs?")
+        // One main-thread turn: Not now's coroutine suspends on the library read, then Disconnect runs.
+        instrumentation.runOnMainSync {
+            vm.declineRestoreOffer()
+            vm.disconnectDrive()
+        }
+
+        waitUntil { vm.backupNotice?.startsWith("Disconnected from Google Drive") == true }
+        // Let Not now's coroutine finish its library read and resume.
+        SystemClock.sleep(500)
+        instrumentation.waitForIdleSync()
+        assertEquals(BackupStatus.NotConnected, vm.backupStatus)
+        assertFalse(prefs().getBoolean("drive_connected", false))
+    }
+
     @Test fun tombstonesAndRecordingChangesQueueTheDebouncedBackup() {
         val vm = launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("Not now").performClick()
-        waitUntil { vm.backupStatus is BackupStatus.Connected }
+        declineThenEndThePauseWithASongHere(vm)
 
         // A recording tombstone alone changes no song list.
         runBlocking {
@@ -270,8 +308,7 @@ class BackupFlowInstrumentedTest {
     @Test fun importThatAddsOnlyRecordingsQueuesTheDebouncedBackup() {
         val vm = launchConnectedWithEmptyLibrary()
         waitForText("Restore your songs?")
-        compose.onNodeWithText("Not now").performClick()
-        waitUntil { vm.backupStatus is BackupStatus.Connected }
+        declineThenEndThePauseWithASongHere(vm)
 
         val audio = byteArrayOf(7, 7, 7)
         val source = java.io.File(context.cacheDir, "import-source.m4a").apply { writeBytes(audio) }
@@ -408,6 +445,7 @@ class BackupFlowInstrumentedTest {
             val id = files.entries.firstOrNull { it.value.first == name }?.key ?: "id-${nextId++}"
             files[id] = name to bytes
         }
+        fun bytes(name: String) = files.values.firstOrNull { it.first == name }?.second
 
         override suspend fun findFileByName(accessToken: String, name: String) =
             files.entries.firstOrNull { it.value.first == name }?.let { DriveFileMetadata(it.key, name, version = it.value.second.size.toString()) }
@@ -425,6 +463,10 @@ class BackupFlowInstrumentedTest {
         override suspend fun deleteFile(accessToken: String, fileId: String) {
             files.remove(fileId)
         }
+        override suspend fun listRevisions(accessToken: String, fileId: String) = emptyList<com.rhymeai.app.data.sync.DriveRevision>()
+        override suspend fun keepRevisionForever(accessToken: String, fileId: String, revisionId: String) {}
+        override suspend fun downloadRevision(accessToken: String, fileId: String, revisionId: String, maxBytes: Long): ByteArray =
+            error("no revisions in this fake")
         override suspend fun revokeToken(token: String) {
             revoked += token
         }

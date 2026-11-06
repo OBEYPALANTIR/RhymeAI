@@ -63,6 +63,13 @@ object DesignTokens {
         val metadataLineHeight = 16.sp
         val syllableUnderlineGap = 2.dp
         val syllableUnderlineWidth = 3.dp
+
+        // Above this, laying out the coloured lyric on every keystroke costs whole frames, so the
+        // colours drop to plain while typing and return after a pause (counter and underlines stay live).
+        const val liveColouringMaxWords = 2_000
+
+        /** Milliseconds of no typing before a long song's colours return. */
+        const val deferredColouringPauseMillis = 180L
     }
 
     object EditorChrome {
@@ -96,6 +103,23 @@ object DesignTokens {
         val compactWidth = 304.dp
         val width = 360.dp
         val expandedWidth = 584.dp
+    }
+
+    /** Surface scale: page (flat), raised (tonal slab), floating (hairline + soft ink shadow). */
+    object Elevation {
+        val hairline = 1.dp
+        // outlineVariant is the strong outline in every appearance; at full ink it reads as a box.
+        const val hairlineAlpha = 0.35f
+        val floatingShadow = 3.dp
+        // Visible shadow strength; Surfaces.kt compensates for the platform's shadow alpha.
+        const val floatingShadowAlpha = 0.10f
+        val contactShadow = 1.dp
+        const val contactShadowAlpha = 0.12f
+        val ambientShadow = 12.dp
+        const val ambientShadowAlpha = 0.08f
+        val rowHighlight = 1.dp
+        const val rowHighlightAlpha = 0.6f
+        val rowGap = 2.dp
     }
 
     object Radius {

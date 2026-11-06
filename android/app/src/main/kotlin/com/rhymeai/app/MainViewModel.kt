@@ -12,6 +12,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.RhymeComplexity
@@ -28,8 +29,14 @@ import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
 import com.rhymeai.app.data.sync.BackupArchive
+import com.rhymeai.app.data.sync.BackupGate
 import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupProbe
+import com.rhymeai.app.data.sync.BackupRevision
+import com.rhymeai.app.data.sync.RevisionsResult
+import com.rhymeai.app.data.sync.RecoveryResult
+import com.rhymeai.app.data.sync.RecoverySummary
+import com.rhymeai.app.data.sync.GatedBackupRun
 import com.rhymeai.app.data.sync.BackupRunOutcome
 import com.rhymeai.app.data.sync.BackupScheduler
 import com.rhymeai.app.data.sync.actionAfterAuthorization
@@ -174,7 +181,8 @@ internal fun recordingMaintenanceNotes(leftInPlace: Int, unresolved: Int, unread
     setAside.takeIf { it > 0 }?.let { "$it deleted recording(s) were set aside on this device." }
 )
 
-internal enum class BackupAction { Connect, BackUp, Restore, Migrate }
+/** [Recover] lists Drive's earlier backups again (after consent) or recovers one. */
+internal enum class BackupAction { Connect, BackUp, Restore, Migrate, Recover }
 
 internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction): String? = listOfNotNull(
     "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive.".takeIf { result.migratedLegacyBackup },
@@ -199,7 +207,8 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         else -> "${result.unmovedLegacySongs} older songs could not be moved; the older backup was kept."
     },
     if (action == BackupAction.Restore) {
-        "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.merged.recordings.size, "recording")}."
+        // Recordings actually on this device after the apply, not the manifest's count.
+        "Restored ${plural(result.merged.projects.size, "song")} and ${plural(result.restoredRecordings, "recording")}."
     } else null,
     when (result.skippedLargeRecordings) {
         0 -> null
@@ -220,8 +229,46 @@ internal fun backupResultNotice(result: SyncResult.Success, action: BackupAction
         0 -> null
         1 -> "1 recording did not match its backup checksum and was not saved."
         else -> "${result.damagedRecordings} recordings did not match their backup checksum and were not saved."
+    },
+    when (result.missingRecordings) {
+        0 -> null
+        1 -> "1 recording is no longer in your Google Drive and was not restored."
+        else -> "${result.missingRecordings} recordings are no longer in your Google Drive and were not restored."
     }
 ).joinToString(" ").ifEmpty { null }
+
+/** Whatever a recovery added here reaches Drive through the next backup. */
+internal fun recoveryNeedsBackup(summary: RecoverySummary): Boolean = summary.songsAdded > 0 || summary.recordingsAdded > 0
+
+/** "Recovered 2 songs and 3 recordings. 1 already here." and what was left out, from what was created. */
+internal fun recoveryNotice(summary: RecoverySummary): String = listOfNotNull(
+    "Recovered ${plural(summary.songsAdded, "song")} and ${plural(summary.recordingsAdded, "recording")}. ${summary.alreadyHere} already here.",
+    (summary.deletedSongs to summary.deletedRecordings).takeIf { it != (0 to 0) }?.let { (songs, takes) ->
+        val parts = listOfNotNull(plural(songs, "song").takeIf { songs > 0 }, plural(takes, "recording").takeIf { takes > 0 })
+        "${parts.joinToString(" and ")} deleted after an earlier recovery stay deleted."
+    },
+    summary.deletedSongsStillHere.takeIf { it > 0 }?.let {
+        "An earlier copy of $it of them is still on this phone; a deletion elsewhere keeps it out of the backup unless you edit it here."
+    },
+    summary.unknownDateDeletions.takeIf { it > 0 }?.let {
+        "$it could not be placed because an earlier deletion of unknown date names ${if (it == 1) "it" else "them"}."
+    },
+    when (summary.missingRecordings) {
+        0 -> null
+        1 -> "1 recording is no longer in your Google Drive and was not recovered."
+        else -> "${summary.missingRecordings} recordings are no longer in your Google Drive and were not recovered."
+    },
+    when (summary.damagedRecordings) {
+        0 -> null
+        1 -> "1 recording did not match its backup checksum and was not saved."
+        else -> "${summary.damagedRecordings} recordings did not match their backup checksum and were not saved."
+    },
+    when (summary.skippedLargeRecordings) {
+        0 -> null
+        1 -> "1 recording is over 16 MB and was skipped."
+        else -> "${summary.skippedLargeRecordings} recordings are over 16 MB and were skipped."
+    }
+).joinToString(" ")
 
 private fun plural(count: Int, noun: String): String =
     if (count == 1) "$count $noun" else "$count ${noun}s"
@@ -380,7 +427,126 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var restoringDraft by mutableStateOf(false)
         private set
-    val recentProject: SongProject? get() = projects.maxByOrNull { it.updatedAt }
+    /** Welcome's Continue: the song last open in the editor (persisted as the current song). */
+    val recentProject: SongProject? get() = continueSong(projects, currentProjectId)
+
+    // One Liners: a pool of stray lines beside the songs. The widget snapshot follows every change.
+    val oneLinersStore = com.rhymeai.app.data.repository.OneLinersStore(application) {
+        com.rhymeai.app.widget.OneLinersWidget.refresh(application)
+    }
+    var oneLiners by mutableStateOf<List<com.rhymeai.app.data.model.OneLiner>>(emptyList())
+        private set
+    var trashedOneLiners by mutableStateOf<List<com.rhymeai.app.data.model.TrashedOneLiner>>(emptyList())
+        private set
+    var showOneLiners by mutableStateOf(false)
+    /** The One Liners screen was opened from the songs drawer, so its back returns there. */
+    var oneLinersOpenedFromDrawer by mutableStateOf(false)
+    /** The open capture sheet's words and take; they outlive an activity recreation. */
+    val oneLinerCaptures = com.rhymeai.app.service.OneLinerCaptures(viewModelScope)
+
+    /** Saves the open capture in the ViewModel's scope, so a recreated activity never cuts a save short. */
+    fun saveOneLinerCapture() = oneLinerCaptures.save { text, take, durationMs ->
+        when (val mode = oneLinerCaptures.current?.mode) {
+            is com.rhymeai.app.service.OneLinerCaptureSession.Mode.Edit -> updateOneLinerText(mode.line.id, text)
+            else -> saveOneLiner(text, take, durationMs)
+        }
+    }
+    /** A widget, tile or link asked for this; the One Liners screen (or an open capture) takes it. */
+    var pendingOneLinerAction by mutableStateOf<com.rhymeai.app.ui.navigation.OneLinerAction?>(null)
+
+    fun requestOneLinerAction(action: com.rhymeai.app.ui.navigation.OneLinerAction) {
+        pendingOneLinerAction = action
+        showOneLiners = true
+    }
+
+    /** Saves a capture; throws (with the take's place) so the sheet keeps the words and the take. */
+    suspend fun saveOneLiner(text: String, take: java.io.File?, audioDurationMs: Long) {
+        oneLinersStore.add(text, take, audioDurationMs)
+    }
+
+    suspend fun updateOneLinerText(id: String, text: String) {
+        oneLinersStore.updateText(id, text)
+    }
+
+    suspend fun trashOneLiner(id: String): Boolean =
+        (oneLinersStore.trash(id) != null).also { scheduleTrashPurge() }
+
+    suspend fun restoreOneLiner(id: String): Boolean = oneLinersStore.restore(id) != null
+
+    suspend fun permanentlyDeleteOneLiner(id: String): Boolean = oneLinersStore.permanentlyDelete(id)
+
+    /**
+     * Puts the line into the song: at the editor's cursor when that song is the open one (one
+     * undoable edit, saved right away), otherwise as its new last line. The line stays in the
+     * pool, marked used. Returns the message to show.
+     */
+    /** Runs in the ViewModel's scope (never the screen's), then reports the message to show. */
+    fun sendOneLinerToSong(line: com.rhymeai.app.data.model.OneLiner, project: SongProject, onResult: (String) -> Unit) {
+        viewModelScope.launch { onResult(sendOneLinerNow(line, project)) }
+    }
+
+    private suspend fun sendOneLinerNow(line: com.rhymeai.app.data.model.OneLiner, project: SongProject): String {
+        val text = line.text.trim()
+        if (text.isEmpty()) return "Transcribe or type the words first."
+        return try {
+            if (!showStartMenu && currentProjectId == project.id) {
+                val notSaved = "Couldn't add the line to the open song. Try again in a moment."
+                val stored = projects.firstOrNull { it.id == project.id } ?: return notSaved
+                // The marker is saved first: if that fails, nothing went into the song.
+                oneLinersStore.markUsed(line.id, project.id) ?: return "This line is no longer in One Liners."
+                if (!insertSuggestion(text)) {
+                    oneLinersStore.markUsed(line.id, line.usedInProjectId)
+                    return notSaved
+                }
+                val insertion = lyricsHistory.revision
+                // Saved right away and awaited: on failure or cancellation the insertion and the
+                // marker are put back, and the edits the cancelled autosave held are saved again.
+                autoSaveJob?.cancel()
+                val savedTitle = title
+                val savedLyrics = lyrics
+                val savedTheme = theme
+                var saved = false
+                suspend fun putBack() = withContext(kotlinx.coroutines.NonCancellable) {
+                    // Only this insertion is undone, and only while it is the latest edit.
+                    if (currentProjectId == project.id && !openingSong) {
+                        lyricsHistory.undoIfLatest(insertion, lyricsFieldValue)?.let(::applyHistoryState)
+                    }
+                    runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
+                }
+                try {
+                    persistActiveProjectSnapshot(
+                        stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
+                            updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
+                        savedTitle, savedLyrics, savedTheme
+                    )
+                    saved = true
+                } catch (cancelled: CancellationException) {
+                    putBack()
+                    throw cancelled
+                } catch (_: Exception) {
+                    putBack()
+                    return notSaved
+                } finally {
+                    if (!saved) triggerAutoSave()
+                }
+            } else {
+                val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
+                    ?: return "That song is no longer in your library."
+                // The song is the editor's (behind the start menu): its buffer follows the stored song.
+                if (currentProjectId == project.id) songs.firstOrNull { it.id == project.id }?.let {
+                    lyricsFieldValue = TextFieldValue(it.lyrics)
+                    resetLyricsHistory()
+                }
+            }
+            "Sent to “${project.title.ifEmpty { "Untitled Song" }}”"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: com.rhymeai.app.data.repository.OneLinerHasNoWordsException) {
+            "Transcribe or type the words first."
+        } catch (_: Exception) {
+            "Couldn't send this line. Try again."
+        }
+    }
     /**
      * Debug builds only: answers Suggest Next Line for UI tests and emulator QA
      * (see [ScriptedSuggestionStream]). Null in normal use.
@@ -585,6 +751,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _appAppearance
     var appearanceLoaded by mutableStateOf(false)
         private set
+    private var _dominantHand by mutableStateOf(DominantHand.RIGHT)
+    val dominantHand: DominantHand
+        get() = _dominantHand
     private var _selectedProvider by mutableStateOf(AIProvider.LOCAL)
     var selectedProvider: AIProvider
         get() = _selectedProvider
@@ -602,6 +771,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _selectedModel = value
         }
     var showSettingsDialog by mutableStateOf(false)
+    /** Settings was opened by "Set up model": it opens with AI setup expanded. */
+    var settingsOpensAiSetup by mutableStateOf(false)
+        private set
+
+    fun openModelSetup() {
+        settingsOpensAiSetup = true
+        showSettingsDialog = true
+    }
+
+    fun dismissSettings() {
+        showSettingsDialog = false
+        settingsOpensAiSetup = false
+    }
     var cloudAISharingRequest by mutableStateOf<CloudAISharingRequest?>(null)
         private set
     internal var aiSettingsLoaded by mutableStateOf(false)
@@ -793,6 +975,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var restoreOffer by mutableStateOf<BackupProbe?>(null)
         private set
 
+    /** Drive's song count while Back up now waits for the user to confirm backing up an empty library. */
+    var emptyBackupConfirm by mutableStateOf<Int?>(null)
+        private set
+
+    /** Drive's earlier manifest versions while "Recover an earlier backup…" is open. */
+    var backupRevisions by mutableStateOf<List<BackupRevision>?>(null)
+        private set
+
+    /** The earlier version chosen in the list, waiting for the user's "Recover" (nothing has been asked of Drive yet). */
+    var chosenRevision by mutableStateOf<BackupRevision?>(null)
+        private set
+
     /**
      * Set when Drive authorization requires the user to approve a consent screen.
      * MainActivity launches it and calls [retryAfterDriveAuthorization] on approval.
@@ -804,19 +998,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The passphrase of a migration waiting for Drive consent: memory only, cleared when used or replaced. */
     private var pendingMigrationPassphrase: String? = null
+    /** Every scheduled, retried, background, connect and Back up now run passes [BackupGate] here. */
+    private val gatedBackup = GatedBackupRun(
+        localSongCount = ::localSongCount,
+        probe = { backupMutex.withLock { driveSyncService.probe(repo) } },
+        backUp = {
+            backupStatus = BackupStatus.BackingUp
+            backupMutex.withLock { driveSyncService.backUp(repo) }
+        },
+        onGated = { decision, remoteSongs ->
+            backupStatus = BackupStatus.Paused(remoteSongs)
+            if (decision == BackupGate.Decision.CONFIRM) emptyBackupConfirm = remoteSongs
+        },
+        onResult = { result, interactive ->
+            when (handleBackupResult(result, BackupAction.BackUp, interactive)) {
+                true -> BackupRunOutcome.RETRY
+                false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
+            }
+        },
+        decisionPending = { restoreOffer != null }
+    )
+
     private val backupScheduler = BackupScheduler(
         scope = viewModelScope,
         clock = System::currentTimeMillis,
         isConnected = ::isBackupConnected,
-        onPending = { if (backupStatus !is BackupStatus.Failed) backupStatus = BackupStatus.Pending }
-    ) { interactive ->
-        backupStatus = BackupStatus.BackingUp
-        val result = backupMutex.withLock { driveSyncService.backUp(repo) }
-        when (handleBackupResult(result, BackupAction.BackUp, interactive)) {
-            true -> BackupRunOutcome.RETRY
-            false -> if (result is SyncResult.Success) BackupRunOutcome.SUCCEEDED else BackupRunOutcome.STOP
-        }
+        onPending = { if (backupStatus !is BackupStatus.Failed && backupStatus !is BackupStatus.Paused) backupStatus = BackupStatus.Pending }
+    ) { interactive -> gatedBackup(interactive) }
+
+    /** Songs stored here, active plus Trash; null when the library cannot be read (nothing then uploads). */
+    private suspend fun localSongCount(): Int? = try {
+        repo.projectsFlow.first().size + repo.trashedProjectsFlow.first().size
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
     }
+
+    /** An empty library over a Drive with songs pauses automatic backup until Restore. */
+    private suspend fun pausesBackup(remoteSongs: Int) =
+        BackupGate.decide(localSongCount(), remoteSongs, interactive = false, userConfirmed = false) == BackupGate.Decision.PAUSE
 
     private fun isBackupConnected(): Boolean = backupPrefs.getBoolean(KEY_CONNECTED, false)
 
@@ -831,8 +1052,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     backupPrefs.edit { putBoolean(KEY_CONNECTED, true) }
                     backupStatus = BackupStatus.Connected(lastBackupAt)
                     legacyBackupPresent = result.probe.legacyBackupPresent
-                    if (result.probe.projectCount > 0) restoreOffer = result.probe
-                    startBackup(interactive = false)
+                    val remoteSongs = result.probe.projectCount
+                    // While the restore offer is up nothing uploads; Not now decides.
+                    if (remoteSongs > 0) restoreOffer = result.probe else startBackup(interactive = false)
+                    // isBackupConnected after the read: a Disconnect meanwhile keeps NotConnected.
+                    if (pausesBackup(remoteSongs) && isBackupConnected()) backupStatus = BackupStatus.Paused(remoteSongs)
                 }
                 is ProbeResult.Failed -> handleBackupResult(result.result, BackupAction.Connect, interactive = true)
             }
@@ -846,6 +1070,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupStatus = BackupStatus.NotConnected
         legacyBackupPresent = false
         restoreOffer = null
+        emptyBackupConfirm = null
+        backupRevisions = null
+        chosenRevision = null
         backupBusyLabel = "Disconnecting…"
         viewModelScope.launch {
             val revoked = backupMutex.withLock { driveSyncService.disconnect() }
@@ -874,13 +1101,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun listBackupRevisions() {
+        backupNotice = null
+        backupBusyLabel = "Looking for earlier backups…"
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.probeRevisions() }
+            backupBusyLabel = null
+            when (result) {
+                is RevisionsResult.Ready ->
+                    if (result.revisions.isEmpty()) backupNotice = "Google Drive keeps no earlier backups."
+                    else backupRevisions = result.revisions
+                is RevisionsResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
+            }
+        }
+    }
+
+    fun closeBackupRevisions() {
+        backupRevisions = null
+        chosenRevision = null
+    }
+
+    /** Asks for confirmation; Drive is asked to keep the version only when the user confirms. */
+    fun chooseBackupRevision(revision: BackupRevision) {
+        backupRevisions = null
+        chosenRevision = revision
+    }
+
+    /** Keeps the chosen version forever, then adds its songs not on this phone as new songs. */
+    fun recoverBackupRevision() {
+        val revision = chosenRevision ?: return
+        chosenRevision = null
+        backupNotice = null
+        backupBusyLabel = "Recovering…"
+        viewModelScope.launch {
+            val result = backupMutex.withLock { driveSyncService.recoverRevision(repo, revision) }
+            backupBusyLabel = null
+            when (result) {
+                is RecoveryResult.Recovered -> {
+                    backupNotice = recoveryNotice(result.summary)
+                    // Takes alone change no song list, so the backup is queued here (as Import does).
+                    if (recoveryNeedsBackup(result.summary)) scheduleAutoBackup()
+                }
+                is RecoveryResult.Failed -> handleBackupResult(result.result, BackupAction.Recover, interactive = true)
+            }
+        }
+    }
+
     fun acceptRestoreOffer() {
         restoreOffer = null
         restoreFromBackup()
     }
 
+    /** Not now: Drive stays as it is. An empty library stays paused; one with songs backs up. */
     fun declineRestoreOffer() {
+        val offer = restoreOffer ?: return
         restoreOffer = null
+        if (!isBackupConnected()) return
+        viewModelScope.launch {
+            val pause = pausesBackup(offer.projectCount)
+            // A Disconnect during the library read already set NotConnected; keep it.
+            if (!isBackupConnected()) return@launch
+            if (pause) backupStatus = BackupStatus.Paused(offer.projectCount)
+            else startBackup(interactive = false)
+        }
+    }
+
+    /** Back up now's explicit confirmation to back up an empty library over Drive's songs. */
+    fun confirmEmptyBackup() {
+        emptyBackupConfirm = null
+        gatedBackup.confirmOnce()
+        startBackup(interactive = true)
+    }
+
+    fun cancelEmptyBackup() {
+        emptyBackupConfirm = null
     }
 
     fun migrateLegacyBackup(passphrase: String) {
@@ -915,6 +1209,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             BackupAction.Connect -> connectDrive()
             BackupAction.BackUp -> startBackup(interactive = true)
             BackupAction.Restore -> restoreFromBackup()
+            BackupAction.Recover -> listBackupRevisions()
             BackupAction.Migrate -> if (passphrase != null) migrateLegacyBackup(passphrase) else startBackup(interactive = true)
         }
     }
@@ -946,6 +1241,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** At most one queued cleanup of recovery stages, waiting for the running backup or recovery. */
+    private var recoveryStageCleanup: Job? = null
+
+    /**
+     * Queued, not blocking maintenance: runs once the backup or recovery releases the lock. A failure
+     * (for example storage full while a record is written) is reported like any maintenance failure,
+     * never thrown; the next launch or recovery tries again.
+     */
+    private fun queueRecoveryStageCleanup(filesDir: java.io.File) = synchronized(this) {
+        if (recoveryStageCleanup?.isActive == true) return@synchronized
+        recoveryStageCleanup = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                backupMutex.withLock { com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) {
+                    reportRecordingMaintenance("Files left by an interrupted recovery could not be cleaned up yet. The app tries again later.")
+                }
+            }
+        }
+    }
+
     /** Debounced automatic backup after a change; waits out any backoff. */
     fun scheduleAutoBackup() = backupScheduler.schedule()
 
@@ -959,7 +1277,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = backupMutex.withLock { driveSyncService.probe(repo) }
             if (result !is ProbeResult.Ready) return@launch
             legacyBackupPresent = result.probe.legacyBackupPresent
-            if (projects.isEmpty() && result.probe.projectCount > 0) restoreOffer = result.probe
+            if (pausesBackup(result.probe.projectCount) && isBackupConnected()) {
+                restoreOffer = result.probe
+                backupStatus = BackupStatus.Paused(result.probe.projectCount)
+            }
         }
     }
 
@@ -1226,6 +1547,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _appAppearance = runCatching { repo.appearanceFlow.first() }
                 .getOrDefault(AppAppearance.INK)
             appearanceLoaded = true
+            _dominantHand = runCatching { repo.dominantHandFlow.first() }.getOrDefault(DominantHand.RIGHT)
             LaunchTestHooks.beforeLoading?.await()
             var established = false
             try {
@@ -1339,6 +1661,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceError = corruptLibraryMessage(error)
                 }
             }
+            fun oneLinersFailed(error: Exception) {
+                persistenceError = (error as? CorruptLibraryException)?.let(::corruptLibraryMessage)
+                    ?: "One Liners could not be opened. Your songs are still available."
+            }
+            launch {
+                try {
+                    oneLinersStore.reconcileAudioFiles()
+                    oneLinersStore.publishSnapshot()
+                    oneLinersStore.linesFlow.collect { oneLiners = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    oneLinersFailed(error)
+                }
+            }
+            launch {
+                try {
+                    oneLinersStore.trashFlow.collect { trashedOneLiners = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    oneLinersFailed(error)
+                }
+            }
             // Trashed recordings have their own expiry clock and live outside the
             // preferences store; rescan it whenever the recording Trash changes.
             launch {
@@ -1386,6 +1732,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val heldRestores = com.rhymeai.app.data.sync.RecordingFileStore.recoverInterruptedRestores(filesDir, onlyHistorical = true)
                     val left = com.rhymeai.app.data.recording.RecordingTransitions.migrate(repo, filesDir) +
                         voiceMemoService.migrateStaging()
+                    // Serialized with recovery (backup lock) and every move (transition lock): only unreferenced
+                    // stages go. A backup or recovery running now cleans up itself, so this one is skipped then.
+                    if (backupMutex.tryLock()) {
+                        try {
+                            com.rhymeai.app.data.recording.RecordingTransitions.removeRecoveryStages(repo, filesDir)
+                        } finally {
+                            backupMutex.unlock()
+                        }
+                    } else {
+                        queueRecoveryStageCleanup(filesDir)
+                    }
                     val setAside = com.rhymeai.app.data.sync.quarantineDeletedRecordings(repo, filesDir)
                     val unresolved = com.rhymeai.app.data.recording.RecordingTransitions.unresolved
                     val unreadableTrash = com.rhymeai.app.data.recording.RecordingTransitions.unrecognizedTrashFiles
@@ -1529,10 +1886,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 repo.saveAppearance(appearance)
+                oneLinersStore.publishSnapshot() // the widget follows the appearance
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Failed to save appearance"
+            }
+        }
+    }
+
+    fun setDominantHand(hand: DominantHand) {
+        if (_dominantHand == hand) return
+        _dominantHand = hand
+        viewModelScope.launch {
+            try {
+                repo.saveDominantHand(hand)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Failed to save dominant hand"
             }
         }
     }
@@ -1756,12 +2128,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inspectorSynonyms = emptyList()
         inspectorSynonymsError = null
 
-        // Local word results remain valid when autosave assigns this song its first project ID.
-        val inspectorLyrics = lyrics
         inspectorProsody = null
         inspectorMatches = null
         viewModelScope.launch {
-            fun stillCurrent() = inspectorWord == word && inspectorRange == range && lyrics == inspectorLyrics
+            // Both results depend only on the word, so they publish for as long as this
+            // inspector is open, whatever else (lyrics, project ID, selection) changes meanwhile.
+            fun stillCurrent() = inspectorWord == word && inspectorRange == range
             // Pronunciation is a direct dictionary read; publish it before the rhyme search,
             // whose first run of a session builds the whole rhyme index.
             val prosodyResult = withContext(Dispatchers.IO) { ProsodyAnalyzer.analyzeWord(word) }
@@ -2128,6 +2500,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {
                 false
             }
+            // One liners expire alongside the songs; a failure leaves them for the next purge.
+            try {
+                oneLinersStore.purgeExpired(now)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+            }
             persistenceError = when {
                 songPurgeError != null -> {
                     val reason = if (songPurgeError is CorruptLibraryException)
@@ -2182,7 +2561,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // comes first. Already-expired recordings are being purged by the
             // launch in purgeExpiredTrashedProjects, so only future expiries count.
             val nextMemoExpiry = voiceMemoService.nextTrashedMemoExpiry()?.takeIf { it > now }
-            val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry).minOrNull()
+            val nextOneLinerExpiry = runCatching { oneLinersStore.nextExpiry(now) }.getOrNull()
+            val nextDeleteAfter = listOfNotNull(nextProjectExpiry, nextMemoExpiry, nextOneLinerExpiry).minOrNull()
                 ?: return@launch
             scheduledTrashPurgeAt = nextDeleteAfter
             delay((nextDeleteAfter - now).coerceAtLeast(0L))
@@ -2648,6 +3028,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = null
             voiceMemoService.release()
+            // Stopping finishes the take's file; with the capture gone it is cleared with the other abandoned pending takes.
+            oneLinerCaptures.current?.recorder?.stop()
             super.onCleared()
         }
     }
@@ -3098,3 +3480,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cancelEditorAIWork()
     }
 }
+
+/** The song last open in the editor, else the most recently updated one. */
+internal fun continueSong(projects: List<SongProject>, lastOpenedId: String?): SongProject? =
+    projects.firstOrNull { it.id == lastOpenedId } ?: projects.maxByOrNull { it.updatedAt }

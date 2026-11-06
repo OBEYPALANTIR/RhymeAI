@@ -19,6 +19,10 @@ struct FloatingMicButton: View {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let service: VoiceMemoService
+    /// The cluster sits on the leading edge (left hand in a left-to-right
+    /// layout, right hand in a right-to-left one): the stop button stays at the
+    /// leading edge and the pill grows toward the trailing side, the centre.
+    var growsTowardTrailing = false
     /// Called at record time to obtain (or lazily create) the project for this recording.
     let ensureProjectId: () -> String?
 
@@ -47,85 +51,26 @@ struct FloatingMicButton: View {
     // MARK: - Body
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        ZStack(alignment: growsTowardTrailing ? .leading : .trailing) {
             // Background pill / circle — width interpolates with progress.
             Color.clear
                 .frame(width: interpolatedWidth, height: pillHeight)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
-                .shadow(
-                    color: appearance.palette.primaryInk.opacity(0.18),
-                    radius: RhymeAITokens.Spacing.sm,
-                    y: RhymeAITokens.Spacing.xxs
-                )
+                .chromeShadow()
 
-            // Content layer: idle glyph on the right, recording controls
-            // growing leftward. Both are pinned to the trailing edge so the
-            // pill expands left while the stop button stays where it always was.
+            // Content layer: idle glyph on the outer edge, recording controls
+            // growing inward. Both are pinned to that edge so the pill expands
+            // toward the centre while the stop button stays where it always was.
             HStack(spacing: 0) {
-                // Recording region — spectralizer + timer
-                // Fades in once the pill is mostly stretched (progress > 0.55).
-                if progress > 0.01 {
-                    HStack(spacing: 0) {
-                        spectralBars
-                        Text(formattedElapsed)
-                            .font(.system(.caption, design: .monospaced).weight(.semibold))
-                            .foregroundStyle(appearance.palette.onAction)
-                            .monospacedDigit()
-                            .fixedSize()
-                            .frame(width: RhymeAITokens.Touch.minimum, alignment: .center)
-                    }
-                    .padding(.leading, RhymeAITokens.Spacing.sm)
-                    .opacity(recordingContentOpacity)
-                    .frame(width: max(0, interpolatedWidth - idleSize), alignment: .leading)
-                    .clipped()
-                    .transition(.opacity)
+                if growsTowardTrailing {
+                    stopButton
+                    Spacer(minLength: 0)
+                    recordingRegion
+                } else {
+                    recordingRegion
+                    Spacer(minLength: 0)
+                    stopButton
                 }
-
-                Spacer(minLength: 0)
-
-                // The 44-point control stays centered in the fixed trailing slot
-                // while the recording content expands to its left.
-                Button {
-                    if service.isRecording {
-                        service.stopRecording()
-                    } else {
-                        guard let projectId = ensureProjectId() else { return }
-                        Task { await service.startRecording(projectId: projectId) }
-                    }
-                } label: {
-                    ZStack {
-                        // Idle mic glyph
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(appearance.palette.onAction)
-                            .opacity(Double(max(0, 1 - progress * 2.5)))
-                            .scaleEffect(max(0.6, 1 - Double(progress) * 0.4))
-
-                        // Recording pause glyph (pause per design spec; action stops + saves)
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(appearance.palette.onAction)
-                            .opacity(Double(max(0, progress * 2.5 - 1.5)))
-                            .scaleEffect(max(0.6, Double(progress) * 0.9 + 0.1))
-                            .background(
-                                Circle()
-                                    .fill(appearance.palette.recording.opacity(min(0.85, Double(progress))))
-                                    .frame(
-                                        width: RhymeAITokens.Touch.minimum,
-                                        height: RhymeAITokens.Touch.minimum
-                                    )
-                            )
-                    }
-                    .frame(
-                        width: RhymeAITokens.Touch.minimum,
-                        height: RhymeAITokens.Touch.minimum
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .frame(width: idleSize, height: pillHeight)
-                .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
-                .accessibilityIdentifier("micButton")
             }
             .frame(width: interpolatedWidth, height: pillHeight)
             .clipShape(Capsule())
@@ -171,6 +116,81 @@ struct FloatingMicButton: View {
         } message: {
             Text("Allow microphone access in Settings to record melody ideas.")
         }
+    }
+
+    // MARK: - Pieces
+
+    /// The 44-point control stays centred in the fixed outer slot while the
+    /// recording content expands beside it.
+    private var stopButton: some View {
+        Button {
+            if service.isRecording {
+                service.stopRecording()
+            } else {
+                guard let projectId = ensureProjectId() else { return }
+                Task { await service.startRecording(projectId: projectId) }
+            }
+        } label: {
+            ZStack {
+                // Idle mic glyph
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(appearance.palette.onAction)
+                    .opacity(Double(max(0, 1 - progress * 2.5)))
+                    .scaleEffect(max(0.6, 1 - Double(progress) * 0.4))
+
+                // Recording pause glyph (pause per design spec; action stops + saves)
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(appearance.palette.onAction)
+                    .opacity(Double(max(0, progress * 2.5 - 1.5)))
+                    .scaleEffect(max(0.6, Double(progress) * 0.9 + 0.1))
+                    .background(
+                        Circle()
+                            .fill(appearance.palette.recording.opacity(min(0.85, Double(progress))))
+                            .frame(
+                                width: RhymeAITokens.Touch.minimum,
+                                height: RhymeAITokens.Touch.minimum
+                            )
+                    )
+            }
+            .frame(
+                width: RhymeAITokens.Touch.minimum,
+                height: RhymeAITokens.Touch.minimum
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: idleSize, height: pillHeight)
+        .accessibilityLabel(service.isRecording ? "Stop recording" : "Record voice memo")
+        .accessibilityIdentifier("micButton")
+    }
+
+    // Recording region — spectralizer + timer, beside the stop button.
+    // Fades in once the pill is mostly stretched (progress > 0.55).
+    @ViewBuilder
+    private var recordingRegion: some View {
+        if progress > 0.01 {
+            HStack(spacing: 0) {
+                if growsTowardTrailing { elapsedLabel }
+                spectralBars
+                if !growsTowardTrailing { elapsedLabel }
+            }
+            .padding(growsTowardTrailing ? .trailing : .leading, RhymeAITokens.Spacing.sm)
+            .opacity(recordingContentOpacity)
+            .frame(width: max(0, interpolatedWidth - idleSize), alignment: growsTowardTrailing ? .trailing : .leading)
+            .clipped()
+            .transition(.opacity)
+        }
+    }
+
+    private var elapsedLabel: some View {
+        Text(formattedElapsed)
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .foregroundStyle(appearance.palette.onAction)
+            .monospacedDigit()
+            .fixedSize()
+            .frame(width: RhymeAITokens.Touch.minimum, alignment: .center)
     }
 
     // MARK: - Interpolated layout

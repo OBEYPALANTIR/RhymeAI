@@ -17,7 +17,6 @@ enum EditorViewConstants {
         static let hiddenWordmarkOpacity: Double = 0
         static let transitionScale: CGFloat = 0.92
         static let surfaceFallbackOpacity: Double = 0.35
-        static let shadowOpacity: Double = 0.26
     }
 
     enum AssistantSheet {
@@ -142,6 +141,8 @@ struct EditorView: View {
     @State private var unblockButtonWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedButtonWidth
     @State private var unblockWordmarkWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedWordmarkWidth
     @State private var unblockCollapsed: Bool = false
+    @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
     /// Starts unbounded so a full-screen iPad never flashes the single column.
@@ -477,14 +478,12 @@ struct EditorView: View {
         if editorActionsVisible {
             VStack {
                 Spacer()
-                HStack {
-                    Spacer()
-                    editorActionCluster
-                }
+                editorActionCluster
+                    .frame(maxWidth: .infinity, alignment: clusterOnLeadingEdge ? .leading : .trailing)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.md)
             }
-            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: .bottomTrailing).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor(in: layoutDirection)).combined(with: .opacity))
         }
     }
 
@@ -500,16 +499,14 @@ struct EditorView: View {
         if editorActionsVisible {
             VStack {
                 Spacer()
-                HStack {
-                    Spacer()
-                    editorActionCluster
-                }
+                editorActionCluster
+                    .frame(maxWidth: .infinity, alignment: clusterOnLeadingEdge ? .leading : .trailing)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible
                          ? keyboardHeight + RhymeAITokens.Spacing.sm
                          : RhymeAITokens.Spacing.md)
             }
-            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: .bottomTrailing).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .scale(scale: EditorViewConstants.UnBlockChrome.transitionScale, anchor: dominantHand.clusterAnchor(in: layoutDirection)).combined(with: .opacity))
         }
     }
 
@@ -527,46 +524,65 @@ struct EditorView: View {
             + RhymeAITokens.Touch.comfortable + RhymeAITokens.Spacing.sm
     }
 
+    private var dominantHand: DominantHand { DominantHand.resolve(dominantHandRawValue) }
+
+    /// The dominant hand's physical edge, as a semantic edge for this layout direction.
+    private var clusterOnLeadingEdge: Bool { dominantHand.usesLeadingEdge(in: layoutDirection) }
+
+    /// The round mic sits outermost at the dominant hand's edge, UnBlock inside it.
     private var editorActionCluster: some View {
         HStack(spacing: RhymeAITokens.Spacing.sm) {
-            Button {
-                presentAssistant()
-            } label: {
-                HStack(spacing: unblockCollapsed || usesCompactControlChrome ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
-                    Image(systemName: inlineAssistantIsOpen ? "sidebar.right" : "pencil")
-                        .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .semibold))
-                    if inlineAssistantIsOpen && !unblockCollapsed && !usesCompactControlChrome {
-                        Text("Hide AI")
-                            .font(.subheadline.weight(.semibold))
-                            .fixedSize(horizontal: true, vertical: true)
-                    } else if !usesCompactControlChrome {
-                        UnBlockWordmark()
-                            .fixedSize(horizontal: true, vertical: true)
-                            .opacity(unblockWordmarkOpacity)
-                            .frame(width: horizontalSizeClass == .regular && dynamicTypeSize.isAccessibilitySize && !unblockCollapsed ? nil : unblockWordmarkWidth)
-                            .clipped()
-                    }
-                }
-                .foregroundStyle(appearance.palette.onAction)
-                .padding(.vertical, RhymeAITokens.Spacing.sm)
-                .padding(.horizontal, RhymeAITokens.Spacing.md)
-                .frame(
-                    minWidth: usesCompactControlChrome ? RhymeAITokens.Touch.comfortable : unblockButtonWidth,
-                    minHeight: RhymeAITokens.Touch.comfortable
-                )
-                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
-                .shadow(color: appearance.palette.primaryInk.opacity(EditorViewConstants.UnBlockChrome.shadowOpacity), radius: RhymeAITokens.Spacing.sm, y: RhymeAITokens.Spacing.xxs)
+            if clusterOnLeadingEdge {
+                micButton
+                unblockButton
+            } else {
+                unblockButton
+                micButton
             }
-            .buttonStyle(.rhymePress)
-            .accessibilityLabel(inlineAssistantIsOpen ? "Hide AI suggestions" : "Open AI suggestions")
-            .accessibilityIdentifier("unblockButton")
-
-            FloatingMicButton(
-                service: viewModel.voiceMemoService,
-                ensureProjectId: { viewModel.ensureProjectForRecording() }
-            )
         }
         .dynamicTypeSize(usesCompactControlChrome ? .large : dynamicTypeSize)
+    }
+
+    private var micButton: some View {
+        FloatingMicButton(
+            service: viewModel.voiceMemoService,
+            growsTowardTrailing: clusterOnLeadingEdge,
+            ensureProjectId: { viewModel.ensureProjectForRecording() }
+        )
+    }
+
+    private var unblockButton: some View {
+        Button {
+            presentAssistant()
+        } label: {
+            HStack(spacing: unblockCollapsed || usesCompactControlChrome ? EditorViewConstants.UnBlockChrome.collapsedWordmarkWidth : RhymeAITokens.Spacing.xs) {
+                Image(systemName: inlineAssistantIsOpen ? "sidebar.right" : "pencil")
+                    .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .semibold))
+                if inlineAssistantIsOpen && !unblockCollapsed && !usesCompactControlChrome {
+                    Text("Hide AI")
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: true, vertical: true)
+                } else if !usesCompactControlChrome {
+                    UnBlockWordmark()
+                        .fixedSize(horizontal: true, vertical: true)
+                        .opacity(unblockWordmarkOpacity)
+                        .frame(width: horizontalSizeClass == .regular && dynamicTypeSize.isAccessibilitySize && !unblockCollapsed ? nil : unblockWordmarkWidth)
+                        .clipped()
+                }
+            }
+            .foregroundStyle(appearance.palette.onAction)
+            .padding(.vertical, RhymeAITokens.Spacing.sm)
+            .padding(.horizontal, RhymeAITokens.Spacing.md)
+            .frame(
+                minWidth: usesCompactControlChrome ? RhymeAITokens.Touch.comfortable : unblockButtonWidth,
+                minHeight: RhymeAITokens.Touch.comfortable
+            )
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.pill)
+            .chromeShadow()
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel(inlineAssistantIsOpen ? "Hide AI suggestions" : "Open AI suggestions")
+        .accessibilityIdentifier("unblockButton")
     }
 
     private var inlineAssistantIsOpen: Bool {
@@ -1026,6 +1042,18 @@ struct EditorView: View {
             }
             .accessibilityLabel("Open songs drawer")
 
+            Button {
+                dismissKeyboard()
+                OneLinerRouter.shared.request(.open)
+            } label: {
+                Image(systemName: "text.quote")
+                    .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+                    .foregroundStyle(appearance.palette.secondaryInk)
+                    .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            }
+            .accessibilityLabel("One Liners")
+            .accessibilityIdentifier("editorOneLinersButton")
+
             if historyControlsVisible {
                 EditorUndoRedoControls(
                     canUndo: viewModel.canUndoLyrics,
@@ -1317,5 +1345,5 @@ private struct ScribbleUnderline: View {
 #Preview {
     EditorView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }

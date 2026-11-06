@@ -1,5 +1,9 @@
 package com.rhymeai.app.ui.screens
 
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.ui.AbsoluteAlignment
+import com.rhymeai.app.data.model.DominantHand
 import android.Manifest
 import android.content.pm.PackageManager
 import com.rhymeai.app.BuildConfig
@@ -63,6 +67,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -181,11 +186,15 @@ import com.rhymeai.app.ui.components.ExportSheet
 import com.rhymeai.app.ui.components.EditorUndoRedoControls
 import com.rhymeai.app.ui.components.KeyboardSafeActionArea
 import com.rhymeai.app.ui.components.RewriteChipBar
+import com.rhymeai.app.ui.components.chromeEdge
+import com.rhymeai.app.ui.components.chromeEdgePadding
+import com.rhymeai.app.ui.components.chromeSide
 import com.rhymeai.app.ui.components.rememberAnalysisText
 import com.rhymeai.app.ui.components.lyricAnalysisTransformation
 import com.rhymeai.app.ui.components.WordInspectorSheet
 import com.rhymeai.app.ui.components.analyzeSyllableUnderlines
 import com.rhymeai.app.ui.components.colorSyllableUnderlines
+import com.rhymeai.app.ui.components.rememberSyllableUnderlineMotion
 import com.rhymeai.app.ui.components.bottomSafeActionPadding
 import com.rhymeai.app.ui.components.keyboardAwareBottomPadding
 import com.rhymeai.app.ui.components.syllableUnderlines
@@ -193,6 +202,7 @@ import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.floatingChromeShadow
 import com.rhymeai.app.ui.theme.outlineStrongColorFor
 import com.rhymeai.app.ui.theme.selectionColorFor
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
@@ -215,15 +225,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal data class LyricStatsSnapshot(
-    val sourceText: String,
     val wordCount: Int,
     val syllableCount: Int
 )
 
-internal fun currentLyricStats(
-    lyrics: String,
-    snapshot: LyricStatsSnapshot?
-): LyricStatsSnapshot? = snapshot?.takeIf { it.sourceText == lyrics }
+/**
+ * The header counter for the text on screen; never a stale or empty value between edits. Lines
+ * come from the shared per-line memo, so a keystroke re-counts only the line it changed.
+ */
+internal fun lyricStatsFor(lyrics: String): LyricStatsSnapshot {
+    var words = 0
+    var syllables = 0
+    SyllableCounter.forEachLyricLine(lyrics) { _, line ->
+        words += line.words
+        syllables += line.syllables
+    }
+    return LyricStatsSnapshot(wordCount = words, syllableCount = syllables)
+}
 
 private const val FAKE_RECORDING_EXTRA = "com.rhymeai.app.FAKE_RECORDING"
 
@@ -234,6 +252,13 @@ internal fun historyControlsVisible(
     editorActionsVisible: Boolean,
     isRecording: Boolean
 ): Boolean = editorActionsVisible && !isRecording
+
+/**
+ * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics", and
+ * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it.
+ */
+internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean): Boolean =
+    songNotebookOpen || oneLinersOpen
 
 /** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
 internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
@@ -270,12 +295,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
     var lyricsTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var titleHeightPx by remember { mutableIntStateOf(0) }
     var metadataHeightPx by remember { mutableIntStateOf(0) }
-    var analyzedLyrics by remember { mutableStateOf(viewModel.lyrics) }
-    var lyricStats by remember {
-        mutableStateOf<LyricStatsSnapshot?>(
-            if (viewModel.lyrics.isEmpty()) LyricStatsSnapshot("", 0, 0) else null
-        )
-    }
     var songActionsExpanded by remember { mutableStateOf(false) }
     var sectionMenuExpanded by remember { mutableStateOf(false) }
     var focusMode by rememberSaveable { mutableStateOf(false) }
@@ -380,20 +399,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
         }
         insertionHighlightAlpha.snapTo(0f)
         highlightedInsertionId = null
-    }
-
-    LaunchedEffect(viewModel.lyrics) {
-        val lyricsSnapshot = viewModel.lyrics
-        delay(180)
-        val stats = withContext(Dispatchers.Default) {
-            LyricStatsSnapshot(
-                sourceText = lyricsSnapshot,
-                wordCount = SyllableCounter.lyricWordCount(lyricsSnapshot),
-                syllableCount = SyllableCounter.lyricSyllableCount(lyricsSnapshot)
-            )
-        }
-        analyzedLyrics = lyricsSnapshot
-        lyricStats = stats
     }
 
     fun beginAssistantSheetPresentation() {
@@ -607,6 +612,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     val modalOpen = recordingsProjectId != null || viewModel.showSongNotebook || viewModel.showSettingsDialog ||
         viewModel.showProjectsDialog ||
+        viewModel.showOneLiners ||
         viewModel.showExportSheet ||
         viewModel.showInspector
     val rewriteReviewVisible = viewModel.hasActiveRewrite &&
@@ -638,8 +644,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            // The Song Notebook offers "Keep selected lyrics", so it keeps the selection it opened over.
-            if (!viewModel.showSongNotebook) viewModel.clearPendingRewriteSelection()
+            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners)) {
+                viewModel.clearPendingRewriteSelection()
+            }
             if (modalOpen) {
                 focusManager.clearFocus(force = true)
             }
@@ -744,6 +751,20 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                 },
                 actions = {
+                    // Below a standard phone width the bar cannot fit another action beside the save
+                    // indicator, so One Liners moves into Song actions there.
+                    val oneLinersInBar = configuration.screenWidthDp >= 360
+                    if (!focusMode && oneLinersInBar) IconButton(
+                        onClick = { viewModel.showOneLiners = true },
+                        enabled = !viewModel.hasActiveRewrite,
+                        modifier = Modifier.testTag("oneLinersButton")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FormatQuote,
+                            contentDescription = stringResource(R.string.editor_open_one_liners),
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (!focusMode) Box {
                         IconButton(
                             onClick = { songActionsExpanded = true },
@@ -760,6 +781,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             expanded = songActionsExpanded,
                             onDismissRequest = { songActionsExpanded = false }
                         ) {
+                            if (!oneLinersInBar) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.editor_open_one_liners)) },
+                                    onClick = {
+                                        songActionsExpanded = false
+                                        viewModel.showOneLiners = true
+                                    },
+                                    modifier = Modifier.testTag("oneLinersMenuItem")
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Insert section") },
                                 onClick = {
@@ -1076,10 +1107,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
                     Spacer(Modifier.height(DesignTokens.Spacing.xs))
                     val statsUseDarkPalette = LocalAppAppearance.current.isDark
-                    val visibleLyricStats = currentLyricStats(viewModel.lyrics, lyricStats)
-                    val measuredLyricStats = visibleLyricStats
-                        ?: lyricStats
-                        ?: LyricStatsSnapshot("", 0, 0)
+                    val measuredLyricStats = remember(viewModel.lyrics) { lyricStatsFor(viewModel.lyrics) }
                     val secondaryContentAlpha by animateFloatAsState(
                         targetValue = if (focusMode) 0f else 1f,
                         animationSpec = tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0),
@@ -1112,9 +1140,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .onSizeChanged { metadataHeightPx = it.height }
-                            .graphicsLayer { alpha = secondaryContentAlpha * if (visibleLyricStats == null) 0f else 1f }
+                            .graphicsLayer { alpha = secondaryContentAlpha }
                             .then(
-                                if (focusMode || visibleLyricStats == null) {
+                                if (focusMode) {
                                     Modifier.clearAndSetSemantics { }
                                 } else {
                                     Modifier.testTag("editorStats")
@@ -1123,21 +1151,19 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     )
                     Spacer(Modifier.height(DesignTokens.Rhythm.standard))
 
-                    // Expensive lyric analysis waits until typing pauses so editor redraws stay stable.
+                    // Analysis follows the text on screen every keystroke (per-word results are cached); a
+                    // debounced copy blanked the colours, underlines and counter after each edit.
                     // It stays on while text is selected: the field draws its selection behind the coloured words.
-                    val lyricAnalysisReady = analyzedLyrics == viewModel.lyrics
                     val analysisOverlayActive = (
                         viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled
                     ) &&
                         viewModel.lyrics.isNotEmpty() &&
-                        !viewModel.hasActiveRewrite &&
-                        lyricAnalysisReady
+                        !viewModel.hasActiveRewrite
                     // Underlines only when rhyme coloring owns the foreground; otherwise syllables tint the word itself.
                     val syllableUnderlineActive = !focusMode && viewModel.isSyllableColoringEnabled &&
                         viewModel.isRhymeHighlightEnabled &&
                         viewModel.lyrics.isNotEmpty() &&
-                        !viewModel.hasActiveRewrite &&
-                        lyricAnalysisReady
+                        !viewModel.hasActiveRewrite
                     // Center glyphs in the 28sp line box and drop legacy font padding so the
                     // cursor, placeholder, and color overlays all share one vertical metric.
                     val lyricsTextStyle = TextStyle(
@@ -1153,15 +1179,16 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     val syllableUnderlineGap = with(density) { DesignTokens.Editor.syllableUnderlineGap.toPx() }
                     val syllableUnderlineWidth = with(density) { DesignTokens.Editor.syllableUnderlineWidth.toPx() }
                     val syllableIsDark = LocalAppAppearance.current.isDark
-                    val syllableUnderlineAnalysis = remember(analyzedLyrics, syllableUnderlineActive) {
+                    val syllableUnderlineAnalysis = remember(viewModel.lyrics, syllableUnderlineActive) {
                         analyzeSyllableUnderlines(
-                            text = analyzedLyrics,
+                            text = viewModel.lyrics,
                             enabled = syllableUnderlineActive
                         )
                     }
                     val syllableUnderlineSpans = remember(syllableUnderlineAnalysis, syllableIsDark) {
                         colorSyllableUnderlines(syllableUnderlineAnalysis, syllableIsDark)
                     }
+                    val syllableUnderlineMotion = rememberSyllableUnderlineMotion(viewModel.openRevision)
                     val inlineRewriteRange = viewModel.inlineRewriteRange
                     val rewriteHighlightRange = if (viewModel.hasActiveRewrite) {
                         inlineRewriteRange
@@ -1183,9 +1210,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     }
                     val analysisTextActive = analysisOverlayActive && !focusMode
                     val analysisText = rememberAnalysisText(
-                        text = analyzedLyrics,
+                        text = viewModel.lyrics,
                         enabled = analysisTextActive && viewModel.isRhymeHighlightEnabled,
-                        syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled
+                        syllablesEnabled = analysisTextActive && viewModel.isSyllableColoringEnabled,
+                        wordCount = measuredLyricStats.wordCount
                     )
                     val analysisTransformation = remember(analysisTextActive, analysisText) {
                         lyricAnalysisTransformation(analysisTextActive, analysisText)
@@ -1247,12 +1275,6 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                         )
                                     }
                                 )
-                                .syllableUnderlines(
-                                    spans = syllableUnderlineSpans,
-                                    textLayoutResult = lyricsTextLayout,
-                                    underlineGap = syllableUnderlineGap,
-                                    strokeWidth = syllableUnderlineWidth
-                                )
                                 .onFocusChanged { lyricsFocused = it.isFocused },
                             decorationBox = { innerTextField ->
                                 Box {
@@ -1268,6 +1290,23 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                         )
                         }
+                        // Over the field in its own layer: an easing underline redraws only itself, never the
+                        // whole lyric's text. It sits below each row, clear of the glyphs and the cursor.
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .graphicsLayer()
+                                .syllableUnderlines(
+                                    text = viewModel.lyrics,
+                                    spans = syllableUnderlineSpans,
+                                    motion = syllableUnderlineMotion,
+                                    animate = animationsEnabled,
+                                    // Read at draw time: the field's layout for this frame's text, not the last one.
+                                    textLayoutResult = { lyricsTextLayout },
+                                    underlineGap = syllableUnderlineGap,
+                                    strokeWidth = syllableUnderlineWidth
+                                )
+                        )
                     }
 
                     // Extra space lets the last line settle around the same point while typing.
@@ -1281,12 +1320,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                 visible = fabRowVisible,
                 enter = fadeIn(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
                 exit = fadeOut(tween(if (animationsEnabled) DesignTokens.Motion.feedbackMillis else 0)),
-                modifier = Modifier.align(Alignment.BottomEnd)
+                modifier = Modifier.align(chromeEdge(viewModel.dominantHand))
             ) {
+                val chromeLeft = viewModel.dominantHand == DominantHand.LEFT
                 KeyboardSafeActionArea(
-                    modifier = Modifier.padding(end = DesignTokens.Rhythm.standard),
+                    modifier = Modifier.chromeEdgePadding(viewModel.dominantHand, DesignTokens.Rhythm.standard),
                     extra = DesignTokens.Rhythm.section,
-                    horizontalAlignment = Alignment.End
+                    horizontalAlignment = chromeSide(viewModel.dominantHand)
                 ) {
                 val barCount = DesignTokens.EditorChrome.recordingBarCount
                 // Amplitude + elapsed polling while recording — drives the spectralizer pill.
@@ -1385,11 +1425,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     transitionSpec = { if (animationsEnabled) DesignTokens.Motion.expressiveSpring() else snap() }
                 ) { recording -> if (recording) 1f else 0f }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-                ) {
-                    // UnBlock collapses into a pencil circle while recording.
+                // UnBlock collapses into a pencil circle while recording.
+                val unBlockButton: @Composable () -> Unit = {
                     val unBlockInteractionSource = remember { MutableInteractionSource() }
                     val unBlockPressScale = rememberPressScale(unBlockInteractionSource)
                     Box(
@@ -1401,6 +1438,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 scaleX = unBlockPressScale.value
                                 scaleY = unBlockPressScale.value
                             }
+                            .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                             .clip(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.primary,
@@ -1444,8 +1482,10 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                         }
                     }
+                }
 
-                    // Animated mic/pill — expands into the recording spectralizer.
+                // Animated mic/pill — expands into the recording spectralizer, toward the centre.
+                val micButton: @Composable () -> Unit = {
                     val micPillInteractionSource = remember { MutableInteractionSource() }
                     val micPressScale = rememberPressScale(micPillInteractionSource)
                     Box(
@@ -1457,6 +1497,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 scaleX = micPressScale.value
                                 scaleY = micPressScale.value
                             }
+                            .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                             .background(
                                 colorScheme.surfaceContainerHigh,
                                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -1499,22 +1540,31 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             }
                     ) {
                         // Spectralizer content fades in from the same spring progress.
+                        val glyphGap = DesignTokens.EditorChrome.fabSize
+                        val innerGap = DesignTokens.EditorChrome.recordingContentStartPadding
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.EditorChrome.recordingContentGap),
+                            horizontalArrangement = Arrangement.Absolute.spacedBy(DesignTokens.EditorChrome.recordingContentGap),
                             modifier = Modifier
-                                .align(Alignment.CenterStart)
+                                .align(if (chromeLeft) AbsoluteAlignment.CenterRight else AbsoluteAlignment.CenterLeft)
                                 .fillMaxWidth()
-                                .padding(start = DesignTokens.EditorChrome.recordingContentStartPadding, end = DesignTokens.EditorChrome.fabSize)
+                                .absolutePadding(
+                                    left = if (chromeLeft) glyphGap else innerGap,
+                                    right = if (chromeLeft) innerGap else glyphGap
+                                )
                                 .graphicsLayer {
                                     alpha = ((recProgress.value - DesignTokens.EditorChrome.recordingBarsFadeStart) /
                                         DesignTokens.EditorChrome.recordingBarsFadeDistance).coerceIn(0f, 1f)
                                 }
                         ) {
+                            // Glyph, elapsed time, then meter outward from the glyph; the newest bar
+                            // stays beside the glyph, so the left hand mirrors the meter.
+                            val meter: @Composable RowScope.() -> Unit = {
                             Canvas(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(DesignTokens.EditorChrome.recordingMeterHeight)
+                                    .graphicsLayer { scaleX = if (chromeLeft) -1f else 1f }
                             ) {
                                 waveformRevision
                                 val pitch = size.width / amplitudeBars.size
@@ -1531,6 +1581,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     )
                                 }
                             }
+                            }
+                            val elapsed: @Composable () -> Unit = {
                             Text(
                                 text = com.rhymeai.app.service.VoiceMemoService.formatDuration(
                                     memoService.recordingElapsedMs
@@ -1539,11 +1591,13 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 fontWeight = FontWeight.Medium,
                                 color = colorScheme.onSurface
                             )
+                            }
+                            if (chromeLeft) { elapsed(); meter() } else { meter(); elapsed() }
                         }
 
                         Box(
                             modifier = Modifier
-                                .align(Alignment.CenterEnd)
+                                .align(if (chromeLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight)
                                 .size(DesignTokens.EditorChrome.fabSize),
                             contentAlignment = Alignment.Center
                         ) {
@@ -1566,6 +1620,14 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                             )
                         }
                     }
+                }
+
+                // Physical order: the round mic is always outermost at the writer's edge.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Absolute.spacedBy(DesignTokens.Spacing.sm)
+                ) {
+                    if (chromeLeft) { micButton(); unBlockButton() } else { unBlockButton(); micButton() }
                 }
                 }
             }
@@ -1719,7 +1781,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                     viewModel = viewModel,
                     rhymeContext = rhymeContext,
                     onSuggestionInserted = { dismissAssistantSheet() },
-                    onModelSetup = { viewModel.showSettingsDialog = true },
+                    onModelSetup = viewModel::openModelSetup,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

@@ -15,6 +15,8 @@ internal object RecordingFiles {
     private const val MEMOS_JOURNAL_ROOT_DIR = "voice-memos-journal"
     private const val MEMOS_PARKING_ROOT_DIR = "voice-memos-parking"
     private const val RESTORE_STAGE_PREFIX = ".recording-restore-"
+    /** A recovery's staged downloads; never matched by the restore-stage cleanup (Restore, Import). */
+    const val RECOVERY_STAGE_PREFIX = ".recording-recovery-"
 
     fun isMemoFile(file: File): Boolean =
         file.isFile && file.extension.lowercase(Locale.ROOT) in SUPPORTED_AUDIO_EXTENSIONS
@@ -65,7 +67,8 @@ internal object RecordingFiles {
     fun containedRecordingFile(filesDir: File, path: String): File? {
         if (path.isEmpty() || path.startsWith("/") || path.split('/').any { it == ".." || it.isEmpty() }) return null
         val file = fileAt(filesDir, path)
-        val stageRoot = path.substringBefore('/').takeIf { it.startsWith(RESTORE_STAGE_PREFIX) }?.let { File(filesDir.canonicalFile, it) }
+        val stageRoot = path.substringBefore('/').takeIf { it.startsWith(RESTORE_STAGE_PREFIX) || it.startsWith(RECOVERY_STAGE_PREFIX) }
+            ?.let { File(filesDir.canonicalFile, it) }
         val roots = listOfNotNull(memosRoot(filesDir), trashRoot(filesDir), stagingRoot(filesDir), quarantineRoot(filesDir), parkingRoot(filesDir), stageRoot)
         val canonical = runCatching { file.canonicalFile.toPath() }.getOrNull() ?: return null
         return file.takeIf { roots.any { root -> canonical.startsWith(root.canonicalFile.toPath()) && canonical != root.canonicalFile.toPath() } }

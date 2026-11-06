@@ -1,7 +1,10 @@
 package com.rhymeai.app.util
 
 import com.rhymeai.app.data.model.SongProject
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -76,6 +79,16 @@ class LyricsExporterTest {
         val decoded = Json.decodeFromString<SongProject>(LyricsExporter.buildJson(project).decodeToString())
 
         assertEquals(project, decoded)
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun jsonExportWritesDefaultValuedFieldsSoUpdatedAtIsNeverDropped() {
+        val keys = Json.parseToJsonElement(LyricsExporter.buildJson(SongProject(id = "song-1")).decodeToString())
+            .jsonObject.keys
+        val fields = SongProject.serializer().descriptor.elementNames.toSet()
+
+        assertEquals(fields, keys)
     }
 
     // wrapLine tests use one unit of width per character so maxWidth doubles

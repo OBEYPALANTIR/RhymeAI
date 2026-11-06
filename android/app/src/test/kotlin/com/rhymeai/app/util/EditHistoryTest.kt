@@ -83,4 +83,28 @@ class EditHistoryTest {
         assertFalse(history.canUndo)
         assertFalse(history.canRedo)
     }
+
+    @Test
+    fun undoIfLatestUndoesThatEditWhileItIsStillTheLatest() {
+        val history = EditHistory<String>()
+        history.recordUserEdit(previous = "", current = "verse", timestampMilliseconds = 0)
+        history.recordAtomicEdit(previous = "verse", current = "verse\nsent line")
+        val insertion = history.revision
+
+        assertEquals("verse", history.undoIfLatest(insertion, current = "verse\nsent line"))
+    }
+
+    @Test
+    fun undoIfLatestLeavesLaterEditsAloneEvenWhenTheTextMatchesAgain() {
+        val history = EditHistory<String>()
+        history.recordAtomicEdit(previous = "verse", current = "verse\nsent line")
+        val insertion = history.revision
+        // The writer deletes the sent line, then types the same words back.
+        history.recordUserEdit(previous = "verse\nsent line", current = "verse", timestampMilliseconds = 0)
+        history.recordUserEdit(previous = "verse", current = "verse\nsent line", timestampMilliseconds = 5_000)
+
+        assertEquals(null, history.undoIfLatest(insertion, current = "verse\nsent line"))
+        // The writer's own undo still steps back through their typing.
+        assertEquals("verse", history.undo(current = "verse\nsent line"))
+    }
 }

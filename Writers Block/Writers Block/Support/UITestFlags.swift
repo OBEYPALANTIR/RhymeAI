@@ -165,9 +165,18 @@ enum UITestFlags {
         GGUFVerifiedArtifactStore.record(sha256: option.sha256, at: url)
         GGUFModelSelection.save(fileName: option.fileName)
     }
+
+    /// `-oneLinerPendingAction record|type|open`: the same hand-off a widget or link makes.
+    static func oneLinerPendingAction(in arguments: [String] = ProcessInfo.processInfo.arguments) -> OneLinerPendingAction? {
+        OneLinerPendingAction.fromLaunchArguments(arguments)
+    }
     #else
     static func isEnabled(_ flag: String, in arguments: [String] = []) -> Bool {
         false
+    }
+
+    static func oneLinerPendingAction() -> OneLinerPendingAction? {
+        nil
     }
 
     static func editorDefaults() -> UserDefaults {
@@ -200,7 +209,7 @@ final class InMemoryDriveAppDataClient: DriveAppDataClient {
     }
 
     func downloadFile(id: String, accessToken: String) async throws -> Data {
-        guard let stored = files.values.first(where: { $0.file.id == id }) else { throw BackupError.noRemoteBackup }
+        guard let stored = files.values.first(where: { $0.file.id == id }) else { throw BackupError.remoteFileMissing }
         return stored.content
     }
 
@@ -218,6 +227,17 @@ final class InMemoryDriveAppDataClient: DriveAppDataClient {
 
     func deleteFile(id: String, accessToken: String) async throws {
         files = files.filter { $0.value.file.id != id }
+    }
+
+    // shortcut: the UI tests' Drive keeps no revisions; add them when a UI test covers recovery.
+    func listRevisions(fileId: String, accessToken: String) async throws -> [DriveFileRevision] { [] }
+
+    func keepRevisionForever(fileId: String, revisionId: String, accessToken: String) async throws {
+        throw BackupError.revisionUnavailable
+    }
+
+    func downloadRevision(fileId: String, revisionId: String, accessToken: String) async throws -> Data {
+        throw BackupError.revisionUnavailable
     }
 }
 

@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.rhymeai.app.data.model.AppAppearance
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
@@ -126,7 +127,8 @@ class ProjectRepository internal constructor(
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
-        private val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
+        internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
+        private val DOMINANT_HAND_KEY = stringPreferencesKey("dominant_hand")
         private val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
@@ -160,6 +162,11 @@ class ProjectRepository internal constructor(
 
     private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
+    /**
+     * Writes every field, defaults too: `updatedAt` equal to its default (now) at encode would
+     * otherwise be left out and read back as an unknown (repaired, 0) time that loses a sync.
+     */
+    private val explicitJson = Json(json) { encodeDefaults = true }
 
     /**
      * A stored song as an earlier build may have written it: without an id it is refused
@@ -192,7 +199,8 @@ class ProjectRepository internal constructor(
     private fun isRecordingPath(path: String): Boolean {
         val parts = path.split('/')
         return !path.startsWith("/") && parts.size >= 2 && parts.none { it.isEmpty() || it == "." || it == ".." } &&
-            (parts.first() in RECORDING_ROOT_NAMES || parts.first().startsWith(".recording-restore-"))
+            (parts.first() in RECORDING_ROOT_NAMES || parts.first().startsWith(".recording-restore-") ||
+                parts.first().startsWith(com.rhymeai.app.data.recording.RecordingFiles.RECOVERY_STAGE_PREFIX))
     }
     private val projectsStore = FailClosedStoredJson("song library") { raw ->
         json.decodeFromJsonElement<List<SongProject>>(JsonArray(json.parseToJsonElement(raw).jsonArray.map { storedSong(it.jsonObject) }))
@@ -320,7 +328,7 @@ class ProjectRepository internal constructor(
                     }
                 }
             }
-            if (project != null) prefs[PROJECTS_KEY] = json.encodeToString(next)
+            if (project != null) prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
             if (project != null && createIfMissing) {
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - project.id
@@ -349,7 +357,7 @@ class ProjectRepository internal constructor(
     }
 
     suspend fun saveProjects(projects: List<SongProject>) = projectSaveMutex.withLock {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        val encoded = withContext(Dispatchers.Default) { explicitJson.encodeToString(projects) }
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
@@ -358,8 +366,18 @@ class ProjectRepository internal constructor(
         }
     }
 
+    /** Adds [added] after the stored songs in one write (a recovery's new songs); nothing stored is changed. */
+    suspend fun addProjects(added: List<SongProject>) = projectSaveMutex.withLock {
+        if (added.isEmpty()) return@withLock
+        dataStore.edit { prefs ->
+            val stored = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            require(stored.none { held -> added.any { it.id == held.id } }) { "A recovered song id is already in use" }
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(stored + added)
+        }
+    }
+
     suspend fun saveTrashedProjects(projects: List<TrashedSongProject>) = projectSaveMutex.withLock {
-        val encoded = withContext(Dispatchers.Default) { json.encodeToString(projects) }
+        val encoded = withContext(Dispatchers.Default) { explicitJson.encodeToString(projects) }
         dataStore.edit { prefs ->
             trashedProjectsStore.requireWritable(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
@@ -386,8 +404,8 @@ class ProjectRepository internal constructor(
             val nextTrash = listOf(TrashedSongProject(project, now, now + TRASH_RETENTION_MILLIS)) +
                 trash.filterNot { it.project.id == id }
             val wasCurrent = prefs[CURRENT_PROJECT_ID_KEY] == id
-            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             if (wasCurrent) {
@@ -409,11 +427,41 @@ class ProjectRepository internal constructor(
             val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
             val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active.filterNot { it.id == id }
             val nextTrash = trash.filterNot { it.project.id == id }
-            prefs[PROJECTS_KEY] = json.encodeToString(nextActive)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             committed = TrashTransition(nextActive, nextTrash)
+        }
+        committed
+    }
+
+    /**
+     * Adds [line] as the song's new last line (a one liner sent to a song that is not open in
+     * the editor). [inSameWrite] stores whatever must land with it (the line's used marker):
+     * if it throws, nothing is stored. Null when the song is no longer active.
+     */
+    suspend fun appendLineToProject(
+        id: String,
+        line: String,
+        now: Long,
+        inSameWrite: (MutablePreferences) -> Unit = {}
+    ): List<SongProject>? = projectSaveMutex.withLock {
+        var committed: List<SongProject>? = null
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            val project = active.firstOrNull { it.id == id } ?: return@edit
+            val updated = project.copy(
+                lyrics = OneLinersStore.appendingLine(line, project.lyrics),
+                updatedAt = now,
+                precedenceRepaired = false // an edit beats a repair (A37)
+            )
+            val next = active.map { if (it.id == id) updated else it }
+            inSameWrite(prefs)
+            prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
+            // The editor's saved draft of this song follows, so reopening it shows the line.
+            if (prefs[CURRENT_PROJECT_ID_KEY] == id) prefs[CURRENT_LYRICS_KEY] = updated.lyrics
+            committed = next
         }
         committed
     }
@@ -479,7 +527,7 @@ class ProjectRepository internal constructor(
             if (trash.none { it.project.id == id }) return@edit
             val nextTrash = trash.filterNot { it.project.id == id }
             val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-            prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+            prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - id)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + id
@@ -518,7 +566,7 @@ class ProjectRepository internal constructor(
             if (expired.isNotEmpty()) {
                 val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
                 val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
-                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(retained)
+                prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(retained)
                 prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - expired.toSet())
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) + expired
@@ -603,8 +651,8 @@ class ProjectRepository internal constructor(
             }
             return if (timed.trashedAt != null && timed.trashedAt <= 0L) timed.copy(trashedAt = repairs.getValue("rtrash:${r.id}")) else timed
         }
-        projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = json.encodeToString(it) }
-        trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(it) }
+        projects.map(::song).let { if (it != projects) prefs[PROJECTS_KEY] = explicitJson.encodeToString(it) }
+        trash.map(::trashed).let { if (it != trash) prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(it) }
         records.map(::record).let { if (it != records) prefs[RECORDING_RECORDS_KEY] = json.encodeToString(it) }
         return inputs.map { blob ->
             blob.copy(
@@ -667,7 +715,8 @@ class ProjectRepository internal constructor(
         val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
         // The same content kept twice (a retried write, a later Restore) is kept once.
         val fresh = losers.filterNot { loser -> stored.any { it.sameAs(loser) } }
-        if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = json.encodeToString(stored + fresh)
+        // Defaults are written: an omitted updatedAt would decode as a new current time and fail the read-back.
+        if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = explicitJson.encodeToString(stored + fresh)
         return KeptLosers(losers, fresh.size)
     }
 
@@ -762,8 +811,8 @@ class ProjectRepository internal constructor(
                 // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
                 // in the same edit, not erased; one that lost with a real time is a genuine deletion.
                 keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
-                prefs[PROJECTS_KEY] = json.encodeToString(nextProjects)
-                prefs[TRASHED_PROJECTS_KEY] = json.encodeToString(nextTrash)
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextProjects)
+                prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
@@ -851,6 +900,16 @@ class ProjectRepository internal constructor(
     suspend fun saveAppearance(appearance: AppAppearance) {
         dataStore.edit { prefs ->
             prefs[APP_APPEARANCE_KEY] = appearance.storageValue
+        }
+    }
+
+    val dominantHandFlow: Flow<DominantHand> = dataStore.data.map { prefs ->
+        DominantHand.fromStorage(prefs[DOMINANT_HAND_KEY])
+    }
+
+    suspend fun saveDominantHand(hand: DominantHand) {
+        dataStore.edit { prefs ->
+            prefs[DOMINANT_HAND_KEY] = hand.storageValue
         }
     }
 

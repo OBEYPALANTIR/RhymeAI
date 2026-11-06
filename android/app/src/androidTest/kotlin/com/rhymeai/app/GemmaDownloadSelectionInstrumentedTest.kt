@@ -2,8 +2,11 @@ package com.rhymeai.app
 
 import android.app.Application
 import android.os.SystemClock
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.components.GEMMA_DOWNLOADS
@@ -11,6 +14,7 @@ import com.rhymeai.app.ui.components.GemmaDownload
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -36,6 +40,12 @@ class GemmaDownloadSelectionInstrumentedTest {
     private lateinit var viewModel: MainViewModel
     private val file = File(app.filesDir, "selection-qa.gguf")
     private lateinit var download: GemmaDownload
+    // The stored choice as the class found it: a test that applies Gemini must not leave it for later classes.
+    private val repo = ProjectRepository(app)
+    private val providerBefore = runBlocking { repo.selectedProviderFlow.first() }
+    private val modelBefore = runBlocking { repo.modelIdFlow.first() }
+    // Owned, so teardown can clear it and no selection write of its own lands after the restore.
+    private val store = ViewModelStore()
 
     @Before
     fun setUp() {
@@ -50,7 +60,7 @@ class GemmaDownloadSelectionInstrumentedTest {
             expectedBytes = file.length(),
             sha256 = sha256
         )
-        onMain { viewModel = MainViewModel(app) }
+        onMain { viewModel = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[MainViewModel::class.java] }
         waitUntil { viewModel.aiSettingsLoaded }
         onMain { viewModel.saveProvider(AIProvider.LOCAL) }
     }
@@ -58,6 +68,19 @@ class GemmaDownloadSelectionInstrumentedTest {
     @After
     fun tearDown() {
         file.delete()
+        try {
+            // saveProvider/saveModel write in the background: wait until the store holds the view model's
+            // choice, then clear the view model, so the restore below is the last write.
+            if (::viewModel.isInitialized) waitUntil("The AI choice reached the store") {
+                runBlocking { repo.selectedProviderFlow.first() == viewModel.selectedProvider.name && repo.modelIdFlow.first() == viewModel.selectedModel.id }
+            }
+        } finally {
+            onMain { store.clear() }
+            runBlocking {
+                repo.saveSelectedProvider(providerBefore)
+                repo.saveModelId(modelBefore)
+            }
+        }
     }
 
     @Test

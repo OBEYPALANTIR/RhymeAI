@@ -6,6 +6,8 @@ import com.rhymeai.app.ui.components.restoreOfferBody
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class BackupScheduleTest {
     private val minute = 60_000L
@@ -37,6 +39,10 @@ class BackupScheduleTest {
         assertEquals("Last backed up yesterday · Google Drive", backupStatusLine(BackupStatus.Connected(now - 30 * 60 * minute), now))
         assertEquals("Last backed up 4 days ago · Google Drive", backupStatusLine(BackupStatus.Connected(now - 4 * 24 * 60 * minute), now))
         assertEquals("Backup failed: offline", backupStatusLine(BackupStatus.Failed("Backup failed: offline", null), now))
+        assertEquals(
+            "Backup paused: this phone has no songs and Drive has 12. Restore to continue.",
+            backupStatusLine(BackupStatus.Paused(12), now)
+        )
     }
 
     @Test
@@ -74,6 +80,14 @@ class BackupScheduleTest {
             "We found 3 songs and 1 recording in your Google Drive backup.",
             restoreOfferBody(BackupProbe(projectCount = 3, recordingCount = 1, legacyBackupPresent = false))
         )
+        assertEquals(
+            "We found 1 song and 2 recordings in your Google Drive backup. Not now leaves Drive as it is; backup stays paused until you restore.",
+            restoreOfferBody(BackupProbe(projectCount = 1, recordingCount = 2, legacyBackupPresent = false), backupPaused = true)
+        )
+        assertEquals(
+            "This phone has no songs. Backing up now merges Drive's 5 songs with nothing from this phone. To get them back here, tap Restore instead.",
+            emptyBackupConfirmation(5)
+        )
         assertNull(backupResultNotice(SyncResult.Success(SyncBlob()), BackupAction.BackUp))
         assertEquals(
             "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive. 2 recordings are over 16 MB and were skipped.",
@@ -87,5 +101,54 @@ class BackupScheduleTest {
             "Restored 0 songs and 0 recordings. 1 recording did not match its backup checksum and was not saved.",
             backupResultNotice(SyncResult.Success(SyncBlob(), damagedRecordings = 1), BackupAction.Restore)
         )
+        // Counted from what is on the device, not what the manifest lists.
+        assertEquals(
+            "Restored 1 song and 2 recordings. 1 recording is over 16 MB and was skipped.",
+            backupResultNotice(
+                SyncResult.Success(SyncBlob(projects = listOf(com.rhymeai.app.data.model.SongProject(id = "s"))), skippedLargeRecordings = 1, restoredRecordings = 2),
+                BackupAction.Restore
+            )
+        )
+    }
+
+    @Test
+    fun anEmptyLibraryNeverBacksUpAutomaticallyOverADriveWithSongs() {
+        val d = BackupGate::decide
+        // The reinstall case: nothing here, songs in Drive.
+        assertEquals(BackupGate.Decision.PAUSE, d(0, 7, false, false))
+        assertEquals(BackupGate.Decision.CONFIRM, d(0, 7, true, false))
+        assertEquals(BackupGate.Decision.RUN, d(0, 7, true, true))
+        // Nothing to protect, or something here to add: back up as before.
+        assertEquals(BackupGate.Decision.RUN, d(0, 0, false, false))
+        assertEquals(BackupGate.Decision.RUN, d(0, 0, true, false))
+        assertEquals(BackupGate.Decision.RUN, d(1, 7, false, false))
+        assertEquals(BackupGate.Decision.RUN, d(3, 0, true, false))
+        // A library not read yet never backs up, whatever else holds.
+        assertEquals(BackupGate.Decision.PAUSE, d(null, 0, false, false))
+        assertEquals(BackupGate.Decision.PAUSE, d(null, 0, true, true))
+    }
+
+    @Test
+    fun earlierBackupsReadAsTimeSongsAndRecordings() {
+        val revision = BackupRevision("f", "r", "2026-11-01T15:14:00Z", sizeBytes = 14_000L)
+        val utc = java.time.ZoneOffset.UTC
+        val us = java.util.Locale.US
+        assertEquals("Nov 1, 3:14 PM · 14 KB", revisionLabel(revision, utc, us))
+        assertEquals("Nov 1, 3:14 PM · 900 bytes", revisionLabel(revision.copy(sizeBytes = 900L), utc, us))
+        assertEquals("an unknown time", revisionLabel(revision.copy(modifiedTime = null, sizeBytes = null), utc, us))
+        assertEquals("Nov 1, 3:14 PM · 14 KB · Kept", revisionLabel(revision.copy(kept = true), utc, us))
+        assertEquals(
+            "Recovered 2 songs and 3 recordings. 1 already here. 1 recording is over 16 MB and was skipped.",
+            com.rhymeai.app.recoveryNotice(RecoverySummary(2, 3, alreadyHere = 1, skippedLargeRecordings = 1))
+        )
+        assertEquals(
+            "Backup from Nov 1, 3:14 PM · 14 KB. This asks Drive to keep that version permanently " +
+                "(nothing is deleted or rewritten), then adds its songs that aren't on this phone as new songs.",
+            recoverRevisionConfirmation(revision, utc, us)
+        )
+        // Takes alone (a finished retry) still need the backup that uploads them.
+        assertTrue(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(0, 1, alreadyHere = 2)))
+        assertTrue(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(1, 0, alreadyHere = 0)))
+        assertFalse(com.rhymeai.app.recoveryNeedsBackup(RecoverySummary(0, 0, alreadyHere = 2)))
     }
 }

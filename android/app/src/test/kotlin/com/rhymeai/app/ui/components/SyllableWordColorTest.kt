@@ -14,6 +14,7 @@ import com.rhymeai.app.ui.theme.SyllableRoseOnLight
 import com.rhymeai.app.ui.theme.editorSyllableCountColor
 import com.rhymeai.app.ui.theme.editorWordCountColor
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyllableWordColorTest {
@@ -69,8 +70,8 @@ class SyllableWordColorTest {
                     span.item.color
                 )
             }
-            val gap = analysed.spanStyles.first { it.start == lyric.indexOf(" ") }
-            assertEquals(base, gap.item.color)
+            // Gaps carry no style: they take the field's own (base) colour.
+            assertTrue(analysed.spanStyles.none { lyric.indexOf(" ") in it.start until it.end })
         }
     }
 
@@ -115,10 +116,10 @@ class SyllableWordColorTest {
             syllablesEnabled = true
         )
 
-        fun colourOf(word: String) = analysed.spanStyles.single { it.start == text.indexOf(word) }.item.color
+        fun colourOf(word: String) = analysed.spanStyles.singleOrNull { it.start == text.indexOf(word) }?.item?.color
         assertEquals(Color.Magenta, colourOf("light"))
         assertEquals(Color.Magenta, colourOf("tonight"))
-        assertEquals(base, colourOf("hold"))
+        assertEquals(null, colourOf("hold")) // unstyled: the field's base colour
         assertEquals(
             listOf(SyllableEmeraldOnLight, SyllableEmeraldOnLight, SyllableEmeraldOnLight, SyllableBlueOnLight),
             colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled = true), isDark = false).map { it.color }
@@ -139,5 +140,73 @@ class SyllableWordColorTest {
             analysis.map { it.start to it.endExclusive },
             colorSyllableUnderlines(analysis, isDark = true).map { it.start to it.endExclusive }
         )
+    }
+
+    @Test
+    fun underlinesDescribeTheCurrentTextAfterEveryConsecutiveEdit() {
+        val header = "[Chorus]\n"
+        var text = header + "Burning bright in the night light"
+        while (text != header) {
+            val spans = analyzeSyllableUnderlines(text, enabled = true)
+            val words = Regex("[A-Za-z]+").findAll(text.removePrefix(header)).map { it.range.first + header.length }.toList()
+            assertEquals(text, words, spans.map { it.start })
+            assertTrue(text, spans.all { it.endExclusive <= text.length })
+            text = text.dropLast(1)
+        }
+    }
+
+    @Test
+    fun underlineMotionContinuesEachWordAcrossOneEdit() {
+        fun spans(text: String) = colorSyllableUnderlines(analyzeSyllableUnderlines(text, enabled = true), isDark = false)
+        fun match(old: String, new: String) = matchUnderlineSpans(TextEdit(old, new), spans(old), spans(new)).toList()
+
+        assertEquals(listOf(0, 1), match("night light", "night ligh"))   // shortens the last word
+        assertEquals(listOf(0, 1), match("night light", "nigh light"))   // later words shift left
+        assertEquals(listOf(0, 1), match("a light", "a xlight"))         // typed at a word's start
+        assertEquals(listOf(0), match("nig ht", "night"))                // "ht" has no continuation: it fades
+        assertEquals(listOf(0, -1), match("night", "night l"))           // a new word grows from nothing
+        assertEquals(listOf(0), match("night", "light"))                 // a retyped letter keeps the line
+        assertEquals(listOf(-1, 0, 1), match("a light", "b a light"))    // a word typed before shifts the rest
+        assertEquals(listOf(1), match("a light", "light"))               // a word deleted before: "a" fades
+        assertEquals(listOf(0, 1), match("a light", "a ight"))           // a word's first letter deleted
+        assertEquals(listOf(0, -1), match("night", "nig ht"))            // a space splits a word
+    }
+
+    @Test
+    fun editSizeSeparatesTypingFromPastesAndSongSwitches() {
+        val verse = "The harbor lights are burning low\n"
+        assertEquals(1, TextEdit(verse, verse.dropLast(2) + "\n").size)
+        assertEquals(verse.length * 3, TextEdit("", verse.repeat(3)).size)        // paste into an empty song
+        assertTrue(TextEdit("", verse.repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
+        assertTrue(TextEdit(verse.repeat(8), "Another song entirely\n".repeat(8)).size > MAX_ANIMATED_EDIT_CHARS)
+    }
+
+    @Test
+    fun earlierColouringIsCarriedAcrossAnEditUntilTheNewOneLands() {
+        val text = "hold the light tonight"
+        val analysed = buildAnalysisText(text, base, listOf(Color.Magenta, Color.Cyan), isDark = false, rhymeEnabled = true, syllablesEnabled = true)
+        fun colourAt(annotated: AnnotatedString, word: String) =
+            annotated.spanStyles.lastOrNull { annotated.text.indexOf(word) in it.start until it.end }?.item?.color ?: base
+
+        val deleted = shiftAnalysis(analysed, "hold the ligh tonight")
+        assertEquals("hold the ligh tonight", deleted.text)
+        assertEquals(Color.Magenta, colourAt(deleted, "ligh"))
+        assertEquals(Color.Magenta, colourAt(deleted, "tonight"))
+        assertEquals(base, colourAt(deleted, "hold"))
+
+        val typedBefore = shiftAnalysis(analysed, "so hold the light tonight")
+        assertEquals(Color.Magenta, colourAt(typedBefore, "light"))
+        assertEquals(base, colourAt(typedBefore, "hold"))
+        assertTrue(typedBefore.spanStyles.all { it.start < it.end && it.end <= typedBefore.text.length })
+    }
+
+    @Test
+    fun songsPastTheLiveLimitRecolourOnlyAfterTypingPauses() {
+        val limit = com.rhymeai.app.ui.theme.DesignTokens.Editor.liveColouringMaxWords
+        assertTrue(colouringFollowsEveryKeystroke(0))
+        assertTrue(colouringFollowsEveryKeystroke(620))
+        assertTrue(colouringFollowsEveryKeystroke(limit))
+        assertEquals(false, colouringFollowsEveryKeystroke(limit + 1))
+        assertEquals(false, colouringFollowsEveryKeystroke(5_022))
     }
 }

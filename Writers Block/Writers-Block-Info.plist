@@ -10,13 +10,26 @@
 				<string>$(GOOGLE_DRIVE_OAUTH_REVERSED_CLIENT_ID)</string>
 			</array>
 		</dict>
+		<!-- writersblock://one-liners/record, /type, /open: widgets, links and UI tests. -->
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ShaydeTree.Writers-Block.one-liners</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>writersblock</string>
+			</array>
+		</dict>
 	</array>
 	<key>GoogleDriveOAuthClientID</key>
 	<string>$(GOOGLE_DRIVE_OAUTH_CLIENT_ID)</string>
 	<key>GoogleDriveOAuthReversedClientID</key>
 	<string>$(GOOGLE_DRIVE_OAUTH_REVERSED_CLIENT_ID)</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record melody ideas for your songs.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turn a spoken one liner into text on this device as you say it.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

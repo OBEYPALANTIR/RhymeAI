@@ -7,6 +7,9 @@ struct TrashBinView: View {
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \TrashedSongProject.deletedAt, order: .reverse) private var trashedProjects: [TrashedSongProject]
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
+    @Query(sort: \TrashedOneLiner.deletedAt, order: .reverse) private var trashedOneLiners: [TrashedOneLiner]
+    @Environment(\.modelContext) private var modelContext
+    @State private var selectedOneLinerIds: Set<String> = []
     @State private var selectedIds: Set<String> = []
     @State private var confirmPermanentDelete = false
     @State private var activeTab: TrashTab = .projects
@@ -24,6 +27,7 @@ struct TrashBinView: View {
     private enum TrashTab: String, CaseIterable {
         case projects = "Songs"
         case recordings = "Recordings"
+        case oneLiners = "One Liners"
     }
 
     private var trashIds: [String] {
@@ -39,14 +43,23 @@ struct TrashBinView: View {
     }
 
     private var allSelected: Bool {
-        if activeTab == .projects {
-            return !trashedProjects.isEmpty && selectedIds.count == trashedProjects.count
+        switch activeTab {
+        case .projects: !trashedProjects.isEmpty && selectedIds.count == trashedProjects.count
+        case .recordings: !trashedMemos.isEmpty && selectedMemoIds.count == trashedMemos.count
+        case .oneLiners: !trashedOneLiners.isEmpty && selectedOneLinerIds.count == trashedOneLiners.count
         }
-        return !trashedMemos.isEmpty && selectedMemoIds.count == trashedMemos.count
     }
 
     private var activeSelectionCount: Int {
-        activeTab == .projects ? selectedIds.count : selectedMemoIds.count
+        switch activeTab {
+        case .projects: selectedIds.count
+        case .recordings: selectedMemoIds.count
+        case .oneLiners: selectedOneLinerIds.count
+        }
+    }
+
+    private var selectedOneLiners: [TrashedOneLiner] {
+        trashedOneLiners.filter { selectedOneLinerIds.contains($0.id) }
     }
 
     // Song titles for recording subtitles: live projects and trashed projects
@@ -91,6 +104,14 @@ struct TrashBinView: View {
                             }
                         }
                         .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedProjects.isEmpty)
+                    } else if activeTab == .oneLiners {
+                        ZStack {
+                            oneLinersTrashList
+                            if trashedOneLiners.isEmpty {
+                                oneLinersEmptyState.transition(.opacity)
+                            }
+                        }
+                        .rhymeAnimation(RhymeAITokens.Motion.state, value: trashedOneLiners.isEmpty)
                     } else {
                         ZStack {
                             recordingsTrashList
@@ -113,6 +134,7 @@ struct TrashBinView: View {
         }
         .onAppear {
             viewModel.purgeExpiredTrashedProjects()
+            try? OneLinersStore(context: modelContext).purgeExpired()
             reloadTrashedMemos()
             pruneSelection()
         }
@@ -127,7 +149,11 @@ struct TrashBinView: View {
                 deleteSelectedForever()
             }
         } message: {
-            let noun = activeTab == .projects ? "song" : "recording"
+            let noun = switch activeTab {
+            case .projects: "song"
+            case .recordings: "recording"
+            case .oneLiners: "line"
+            }
             Text("\(activeSelectionCount) selected \(noun)\(activeSelectionCount == 1 ? "" : "s") will be permanently deleted. This cannot be undone.")
         }
     }
@@ -193,10 +219,10 @@ struct TrashBinView: View {
     private var selectionHeader: some View {
         Button {
             withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
-                if activeTab == .projects {
-                    selectedIds = allSelected ? [] : Set(trashIds)
-                } else {
-                    selectedMemoIds = allSelected ? [] : Set(trashedMemos.map(\.id))
+                switch activeTab {
+                case .projects: selectedIds = allSelected ? [] : Set(trashIds)
+                case .recordings: selectedMemoIds = allSelected ? [] : Set(trashedMemos.map(\.id))
+                case .oneLiners: selectedOneLinerIds = allSelected ? [] : Set(trashedOneLiners.map(\.id))
                 }
             }
         } label: {
@@ -357,6 +383,93 @@ struct TrashBinView: View {
         .accessibilityValue(selected ? "Selected" : "Not selected")
     }
 
+    // MARK: - One Liners Tab
+
+    private var oneLinersEmptyState: some View {
+        ContentUnavailableView {
+            Label {
+                Text("No One Liners in Trash")
+            } icon: {
+                Image(systemName: "text.quote").foregroundStyle(appearance.palette.secondaryInk)
+            }
+        } description: {
+            Text("Deleted lines stay here for 30 days.")
+        }
+        .foregroundStyle(appearance.palette.secondaryInk)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(RhymeAITokens.Spacing.xl)
+    }
+
+    private var oneLinersTrashList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if !trashedOneLiners.isEmpty {
+                    selectionHeader.transition(.opacity)
+                }
+
+                ForEach(trashedOneLiners, id: \.id) { line in
+                    trashOneLinerRow(line)
+                        .transition(reduceMotion ? .opacity : .opacity.animation(RhymeAITokens.Motion.dismiss))
+                }
+            }
+            .padding(.top, RhymeAITokens.Spacing.sm)
+            .padding(.bottom, RhymeAITokens.Spacing.xxl)
+        }
+        .scrollContentBackground(.hidden)
+        .rhymeAnimation(RhymeAITokens.Motion.presentation, value: trashedOneLiners.map(\.id))
+    }
+
+    private func trashOneLinerRow(_ line: TrashedOneLiner) -> some View {
+        let selected = selectedOneLinerIds.contains(line.id)
+        let title = line.text.isEmpty ? "Voice line" : line.text
+
+        return Button {
+            withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
+                if selected {
+                    selectedOneLinerIds.remove(line.id)
+                } else {
+                    selectedOneLinerIds.insert(line.id)
+                }
+            }
+        } label: {
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: RhymeAITokens.Radius.sm, style: .continuous)
+                        .fill(appearance.palette.raisedSurface)
+
+                    Image(systemName: line.audioFileName == nil ? "text.quote" : "mic")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                }
+                .frame(width: RhymeAITokens.Touch.comfortable, height: RhymeAITokens.Touch.comfortable)
+
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(appearance.palette.primaryInk)
+                        .lineLimit(rowLineLimit)
+
+                    Text(trashRemainingText(deleteAfter: line.deleteAfter))
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.secondaryInk)
+                        .lineLimit(rowLineLimit)
+                }
+                .multilineTextAlignment(.leading)
+
+                Spacer(minLength: RhymeAITokens.Spacing.sm)
+
+                selectionCircle(selected: selected)
+            }
+            .frame(minHeight: 76)
+            .padding(.horizontal, RhymeAITokens.Spacing.md)
+            .padding(.vertical, RhymeAITokens.Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.rhymePress)
+        .accessibilityLabel(title)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
+
     private static let recordingDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -433,23 +546,31 @@ struct TrashBinView: View {
     }
 
     private func restoreSelected() {
-        if activeTab == .projects {
+        switch activeTab {
+        case .projects:
             let restored = selectedProjects.compactMap { viewModel.restoreTrashedProject($0) }
             if !restored.isEmpty { onRestored?(restored) }
-        } else {
+        case .recordings:
             selectedMemos.forEach(viewModel.voiceMemoService.restoreTrashedMemo)
             reloadTrashedMemos()
+        case .oneLiners:
+            let store = OneLinersStore(context: modelContext)
+            selectedOneLiners.forEach { _ = try? store.restore($0) }
         }
         clearSelectionWithFeedback()
     }
 
     private func deleteSelectedForever() {
-        if activeTab == .projects {
+        switch activeTab {
+        case .projects:
             let projects = selectedProjects
             projects.forEach { _ = viewModel.permanentlyDeleteTrashedProject($0) }
-        } else {
+        case .recordings:
             selectedMemos.forEach { _ = viewModel.permanentlyDeleteTrashedMemo($0) }
             reloadTrashedMemos()
+        case .oneLiners:
+            let store = OneLinersStore(context: modelContext)
+            selectedOneLiners.forEach { try? store.permanentlyDelete($0) }
         }
         clearSelectionWithFeedback()
     }
@@ -511,6 +632,7 @@ struct TrashBinView: View {
         withRhymeAnimation(RhymeAITokens.Motion.feedback, reduceMotion: reduceMotion) {
             selectedIds.removeAll()
             selectedMemoIds.removeAll()
+            selectedOneLinerIds.removeAll()
         }
     }
 
@@ -535,5 +657,5 @@ struct TrashBinView: View {
 #Preview {
     TrashBinView()
         .environmentObject(EditorViewModel())
-        .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
+        .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }

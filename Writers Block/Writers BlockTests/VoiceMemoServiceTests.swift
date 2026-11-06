@@ -618,6 +618,35 @@ struct PendingTakeTests {
         service.togglePlayback(url: URL(fileURLWithPath: "/tmp/song/take.m4a"))
         #expect(!service.isPlaying && service.lastError == "This recording was deleted and can't be played.")
     }
+
+    @MainActor
+    @Test func pauseThenPlayResumesWhereItStopped() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pause-\(UUID()).m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try AudioFixtures.long(seconds: 30, at: url)
+        let service = VoiceMemoService(stagingRoot: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        #expect(service.playbackPosition(at: url) == nil)
+
+        service.togglePlayback(url: url)
+        for _ in 0..<50 where !service.isPlaying { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(service.isPlayingMemo(at: url))
+        try await Task.sleep(for: .milliseconds(600))
+
+        service.togglePlayback(url: url)
+        #expect(!service.isPlaying)
+        let paused = try #require(service.playbackPosition(at: url), "a paused memo keeps its position")
+        #expect(paused.elapsed > 0.2 && abs(paused.duration - 30) < 1)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(service.playbackPosition(at: url)?.elapsed == paused.elapsed, "paused means the clock stands still")
+
+        service.togglePlayback(url: url)
+        #expect(service.isPlayingMemo(at: url))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect((service.playbackPosition(at: url)?.elapsed ?? 0) > paused.elapsed, "Play resumes, it does not restart")
+
+        service.stopPlayback()
+        #expect(service.playbackPosition(at: url) == nil)
+    }
 }
 
 /// Real AAC recordings written by the system encoder, and cut-off copies.

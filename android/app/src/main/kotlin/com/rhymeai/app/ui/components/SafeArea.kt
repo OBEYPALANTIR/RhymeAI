@@ -4,6 +4,7 @@ import android.os.Build
 import android.view.WindowManager
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -21,6 +23,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 
@@ -76,6 +79,19 @@ internal fun KeyboardSafeActionArea(
         content()
     }
 }
+// Floating chrome sits on the writer's physical side whatever the locale's text direction.
+/** The bottom corner the floating chrome cluster sits in for [hand]. */
+internal fun chromeEdge(hand: DominantHand): Alignment =
+    if (hand == DominantHand.LEFT) AbsoluteAlignment.BottomLeft else AbsoluteAlignment.BottomRight
+
+/** The side a column of floating chrome hugs for [hand]. */
+internal fun chromeSide(hand: DominantHand): Alignment.Horizontal =
+    if (hand == DominantHand.LEFT) AbsoluteAlignment.Left else AbsoluteAlignment.Right
+
+/** [inset] from the screen edge the chrome sits on. */
+internal fun Modifier.chromeEdgePadding(hand: DominantHand, inset: Dp): Modifier =
+    if (hand == DominantHand.LEFT) absolutePadding(left = inset) else absolutePadding(right = inset)
+
 /**
  * Wraps [content] in a [Column] that sits above the system navigation bar.
  *

@@ -50,13 +50,19 @@ class PronunciationDictionary private constructor(
     }
 
     companion object {
+        private val whitespace = Regex("\\s+")
+
         @Volatile
         private var sharedDictionary = PronunciationDictionary(emptyMap())
 
         val shared: PronunciationDictionary
             get() = sharedDictionary
 
+        // Every Activity creation starts a load on IO; without this guard the second parse ran
+        // alongside the first (two copies of ~130k entries in flight) and could exhaust the heap.
+        @Synchronized
         fun initialize(inputStream: InputStream) {
+            if (sharedDictionary.wordCount > 0) return
             sharedDictionary = inputStream.bufferedReader().useLines { lines ->
                 fromLines(lines).also { dictionary ->
                     check(dictionary.entries.isNotEmpty()) { "Pronunciation dictionary is empty" }
@@ -74,7 +80,7 @@ class PronunciationDictionary private constructor(
                 val word = row.substring(0, tabIndex)
                 val variants = row.substring(tabIndex + 1)
                     .split('|')
-                    .map { variant -> variant.trim().split(Regex("\\s+")).filter { it.isNotBlank() } }
+                    .map { variant -> variant.trim().split(whitespace).filter { it.isNotBlank() } }
                     .filter { it.isNotEmpty() }
 
                 if (variants.isNotEmpty()) parsed[word] = variants
@@ -225,7 +231,17 @@ object ProsodyAnalyzer {
         )
     }
 
-    fun countWord(word: String): Int = analyzeWord(word).syllableCount
+    /** [analyzeWord]'s syllable count without building its stress pattern or IPA. */
+    fun countWord(
+        word: String,
+        dictionary: PronunciationDictionary = PronunciationDictionary.shared
+    ): Int {
+        val normalized = normalizeWord(word)
+        if (normalized.isEmpty()) return 0
+        val phones = dictionary.pronunciations(normalized).firstOrNull()
+            ?: return fallbackStressPattern(normalized).size
+        return stressPatternForPhones(phones).size
+    }
 
     fun countText(text: String): Int = analyzeLine(text).syllableCount
 
@@ -339,6 +355,11 @@ object ProsodyAnalyzer {
 
     private fun codaKey(coda: List<String>): String = coda.joinToString(" ")
 
+    /** Builds the rhyme index ahead of the first lookup; call off the main thread once the dictionary loads. */
+    fun prepareRhymeIndex(dictionary: PronunciationDictionary = PronunciationDictionary.shared) {
+        if (dictionary.wordCount > 0) ensureIndex(dictionary)
+    }
+
     private fun ensureIndex(dictionary: PronunciationDictionary) {
         if (indexBuiltFor === dictionary) return
         synchronized(indexLock) {
@@ -348,26 +369,27 @@ object ProsodyAnalyzer {
             val vowelBuild = HashMap<String, MutableList<RhymeTailEntry>>(64)
             val codaBuild = HashMap<String, MutableList<RhymeTailEntry>>(4_096)
             val weakBuild = HashMap<String, MutableList<RhymeTailEntry>>(4_096)
+            // One profile per pronunciation and plain loops: this runs over every
+            // dictionary entry, and per-entry collection churn made the first
+            // lookup take seconds on a phone.
             dictionary.forEachEntry { word, variants ->
                 if (word.length < 2) return@forEachEntry
                 val isStopword = word in stopwords
-                val seenK0 = HashSet<String>(2)
-                val seenK1 = HashSet<String>(2)
                 val profiles = ArrayList<RhymeProfile>(variants.size)
                 for (phones in variants) {
-                    val ks = rhymeKeysForPhones(phones, maxDepth = 2)
-                    val k0 = ks.getOrNull(0) ?: continue
-                    rhymeTailForPhones(phones)?.let { profiles += RhymeProfile(k0, ks.getOrNull(1), it) }
+                    val profile = rhymeProfile(phones) ?: continue
+                    val k0 = profile.key
+                    val k1 = profile.multiKey
+                    val newK0 = profiles.none { it.key == k0 }
+                    val newK1 = k1 != null && profiles.none { it.multiKey == k1 }
+                    profiles += profile
                     if (isStopword) continue
-                    if (seenK0.add(k0)) {
-                        perfectBuild.getOrPut(k0) { ArrayList(8) }.add(word)
-                    }
-                    val k1 = ks.getOrNull(1) ?: continue
-                    if (seenK1.add(k1)) {
-                        multiBuild.getOrPut(k1) { ArrayList(4) }.add(word)
-                    }
+                    if (newK0) perfectBuild.getOrPut(k0) { ArrayList(8) }.add(word)
+                    if (newK1) multiBuild.getOrPut(k1!!) { ArrayList(4) }.add(word)
                 }
-                for (tail in profiles.map { it.tail }.distinct()) {
+                for (i in profiles.indices) {
+                    val tail = profiles[i].tail
+                    if ((0 until i).any { profiles[it].tail == tail }) continue
                     val entry = RhymeTailEntry(word, tail, profiles)
                     vowelBuild.getOrPut(tail.vowel) { ArrayList(256) }.add(entry)
                     if (tail.coda.isNotEmpty()) {
@@ -375,9 +397,9 @@ object ProsodyAnalyzer {
                     }
                     // Unstressed syllables after the stress ("happy" ends in an
                     // unstressed IY), for stress-shifted near rhymes.
-                    tail.coda.forEachIndexed { index, phone ->
-                        if (isVowelPhone(phone)) {
-                            weakBuild.getOrPut(codaKey(tail.coda.drop(index))) { ArrayList(8) }.add(entry)
+                    for (index in tail.coda.indices) {
+                        if (isVowelPhone(tail.coda[index])) {
+                            weakBuild.getOrPut(codaKey(tail.coda.subList(index, tail.coda.size))) { ArrayList(8) }.add(entry)
                         }
                     }
                 }
@@ -419,11 +441,43 @@ object ProsodyAnalyzer {
     /** One pronunciation's rhyme keys and tail. */
     class RhymeProfile(val key: String, val multiKey: String?, val tail: RhymeTail)
 
+    /** Same keys as [rhymeKeysForPhones] (depth 2) and tail as [rhymeTailForPhones],
+     *  in one pass without intermediate lists, because the index runs it for every entry. */
     private fun rhymeProfile(phones: List<String>): RhymeProfile? {
-        val keys = rhymeKeysForPhones(phones, maxDepth = 2)
-        val key = keys.firstOrNull() ?: return null
-        val tail = rhymeTailForPhones(phones) ?: return null
-        return RhymeProfile(key, keys.getOrNull(1), tail)
+        var last = -1
+        var previous = -1
+        var lastVowel = -1
+        var previousVowel = -1
+        for (i in phones.indices) {
+            if (basePhone(phones[i]) !in vowels) continue
+            previousVowel = lastVowel
+            lastVowel = i
+            if ((stressForPhone(phones[i]) ?: 0) > 0) {
+                previous = last
+                last = i
+            }
+        }
+        if (lastVowel < 0) return null
+        if (last < 0) {
+            last = lastVowel
+            previous = previousVowel
+        }
+        val coda = ArrayList<String>(phones.size - last - 1)
+        for (i in last + 1 until phones.size) coda += basePhone(phones[i])
+        return RhymeProfile(
+            key = joinedBasePhones(phones, last),
+            multiKey = if (previous < 0) null else joinedBasePhones(phones, previous),
+            tail = RhymeTail(basePhone(phones[last]), coda)
+        )
+    }
+
+    private fun joinedBasePhones(phones: List<String>, from: Int): String {
+        val builder = StringBuilder()
+        for (i in from until phones.size) {
+            if (i > from) builder.append(' ')
+            builder.append(basePhone(phones[i]))
+        }
+        return builder.toString()
     }
 
     /** The closest relation over every target x candidate pronunciation, with
@@ -582,7 +636,13 @@ object ProsodyAnalyzer {
             .trim('\'')
     }
 
-    private fun basePhone(phone: String): String = phone.replace(Regex("[0-2]$"), "")
+    /** Stress-marked phone to its base ("AY1" -> "AY"), shared instances so the index allocates no strings per phone. */
+    private val baseByPhone: Map<String, String> = (vowels + ipaByPhone.keys).flatMap { base ->
+        listOf(base to base) + (0..2).map { "$base$it" to base }
+    }.toMap()
+
+    private fun basePhone(phone: String): String =
+        baseByPhone[phone] ?: if (phone.lastOrNull() in '0'..'2') phone.dropLast(1) else phone
 
     private fun stressForPhone(phone: String): Int? {
         val last = phone.lastOrNull() ?: return null

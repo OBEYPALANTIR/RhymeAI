@@ -200,9 +200,11 @@ class LaunchLoadingInstrumentedTest {
         val gate = CompletableDeferred<Unit>()
         NewSongTestHooks.beforeSelectionSave = gate
         try {
+            val openedBefore = vm.openRevision
             onMain { vm.newProject() }
-            // The flush has finished; the selection save is still held.
-            waitUntil { !vm.savingBeforeNavigation }
+            // The flush has finished and the editor has opened the blank song (after the column's fade,
+            // which ignores typing); the selection save is still held.
+            waitUntil { !vm.savingBeforeNavigation && !vm.openingSong && vm.newSongOpenRevision > openedBefore }
             val typed = "typed while New Song was saving ${UUID.randomUUID()}"
             onMain { vm.onLyricsChanged(TextFieldValue(typed)) }
             gate.complete(Unit)

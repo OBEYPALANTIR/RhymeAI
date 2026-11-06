@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -169,6 +170,8 @@ class BackupServiceTest {
         assertFalse(liveFile("elsewhere", "bad.m4a").exists())
         assertEquals(listOf(goodEntry.id), repository.recordingRecords().map { it.id })
         assertEquals(1, result.damagedRecordings)
+        // Counted from what is on this device after the apply: the damaged one is not.
+        assertEquals(1, result.restoredRecordings)
     }
 
     @Test
@@ -1469,10 +1472,15 @@ class BackupServiceTest {
         assertEquals(listOf("take"), RecordingFiles.memoDirectory(filesDir, "gone").listFiles()!!.map { it.readText() })
     }
 
-    private fun secondDevice(name: String): Pair<ProjectRepository, Pair<File, DriveSyncService>> {
+    private fun secondDevice(
+        name: String,
+        store: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> =
+            PreferenceDataStoreFactory.create(scope = scope) { File(root, "$name.preferences_pb") },
+        usableSpace: (File) -> Long = File::getUsableSpace
+    ): Pair<ProjectRepository, Pair<File, DriveSyncService>> {
         val files = File(root, "$name-files").also { it.mkdirs() }
-        val repo = ProjectRepository(PreferenceDataStoreFactory.create(scope = scope) { File(root, "$name.preferences_pb") }, MemoryKeyStore())
-        return repo to (files to DriveSyncService(files, MemoryKeyStore(), drive, auth, clientId = { name }, now = { clock }))
+        val repo = ProjectRepository(store, MemoryKeyStore())
+        return repo to (files to DriveSyncService(files, MemoryKeyStore(), drive, auth, clientId = { name }, now = { clock }, usableSpace = usableSpace))
     }
 
     private suspend fun holdRecording(
@@ -1803,11 +1811,31 @@ class BackupServiceTest {
         assertEquals(listOf("binned" to 500L), remote().trashed.map { it.project.id to it.deletedAt })
     }
 
-    class StoredFile(val name: String, var bytes: ByteArray, var appProperties: Map<String, String>, var version: Int, val created: Int)
+    class StoredFile(val name: String, var bytes: ByteArray, var appProperties: Map<String, String>, var version: Int, val created: Int) {
+        /** Every content this file has had, oldest first, as Drive keeps for an in-place update. */
+        val revisions = mutableListOf<StoredRevision>()
+    }
+
+    class StoredRevision(val number: Int, val bytes: ByteArray, var keepForever: Boolean = false) {
+        val id get() = "rev-$number"
+    }
 
     class FakeDrive : DriveClient {
         private val files = LinkedHashMap<String, StoredFile>()
         private var nextId = 0
+        private var nextRevision = 0
+        private fun StoredFile.revise() = revisions.add(StoredRevision(++nextRevision, bytes))
+        /** Every deleteFile call, by file id. */
+        val deleted = mutableListOf<String>()
+        /** Every upload, update and delete, in order. */
+        val writes = mutableListOf<String>()
+        /** Listed, but a download answers 404 (removed in between). */
+        val notFound = mutableSetOf<String>()
+        /** A download answers 401. */
+        val authExpired = mutableSetOf<String>()
+        /** A download answers with this HTTP status. */
+        val failWith = mutableMapOf<String, Int>()
+        fun pinnedRevisions() = files.values.flatMap { f -> f.revisions.filter { it.keepForever }.map { it.id } }
         var uploads = 0
         var calls = 0
         var manifestWrites = 0
@@ -1828,6 +1856,7 @@ class BackupServiceTest {
                 existing.bytes = bytes
                 existing.appProperties = appProperties
                 existing.version++
+                existing.revise()
             } else {
                 add(name, bytes, appProperties)
             }
@@ -1838,7 +1867,7 @@ class BackupServiceTest {
 
         fun add(name: String, bytes: ByteArray, appProperties: Map<String, String> = emptyMap()): String {
             val id = "id-${nextId++}"
-            files[id] = StoredFile(name, bytes, appProperties, 1, nextId)
+            files[id] = StoredFile(name, bytes, appProperties, 1, nextId).apply { revise() }
             return id
         }
         fun file(name: String) = files.values.firstOrNull { it.name == name }
@@ -1869,7 +1898,10 @@ class BackupServiceTest {
             val bytes = files.getValue(fileId).bytes
             if (files.getValue(fileId).name == failDownloadOf) throw DriveNetworkException("injected download failure")
             duringDownloadOf?.takeIf { it.first == files.getValue(fileId).name }?.let { (_, hook) -> duringDownloadOf = null; hook() }
-            if (bytes.size > maxBytes) throw DriveNetworkException("Drive download exceeds the allowed size")
+            if (fileId in notFound) throw DriveHttpException(404, "not found")
+            if (fileId in authExpired) throw DriveAuthException("Drive authorization expired (401)")
+            failWith[fileId]?.let { throw DriveHttpException(it, "injected HTTP $it") }
+            if (bytes.size > maxBytes) throw DriveDownloadTooLargeException()
             afterNextDownload?.let { afterNextDownload = null; it() }
             return bytes
         }
@@ -1878,6 +1910,7 @@ class BackupServiceTest {
         ): String {
             calls++
             uploads++
+            writes += "upload:$name"
             val id = add(name, content, appProperties)
             if (name == BackupManifest.FILE_NAME) manifestWritten()
             if (name.startsWith(BackupManifest.RECORDING_PREFIX)) onRecordingUpload?.let { onRecordingUpload = null; it() }
@@ -1887,17 +1920,38 @@ class BackupServiceTest {
             accessToken: String, fileId: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
         ) {
             calls++
+            writes += "update:$fileId"
             files.getValue(fileId).apply {
                 bytes = content
                 version++
                 if (appProperties.isNotEmpty()) this.appProperties = appProperties
+                revise()
             }
             if (files.getValue(fileId).name == BackupManifest.FILE_NAME) manifestWritten()
         }
         override suspend fun deleteFile(accessToken: String, fileId: String) {
             calls++
+            deleted += fileId
+            writes += "delete:$fileId"
             files.remove(fileId)
         }
+        override suspend fun listRevisions(accessToken: String, fileId: String): List<DriveRevision> {
+            calls++
+            return files.getValue(fileId).revisions.map { DriveRevision(it.id, "%08d".format(it.number), it.bytes.size.toLong(), it.keepForever) }
+        }
+        override suspend fun keepRevisionForever(accessToken: String, fileId: String, revisionId: String) {
+            calls++
+            revision(fileId, revisionId).keepForever = true
+        }
+        /** As Drive: an earlier blob revision is served only once it is kept forever. */
+        override suspend fun downloadRevision(accessToken: String, fileId: String, revisionId: String, maxBytes: Long): ByteArray {
+            calls++
+            val revision = revision(fileId, revisionId)
+            if (!revision.keepForever) throw DriveHttpException(403, "revision is not kept forever")
+            return revision.bytes
+        }
+        private fun revision(fileId: String, revisionId: String) =
+            files[fileId]?.revisions?.singleOrNull { it.id == revisionId } ?: throw DriveHttpException(404, "This earlier backup is no longer in Google Drive.")
         override suspend fun revokeToken(token: String) {
             if (failRevoke) throw DriveNetworkException("Google revoke failed — check your connection.")
             revoked += token
@@ -2325,5 +2379,567 @@ class BackupServiceTest {
         val empty = RecordingManifestEntry("p", "take.m4a", sizeBytes = 0L, modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(ByteArray(0)), uploadedAt = 1L)
         assertFails { empty.validate() }
         assertFails { BackupManifest.encode(SyncBlob(recordings = listOf(empty)), 1L, "x") }
+    }
+
+    /** Device A backs up two songs, each with a take; returns the two raw Drive names. */
+    private suspend fun backUpTwoSongsWithTakes(): List<String> {
+        repository.saveProjects(listOf(song("one"), song("two")))
+        val takes = listOf(writeMemo("one", "a.m4a", "take one".toByteArray()), writeMemo("two", "b.m4a", "take two".toByteArray()))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        return takes.map { BackupManifest.recordingDriveName(it.id) }
+    }
+
+    @Test
+    fun aFreshEmptyDeviceBackingUpLeavesDrivesSongsAndRecordingsInPlace() = runBlocking<Unit> {
+        val raw = backUpTwoSongsWithTakes()
+        // A reinstall: empty library, new client id, same Drive.
+        val (fresh, freshSide) = secondDevice("reinstalled")
+        clock += 60_000L
+
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+
+        assertEquals(setOf("one", "two"), remote().projects.map { it.id }.toSet())
+        assertEquals(2, remote().recordings.size)
+        raw.forEach { assertNotNull(drive.file(it), "$it was deleted from Drive") }
+        // Back up never applies Drive here.
+        assertTrue(fresh.projectsFlow.first().isEmpty())
+        assertTrue(fresh.recordingRecords().isEmpty())
+    }
+
+    @Test
+    fun aFreshDeviceWithOneNewSongAddsItToDrivesSongs() = runBlocking<Unit> {
+        val raw = backUpTwoSongsWithTakes()
+        val (fresh, freshSide) = secondDevice("reinstalled")
+        fresh.saveProjects(listOf(song("three")))
+        clock += 60_000L
+
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+
+        assertEquals(setOf("one", "two", "three"), remote().projects.map { it.id }.toSet())
+        assertEquals(2, remote().recordings.size)
+        raw.forEach { assertNotNull(drive.file(it), "$it was deleted from Drive") }
+        assertEquals(listOf("three"), fresh.projectsFlow.first().map { it.id })
+    }
+
+    /** A, then a manifest overwritten in place without A's songs, then a fresh device's backup over it. */
+    private suspend fun lostAfterAFreshBackup(
+        current: SyncBlob = SyncBlob(),
+        device: Pair<ProjectRepository, Pair<File, DriveSyncService>>? = null
+    ): Pair<ProjectRepository, DriveSyncService> {
+        backUpTwoSongsWithTakes()
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(current, 2_000L, "lost"))
+        val (fresh, freshSide) = device ?: secondDevice("reinstalled")
+        assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
+        assertTrue(remote().projects.isEmpty())
+        return fresh to freshSide.second
+    }
+
+    /** The oldest listed revision (A's backup); listing asks nothing of Drive but the list. */
+    private suspend fun openOldest(service: DriveSyncService): BackupRevision {
+        val pinsBefore = drive.pinnedRevisions()
+        val revisions = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+        assertEquals(pinsBefore, drive.pinnedRevisions(), "listing pins nothing")
+        return revisions.last()
+    }
+
+    /**
+     * Lists and recovers the oldest revision on [service]. Across both, Drive's only change is
+     * the chosen revision being kept forever: no upload, update or delete.
+     */
+    private suspend fun recoverOldest(service: DriveSyncService, repo: ProjectRepository): RecoverySummary {
+        val writesBefore = drive.writes.toList()
+        val pinsBefore = drive.pinnedRevisions().toSet()
+        val chosen = openOldest(service)
+        val result = service.recoverRevision(repo, chosen)
+        val summary = assertIs<RecoveryResult.Recovered>(result, "recovery failed: $result").summary
+        assertEquals(writesBefore, drive.writes, "preview and recovery write nothing to Drive")
+        assertEquals(pinsBefore + chosen.revisionId, drive.pinnedRevisions().toSet())
+        return summary
+    }
+
+    /** The oldest revision's take of song [projectId] as A backed it up. */
+    private fun oldTake(projectId: String) =
+        BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.revisions.first().bytes).recordings.single { it.projectId == projectId }
+
+    private suspend fun ProjectRepository.songsByTitle() = projectsFlow.first().associateBy { it.title }
+
+    @Test
+    fun anEarlierRevisionIsListedOpenedAndRecoveredAsNewSongsWithTheirRecordings() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val revisions = assertIs<RevisionsResult.Ready>(freshService.probeRevisions()).revisions
+        assertEquals(3, revisions.size)
+        assertEquals(revisions.sortedByDescending { it.modifiedTime }, revisions) // newest first
+        val summary = recoverOldest(freshService, fresh)
+        // Only the chosen revision is kept forever.
+        assertEquals(listOf(revisions.last().revisionId), drive.pinnedRevisions())
+
+        assertEquals(RecoverySummary(songsAdded = 2, recordingsAdded = 2, alreadyHere = 0), summary)
+        val songs = fresh.songsByTitle()
+        assertEquals(setOf("one", "two"), songs.keys)
+        // New identities: the old ids are untouched everywhere.
+        assertTrue(songs.values.none { it.id == "one" || it.id == "two" })
+        assertEquals("lyrics of one", songs.getValue("one").lyrics)
+        val records = fresh.recordingRecords()
+        assertEquals(setOf("a.m4a", "b.m4a"), records.map { it.displayName }.toSet())
+        assertEquals(songs.values.map { it.id }.toSet(), records.map { it.projectId }.toSet())
+        assertContentEquals("take one".toByteArray(), File(root, "reinstalled-files/" + records.single { it.displayName == "a.m4a" }.path).readBytes())
+        // The next ordinary backup uploads them as new entries.
+        assertIs<SyncResult.Success>(freshService.backUp(fresh))
+        assertEquals(songs.values.map { it.id }.toSet(), remote().projects.map { it.id }.toSet())
+        assertEquals(records.map { it.id }.toSet(), remote().recordings.map { it.id }.toSet())
+        records.forEach { assertNotNull(drive.file(BackupManifest.recordingDriveName(it.id))) }
+        // Recovering again adds nothing: the same words are already here.
+        assertEquals(RecoverySummary(0, 0, alreadyHere = 2), recoverOldest(freshService, fresh))
+    }
+
+    @Test
+    fun anEarlierRevisionCannotBeReadUntilItIsKeptForever() = runBlocking<Unit> {
+        lostAfterAFreshBackup()
+        val manifest = drive.file(BackupManifest.FILE_NAME)!!
+        val id = drive.listFilesByNamePrefix("t", BackupManifest.FILE_NAME).single().id
+        assertFailsWith<DriveHttpException> { drive.downloadRevision("t", id, manifest.revisions.first().id, Long.MAX_VALUE) }
+    }
+
+    @Test
+    fun recoveryAddsTheSongsWhenARecordingIsNoLongerInDrive() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val gone = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.revisions.first().bytes)
+            .recordings.single { it.fileName == "b.m4a" }
+        drive.remove(BackupManifest.recordingDriveName(gone.id))
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 2, recordingsAdded = 1, alreadyHere = 0, missingRecordings = 1), summary)
+        assertEquals(setOf("one", "two"), fresh.songsByTitle().keys)
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().map { it.displayName })
+        assertEquals(
+            "Recovered 2 songs and 1 recording. 0 already here. 1 recording is no longer in your Google Drive and was not recovered.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
+    }
+
+    @Test
+    fun aRecoveredSongIsNewSoTheCurrentTombstoneOfTheOldOneNeverTouchesIt() = runBlocking<Unit> {
+        // Since A's backup, another device deleted song "one" for good.
+        val tombstone = SyncDeletion("one", deletedAt = clock + 1_000L)
+        val (fresh, freshService) = lostAfterAFreshBackup(SyncBlob(deletions = listOf(tombstone)))
+        val oldTake = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.revisions.first().bytes).recordings.single { it.projectId == "one" }
+        clock += 10_000L
+
+        assertEquals(2, recoverOldest(freshService, fresh).songsAdded)
+
+        val recovered = fresh.songsByTitle().getValue("one")
+        assertTrue(fresh.recordingRecords().any { it.projectId == recovered.id && it.displayName == "a.m4a" })
+        assertNotNull(drive.file(BackupManifest.recordingDriveName(oldTake.id)))
+        repeat(2) {
+            clock += 10_000L
+            assertIs<SyncResult.Success>(freshService.backUp(fresh))
+            assertIs<SyncResult.Success>(freshService.restore(fresh))
+        }
+        assertTrue(remote().projects.any { it.id == recovered.id })
+        assertTrue(remote().recordings.any { it.projectId == recovered.id })
+        assertTrue(remote().deletions.any { it.projectId == "one" && it.fileName == null })
+        assertTrue(fresh.projectsFlow.first().any { it.id == recovered.id })
+    }
+
+    @Test
+    fun anotherDevicesNewerEditOfTheOldSongIsNeverTouchedByARecovery() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        // Device B edited "one" while offline, after A's backup and before the recovery.
+        val (other, otherSide) = secondDevice("b")
+        val otherService = otherSide.second
+        other.saveProjects(listOf(song("one", updatedAt = clock + 500L, lyrics = "B's newer edit")))
+        clock += 10_000L
+
+        recoverOldest(freshService, fresh)
+        clock += 1_000L
+        assertIs<SyncResult.Success>(freshService.backUp(fresh))
+        assertIs<SyncResult.Success>(otherService.backUp(other))
+        assertIs<SyncResult.Success>(otherService.restore(other))
+        assertIs<SyncResult.Success>(freshService.restore(fresh))
+
+        assertEquals("B's newer edit", other.projectsFlow.first().single { it.id == "one" }.lyrics)
+        assertEquals("B's newer edit", remote().projects.single { it.id == "one" }.lyrics)
+        assertEquals("B's newer edit", fresh.projectsFlow.first().single { it.id == "one" }.lyrics)
+        // The recovered copy lives beside it under its own id.
+        assertEquals(2, fresh.projectsFlow.first().count { it.title == "one" })
+    }
+
+    @Test
+    fun songsInTheCurrentBackupsTrashOrAlreadyHereAreLeftAsTheyAre() = runBlocking<Unit> {
+        val edited = TrashedSongProject(song("one", updatedAt = clock + 250L, lyrics = "edited, then trashed"), deletedAt = clock + 260L)
+        val (fresh, freshService) = lostAfterAFreshBackup(SyncBlob(trashed = listOf(edited)))
+        fresh.saveProjects(listOf(song("two")))
+        clock += 10_000L
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 0, recordingsAdded = 0, alreadyHere = 2), summary)
+        assertEquals(listOf("two"), fresh.projectsFlow.first().map { it.id })
+        assertIs<SyncResult.Success>(freshService.backUp(fresh))
+        assertEquals(listOf(edited), remote().trashed)
+    }
+
+    @Test
+    fun aRecoveryStoppedAfterItsSongsIsFinishedByTheNextOneWithoutDuplicates() = runBlocking<Unit> {
+        // The first write of a recording record fails, as if the process died right after the songs were stored.
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        assertEquals(setOf("one", "two"), fresh.songsByTitle().keys)
+        assertTrue(fresh.recordingRecords().isEmpty())
+
+        dying.set(false)
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 0, recordingsAdded = 2, alreadyHere = 2), summary)
+        assertEquals(listOf("one", "two"), fresh.projectsFlow.first().map { it.title }.sorted())
+        val songs = fresh.songsByTitle()
+        assertEquals(
+            mapOf(songs.getValue("one").id to "a.m4a", songs.getValue("two").id to "b.m4a"),
+            fresh.recordingRecords().associate { it.projectId to it.displayName }
+        )
+        // No staging folder is left behind.
+        assertTrue(File(root, "dying-files").listFiles().orEmpty().none { it.name.startsWith(RecordingFiles.RECOVERY_STAGE_PREFIX) })
+    }
+
+    @Test
+    fun recoveryNeedsRoomForItsDownloadsOnceAndWritesNothingWithoutIt() = runBlocking<Unit> {
+        val payload = "take one".length + "take two".length.toLong()
+        var free = payload + DriveSyncService.MIN_FREE_AFTER_RECORDING_RESTORE_BYTES - 1
+        val device = secondDevice("small", usableSpace = { free })
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+
+        val refused = assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen)).result
+        assertEquals(SyncResult.NetworkError("Not enough storage to recover recordings safely"), refused)
+        assertTrue(fresh.projectsFlow.first().isEmpty())
+
+        // Exactly the downloads plus the reserve is enough: each staged take is moved into place, never copied.
+        free++
+        assertEquals(2, assertIs<RecoveryResult.Recovered>(freshService.recoverRevision(fresh, chosen)).summary.recordingsAdded)
+    }
+
+    @Test
+    fun theSameWordsHereWithAnotherTakeDoNotHideTheRecoveredSong() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        fresh.saveProjects(listOf(song("mine", lyrics = "lyrics of one").copy(title = "one")))
+        writeMemo("mine", "other.m4a", "a different melody".toByteArray(), repo = fresh, dir = File(root, "reinstalled-files"))
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(2, summary.songsAdded)
+        val ones = fresh.projectsFlow.first().filter { it.title == "one" }
+        assertEquals(2, ones.size)
+        val copy = ones.single { it.id != "mine" }
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().filter { it.projectId == copy.id }.map { it.displayName })
+    }
+
+    @Test
+    fun aSameNameRawObjectThatIsTooLargeOrGoneIsSkippedForTheIntactOne() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        // Two objects under each take's name, the broken one listed first.
+        for ((project, broken) in listOf("one" to "too large", "two" to "gone")) {
+            val take = oldTake(project)
+            val name = BackupManifest.recordingDriveName(take.id)
+            val good = drive.bytes(name)!!
+            drive.remove(name)
+            val first = drive.add(name, if (broken == "too large") ByteArray(take.sizeBytes.toInt() + 10) else good, recordingAppProperties(take))
+            if (broken == "gone") drive.notFound += first
+            drive.add(name, good, recordingAppProperties(take))
+        }
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 2, recordingsAdded = 2, alreadyHere = 0), summary)
+        assertEquals(setOf("a.m4a", "b.m4a"), fresh.recordingRecords().map { it.displayName }.toSet())
+    }
+
+    @Test
+    fun aRawObjectThatIsOnlyGoneCountsAsMissingAndAnExpiredSignInStopsBeforeAnyWrite() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val raw = drive.listFilesByNamePrefix("t", BackupManifest.recordingDriveName(oldTake("two").id)).single().id
+        val chosen = openOldest(freshService)
+
+        drive.authExpired += raw
+        assertEquals(
+            SyncResult.NetworkError("Drive authorization expired — tap Back up now to sign in again."),
+            assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen)).result
+        )
+        assertTrue(fresh.projectsFlow.first().isEmpty())
+
+        drive.authExpired.clear()
+        drive.notFound += raw
+        assertEquals(1, recoverOldest(freshService, fresh).missingRecordings)
+    }
+
+    @Test
+    fun aTakeWhoseOnlyRawObjectIsTooLargeIsCountedDamagedAndTheRestIsRecovered() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val take = oldTake("two")
+        val name = BackupManifest.recordingDriveName(take.id)
+        drive.remove(name)
+        drive.add(name, ByteArray(take.sizeBytes.toInt() + 10), recordingAppProperties(take))
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 2, recordingsAdded = 1, alreadyHere = 0, damagedRecordings = 1), summary)
+    }
+
+    /** A device whose store throws on any change of its recording records while the switch is on. */
+    private fun dyingDevice(name: String): Pair<Pair<ProjectRepository, Pair<File, DriveSyncService>>, java.util.concurrent.atomic.AtomicBoolean> {
+        val store = PreferenceDataStoreFactory.create(scope = scope) { File(root, "$name.preferences_pb") }
+        val records = androidx.datastore.preferences.core.stringPreferencesKey("recording_records_json")
+        val dying = java.util.concurrent.atomic.AtomicBoolean(false)
+        val killing = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> by store {
+            override suspend fun updateData(
+                transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences
+            ) = store.updateData { current ->
+                transform(current).also { next -> if (dying.get() && next[records] != current[records]) throw java.io.IOException("process died") }
+            }
+        }
+        return secondDevice(name, killing) to dying
+    }
+
+    private fun recoveryStages(dir: File) = dir.listFiles().orEmpty().filter { it.name.startsWith(RecordingFiles.RECOVERY_STAGE_PREFIX) }
+
+    @Test
+    fun aRecoveryCancelledWhileATakeIsBeingPlacedStillPlacesItAndARetryFindsNothingMissing() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val chosen = openOldest(freshService)
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        // The playback hook suspends after the first take's intent is stored, before its bytes move.
+        com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = {
+            if (!reached.isCompleted) {
+                reached.complete(Unit)
+                release.await()
+            }
+        }
+        try {
+            var outcome: RecoveryResult? = null
+            val job = launch(Dispatchers.IO) { outcome = freshService.recoverRevision(fresh, chosen) }
+            kotlinx.coroutines.withTimeoutOrNull(20_000) { kotlinx.coroutines.selects.select<Unit> { reached.onAwait {}; job.onJoin {} } }
+            assertTrue(reached.isCompleted, "the hook was not reached: $outcome")
+            job.cancel()
+            release.complete(Unit)
+            job.join()
+        } finally {
+            com.rhymeai.app.data.recording.RecordingTransitions.beforeBytesMove = null
+        }
+        assertTrue(fresh.recordingRecords().none { it.pendingOp != null })
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(0, summary.songsAdded)
+        assertEquals(setOf("a.m4a", "b.m4a"), fresh.recordingRecords().map { it.displayName }.toSet())
+        fresh.recordingRecords().forEach { assertTrue(File(root, "reinstalled-files/" + it.path).isFile) }
+        assertEquals(2, fresh.projectsFlow.first().size)
+        assertTrue(recoveryStages(File(root, "reinstalled-files")).isEmpty())
+    }
+
+    @Test
+    fun anInterruptedRecoveryStageSurvivesAnOrdinaryRestoreAndItsRetryPlacesTheTake() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val dir = File(root, "reinstalled-files")
+        recoverOldest(freshService, fresh)
+        // As if the process died after take b's intent was stored: its bytes only in the recovery stage.
+        val b = fresh.recordingRecords().single { it.displayName == "b.m4a" }
+        val placed = File(dir, b.path!!)
+        val bytes = placed.readBytes()
+        placed.delete()
+        val stage = File(dir, RecordingFiles.RECOVERY_STAGE_PREFIX + "interrupted").apply { mkdirs() }
+        val staged = File(stage, placed.name).apply { writeBytes(bytes) }
+        fresh.updateRecordingRecords { records ->
+            records.map {
+                if (it.id != b.id) it else it.copy(
+                    pendingFrom = com.rhymeai.app.data.recording.RecordingTransitions.relativePath(dir, staged),
+                    pendingOp = RecordingRecord.OP_PUBLISH
+                )
+            }
+        }
+
+        assertIs<SyncResult.Success>(freshService.restore(fresh))
+        assertTrue(stage.isDirectory, "an ordinary Restore never removes a recovery stage")
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(1, summary.recordingsAdded)
+        val again = fresh.recordingRecords().single { it.displayName == "b.m4a" }
+        assertEquals(b.id, again.id)
+        assertContentEquals(bytes, File(dir, again.path!!).readBytes())
+        assertTrue(fresh.recordingRecords().none { it.pendingOp != null })
+        assertTrue(recoveryStages(dir).isEmpty())
+    }
+
+    @Test
+    fun aRecoveredSongDeletedForeverStaysDeletedWhenTheSameRevisionIsRecoveredAgain() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        recoverOldest(freshService, fresh)
+        val one = fresh.songsByTitle().getValue("one")
+        clock += 1_000L
+        assertNotNull(fresh.moveProjectToTrash(one.id, clock))
+        fresh.permanentlyDeleteTrashedProject(one.id, now = clock)
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 0, recordingsAdded = 0, alreadyHere = 1, deletedSongs = 1), summary)
+        assertEquals(listOf("two"), fresh.projectsFlow.first().map { it.title })
+        assertEquals(
+            "Recovered 0 songs and 0 recordings. 1 already here. 1 song deleted after an earlier recovery stay deleted.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
+    }
+
+    @Test
+    fun aTakeAnotherDeviceDeletedAfterItsRecoveryIsNotPlacedByThisDevicesRetry() = runBlocking<Unit> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        // This device stops after storing the songs.
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        // Device B recovers the same revision, deletes take a, and backs up.
+        val (other, otherSide) = secondDevice("b")
+        assertIs<RecoveryResult.Recovered>(otherSide.second.recoverRevision(other, chosen))
+        val takeA = other.recordingRecords().single { it.displayName == "a.m4a" }
+        clock += 5_000L
+        other.recordRecordingDeletion(takeA.projectId, "a.m4a", takeA.id, clock)
+        assertIs<SyncResult.Success>(otherSide.second.backUp(other))
+        assertTrue(remote().deletions.any { it.recordingId == takeA.id })
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(1, summary.deletedRecordings)
+        assertEquals(1, summary.recordingsAdded)
+        assertEquals(listOf("b.m4a"), fresh.recordingRecords().map { it.displayName })
+    }
+
+    @Test
+    fun aRateLimitedRawObjectStopsTheRecoveryBeforeAnyWriteEvenWithAnIntactDuplicate() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val take = oldTake("one")
+        val name = BackupManifest.recordingDriveName(take.id)
+        val good = drive.bytes(name)!!
+        drive.remove(name)
+        drive.failWith[drive.add(name, good, recordingAppProperties(take))] = 429
+        drive.add(name, good, recordingAppProperties(take))
+        val chosen = openOldest(freshService)
+        val writesBefore = drive.writes.toList()
+
+        val failed = assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen)).result
+        assertIs<SyncResult.NetworkError>(failed)
+        assertTrue(fresh.projectsFlow.first().isEmpty())
+        assertTrue(fresh.recordingRecords().isEmpty())
+        assertEquals(writesBefore, drive.writes)
+    }
+
+    @Test
+    fun recoveredIdsFollowTheSharedFixedVector() {
+        // The same vector is pinned on iOS: a change to the derivation must fail on both.
+        assertEquals("3ec9dc72-4f40-37c0-a588-f62dc27d13de", recoveredId(BackupRevision("f1", "r1", null, null), "song-1"))
+    }
+
+    @Test
+    fun theListShowsTheFiftyNewestAndEveryKeptRevision() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("first")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        val oldest = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions.single()
+        // Recovering pins the oldest (its song is already here); then every backup writes one more version.
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, oldest))
+        repeat(60) { assertIs<SyncResult.Success>(service.backUp(repository)) }
+
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+
+        assertEquals(DriveSyncService.MAX_LISTED_REVISIONS + 1, listed.size)
+        assertEquals(oldest.revisionId, listed.last().revisionId)
+        assertTrue(listed.last().kept)
+        assertEquals(listOf(true), listed.filter { it.kept }.map { it.kept })
+    }
+
+    @Test
+    fun withTwoHundredKeptVersionsOnlyAKeptOneCanBeRecoveredAndNothingIsUnpinned() = runBlocking<Unit> {
+        repository.saveProjects(listOf(song("first")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        repeat(DriveSyncService.KEPT_REVISION_LIMIT) { assertIs<SyncResult.Success>(service.backUp(repository)) }
+        val id = drive.listFilesByNamePrefix("t", BackupManifest.FILE_NAME).single().id
+        val all = drive.file(BackupManifest.FILE_NAME)!!.revisions
+        all.drop(1).forEach { drive.keepRevisionForever("t", id, it.id) }
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+        // All 200 kept ones are listed (more than the 50 newest); the one unkept version is too old to be.
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, listed.size)
+        val unkept = BackupRevision(id, all.first().id, null, null)
+
+        val refused = assertIs<RecoveryResult.Failed>(service.recoverRevision(repository, unkept)).result
+        assertEquals(SyncResult.NetworkError(DriveSyncService.TOO_MANY_KEPT_MESSAGE), refused)
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, drive.pinnedRevisions().size)
+        assertTrue(listed.first().kept)
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, listed.first()))
+        assertEquals(DriveSyncService.KEPT_REVISION_LIMIT, drive.pinnedRevisions().size)
+    }
+
+    @Test
+    fun aRecoveredSongAnotherDeviceDeletedGetsNoTakesOnThisDevicesRetryAndStaysDeleted() = runBlocking<Unit> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        // This device stops after storing the songs (no takes yet).
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        // Device B recovers the same revision, deletes its copy of "one" forever, and backs up.
+        val (other, otherSide) = secondDevice("b")
+        assertIs<RecoveryResult.Recovered>(otherSide.second.recoverRevision(other, chosen))
+        val oneId = recoveredId(chosen, "one")
+        clock += 5_000L
+        assertNotNull(other.moveProjectToTrash(oneId, clock))
+        other.permanentlyDeleteTrashedProject(oneId, now = clock)
+        assertIs<SyncResult.Success>(otherSide.second.backUp(other))
+        assertTrue(remote().deletions.any { it.isSongTombstone && it.projectId == oneId })
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(1, summary.deletedSongs)
+        assertEquals(1, summary.deletedSongsStillHere)
+        assertEquals(1, summary.recordingsAdded)
+        assertTrue(fresh.recordingRecords().none { it.projectId == oneId })
+        assertEquals(
+            "Recovered 0 songs and 1 recording. 1 already here. 1 song deleted after an earlier recovery stay deleted. " +
+                "An earlier copy of 1 of them is still on this phone; a deletion elsewhere keeps it out of the backup unless you edit it here.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
+        // The next backup keeps the deletion winning: no song and no take of it reach Drive.
+        clock += 1_000L
+        assertIs<SyncResult.Success>(freshService.backUp(fresh))
+        assertTrue(remote().projects.none { it.id == oneId })
+        assertTrue(remote().recordings.none { it.projectId == oneId })
+        assertTrue(remote().deletions.any { it.isSongTombstone && it.projectId == oneId })
+    }
+
+    @Test
+    fun aDeletionOfUnknownDateKeepsARecoveredSongOutAndIsReportedAsSuch() = runBlocking<Unit> {
+        val (fresh, freshService) = lostAfterAFreshBackup()
+        val chosen = openOldest(freshService)
+        // The current backup names the recovered copy of "two" in a deletion without a time.
+        val text = String(BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion(recoveredId(chosen, "two"), deletedAt = 1L))), 3_000L, "other"))
+        val body = JsonObject(Json.parseToJsonElement(text).jsonObject - BackupManifest.HASH_KEY).let { body ->
+            JsonObject(body + ("deletions" to kotlinx.serialization.json.JsonArray(body.getValue("deletions").jsonArray.map { JsonObject(it.jsonObject - "deletedAt") })))
+        }
+        val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray())
+        assertFalse(remote().deletions.single().timeKnown)
+
+        val summary = recoverOldest(freshService, fresh)
+
+        assertEquals(RecoverySummary(songsAdded = 1, recordingsAdded = 1, alreadyHere = 0, unknownDateDeletions = 1), summary)
+        assertEquals(listOf("one"), fresh.projectsFlow.first().map { it.title })
+        assertEquals(
+            "Recovered 1 song and 1 recording. 0 already here. 1 could not be placed because an earlier deletion of unknown date names it.",
+            com.rhymeai.app.recoveryNotice(summary)
+        )
     }
 }

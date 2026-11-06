@@ -94,6 +94,10 @@ struct AppAppearancePalette {
     let canvas: Color
     let surface: Color
     let raisedSurface: Color
+    /// Raised rows and cards: a half step off the page.
+    let surfaceLow: Color
+    /// Floating cards and the drawer panel.
+    let surfaceHigh: Color
     let primaryInk: Color
     let secondaryInk: Color
     let outline: Color
@@ -108,11 +112,15 @@ struct AppAppearancePalette {
     let warning: Color
     let error: Color
     let recording: Color
+    /// Shadow tint: the ink on the light appearances; black on Graphite, where a cream shadow would read as a glow.
+    let shadowInk: Color
 
     fileprivate static let ink = AppAppearancePalette(
         canvas: Color(hex: 0xFCFCF8),
         surface: Color(hex: 0xFCFCF8),
         raisedSurface: Color(hex: 0xE5E5DE),
+        surfaceLow: Color(hex: 0xF7F7F2),
+        surfaceHigh: Color(hex: 0xE5E5DE),
         primaryInk: Color(hex: 0x050505),
         secondaryInk: Color(hex: 0x4D4D48),
         outline: Color(hex: 0xB5B5AD),
@@ -126,13 +134,16 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.ink.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.ink.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.ink.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.ink.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.ink.statusRecordingHexValue),
+        shadowInk: Color(hex: 0x050505)
     )
 
     fileprivate static let paper = AppAppearancePalette(
         canvas: Color(hex: 0xF3EEDF),
         surface: Color(hex: 0xF8F3E6),
         raisedSurface: Color(hex: 0xDDD4BF),
+        surfaceLow: Color(hex: 0xEFE8D7),
+        surfaceHigh: Color(hex: 0xDDD4BF),
         primaryInk: Color(hex: 0x302E2A),
         secondaryInk: Color(hex: 0x5D574E),
         outline: Color(hex: 0xB7AC94),
@@ -146,13 +157,16 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.paper.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.paper.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.paper.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.paper.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.paper.statusRecordingHexValue),
+        shadowInk: Color(hex: 0x302E2A)
     )
 
     fileprivate static let graphite = AppAppearancePalette(
         canvas: Color(hex: 0x171716),
         surface: Color(hex: 0x1C1C1B),
         raisedSurface: Color(hex: 0x2B2B28),
+        surfaceLow: Color(hex: 0x20201E),
+        surfaceHigh: Color(hex: 0x2B2B28),
         primaryInk: Color(hex: 0xF6F2E8),
         secondaryInk: Color(hex: 0xC4BEB3),
         outline: Color(hex: 0x484843),
@@ -166,7 +180,8 @@ struct AppAppearancePalette {
         success: Color(hex: AppAppearanceStyle.graphite.statusSuccessHexValue),
         warning: Color(hex: AppAppearanceStyle.graphite.statusWarningHexValue),
         error: Color(hex: AppAppearanceStyle.graphite.statusErrorHexValue),
-        recording: Color(hex: AppAppearanceStyle.graphite.statusRecordingHexValue)
+        recording: Color(hex: AppAppearanceStyle.graphite.statusRecordingHexValue),
+        shadowInk: Color.black
     )
 }
 
@@ -218,29 +233,48 @@ struct AppWritingBackground: View {
 private struct AppearanceTexture: View, Equatable {
     let appearance: AppAppearanceStyle
 
-    @ViewBuilder
     var body: some View {
-        switch appearance {
-        case .ink:
-            EmptyView()
-        case .paper:
-            ZStack {
+        let palette = appearance.palette
+
+        ZStack {
+            if appearance == .paper {
                 CachedAppearanceTextureShape(appearance: appearance, layer: .paperRules)
-                    .stroke(appearance.palette.primaryInk.opacity(0.055), lineWidth: 1)
-                CachedAppearanceTextureShape(appearance: appearance, layer: .paperFibers)
-                    .stroke(appearance.palette.primaryInk.opacity(0.024), lineWidth: 0.5)
+                    .stroke(palette.primaryInk.opacity(0.055), lineWidth: 1)
+                // A faint edge vignette, like light falling off a sheet.
+                EllipticalGradient(
+                    colors: [.clear, palette.primaryInk.opacity(0.02)],
+                    startRadiusFraction: 0.35,
+                    endRadiusFraction: 0.75
+                )
             }
-        case .graphite:
-            CachedAppearanceTextureShape(appearance: appearance, layer: .graphiteGrain)
-                .stroke(appearance.palette.primaryInk.opacity(0.018), lineWidth: 0.75)
+            CachedAppearanceTextureShape(appearance: appearance, layer: .grain)
+                .stroke(grainColor(palette), lineWidth: grainLineWidth)
+        }
+    }
+
+    /// Paper: warm fibre in the outline colour (the strong one: the light outline
+    /// at 4.5% sat about 3 levels off the canvas, too faint to see). Ink: a finer,
+    /// cooler tooth. Graphite: pencil grain.
+    private func grainColor(_ palette: AppAppearancePalette) -> Color {
+        switch appearance {
+        case .ink: palette.primaryInk.opacity(0.03)
+        case .paper: palette.outlineStrong.opacity(0.045)
+        case .graphite: palette.primaryInk.opacity(0.04)
+        }
+    }
+
+    private var grainLineWidth: CGFloat {
+        switch appearance {
+        case .ink: 0.5
+        case .paper: 0.75
+        case .graphite: 0.6
         }
     }
 }
 
 enum AppearanceTextureLayer: Hashable {
     case paperRules
-    case paperFibers
-    case graphiteGrain
+    case grain
 }
 
 private struct CachedAppearanceTextureShape: Shape {
@@ -292,7 +326,7 @@ final class AppearanceTexturePathCache: @unchecked Sendable {
             paths.removeAll(keepingCapacity: true)
         }
 
-        let path = Self.makePath(layer: layer, in: rect)
+        let path = Self.makePath(appearance: appearance, layer: layer, in: rect)
         paths[key] = path
         generationCount += 1
         return path
@@ -311,14 +345,12 @@ final class AppearanceTexturePathCache: @unchecked Sendable {
         generationCount = 0
     }
 
-    private static func makePath(layer: AppearanceTextureLayer, in rect: CGRect) -> CGPath {
+    private static func makePath(appearance: AppAppearanceStyle, layer: AppearanceTextureLayer, in rect: CGRect) -> CGPath {
         switch layer {
         case .paperRules:
             paperRulesPath(in: rect)
-        case .paperFibers:
-            paperFibersPath(in: rect)
-        case .graphiteGrain:
-            graphiteGrainPath(in: rect)
+        case .grain:
+            grainPath(appearance: appearance, in: rect)
         }
     }
 
@@ -335,42 +367,49 @@ final class AppearanceTexturePathCache: @unchecked Sendable {
         return path
     }
 
-    private static func paperFibersPath(in rect: CGRect) -> CGPath {
+    /// Short diagonal marks, one per cell of a 16pt-row grid (22pt columns,
+    /// 16pt on Ink), each nudged, sized and tilted by a hash of its cell so
+    /// the grid never reads as a pattern. One path for the whole surface.
+    static func grainPath(appearance: AppAppearanceStyle, in rect: CGRect) -> CGPath {
+        let rowHeight: CGFloat = 16
+        let columnWidth: CGFloat = appearance == .ink ? 16 : 22
+        let lengths: ClosedRange<CGFloat> = switch appearance {
+        case .ink: 1.2...2.4
+        case .paper: 2.5...5.5
+        case .graphite: 1.6...3.2
+        }
         let path = CGMutablePath()
         var row = 0
-        var y: CGFloat = 13
+        var y: CGFloat = 0
 
         while y < rect.height {
-            var x = CGFloat(11 + (row % 4) * 13)
+            var column = 0
+            var x: CGFloat = 0
             while x < rect.width {
-                path.move(to: CGPoint(x: rect.minX + x, y: rect.minY + y))
-                path.addLine(to: CGPoint(x: rect.minX + x + 0.7, y: rect.minY + y + 5))
-                x += 54
+                let hash = grainHash(row, column)
+                let unit = { (shift: UInt32) in CGFloat((hash >> shift) & 0xFF) / 255 }
+                let start = CGPoint(x: rect.minX + x + unit(0) * columnWidth, y: rect.minY + y + unit(8) * rowHeight)
+                let length = lengths.lowerBound + unit(16) * (lengths.upperBound - lengths.lowerBound)
+                // Down-right diagonals, tilted ±15°.
+                let angle = CGFloat.pi / 4 + (unit(24) - 0.5) * (CGFloat.pi / 6)
+                path.move(to: start)
+                path.addLine(to: CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length))
+                column += 1
+                x += columnWidth
             }
             row += 1
-            y += 38
+            y += rowHeight
         }
 
         return path
     }
 
-    private static func graphiteGrainPath(in rect: CGRect) -> CGPath {
-        let path = CGMutablePath()
-        var row = 0
-        var y: CGFloat = 8
-
-        while y < rect.height {
-            var x = CGFloat(6 + (row % 3) * 5)
-            while x < rect.width {
-                path.move(to: CGPoint(x: rect.minX + x, y: rect.minY + y))
-                path.addLine(to: CGPoint(x: rect.minX + x + 0.8, y: rect.minY + y + 0.28))
-                x += 22
-            }
-            row += 1
-            y += 16
-        }
-
-        return path
+    private static func grainHash(_ row: Int, _ column: Int) -> UInt32 {
+        var value = UInt32(truncatingIfNeeded: row &* 73_856_093 ^ column &* 19_349_663)
+        value ^= value >> 13
+        value &*= 0x5BD1_E995
+        value ^= value >> 15
+        return value
     }
 }
 

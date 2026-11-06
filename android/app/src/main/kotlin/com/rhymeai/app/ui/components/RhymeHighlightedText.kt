@@ -16,14 +16,18 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAppAppearance
 import com.rhymeai.app.ui.theme.rhymePalette
 import com.rhymeai.app.ui.theme.syllableColor
 import com.rhymeai.app.util.LyricTokenizer
-import com.rhymeai.app.util.RhymePhonetics
+import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SyllableCounter
+import com.rhymeai.app.util.pronunciationMemo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private val wordPattern = LyricTokenizer.wordPattern
@@ -37,7 +41,8 @@ private data class WordAnalysis(
 
 private data class DocumentAnalysisRequest(
     val text: String,
-    val rhymeEnabled: Boolean
+    val rhymeEnabled: Boolean,
+    val dictionary: PronunciationDictionary = PronunciationDictionary.shared
 )
 
 private data class DocumentAnalysis(
@@ -47,27 +52,34 @@ private data class DocumentAnalysis(
 )
 
 private object WordAnalysisCache {
-    private const val CAPACITY = 4096
-    private val entries = LinkedHashMap<String, WordAnalysis>()
+    private val entries = pronunciationMemo<WordAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 64)
 
     fun analysisFor(word: String): WordAnalysis {
         val key = word.lowercase()
-        synchronized(entries) {
-            entries[key]?.let { return it }
+        return entries.getOrPut(key) { dictionary ->
+            WordAnalysis(
+                rhymeKeys = ProsodyAnalyzer.rhymeKeys(key, maxDepth = 2, dictionary = dictionary),
+                syllableCount = SyllableCounter.count(key)
+            )
         }
+    }
+}
 
-        val computed = WordAnalysis(
-            rhymeKeys = RhymePhonetics.rhymeKeys(key, maxDepth = 2),
-            syllableCount = SyllableCounter.count(key)
-        )
-        synchronized(entries) {
-            entries[key]?.let { return it }
-            if (entries.size >= CAPACITY) {
-                entries.clear()
-            }
-            entries[key] = computed
+/** One lyric line's words and their analyses, memoised so an unchanged line is never re-analysed. */
+private class LineAnalysis(val tokens: List<Token>, val words: List<WordAnalysis>)
+
+private object LineAnalysisCache {
+    private val empty = LineAnalysis(emptyList(), emptyList())
+
+    // Bounded by characters, and a huge pasted paragraph is analysed directly rather than kept.
+    private val entries = pronunciationMemo<LineAnalysis>(maxCharacters = 200_000, maxKeyCharacters = 2_000)
+
+    /** [index] (the line's position in the lyric) lets a very long line keep its latest analysis. */
+    fun analysisFor(line: String, index: Int): LineAnalysis = entries.getOrPut(line, index) {
+        if (SectionMap.headerTitle(line) != null) empty else {
+            val tokens = wordPattern.findAll(line).map { Token(it.value, it.range.first, it.range.last + 1) }.toList()
+            LineAnalysis(tokens, tokens.map { WordAnalysisCache.analysisFor(it.text) })
         }
-        return computed
     }
 }
 
@@ -98,11 +110,19 @@ private object DocumentAnalysisCache {
     }
 }
 
+/**
+ * The lyric coloured by rhyme family or syllable count. The colouring is built off the main
+ * thread for each new text; until it lands, the last colouring is carried across the edit
+ * ([shiftAnalysis]), so no frame shows the words uncoloured. A song longer than
+ * [DesignTokens.Editor.liveColouringMaxWords] instead shows plain text while typing and is
+ * recoloured once typing pauses.
+ */
 @Composable
 internal fun rememberAnalysisText(
     text: String,
     enabled: Boolean,
-    syllablesEnabled: Boolean = false
+    syllablesEnabled: Boolean = false,
+    wordCount: Int = 0
 ): AnnotatedString {
     val baseTextColor = MaterialTheme.colorScheme.onBackground
     val isDark = LocalAppAppearance.current.isDark
@@ -112,11 +132,16 @@ internal fun rememberAnalysisText(
         return remember(text) { AnnotatedString(text) }
     }
 
-    var result by remember(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
-        mutableStateOf(AnnotatedString(text))
+    // Plain only until the first colouring for these settings lands (opening a song, a toggle).
+    var latest by remember(baseTextColor, palette, isDark, enabled, syllablesEnabled) {
+        mutableStateOf(AnnotatedString(""))
     }
+    val live = colouringFollowsEveryKeystroke(wordCount)
     LaunchedEffect(text, baseTextColor, palette, isDark, enabled, syllablesEnabled) {
-        result = withContext(Dispatchers.Default) {
+        if (latest.text == text) return@LaunchedEffect
+        if (!live) delay(DesignTokens.Editor.deferredColouringPauseMillis)
+        // A newer text cancels this job, so whatever lands is for the text on screen.
+        latest = withContext(Dispatchers.Default) {
             buildAnalysisText(
                 text = text,
                 baseTextColor = baseTextColor,
@@ -127,8 +152,73 @@ internal fun rememberAnalysisText(
             )
         }
     }
-    return result
+    val current = latest
+    return when {
+        current.text == text -> current
+        current.text.isEmpty() || !live -> remember(text) { AnnotatedString(text) }
+        else -> remember(current, text) { shiftAnalysis(current, text) }
+    }
 }
+
+/** Whether a lyric of [wordCount] words is recoloured on every keystroke or only after a pause. */
+internal fun colouringFollowsEveryKeystroke(wordCount: Int): Boolean =
+    wordCount <= DesignTokens.Editor.liveColouringMaxWords
+
+/**
+ * [previous] colouring carried onto [text] across the one edit between them: styles before the
+ * edit stay, styles after it shift by its length change, a word spanning the edit keeps its colour.
+ */
+internal fun shiftAnalysis(previous: AnnotatedString, text: String): AnnotatedString {
+    val edit = TextEdit(previous.text, text)
+    val oldTailStart = previous.text.length - edit.suffix
+    fun start(offset: Int) = when {
+        offset >= oldTailStart -> offset + edit.delta
+        offset <= edit.prefix -> offset
+        else -> edit.newEnd
+    }
+    fun end(offset: Int) = when {
+        offset <= edit.prefix -> offset
+        offset >= oldTailStart -> offset + edit.delta
+        else -> edit.prefix
+    }
+    val spans = previous.spanStyles.mapNotNull { range ->
+        val from = start(range.start)
+        val to = end(range.end)
+        if (from < to) AnnotatedString.Range(range.item, from, to) else null
+    }
+    return AnnotatedString(text, spans)
+}
+
+private fun analyseDocument(request: DocumentAnalysisRequest, text: String, rhymeEnabled: Boolean): DocumentAnalysis =
+    DocumentAnalysisCache.analysisFor(request) {
+        val tokens = ArrayList<Token>()
+        val analyses = ArrayList<WordAnalysis>()
+        var lineStart = 0
+        var index = 0
+        while (true) {
+            val newline = text.indexOf('\n', lineStart)
+            val lineEnd = if (newline < 0) text.length else newline
+            val line = LineAnalysisCache.analysisFor(text.substring(lineStart, lineEnd), index++)
+            line.tokens.forEach { tokens += Token(it.text, lineStart + it.start, lineStart + it.end) }
+            analyses += line.words
+            if (newline < 0) break
+            lineStart = newline + 1
+        }
+        val keysPerToken = if (rhymeEnabled) {
+            analyses.map(WordAnalysis::rhymeKeys)
+        } else {
+            List(tokens.size) { emptyList() }
+        }
+        val occurrences = mutableMapOf<String, Int>()
+        keysPerToken.forEach { keys -> keys.forEach { key -> occurrences[key] = (occurrences[key] ?: 0) + 1 } }
+        DocumentAnalysis(
+            tokens = tokens,
+            words = analyses,
+            familyKeys = keysPerToken.map { keys ->
+                keys.lastOrNull { (occurrences[it] ?: 0) >= 2 }
+            }
+        )
+    }
 
 internal fun buildAnalysisText(
     text: String,
@@ -138,32 +228,13 @@ internal fun buildAnalysisText(
     rhymeEnabled: Boolean,
     syllablesEnabled: Boolean
 ): AnnotatedString {
-    val documentAnalysis = DocumentAnalysisCache.analysisFor(
-        DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
-    ) {
-        val headerRanges = SectionMap.headerRanges(text)
-        val tokens = wordPattern.findAll(text)
-            .filterNot { match ->
-                SectionMap.intersectsHeader(match.range, headerRanges)
-            }
-            .map { Token(it.value, it.range.first, it.range.last + 1) }
-            .toList()
-        val analyses = tokens.map { WordAnalysisCache.analysisFor(it.text) }
-        val keysPerToken = if (rhymeEnabled) {
-            analyses.map(WordAnalysis::rhymeKeys)
-        } else {
-            List(tokens.size) { emptyList() }
-        }
-        val occurrences = mutableMapOf<String, Int>()
-        keysPerToken.flatten().forEach { key -> occurrences[key] = (occurrences[key] ?: 0) + 1 }
-        DocumentAnalysis(
-            tokens = tokens,
-            words = analyses,
-            familyKeys = keysPerToken.map { keys ->
-                keys.lastOrNull { (occurrences[it] ?: 0) >= 2 }
-            }
-        )
-    }
+    var request: DocumentAnalysisRequest
+    var documentAnalysis: DocumentAnalysis
+    // Rebuilt if the pronunciation dictionary finished loading while this pass ran.
+    do {
+        request = DocumentAnalysisRequest(text = text, rhymeEnabled = rhymeEnabled)
+        documentAnalysis = analyseDocument(request, text, rhymeEnabled)
+    } while (request.dictionary !== PronunciationDictionary.shared)
     val tokens = documentAnalysis.tokens
     val analyses = documentAnalysis.words
     val familyKeys = documentAnalysis.familyKeys
@@ -171,12 +242,10 @@ internal fun buildAnalysisText(
 
     return buildAnnotatedString {
         var cursor = 0
+        // Only coloured words carry a style; the rest takes the field's own colour ([baseTextColor]).
+        // Every span makes each glyph-position query on the laid-out lyric slower.
         tokens.forEachIndexed { index, token ->
-            if (token.start > cursor) {
-                withStyle(SpanStyle(color = baseTextColor)) {
-                    append(text.substring(cursor, token.start))
-                }
-            }
+            if (token.start > cursor) append(text, cursor, token.start)
 
             val syllableCount = if (syllablesEnabled) {
                 analyses[index].syllableCount
@@ -195,16 +264,12 @@ internal fun buildAnalysisText(
                     color = syllableColor(requireNotNull(syllableCount), isDark),
                     fontWeight = FontWeight.SemiBold
                 )
-                else -> SpanStyle(color = baseTextColor)
+                else -> null
             }
-            withStyle(tokenStyle) { append(token.text) }
+            if (tokenStyle == null) append(token.text) else withStyle(tokenStyle) { append(token.text) }
             cursor = token.end
         }
-        if (cursor < text.length) {
-            withStyle(SpanStyle(color = baseTextColor)) {
-                append(text.substring(cursor))
-            }
-        }
+        if (cursor < text.length) append(text, cursor, text.length)
     }
 }
 

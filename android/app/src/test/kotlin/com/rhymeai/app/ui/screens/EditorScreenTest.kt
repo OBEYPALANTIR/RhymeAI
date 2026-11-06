@@ -3,8 +3,6 @@ package com.rhymeai.app.ui.screens
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class EditorScreenTest {
@@ -13,6 +11,13 @@ class EditorScreenTest {
         assertTrue(historyControlsVisible(editorActionsVisible = true, isRecording = false))
         assertFalse(historyControlsVisible(editorActionsVisible = true, isRecording = true))
         assertFalse(historyControlsVisible(editorActionsVisible = false, isRecording = false))
+    }
+
+    @Test
+    fun `song notebook and one liners keep the rewrite selection, other modals clear it`() {
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = true, oneLinersOpen = false))
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = true))
+        assertFalse(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = false))
     }
 
     @Test
@@ -30,15 +35,15 @@ class EditorScreenTest {
     }
 
     @Test
-    fun `lyric stats are visible only for the text they describe`() {
-        val snapshot = LyricStatsSnapshot(
-            sourceText = "first lyric",
-            wordCount = 2,
-            syllableCount = 3
-        )
-
-        assertSame(snapshot, currentLyricStats("first lyric", snapshot))
-        assertNull(currentLyricStats("replacement lyric", snapshot))
-        assertNull(currentLyricStats("first lyric", null))
+    fun `lyric stats follow each consecutive edit with no blank step`() {
+        var text = "[Verse]\nnight light burning"
+        while (text != "[Verse]\n") {
+            val stats = lyricStatsFor(text)
+            val words = text.substringAfter('\n').split(' ').count { it.isNotEmpty() }
+            assertEquals(words, stats.wordCount, text)
+            assertTrue(stats.syllableCount >= words, text)
+            text = text.dropLast(1)
+        }
+        assertEquals(LyricStatsSnapshot(wordCount = 0, syllableCount = 0), lyricStatsFor(text))
     }
 }

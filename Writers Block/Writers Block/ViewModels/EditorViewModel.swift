@@ -24,6 +24,8 @@ protocol CloudBackupServicing: AnyObject {
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
+    func probeRevisions() async throws -> [BackupRevision]
+    func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
     func importArchive(_ data: Data, modelContext: ModelContext) async throws
 }
@@ -38,6 +40,8 @@ extension CloudBackupServicing {
     func disconnect() async -> Bool { true }
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws {}
     func remoteBackupSummary() async throws -> RemoteBackupSummary? { nil }
+    func probeRevisions() async throws -> [BackupRevision] { [] }
+    func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws {}
     func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
         throw BackupError.notConfigured
     }
@@ -320,6 +324,7 @@ final class EditorViewModel: ObservableObject {
                 // A request answers the lyrics and cursor it was built from
                 // (Android cancels on text and selection changes too).
                 cancelSuggestions()
+                scheduleCountRefresh()
             }
             scheduleDerivedStateRefresh()
         }
@@ -426,6 +431,14 @@ final class EditorViewModel: ObservableObject {
     private var suggestionsRequestID: UUID?
     private var rewriteRequestID: UUID?
     private var derivedStateTask: Task<Void, Never>?
+    private(set) var countTask: Task<Void, Never>?
+    /// Waits out the rhyme context's debounce; tests hold it to show the header counts never wait on it.
+    var derivedStateDebounce: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    /// Counts the header's words and syllables, or nil once its task is cancelled; tests substitute a slow or instant one.
+    var countLyrics: @Sendable (String) -> (words: Int, syllables: Int)? = { lyrics in
+        guard let syllables = SyllableCounter.cancellableLyricSyllableCount(lyrics) else { return nil }
+        return (SyllableCounter.lyricWordCount(lyrics), syllables)
+    }
     private var rewriteRejectedCandidates: Set<String> = []
 
     // MARK: - Word Inspector
@@ -520,6 +533,12 @@ final class EditorViewModel: ObservableObject {
     /// An older passphrase-encrypted backup is on Drive and waits for its passphrase.
     @Published private(set) var legacyBackupNeedsPassphrase: Bool = false
     @Published var firstRunRestoreOffer: FirstRunRestoreOffer?
+    /// "Back up now" with no songs here while Drive has this many: asks before merging.
+    @Published var emptyBackupConfirmation: Int?
+    /// "Recover an earlier backup": Drive's kept manifest revisions, nil until listed.
+    @Published private(set) var backupRevisions: [BackupRevision]?
+    /// A chosen revision waiting for "Recover"; nothing on Drive changes before that.
+    @Published var recoveryToConfirm: BackupRevision?
     /// Recordings over 16 MiB that stay on this device (not in iCloud or Drive).
     @Published private(set) var oversizedRecordingCount = 0
     /// Files the recordings check left alone because another file holds their place
@@ -546,6 +565,10 @@ final class EditorViewModel: ObservableObject {
     private var automaticBackupFailures = 0
     private var automaticBackupRerunRequested = false
     private var firstRunCheckedThisLaunch = false
+    /// Drive's song count while automatic backups wait for a restore (BackupGate).
+    private var backupPausedForRestore: Int?
+    /// Why the last automatic run could not tell whether it may upload (it uploaded nothing).
+    private var backupGateFailure: String?
     /// Quiet period after the last saved change before an automatic backup.
     var automaticBackupDebounce: TimeInterval = BackupSchedule.debounce
     /// Waits out a debounce or backoff delay; tests substitute a clock they advance.
@@ -585,7 +608,13 @@ final class EditorViewModel: ObservableObject {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
                 recordingsLaunchTask = Task { [weak self] in
-                    guard let self, await self.reconcileRecordings() else { return }
+                    guard let self else { return }
+                    // Audio an interrupted restore, import or recovery left staged goes now;
+                    // anything a row or the staging journal claims stays (T1.7).
+                    if let library = self.recordingLibrary, let context = self.modelContext {
+                        await library.withGate { library.clearStaging(context: context) }
+                    }
+                    guard await self.reconcileRecordings() else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -857,6 +886,7 @@ final class EditorViewModel: ObservableObject {
         rewriteTask?.cancel()
         suggestionsTask?.cancel()
         derivedStateTask?.cancel()
+        countTask?.cancel()
         inspectorSynonymsTask?.cancel()
         inspectorAnalysisTask?.cancel()
         // Stop any in-progress recording or playback so AVAudioSession is
@@ -868,23 +898,42 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Rhyme Context
 
     private nonisolated struct LyricsDerivedState: Sendable {
-        let wordCount: Int
-        let syllableCount: Int
         let rhymeContext: RhymeContext
+    }
+
+    /// The header counts follow every edit with no debounce: the previous
+    /// counts stay on screen until the new text's are ready, never zero.
+    /// Each edit cancels the count still running for the text before it.
+    private func scheduleCountRefresh() {
+        countTask?.cancel()
+        let lyrics = self.lyrics
+        let count = countLyrics
+        countTask = Task { @MainActor [weak self] in
+            let work = Task.detached(priority: .userInitiated) { count(lyrics) }
+            let counts = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            guard let counts, !Task.isCancelled, let self, self.lyrics == lyrics,
+                  counts.words != self.wordCount || counts.syllables != self.syllableCount else { return }
+            self.objectWillChange.send()
+            self.wordCount = counts.words
+            self.syllableCount = counts.syllables
+        }
     }
 
     private func scheduleDerivedStateRefresh() {
         derivedStateTask?.cancel()
+        let debounce = derivedStateDebounce
         derivedStateTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await debounce(.milliseconds(120))
             guard !Task.isCancelled, let self else { return }
             let lyrics = self.lyrics
             let cursorPosition = self.cursorPosition
             let rhymeScheme = self.activeRhymeScheme
             let derived = await Task.detached(priority: .userInitiated) {
                 LyricsDerivedState(
-                    wordCount: SyllableCounter.lyricWordCount(lyrics),
-                    syllableCount: SyllableCounter.lyricSyllableCount(lyrics),
                     rhymeContext: Self.computeRhymeContext(
                         lyrics: lyrics,
                         cursorPosition: cursorPosition,
@@ -899,8 +948,6 @@ final class EditorViewModel: ObservableObject {
                 return
             }
             self.objectWillChange.send()
-            self.wordCount = derived.wordCount
-            self.syllableCount = derived.syllableCount
             self.rhymeContext = derived.rhymeContext
         }
     }
@@ -1740,6 +1787,8 @@ final class EditorViewModel: ObservableObject {
 
     func purgeExpiredTrashedProjects() {
         guard let context = modelContext else { return }
+        // One liners hold no song recordings, so they expire before the recordings check.
+        try? OneLinersStore(context: context).purgeExpired()
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -2023,7 +2072,11 @@ final class EditorViewModel: ObservableObject {
         try upsertPermanentDeletion(projectId: trashed.projectId, recordingId: recordingId, fileName: trashed.originalName, deletedAt: deletedAt, in: context)
     }
 
-    private func scheduleTrashPurge() {
+    /// True while a timer waits for the next Trash expiry.
+    var hasScheduledTrashPurge: Bool { trashSchedulerTask != nil }
+
+    /// Also called after a one liner goes to Trash, so its expiry gets a timer.
+    func scheduleTrashPurge() {
         trashSchedulerTask?.cancel()
         guard let context = modelContext else { return }
         normalizeTrashDeadlines(in: context)
@@ -2036,13 +2089,16 @@ final class EditorViewModel: ObservableObject {
         let nextProjectExpiry = (try? context.fetch(descriptor).first)?.deleteAfter
         // Already-expired recordings were purged above; only future expiries count.
         let nextMemoExpiry = trashedRecordings().map(\.deleteAfter).min().flatMap { $0 > now ? $0 : nil }
-        guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry].compactMap({ $0 }).min() else { return }
+        let nextOneLinerExpiry = OneLinersStore(context: context).nextExpiry(after: now)
+        guard let nextExpiry = [nextProjectExpiry, nextMemoExpiry, nextOneLinerExpiry].compactMap({ $0 }).min() else { return }
 
         let delay = max(nextExpiry.timeIntervalSinceNow, 0)
         trashSchedulerTask = Task { @MainActor [weak self] in
             // Duration-based sleep — manual Double→UInt64 nanosecond math overflows
             // for far-future dates and would fire the purge immediately.
             try? await Task.sleep(for: .seconds(delay))
+            // A cancelled timer was replaced; it must not clear the newer one.
+            guard !Task.isCancelled else { return }
             self?.trashSchedulerTask = nil
             self?.purgeExpiredTrashedProjects()
         }
@@ -2737,6 +2793,10 @@ final class EditorViewModel: ObservableObject {
         }
         if cloudBackupIsWorking {
             backupStatus = .backingUp
+        } else if let remoteSongs = backupPausedForRestore {
+            backupStatus = .failed(reason: Self.backupPausedText(remoteSongs: remoteSongs), lastBackupAt: backupService.lastBackupAt)
+        } else if let reason = backupGateFailure {
+            backupStatus = .failed(reason: reason, lastBackupAt: backupService.lastBackupAt)
         } else if let failure = backupService.backgroundBackupFailureDescription {
             backupStatus = .failed(reason: failure, lastBackupAt: backupService.lastBackupAt)
         } else if automaticBackupTask != nil {
@@ -2771,6 +2831,8 @@ final class EditorViewModel: ObservableObject {
         automaticBackupFailures = 0
         automaticBackupRerunRequested = false
         firstRunRestoreOffer = nil
+        backupPausedForRestore = nil
+        backupGateFailure = nil
         let revoked = await backupService.disconnect()
         refreshCloudBackupState()
         cloudBackupLastResultIsError = !revoked
@@ -2785,16 +2847,44 @@ final class EditorViewModel: ObservableObject {
         guard let backupService, backupService.isConnected, let context = modelContext,
               firstRunRestoreOffer == nil, afterConnecting || !firstRunCheckedThisLaunch else { return }
         firstRunCheckedThisLaunch = true
+        guard let localSongs = localSongCount(context) else { return }
         if !afterConnecting {
-            let songs = (try? context.fetchCount(FetchDescriptor<SongProject>())) ?? 0
-            let trashed = (try? context.fetchCount(FetchDescriptor<TrashedSongProject>())) ?? 0
-            guard songs + trashed == 0 else { return }
+            guard localSongs == 0 else { return }
         }
         guard let summary = try? await backupService.remoteBackupSummary(), summary.songs > 0 else { return }
         automaticBackupTask?.cancel()
         automaticBackupTask = nil
         firstRunRestoreOffer = FirstRunRestoreOffer(songs: summary.songs, recordings: summary.recordings)
+        // However the offer is dismissed, automatic backups stay paused until a restore.
+        if case .pausedForRestore(let remoteSongs) = BackupGate.decide(localSongCount: localSongs, remoteSongCount: summary.songs, interactive: false, userConfirmed: false) {
+            backupPausedForRestore = remoteSongs
+        }
         refreshCloudBackupState()
+    }
+
+    /// Songs in the library, active or in Trash (a Trash-only library is not a fresh
+    /// device); nil when the library cannot be read.
+    private func localSongCount(_ context: ModelContext) -> Int? {
+        guard let songs = try? context.fetchCount(FetchDescriptor<SongProject>()),
+              let trashed = try? context.fetchCount(FetchDescriptor<TrashedSongProject>()) else { return nil }
+        return songs + trashed
+    }
+
+    /// The gate for this device and Drive; Drive is only asked while the library is
+    /// empty. Throws, with the reason, when the library or Drive's song count cannot
+    /// be read: an automatic run then uploads nothing and shows why.
+    private func backupGate(_ context: ModelContext, interactive: Bool, userConfirmed: Bool) async throws -> BackupGate {
+        if firstRunRestoreOffer != nil, !interactive {
+            return BackupGate.decide(localSongCount: 0, remoteSongCount: 0, interactive: false, userConfirmed: false, restoreOfferPending: true)
+        }
+        guard let localSongs = localSongCount(context) else { throw BackupError.network("Couldn't read the songs on this device.") }
+        guard localSongs == 0, let backupService else { return .proceed }
+        let remoteSongs = try await backupService.remoteBackupSummary()?.songs ?? 0
+        return BackupGate.decide(localSongCount: localSongs, remoteSongCount: remoteSongs, interactive: interactive, userConfirmed: userConfirmed)
+    }
+
+    static func backupPausedText(remoteSongs: Int) -> String {
+        "Backup paused: this device has no songs and Drive has \(remoteSongs) \(remoteSongs == 1 ? "song" : "songs"). Restore to continue."
     }
 
     func acceptFirstRunRestore() async {
@@ -2810,7 +2900,9 @@ final class EditorViewModel: ObservableObject {
     /// Starts the quiet-period countdown to an automatic backup. Runs coalesce:
     /// a change during a run asks for one more run after it.
     func scheduleAutomaticBackup() {
-        guard let backupService, backupService.isConnected, modelContext != nil, firstRunRestoreOffer == nil else { return }
+        guard let backupService, backupService.isConnected, let context = modelContext, firstRunRestoreOffer == nil else { return }
+        // A first song here ends the pause: this run backs it up (the gate looks again when it starts).
+        if backupPausedForRestore != nil, (localSongCount(context) ?? 0) > 0 { backupPausedForRestore = nil }
         if cloudBackupIsWorking {
             automaticBackupRerunRequested = true
             return
@@ -2827,7 +2919,22 @@ final class EditorViewModel: ObservableObject {
         refreshCloudBackupState()
     }
 
-    func backUpNow() async {
+    /// With no songs here and songs on Drive, asks first (`emptyBackupConfirmation`)
+    /// and runs only once `confirmedEmptyMerge` is passed.
+    func backUpNow(confirmedEmptyMerge: Bool = false) async {
+        emptyBackupConfirmation = nil
+        if let context = modelContext, canRunCloudBackup {
+            do {
+                if case .confirmEmptyMerge(let remoteSongs) = try await backupGate(context, interactive: true, userConfirmed: confirmedEmptyMerge) {
+                    emptyBackupConfirmation = remoteSongs
+                    return
+                }
+            } catch {
+                cloudBackupLastResultIsError = true
+                cloudBackupStatusText = "Backup canceled: couldn't check the Google Drive backup. \(cloudBackupErrorDescription(error))"
+                return
+            }
+        }
         await runCloudEditorOperation(
             noun: "Backup",
             changesLibrary: false,
@@ -2847,6 +2954,45 @@ final class EditorViewModel: ObservableObject {
             try await service.restoreNow(modelContext: context)
         }
         voiceMemoService.recordingsChanged()
+    }
+
+    /// Lists the backup's earlier versions kept by Drive, newest first.
+    func loadBackupRevisions() async {
+        guard let backupService, cloudBackupConnected else { return }
+        backupRevisions = nil
+        do {
+            backupRevisions = try await backupService.probeRevisions()
+        } catch {
+            backupRevisions = []
+            cloudBackupLastResultIsError = true
+            cloudBackupStatusText = "Couldn't list earlier backups: \(cloudBackupErrorDescription(error))"
+        }
+    }
+
+    /// Recovers a revision the user confirmed: Drive keeps it forever, then its songs
+    /// that are not on this device are added as new songs.
+    func recoverBackupRevision(_ revision: BackupRevision) async {
+        recoveryToConfirm = nil
+        await runCloudEditorOperation(
+            noun: "Recovery",
+            success: "",
+            separateDraft: "Recovery complete. Your open edits were saved as a separate local draft."
+        ) { service, context in
+            try await service.recoverRevision(revision, modelContext: context)
+        }
+        voiceMemoService.recordingsChanged()
+        // The recovered songs go into the next backup.
+        scheduleAutomaticBackup()
+    }
+
+    static func revisionDate(_ revision: BackupRevision) -> String {
+        revision.modifiedAt?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "an unknown date"
+    }
+
+    /// "Nov 1, 3:14 PM · 2 KB · Kept": its content is read only once it is recovered.
+    static func revisionLabel(_ revision: BackupRevision) -> String {
+        [revisionDate(revision), revision.bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }, revision.keptForever ? "Kept" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     /// Opens the older encrypted backup with a passphrase typed once; it is not kept.
@@ -2947,8 +3093,10 @@ final class EditorViewModel: ObservableObject {
             return
         }
         automaticBackupFailures = 0
+        backupPausedForRestore = nil
+        backupGateFailure = nil
         let report = backupService.lastReport
-        cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true)
+        cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true) || !(report?.missingRecordings.isEmpty ?? true)
         cloudBackupStatusText = [recovered ? separateDraft : success, reportNote(report)]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
     }
@@ -2958,6 +3106,25 @@ final class EditorViewModel: ObservableObject {
         var notes: [String] = []
         if report.migratedLegacyBackup {
             notes.append("Your older encrypted backup was moved to the new format.")
+        }
+        if report.recoveredSongs > 0 || report.recoveredRecordings > 0 || report.songsAlreadyHere > 0 || report.songsInBackupTrash > 0
+            || report.songsDeletedSince > 0 || report.recordingsDeletedSince > 0 || report.songsHeldWithoutDate > 0 || report.recordingsHeldWithoutDate > 0
+            || !report.missingRecordings.isEmpty {
+            func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+            notes.append("Recovered \(count(report.recoveredSongs, "song")) and \(count(report.recoveredRecordings, "recording")). \(report.songsAlreadyHere) already here.")
+            if report.songsInBackupTrash > 0 {
+                notes.append("\(count(report.songsInBackupTrash, "song")) \(report.songsInBackupTrash == 1 ? "is" : "are") in the Google Drive backup's Trash; Restore from backup brings \(report.songsInBackupTrash == 1 ? "it" : "them") to this device's Trash.")
+            }
+            if report.songsDeletedSince + report.recordingsDeletedSince > 0 {
+                notes.append("\(count(report.songsDeletedSince, "song")) and \(count(report.recordingsDeletedSince, "recording")) recovered before and deleted since \(report.songsDeletedSince + report.recordingsDeletedSince == 1 ? "was" : "were") not brought back.")
+            }
+            if report.songsHeldWithoutDate + report.recordingsHeldWithoutDate > 0 {
+                notes.append("\(count(report.songsHeldWithoutDate, "song")) and \(count(report.recordingsHeldWithoutDate, "recording")) \(report.songsHeldWithoutDate + report.recordingsHeldWithoutDate == 1 ? "is" : "are") held by a deletion record without a date and \(report.songsHeldWithoutDate + report.recordingsHeldWithoutDate == 1 ? "was" : "were") not brought back.")
+            }
+        }
+        if !report.missingRecordings.isEmpty {
+            let count = report.missingRecordings.count
+            notes.append("\(count) \(count == 1 ? "recording" : "recordings") could not come back because \(count == 1 ? "its" : "their") audio is no longer on Google Drive: \(report.missingRecordings.joined(separator: ", ")).")
         }
         if !report.damagedRecordings.isEmpty {
             let count = report.damagedRecordings.count
@@ -3549,7 +3716,6 @@ final class EditorViewModel: ObservableObject {
               let context = modelContext,
               cloudBackupConfigured,
               cloudBackupConnected,
-              firstRunRestoreOffer == nil,
               !cloudBackupIsWorking else {
             return
         }
@@ -3563,6 +3729,33 @@ final class EditorViewModel: ObservableObject {
         automaticBackupTask = nil
         cloudBackupIsWorking = true
         refreshCloudBackupState()
+        // Restore first: nothing uploads from an empty library over a Drive backup with songs.
+        let gate: BackupGate
+        do {
+            gate = try await backupGate(context, interactive: false, userConfirmed: false)
+            backupGateFailure = nil
+        } catch {
+            // Nothing uploads while it is unknown whether this run may; the reason shows
+            // with Retry, and the run is tried again after the usual backoff.
+            backupGateFailure = "Backup waiting: couldn't check the Google Drive backup. \(cloudBackupErrorDescription(error))"
+            cloudBackupIsWorking = false
+            automaticBackupFailures += 1
+            refreshCloudBackupState()
+            scheduleAutomaticBackup()
+            return
+        }
+        if gate != .proceed {
+            if case .pausedForRestore(let remoteSongs) = gate { backupPausedForRestore = remoteSongs }
+            cloudBackupIsWorking = false
+            refreshCloudBackupState()
+            // A change saved meanwhile (a first song) gets its own run.
+            if automaticBackupRerunRequested {
+                automaticBackupRerunRequested = false
+                scheduleAutomaticBackup()
+            }
+            return
+        }
+        backupPausedForRestore = nil
         await backupService.backupInBackgroundIfPossible(modelContext: context)
         cloudBackupIsWorking = false
         refreshCloudBackupState()

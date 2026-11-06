@@ -119,7 +119,7 @@ internal fun FeatureHelpLabel(
 }
 
 @Composable
-private fun HelpButton(
+internal fun HelpButton(
     onClick: () -> Unit,
     tint: Color,
     contentDescription: String

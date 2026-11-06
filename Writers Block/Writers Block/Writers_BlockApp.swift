@@ -67,11 +67,30 @@ final class AppPersistenceState: ObservableObject {
     }
 }
 
-private struct ModelContainerBootstrap {
+struct ModelContainerBootstrap {
     let container: ModelContainer?
     let persistenceDegraded: Bool
     let cloudSyncStatus: CloudSyncStatus
     let usesCloudBackedStore: Bool
+
+    /// One container per process: the app's scene and its App Intents (which can
+    /// run with no scene) share it, so two never open the CloudKit store at once.
+    static let shared = Writers_BlockApp.makeModelContainer()
+
+    // `groupContainer: .none` keeps the store in Application Support: with the App
+    // Group entitlement the default (.automatic) would move it into the group container.
+    static func cloudKitConfiguration(schema: Schema) -> ModelConfiguration {
+        ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            groupContainer: .none,
+            cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
+        )
+    }
+
+    static func localConfiguration(schema: Schema) -> ModelConfiguration {
+        ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, groupContainer: .none, cloudKitDatabase: .none)
+    }
 }
 
 
@@ -124,7 +143,10 @@ struct Writers_BlockApp: App {
         #if DEBUG
         CloudKitSchemaInitializer.runIfRequested()
         #endif
-        let bootstrap = Self.makeModelContainer()
+        let bootstrap = ModelContainerBootstrap.shared
+        if let action = UITestFlags.oneLinerPendingAction() {
+            OneLinerRouter.shared.request(action)
+        }
         _persistenceState = StateObject(
             wrappedValue: AppPersistenceState(
                 persistenceDegraded: bootstrap.persistenceDegraded,
@@ -171,6 +193,11 @@ struct Writers_BlockApp: App {
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
+                // Launch only: the week-old rule keeps takes of lines still syncing.
+                reconcileOneLinerAudio()
+                publishOneLinersSnapshot()
+                // A recording activity left by a process that ended has no take behind it.
+                if !OneLinerRouter.shared.isRecording { await OneLinerActivityAttributes.endAll() }
             }
             .task {
                 // After the first frames, so launch is not competing with it.
@@ -181,7 +208,10 @@ struct Writers_BlockApp: App {
             // iCloud delivered changes: new or removed recordings get their files.
             .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
                 Task { await viewModel.reconcileRecordings() }
+                publishOneLinersSnapshot()
             }
+            // The widgets follow the chosen appearance.
+            .onChange(of: appearanceRawValue) { _, _ in publishOneLinersSnapshot() }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
@@ -204,6 +234,18 @@ struct Writers_BlockApp: App {
         }
     }
 
+    private func reconcileOneLinerAudio() {
+        guard let sharedModelContainer else { return }
+        try? OneLinersStore(context: sharedModelContainer.mainContext).reconcileAudioFiles()
+    }
+
+    /// Lines another device added, and the appearance, reach the widgets too.
+    private func publishOneLinersSnapshot() {
+        // A library that failed to open would show the widgets an empty pool.
+        guard let sharedModelContainer, !persistenceState.persistenceDegraded else { return }
+        OneLinersStore(context: sharedModelContainer.mainContext).publishSnapshot()
+    }
+
     @ViewBuilder
     private var persistenceDegradedBanner: some View {
         if persistenceState.persistenceDegraded {
@@ -221,13 +263,15 @@ struct Writers_BlockApp: App {
         }
     }
 
-    private static func makeModelContainer() -> ModelContainerBootstrap {
+    fileprivate static func makeModelContainer() -> ModelContainerBootstrap {
         let schema = Schema([
             SongProject.self,
             TrashedSongProject.self,
             SyncDeletionRecord.self,
             SyncRecordingDeletion.self,
             Recording.self,
+            OneLiner.self,
+            TrashedOneLiner.self,
         ])
         let logger = Logger(subsystem: "ShaydeTree.Writers-Block", category: "storage")
 
@@ -258,11 +302,7 @@ struct Writers_BlockApp: App {
         // The unsigned persistent UI-test bundle cannot initialize CloudKit's
         // asynchronous store setup. Keep its relaunch test local to its own app data.
         if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store") {
-            let cloudKit = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: false,
-                cloudKitDatabase: .private("iCloud.ShaydeTree.Writers-Block")
-            )
+            let cloudKit = ModelContainerBootstrap.cloudKitConfiguration(schema: schema)
             do {
                 return ModelContainerBootstrap(
                     container: try ModelContainer(for: schema, configurations: [cloudKit]),
@@ -275,7 +315,7 @@ struct Writers_BlockApp: App {
             }
         }
 
-        let localOnly = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
+        let localOnly = ModelContainerBootstrap.localConfiguration(schema: schema)
         do {
             return ModelContainerBootstrap(
                 container: try ModelContainer(for: schema, configurations: [localOnly]),

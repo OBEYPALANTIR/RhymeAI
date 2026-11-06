@@ -1,7 +1,9 @@
 package com.rhymeai.app
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -10,18 +12,29 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -45,8 +58,10 @@ import com.rhymeai.app.ui.components.SettingsDialog
 import com.rhymeai.app.ui.components.TemplatesDialog
 import com.rhymeai.app.ui.navigation.RhymeNavGraph
 import com.rhymeai.app.ui.navigation.Routes
+import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.RhymeAITheme
 import com.rhymeai.app.util.PronunciationDictionary
+import com.rhymeai.app.util.ProsodyAnalyzer
 import com.rhymeai.app.util.WordFrequency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -55,9 +70,21 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
+    /** `writersblock://one-liners/...` from the widget, the Quick Settings tile or a link. */
+    private fun handleOneLinerLink(intent: Intent?) {
+        com.rhymeai.app.ui.navigation.OneLinerAction.parse(intent?.dataString)?.let(mainViewModel::requestOneLinerAction)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOneLinerLink(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen().setKeepOnScreenCondition { !mainViewModel.initialized }
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleOneLinerLink(intent)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 if (PronunciationDictionary.shared.wordCount == 0) {
@@ -73,6 +100,10 @@ class MainActivity : ComponentActivity() {
             }.onFailure { error ->
                 Log.w("RhymeAI", "Word frequency list failed to load; rhyme candidates will use dictionary order.", error)
             }
+            // Ready before the first word lookup or rhyme-constrained suggestion asks for it.
+            val indexStart = SystemClock.elapsedRealtime()
+            ProsodyAnalyzer.prepareRhymeIndex()
+            Log.i("RhymeAI", "Rhyme index ready in ${SystemClock.elapsedRealtime() - indexStart} ms")
         }
         enableEdgeToEdge()
         setContent {
@@ -149,8 +180,21 @@ class MainActivity : ComponentActivity() {
 
                     // Determine start destination
                     val startDest = if (viewModel.showStartMenu) Routes.WELCOME else Routes.EDITOR
+                    // Rises over the editor like the iOS full-screen cover; a bare `if` popped it in with no motion.
+                    // While it slides away it is inert and silent, and nothing beneath comes back until it is gone.
+                    val oneLinersVisibility = remember { MutableTransitionState(viewModel.showOneLiners) }
+                    oneLinersVisibility.targetState = viewModel.showOneLiners
+                    val oneLinersShown = oneLinersVisibility.currentState || oneLinersVisibility.targetState
+                    LaunchedEffect(oneLinersVisibility.isIdle, oneLinersVisibility.currentState) {
+                        // Opened from the songs drawer: back returns there, once the screen has left.
+                        if (oneLinersVisibility.isIdle && !oneLinersVisibility.currentState && viewModel.oneLinersOpenedFromDrawer) {
+                            viewModel.oneLinersOpenedFromDrawer = false
+                            viewModel.showProjectsDialog = true
+                        }
+                    }
                     val navModifier =
                         if (
+                            oneLinersShown ||
                             viewModel.showProjectsDialog ||
                             viewModel.showTemplatesDialog ||
                             viewModel.showSettingsDialog
@@ -193,6 +237,7 @@ class MainActivity : ComponentActivity() {
                     viewModel.restoreOffer?.let { offer ->
                         RestoreOfferSheet(
                             offer = offer,
+                            backupPaused = viewModel.backupStatus is com.rhymeai.app.data.sync.BackupStatus.Paused,
                             onRestore = viewModel::acceptRestoreOffer,
                             onNotNow = viewModel::declineRestoreOffer
                         )
@@ -255,8 +300,47 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDismiss = { viewModel.showProjectsDialog = false },
-                            service = viewModel.voiceMemoService
+                            service = viewModel.voiceMemoService,
+                            oneLiners = viewModel.oneLiners,
+                            trashedOneLiners = viewModel.trashedOneLiners,
+                            onOpenOneLiners = {
+                                viewModel.oneLinersOpenedFromDrawer = true
+                                viewModel.showOneLiners = true
+                            },
+                            onRestoreOneLiner = viewModel::restoreOneLiner,
+                            onDeleteOneLinerForever = viewModel::permanentlyDeleteOneLiner
                         )
+                    }
+
+                    AnimatedVisibility(
+                        visibleState = oneLinersVisibility,
+                        enter = fadeIn(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) +
+                            slideInVertically(tween(DesignTokens.Motion.sheetPresentMillis, easing = DesignTokens.Motion.emphasizedEasing)) { it },
+                        exit = fadeOut(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) +
+                            slideOutVertically(tween(DesignTokens.Motion.dismissMillis, easing = DesignTokens.Motion.exitEasing)) { it }
+                    ) {
+                        val leaving = !oneLinersVisibility.targetState
+                        // Keys are judged on the live flag, so a hardware keyboard is shut out from the
+                        // moment Back lands, before this recomposes; taps and talkback once it has.
+                        Box(
+                            Modifier.onPreviewKeyEvent { !viewModel.showOneLiners }
+                                .then(if (leaving) Modifier.clearAndSetSemantics {} else Modifier)
+                        ) {
+                            com.rhymeai.app.ui.screens.OneLinersScreen(
+                                viewModel = viewModel,
+                                onBack = { viewModel.showOneLiners = false }
+                            )
+                            if (leaving) {
+                                // A tap on the outgoing Record control would start a take nobody can see.
+                                Box(
+                                    Modifier.matchParentSize().clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = {}
+                                    )
+                                )
+                            }
+                        }
                     }
 
                     if (viewModel.showTemplatesDialog) {
@@ -319,7 +403,10 @@ class MainActivity : ComponentActivity() {
                                 busyLabel = viewModel.backupBusyLabel,
                                 legacyBackupPresent = viewModel.legacyBackupPresent,
                                 migrationInProgress = viewModel.migrationInProgress,
-                                migrationError = viewModel.migrationError
+                                migrationError = viewModel.migrationError,
+                                emptyBackupConfirm = viewModel.emptyBackupConfirm,
+                                revisions = viewModel.backupRevisions,
+                                chosenRevision = viewModel.chosenRevision
                             ),
                             backupActions = remember(viewModel) {
                                 BackupSectionActions(
@@ -330,7 +417,13 @@ class MainActivity : ComponentActivity() {
                                     onMigrate = viewModel::migrateLegacyBackup,
                                     exportFileName = viewModel::exportFileName,
                                     onExport = viewModel::exportBackup,
-                                    onImport = viewModel::importBackup
+                                    onImport = viewModel::importBackup,
+                                    onConfirmEmptyBackup = viewModel::confirmEmptyBackup,
+                                    onCancelEmptyBackup = viewModel::cancelEmptyBackup,
+                                    onListRevisions = viewModel::listBackupRevisions,
+                                    onCloseRevisions = viewModel::closeBackupRevisions,
+                                    onChooseRevision = viewModel::chooseBackupRevision,
+                                    onRecoverRevision = viewModel::recoverBackupRevision
                                 )
                             },
                             // Editor toggles — each change is persisted via viewModel.persistEditorToggles().
@@ -346,7 +439,10 @@ class MainActivity : ComponentActivity() {
                             onRhymeHighlightChange = { viewModel.isRhymeHighlightEnabled = it; viewModel.persistEditorToggles() },
                             isBeatGridEnabled = viewModel.isBeatGridEnabled,
                             onBeatGridChange = { viewModel.isBeatGridEnabled = it; viewModel.persistEditorToggles() },
-                            onDismiss = { viewModel.showSettingsDialog = false }
+                            dominantHand = viewModel.dominantHand,
+                            onDominantHandChange = viewModel::setDominantHand,
+                            initialAiSetupExpanded = viewModel.settingsOpensAiSetup,
+                            onDismiss = viewModel::dismissSettings
                         )
                     }
                     }

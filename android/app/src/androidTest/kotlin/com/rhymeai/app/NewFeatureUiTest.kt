@@ -16,6 +16,8 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -45,10 +47,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import com.rhymeai.app.data.model.RewriteAction
+import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.util.PronunciationDictionary
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.After
@@ -323,18 +328,26 @@ class NewFeatureUiTest {
         // When
         relaunchActivity()
 
-        // Then
-        listOf("New Song", "Load Song", "Song Templates").forEach { title ->
+        // Then: the page scrolls at this size, so each target is brought into view before it is checked.
+        listOf("New Song", "Load Song", "Song Templates", "One Liners").forEach { title ->
             composeRule.onNodeWithText(title)
+                .performScrollTo()
                 .assertIsDisplayed()
                 .assertHasClickAction()
         }
         listOf(
             "Start with a blank canvas",
             "Continue where you left off",
-            "Start with a structured layout"
+            "Start with a structured layout",
+            "Catch a line before it goes"
         ).forEach { subtitle ->
-            composeRule.onNodeWithText(subtitle).assertIsDisplayed()
+            composeRule.onNodeWithText(subtitle).performScrollTo().assertIsDisplayed()
+        }
+        listOf("Record a one liner", "Type a one liner").forEach { action ->
+            composeRule.onNodeWithContentDescription(action)
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertHasClickAction()
         }
 
         val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
@@ -344,10 +357,10 @@ class NewFeatureUiTest {
         )
         val expectedCardCount = if (
             composeRule.onAllNodesWithText("Return to your writing").fetchSemanticsNodes().isEmpty()
-        ) 3 else 4
+        ) 4 else 5
         textContainers.assertCountEquals(expectedCardCount)
         val textContainerBounds = List(expectedCardCount) { index ->
-            textContainers[index].getUnclippedBoundsInRoot()
+            textContainers[index].performScrollTo().getUnclippedBoundsInRoot()
         }
         textContainerBounds.forEachIndexed { index, bounds ->
             assertTrue(
@@ -525,6 +538,10 @@ class NewFeatureUiTest {
 
         composeRule.onNodeWithContentDescription("Open songs drawer").performClick()
         composeRule.onNodeWithContentDescription("Delete UI Trash Song").performClick()
+        // The snackbar follows the stored move, which Compose idling does not wait for.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("\"UI Trash Song\" moved to Trash").fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText("\"UI Trash Song\" moved to Trash").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open Trash Bin").performClick()
 
@@ -839,22 +856,49 @@ class NewFeatureUiTest {
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun rewriteActionsOpenReviewBarAndCancelBackToChipBar() {
-        composeRule.onNodeWithText("New Song").performClick()
+        // On-device rewrites: a cloud provider left selected would ask for sharing consent first.
+        // Pinned once loading has applied the stored choice, and that choice is put back afterwards.
+        lateinit var vm: MainViewModel
+        scenario?.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.aiSettingsLoaded }
+        val repo = ProjectRepository(InstrumentationRegistry.getInstrumentation().targetContext)
+        val providerBefore = runBlocking { repo.selectedProviderFlow.first() }
+        val modelBefore = runBlocking { repo.modelIdFlow.first() }
+        composeRule.runOnIdle { vm.saveProvider(AIProvider.LOCAL) }
+        try {
+            composeRule.onNodeWithText("New Song").performClick()
 
-        val lyrics = "yellow music\nfollow music"
-        val selection = TextRange(0, "yellow music".length)
-        composeRule.onNodeWithTag("lyricsEditor").performClick()
-        composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
-        composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
+            val lyrics = "yellow music\nfollow music"
+            val selection = TextRange(0, "yellow music".length)
+            composeRule.onNodeWithTag("lyricsEditor").performClick()
+            composeRule.onNodeWithTag("lyricsEditor").performTextInput(lyrics)
+            composeRule.onNodeWithTag("lyricsEditor").performTextInputSelection(selection)
 
-        listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
-            composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
-            composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
-            if (action == "Punch Up") {
-                captureRootScreenshot("rewrite-review-punch-up.png")
+            listOf("Rephrase", "Harder Rhyme", "Punch Up").forEach { action ->
+                composeRule.onNodeWithText(action).assertIsDisplayed().performClick()
+                composeRule.onNodeWithTag("inlineRewriteReviewBar").assertIsDisplayed()
+                if (action == "Punch Up") {
+                    captureRootScreenshot("rewrite-review-punch-up.png")
+                }
+                composeRule.onNode(hasText("Cancel") and hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))).performClick()
+                composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
             }
-            composeRule.onNodeWithText("Cancel").performClick()
-            composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        } finally {
+            try {
+                // The pin's own writes land first, so the restore is the last word.
+                composeRule.waitUntil(timeoutMillis = 5_000) {
+                    runBlocking { repo.selectedProviderFlow.first() == AIProvider.LOCAL.name && repo.modelIdFlow.first() == vm.selectedModel.id }
+                }
+            } finally {
+                // Closing the Activity clears the ViewModel, so a write still in flight after a
+                // timed-out wait cannot land on top of the restore.
+                scenario?.close()
+                scenario = null
+                runBlocking {
+                    repo.saveSelectedProvider(providerBefore)
+                    repo.saveModelId(modelBefore)
+                }
+            }
         }
     }
 

@@ -96,5 +96,9 @@ internal class InMemoryDrive : com.rhymeai.app.data.sync.DriveClient {
     override suspend fun deleteFile(accessToken: String, fileId: String) {
         files.remove(fileId)
     }
+    override suspend fun listRevisions(accessToken: String, fileId: String) = emptyList<com.rhymeai.app.data.sync.DriveRevision>()
+    override suspend fun keepRevisionForever(accessToken: String, fileId: String, revisionId: String) {}
+    override suspend fun downloadRevision(accessToken: String, fileId: String, revisionId: String, maxBytes: Long): ByteArray =
+        error("no revisions in this fake")
     override suspend fun revokeToken(token: String) {}
 }

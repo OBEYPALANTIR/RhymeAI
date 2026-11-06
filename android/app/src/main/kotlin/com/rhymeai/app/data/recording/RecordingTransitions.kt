@@ -802,6 +802,21 @@ internal object RecordingTransitions {
     /** A24: finishes a move whose file reached its target, undoes one that did not. */
     suspend fun reconcile(catalog: RecordingCatalog, filesDir: File) = namespace.withLock { reconcileLocked(catalog, filesDir) }
 
+    private fun recoveryStaged(record: RecordingRecord) =
+        record.pendingFrom?.substringBefore('/')?.startsWith(RecordingFiles.RECOVERY_STAGE_PREFIX) == true
+
+    /**
+     * Settles interrupted moves, then removes recovery staging folders that no pending
+     * publication still reads from, under the same lock as every move.
+     */
+    suspend fun removeRecoveryStages(catalog: RecordingCatalog, filesDir: File) = namespace.withLock {
+        reconcileLocked(catalog, filesDir)
+        val referenced = catalog.recordingRecords().mapNotNullTo(HashSet()) { record -> record.pendingFrom?.substringBefore('/') }
+        filesDir.listFiles().orEmpty()
+            .filter { it.isDirectory && it.name.startsWith(RecordingFiles.RECOVERY_STAGE_PREFIX) && it.name !in referenced }
+            .forEach { it.deleteRecursively() }
+    }
+
     /**
      * Settles interrupted moves. With [mutateFiles] (launch, transitions, Restore, Import)
      * journals are settled and this move's own claims removed; a read-only pass (Back up,
@@ -842,6 +857,9 @@ internal object RecordingTransitions {
                         )
                         // Not published: the take or import is still in staging and is retried by its owner.
                         record.pendingOp == RecordingRecord.OP_PUBLISH && source != null && holds(source, record.sha256, record.bytes) -> null
+                        // A recovery's publication whose bytes are at neither end: its retry downloads them from Drive again.
+                        record.pendingOp == RecordingRecord.OP_PUBLISH && recoveryStaged(record) &&
+                            source?.exists() != true && target?.exists() != true -> null
                         // At neither end: kept with its identity and time, reported.
                         else -> record
                     }

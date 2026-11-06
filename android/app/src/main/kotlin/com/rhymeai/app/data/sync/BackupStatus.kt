@@ -1,5 +1,10 @@
 package com.rhymeai.app.data.sync
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
 /** Backup state shown in Settings; the same cases exist on iOS. */
 sealed class BackupStatus {
     data object NotConnected : BackupStatus()
@@ -7,6 +12,48 @@ sealed class BackupStatus {
     data object Pending : BackupStatus()
     data object BackingUp : BackupStatus()
     data class Failed(val reason: String, val lastBackupAt: Long?) : BackupStatus()
+    /** This device has no songs and Drive has [remoteSongCount]: nothing uploads until Restore or a confirmed Back up now. */
+    data class Paused(val remoteSongCount: Int) : BackupStatus()
+}
+
+/**
+ * Restore first: a device with no songs (active or in Trash) never backs up automatically
+ * over a Drive that lists songs (a reinstall, before Restore). Back up now asks first.
+ * A library that could not be read yet ([localSongCount] null) never backs up.
+ */
+object BackupGate {
+    enum class Decision { RUN, PAUSE, CONFIRM }
+
+    fun decide(localSongCount: Int?, remoteSongCount: Int, interactive: Boolean, userConfirmed: Boolean): Decision = when {
+        localSongCount == null -> Decision.PAUSE
+        localSongCount > 0 || remoteSongCount == 0 || userConfirmed -> Decision.RUN
+        interactive -> Decision.CONFIRM
+        else -> Decision.PAUSE
+    }
+}
+
+/** "Nov 1, 3:14 PM · 14 KB" (plus " · Kept" when Drive keeps it forever) for one earlier Drive backup. */
+fun revisionLabel(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
+    val time = revisionTime(revision, zone, locale)
+    val size = revision.sizeBytes?.let { if (it < 1024) "$it bytes" else "${(it + 1023) / 1024} KB" }
+    return listOfNotNull(time, size, "Kept".takeIf { revision.kept }).joinToString(" · ")
+}
+
+/** What recovering [revision] does, said before anything is asked of Drive (its contents are unknown until then). */
+fun recoverRevisionConfirmation(revision: BackupRevision, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String =
+    "Backup from ${revisionLabel(revision, zone, locale)}. This asks Drive to keep that version permanently " +
+        "(nothing is deleted or rewritten), then adds its songs that aren't on this phone as new songs."
+
+private fun revisionTime(revision: BackupRevision, zone: ZoneId, locale: Locale): String =
+    revision.modifiedTime?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, h:mm a", locale).format(Instant.parse(it).atZone(zone)) }.getOrNull() }
+        ?: "an unknown time"
+
+private fun count(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
+
+/** The Back up now confirmation for an empty device over a Drive with songs. */
+fun emptyBackupConfirmation(remoteSongCount: Int): String {
+    val songs = if (remoteSongCount == 1) "1 song" else "$remoteSongCount songs"
+    return "This phone has no songs. Backing up now merges Drive's $songs with nothing from this phone. To get them back here, tap Restore instead."
 }
 
 object BackupSchedule {
@@ -47,6 +94,7 @@ fun backupStatusLine(status: BackupStatus, nowMillis: Long): String = when (stat
         ?.let { "Last backed up ${relativeTime(nowMillis, it)} · Google Drive" }
         ?: "Connected · Google Drive"
     is BackupStatus.Failed -> status.reason
+    is BackupStatus.Paused -> "Backup paused: this phone has no songs and Drive has ${status.remoteSongCount}. Restore to continue."
 }
 
 internal fun relativeTime(nowMillis: Long, thenMillis: Long): String {

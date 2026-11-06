@@ -425,6 +425,7 @@ struct SettingsEditorSection: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.appAppearanceStyle) private var appearance
     @Binding var activeHelp: FeatureHelp?
+    @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
@@ -436,6 +437,22 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Stress + IPA", help: .stressIPA, isOn: binding(viewModel.isStressPreviewEnabled, setter: viewModel.saveIsStressPreviewEnabled))
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
+
+            // Puts UnBlock + mic and the One Liners Record + Type on this side.
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                Text("Dominant hand")
+                    .font(.subheadline)
+                RhymeSegmentedControl(
+                    options: DominantHand.allCases,
+                    selection: Binding(
+                        get: { DominantHand.resolve(dominantHandRawValue) },
+                        set: { dominantHandRawValue = $0.rawValue }
+                    ),
+                    accessibilityIdentifier: "dominantHandPicker",
+                    label: "Dominant hand",
+                    title: \.displayName
+                )
+            }
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
@@ -485,6 +502,7 @@ struct SettingsCloudBackupSection: View {
     @State private var importerShown = false
     @State private var exporterShown = false
     @State private var pendingExport: (fileName: String, document: ExportDocument)?
+    @State private var earlierBackupsShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -540,6 +558,21 @@ struct SettingsCloudBackupSection: View {
         } message: {
             Text("Enter the passphrase of your older encrypted backup. It is used once to move that backup to the new format and is not kept.")
         }
+        .alert(
+            "Back up with no songs here?",
+            isPresented: Binding(get: { viewModel.emptyBackupConfirmation != nil }, set: { if !$0 { viewModel.emptyBackupConfirmation = nil } }),
+            presenting: viewModel.emptyBackupConfirmation
+        ) { _ in
+            Button("Cancel", role: .cancel) {}
+            Button("Back Up Anyway") {
+                Task { await viewModel.backUpNow(confirmedEmptyMerge: true) }
+            }
+        } message: { remoteSongs in
+            Text("This device has no songs. Google Drive's \(remoteSongs) \(remoteSongs == 1 ? "song" : "songs") would be merged with nothing. Restore from backup to bring them here instead.")
+        }
+        .sheet(isPresented: $earlierBackupsShown) {
+            EarlierBackupsSheet()
+        }
         .fileImporter(isPresented: $importerShown, allowedContentTypes: [.zip, .json], allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
             let scoped = url.startAccessingSecurityScopedResource()
@@ -578,6 +611,11 @@ struct SettingsCloudBackupSection: View {
             }
             row("Restore from backup", systemImage: "arrow.down.doc.fill", id: "restoreFromBackup", enabled: viewModel.canRunCloudBackup) {
                 Task { await viewModel.restoreBackupNow() }
+            }
+            if viewModel.cloudBackupConnected {
+                row("Recover an earlier backup…", systemImage: "clock.arrow.circlepath", id: "recoverEarlierBackup", enabled: viewModel.canRunCloudBackup) {
+                    earlierBackupsShown = true
+                }
             }
             if viewModel.legacyBackupNeedsPassphrase {
                 row("Migrate older encrypted backup…", systemImage: "lock.open", id: "migrateLegacyBackup", enabled: viewModel.canRunCloudBackup) {
@@ -808,6 +846,77 @@ struct SettingsCloudBackupSection: View {
         case .checking: "arrow.triangle.2.circlepath"
         case .on: "checkmark.icloud.fill"
         case .noAccount, .restricted, .localOnlyFallback, .temporarilyUnavailable: "icloud.slash"
+        }
+    }
+}
+
+/// "Recover an earlier backup": the backup versions Google Drive kept, newest
+/// first. Choosing one only asks for confirmation; "Recover" then has Drive keep
+/// that version permanently and adds its songs to this device as new songs.
+struct EarlierBackupsSheet: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                    if viewModel.cloudBackupLastResultIsError, !viewModel.cloudBackupStatusText.isEmpty {
+                        Label(viewModel.cloudBackupStatusText, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.error)
+                            .accessibilityIdentifier("earlierBackupsError")
+                    }
+                    if let revisions = viewModel.backupRevisions {
+                        if revisions.isEmpty {
+                            Text("Google Drive has no earlier versions of this backup.")
+                                .font(.body)
+                                .foregroundStyle(appearance.palette.secondaryInk)
+                                .accessibilityIdentifier("earlierBackupsEmpty")
+                        }
+                        ForEach(revisions) { revision in
+                            Button {
+                                viewModel.recoveryToConfirm = revision
+                            } label: {
+                                Text(EditorViewModel.revisionLabel(revision))
+                                    .font(.body)
+                                    .foregroundStyle(appearance.palette.primaryInk)
+                                    .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("earlierBackup")
+                        }
+                    } else {
+                        ProgressView("Looking for earlier backups…")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(RhymeAITokens.Spacing.lg)
+            }
+            .background(appearance.palette.canvas)
+            .navigationTitle("Earlier Backups")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .task { await viewModel.loadBackupRevisions() }
+        .alert(
+            "Recover this backup?",
+            isPresented: Binding(get: { viewModel.recoveryToConfirm != nil }, set: { if !$0 { viewModel.recoveryToConfirm = nil } }),
+            presenting: viewModel.recoveryToConfirm
+        ) { revision in
+            Button("Cancel", role: .cancel) {}
+            Button("Recover") {
+                dismiss()
+                Task { await viewModel.recoverBackupRevision(revision) }
+            }
+        } message: { revision in
+            Text("Backup from \(EditorViewModel.revisionLabel(revision)). This asks Drive to keep that version permanently (nothing is deleted or rewritten), then adds its songs that aren't on this device as new songs.")
         }
     }
 }

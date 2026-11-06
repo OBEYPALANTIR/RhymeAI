@@ -115,6 +115,53 @@ class BackupScheduler(
     }
 }
 
+/**
+ * One scheduler run behind [BackupGate]: an empty library asks Drive how many songs it
+ * lists before anything uploads, and nothing uploads on PAUSE or CONFIRM. [confirmOnce]
+ * is the user's explicit "Back up anyway"; it covers the next run only.
+ */
+class GatedBackupRun(
+    /** Songs here, active plus Trash, read from the stored library; null when it cannot be read. */
+    private val localSongCount: suspend () -> Int?,
+    private val probe: suspend () -> ProbeResult,
+    private val backUp: suspend () -> SyncResult,
+    /** PAUSE or CONFIRM with Drive's song count, for the status line or the confirmation. */
+    private val onGated: (BackupGate.Decision, Int) -> Unit,
+    /** Renders a result (a failed probe or the backup's) and says whether to retry. */
+    private val onResult: (SyncResult, Boolean) -> BackupRunOutcome,
+    /** True while the restore offer waits for Restore or Not now: no run uploads, whatever this device holds. */
+    private val decisionPending: () -> Boolean = { false }
+) {
+    private var confirmed = false
+
+    fun confirmOnce() {
+        confirmed = true
+    }
+
+    suspend operator fun invoke(interactive: Boolean): BackupRunOutcome {
+        // The offer's answer decides; Not now or Restore starts the next run.
+        if (decisionPending()) return BackupRunOutcome.STOP
+        val userConfirmed = confirmed
+        confirmed = false
+        val local = localSongCount()
+        var remote = 0
+        if (local == 0 && !userConfirmed) {
+            when (val probed = probe()) {
+                is ProbeResult.Failed -> return onResult(probed.result, interactive)
+                is ProbeResult.Ready -> remote = probed.probe.projectCount
+            }
+        }
+        return when (val decision = BackupGate.decide(local, remote, interactive, userConfirmed)) {
+            BackupGate.Decision.RUN -> onResult(backUp(), interactive)
+            BackupGate.Decision.PAUSE, BackupGate.Decision.CONFIRM -> {
+                // An unreadable library has no count to show; the run just does nothing.
+                if (local != null) onGated(decision, remote)
+                BackupRunOutcome.STOP
+            }
+        }
+    }
+}
+
 /** The action to retry once Google consent is granted; a missing one means "back up". */
 internal fun <T> actionAfterAuthorization(pending: T?, fallback: T): T = pending ?: fallback
 

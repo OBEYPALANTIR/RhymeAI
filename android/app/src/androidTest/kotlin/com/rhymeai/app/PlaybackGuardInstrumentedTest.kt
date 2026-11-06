@@ -112,6 +112,16 @@ class PlaybackGuardInstrumentedTest {
         instrumentation.waitForIdleSync()
     }
 
+    /** Waits until playback reaches [positionMs]; false when [timeoutMs] passes first. */
+    private fun awaitPosition(positionMs: Long, timeoutMs: Long): Boolean {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (service.playbackPositionMs < positionMs) {
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) return false
+            Thread.sleep(50)
+        }
+        return true
+    }
+
     private fun play(target: VoiceMemo = memo) = instrumentation.runOnMainSync { service.play(target) }
 
     /** Plays and returns once the play's authorization is inside its gated read. */
@@ -136,6 +146,35 @@ class PlaybackGuardInstrumentedTest {
         val adopted = catalog.records.single().id
         runBlocking { service.stopPlayingIds(setOf(adopted)) }
         assertNull(service.playingFile)
+    }
+
+    @Test fun pauseThenPlayResumesWhereItStopped() {
+        play()
+        assertTrue("playback never reached 2 s", awaitPosition(2_000L, timeoutMs = 8_000L))
+        instrumentation.runOnMainSync { service.pausePlayback() }
+        assertNull(service.playingFile)
+        assertEquals(memo.file, service.pausedFile)
+        val pausedAt = service.playbackPositionMs
+        assertTrue("paused at $pausedAt", pausedAt >= 2_000L)
+
+        // A restart from zero cannot reach the paused offset within 1.5 s; a resume does. Half a
+        // second later the player's own ticks (not the value set at prepare) must still be past it.
+        play()
+        assertTrue("did not resume at $pausedAt", awaitPosition(pausedAt, timeoutMs = 1_500L))
+        Thread.sleep(500)
+        assertEquals(memo.file, service.playingFile)
+        assertNull(service.pausedFile)
+        assertTrue("at ${service.playbackPositionMs}, paused at $pausedAt", service.playbackPositionMs > pausedAt)
+    }
+
+    @Test fun onlyAMoveOfThePausedRecordingForgetsItsPosition() {
+        play()
+        settle()
+        instrumentation.runOnMainSync { service.pausePlayback() }
+        runBlocking { service.stopPlayingIds(setOf("5d1c9e3a-2b4f-4a6e-9c8d-7e6f5a4b3c2d")) }
+        assertEquals(memo.file, service.pausedFile)
+        runBlocking { service.stopPlayingIds(setOf(id)) }
+        assertNull(service.pausedFile)
     }
 
     @Test fun stopWhileThePlaybackIsStillBeingCheckedWins() {

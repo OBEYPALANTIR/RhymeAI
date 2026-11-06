@@ -22,6 +22,8 @@ enum CloudKitSchemaInitializer {
         SyncDeletionRecord.self,
         SyncRecordingDeletion.self,
         Recording.self,
+        OneLiner.self,
+        TrashedOneLiner.self,
     ]
 
     static func makeManagedObjectModel() -> NSManagedObjectModel? {
