@@ -10,6 +10,7 @@ import com.rhymeai.app.service.AIModel
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIService
 import com.rhymeai.app.service.LocalModelService
+import com.rhymeai.app.util.PronunciationDictionary
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
@@ -53,11 +54,14 @@ class LocalModelInstrumentedTest {
             service.loadModel(modelPath)
             val invalidModel = File(instrumentation.targetContext.cacheDir, "invalid-replacement.gguf")
             invalidModel.writeBytes("GGUF-not-a-model".toByteArray())
+            val acceptedMetadata = service.loadedPromptMetadata
             val replacementFailure = runCatching { service.loadModel(invalidModel.absolutePath) }
             assertTrue("Invalid replacement model must fail", replacementFailure.isFailure)
-            assertFalse("Failed replacement must clear loaded state", service.isLoaded)
-            service.loadModel(modelPath)
-            assertTrue("Accepted model must reload after replacement failure", service.isLoaded)
+            assertTrue("Rejected replacement must keep the accepted model loaded", service.isLoaded)
+            assertTrue(
+                "Rejected replacement must leave the accepted model untouched",
+                service.loadedPromptMetadata === acceptedMetadata
+            )
             invalidModel.delete()
             val firstChunk = CompletableDeferred<String>()
             val privacySentinel = "RHYME_PRIVACY_SENTINEL_7319"
@@ -106,6 +110,10 @@ class LocalModelInstrumentedTest {
         val modelFile = File(modelPath)
         assertTrue("Model file does not exist at $modelPath", modelFile.exists())
         assertTrue("Model file is not readable at $modelPath", modelFile.canRead())
+        // One-word rewrites are checked against the dictionary MainActivity loads; this test has no Activity.
+        if (PronunciationDictionary.shared.wordCount == 0) {
+            instrumentation.targetContext.assets.open("cmudict-rhymeai.tsv").use(PronunciationDictionary::initialize)
+        }
 
         val service = LocalModelService()
         service.initialize(instrumentation.targetContext)
