@@ -373,7 +373,6 @@ struct OneLinersView: View {
 
     private var recordButton: some View {
         Button {
-            viewModel.voiceMemoService.stopPlayback()
             openCapture(.record)
         } label: {
             HStack(spacing: RhymeAITokens.Spacing.xs) {
@@ -399,7 +398,6 @@ struct OneLinersView: View {
               let action = router.take([.record, .type, .open]) else { return }
         switch action {
         case .record:
-            viewModel.voiceMemoService.stopPlayback()
             openCapture(.record)
         case .type:
             openCapture(.type)
@@ -408,9 +406,11 @@ struct OneLinersView: View {
         }
     }
 
-    /// A take playing would reach the microphone, so playback stops before any capture opens.
+    /// A take or voice memo playing would reach the microphone, so playback stops before any
+    /// capture opens, Type included: its mic starts a take too. Android `openCapture` does the same.
     private func openCapture(_ mode: OneLinerCaptureMode) {
         player.stop()
+        viewModel.voiceMemoService.stopPlayback()
         capture = mode
     }
 
