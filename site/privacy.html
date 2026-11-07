@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Privacy policy for the Writers Block songwriting app.">
+  <title>Writers Block Privacy Policy</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #FCFCF8;
+      --on-background: #050505;
+      --on-surface-muted: #4D4D48;
+      --outline: #B5B5AD;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #171716;
+        --on-background: #F6F2E8;
+        --on-surface-muted: #C4BEB3;
+        --outline: #484843;
+      }
+    }
+    body {
+      margin: 0;
+      padding: 48px 20px 64px;
+      background: var(--background);
+      color: var(--on-background);
+      font-family: ui-serif, Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      line-height: 1.6;
+    }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 2.2rem; font-weight: 600; line-height: 1.15; margin: 0 0 4px; }
+    h2 { font-size: 1.35rem; font-weight: 600; margin: 36px 0 8px; }
+    .meta { margin: 0 0 28px; color: var(--on-surface-muted); }
+    p { margin: 0 0 16px; }
+    ul { padding-left: 22px; margin: 0 0 16px; }
+    li { margin-bottom: 4px; }
+    code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; }
+    a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+    a:focus-visible { outline: 2px solid var(--on-background); outline-offset: 3px; }
+    footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid var(--outline);
+      color: var(--on-surface-muted);
+      font-size: 0.95rem;
+    }
+    footer p { margin: 0 0 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Writers Block Privacy Policy</h1>
+    <p class="meta">Effective 23 October 2026. Developer: Tyler Manring (ShaydeTree).</p>
+
+    <p>
+      Writers Block is a songwriting app for iPhone, iPad and Android. It has no
+      accounts, no advertising and no analytics. Your songs stay on your device unless
+      you turn on a backup or a cloud AI provider, and in every case the data goes to a
+      service you control, not to the developer. This page explains each case.
+    </p>
+
+    <h2>Data stored on your device</h2>
+    <p>
+      The app stores your songs (titles, lyrics, themes and section markers), your Trash,
+      your voice memos (audio recordings and their names), your settings, and any
+      downloaded AI model files. All of this is kept in the app's private storage on the
+      device. Songs you delete go to Trash, where they are kept for 30 days unless you
+      delete them permanently or restore them.
+    </p>
+    <p>
+      On Android the microphone is used only while you record a voice memo. On iOS
+      the same applies, and iOS asks for microphone permission the first time you record.
+    </p>
+
+    <h2>iCloud sync (iOS)</h2>
+    <p>
+      On iPhone and iPad, the library is stored with SwiftData and synced through your
+      own iCloud account using CloudKit's private database for the container
+      <code>iCloud.ShaydeTree.Writers-Block</code>. That data is protected by your Apple
+      account. The developer cannot read it; Apple's own privacy policy governs iCloud.
+      If iCloud is unavailable, the app keeps a local-only library on the device.
+    </p>
+
+    <h2>Google Drive backup (optional, both platforms)</h2>
+    <p>
+      Nothing is sent to Google Drive unless you tap <strong>Connect Google Drive</strong>
+      in Settings. When you do, the app asks Google for one permission only, the
+      <code>drive.appdata</code> scope, which gives it access to its own hidden
+      application-data folder in your Drive and to nothing else in your Drive.
+    </p>
+    <p>In that folder the app stores:</p>
+    <ul>
+      <li>A plain JSON manifest (<code>rhymeai-manifest.json</code>) with your songs, your Trash, the list of your recordings (name, size, hash and the song they belong to) and deletion records so that a song deleted on one device is removed on another.</li>
+      <li>One raw audio file per voice memo.</li>
+    </ul>
+    <p>
+      The backup never contains your AI provider API keys. The data is protected by your
+      Google account and by Google's encryption at rest; the app does not add a passphrase.
+      The developer has no access to your Drive and never receives this data. Google's
+      privacy policy governs how Google handles Drive.
+    </p>
+    <p>
+      To stop, tap <strong>Disconnect</strong> in Settings. The app asks Google to revoke
+      its permission and forgets the connection on the device. If the revoke request
+      cannot reach Google, the app tells you, and you can remove Writers Block at
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+      Disconnecting does not delete the files already in Drive; see Deleting your data below.
+    </p>
+
+    <h2>Cloud AI providers (optional)</h2>
+    <p>
+      The app can send lyrics to Google Gemini, OpenAI or Anthropic when you choose one of
+      those providers in Settings and enter your own API key for it. Only the lyrics and
+      context needed for the request you make (for example a next-line suggestion or a
+      rewrite) are sent, directly from your device to that provider, under your own key.
+      Those providers' terms and privacy policies apply to what they do with it. Your API
+      keys are stored in the iOS Keychain or in Android's encrypted preferences on the
+      device and are never backed up or sent to the developer. If you keep the default
+      on-device model, nothing is sent to any AI provider.
+    </p>
+
+    <h2>On-device AI models</h2>
+    <p>
+      The on-device models (Gemma 4 E2B and E4B, fine-tuned for songwriting) are not in
+      the app download. When you choose one, the app downloads the model file from the
+      developer's model repository on Hugging Face
+      (<code>huggingface.co/Shayde182/rhymeai-gemma-4-gguf</code>). That download is an
+      ordinary file request; the app sends no lyrics or personal data with it. Once
+      downloaded, the model runs entirely on your device.
+    </p>
+
+    <h2>No accounts, advertising, analytics or tracking</h2>
+    <p>
+      Writers Block has no account system. It contains no advertising, analytics,
+      crash-reporting or tracking SDKs, and it does not collect usage data. The iOS app's
+      privacy manifest declares no tracking and no collected data types. The only network
+      connections the app makes are the ones described above: Google Drive (if connected),
+      the AI provider you selected (if any), and the model download.
+    </p>
+
+    <h2>Children</h2>
+    <p>Writers Block is not directed at children under 13.</p>
+
+    <h2>Deleting your data</h2>
+    <ul>
+      <li><strong>On the device:</strong> delete songs and recordings in the app, then empty Trash, or uninstall the app, which removes its private storage. On Android you can also clear the app's data from the system Settings.</li>
+      <li><strong>iCloud:</strong> deleting songs in the app removes them from your iCloud copy. To remove everything, delete the app's data under Settings, your name, iCloud, Manage Account Storage, Writers Block on your iPhone or iPad.</li>
+      <li><strong>Google Drive:</strong> tap Disconnect in the app, then in Google Drive on the web open Settings, Manage apps, find Writers Block and choose Delete hidden app data. You can also remove the app's access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+      <li><strong>Cloud AI providers:</strong> data you sent to Gemini, OpenAI or Anthropic is held by that provider under its own policy; delete it through that provider's tools.</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about this policy go to Tyler Manring (ShaydeTree) at
+      <a href="mailto:manring55@gmail.com">manring55@gmail.com</a>.
+    </p>
+
+    <footer>
+      <p>Changelog: 2026-10-23, first version.</p>
+      <p><a href="index.html">Back to Writers Block</a></p>
+    </footer>
+  </main>
+</body>
+</html>
