@@ -13,6 +13,7 @@ struct OneLinersView: View {
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \OneLiner.createdAt, order: .reverse) private var lines: [OneLiner]
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
@@ -49,18 +50,20 @@ struct OneLinersView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 topBar
-                header
-                    .padding(.horizontal, RhymeAITokens.Rhythm.standard)
-                    .padding(.top, RhymeAITokens.Rhythm.standard)
+                if !pageScrolls {
+                    header
+                        .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+                        .padding(.top, RhymeAITokens.Rhythm.standard)
+                }
 
                 list
                     .overlay(alignment: dominantHand.clusterAlignment(in: layoutDirection)) { floatingActions }
 
-                Text("Swipe right to send to a song, left to trash. Used lines stay.")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondaryInk)
-                    .padding(.horizontal, RhymeAITokens.Rhythm.standard)
-                    .padding(.bottom, RhymeAITokens.Rhythm.related)
+                if !pageScrolls {
+                    footer
+                        .padding(.horizontal, RhymeAITokens.Rhythm.standard)
+                        .padding(.bottom, RhymeAITokens.Rhythm.related)
+                }
             }
             .frame(maxWidth: horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity)
 
@@ -121,7 +124,10 @@ struct OneLinersView: View {
                     HStack(spacing: RhymeAITokens.Spacing.xxs) {
                         Image(systemName: "chevron.left")
                             .font(.body.weight(.semibold))
-                        Text("Songs")
+                        // At accessibility sizes the label ran into the centred title.
+                        if !dynamicTypeSize.isAccessibilitySize {
+                            Text("Songs")
+                        }
                     }
                     .foregroundStyle(palette.secondaryInk)
                     .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
@@ -144,8 +150,31 @@ struct OneLinersView: View {
             Text("\(Self.lineCountText(lines.count)), newest first. Nothing here belongs to a song until you send it.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondaryInk)
+                .fixedSize(horizontal: false, vertical: true)
             searchField
         }
+    }
+
+    private var footer: some View {
+        Text("Swipe right to send to a song, left to trash. Used lines stay.")
+            .font(.caption)
+            .foregroundStyle(palette.secondaryInk)
+    }
+
+    /// At accessibility sizes the header and footer scroll with the list, as
+    /// one page under the floating actions; pinned, they left the list no room.
+    private var pageScrolls: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    private func pageRow(_ content: some View, top: CGFloat, bottom: CGFloat) -> some View {
+        content
+            .listRowInsets(EdgeInsets(
+                top: top,
+                leading: RhymeAITokens.Rhythm.standard,
+                bottom: bottom,
+                trailing: RhymeAITokens.Rhythm.standard
+            ))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 
     private var searchField: some View {
@@ -182,6 +211,9 @@ struct OneLinersView: View {
 
     private var list: some View {
         List {
+            if pageScrolls {
+                pageRow(header, top: RhymeAITokens.Rhythm.standard, bottom: 0)
+            }
             if lines.isEmpty {
                 emptyState(title: "No one liners yet.", caption: "Tap Record or Type to catch a line before it slips away.")
             } else if filteredLines.isEmpty {
@@ -224,6 +256,9 @@ struct OneLinersView: View {
                             }
                         }
                 }
+            }
+            if pageScrolls {
+                pageRow(footer, top: RhymeAITokens.Rhythm.related, bottom: RhymeAITokens.Rhythm.related)
             }
         }
         .listStyle(.plain)
