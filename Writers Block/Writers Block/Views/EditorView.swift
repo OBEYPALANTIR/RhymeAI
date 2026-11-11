@@ -132,6 +132,9 @@ struct EditorView: View {
     /// because SwiftUI does not learn that the lyrics text view took the focus:
     /// a stale value never matches the next open's re-created title field.
     @FocusState private var titleFocusedOpen: EditorViewModel.EditorOpen?
+    /// Bumped when the title loses focus so a long title rests on its first
+    /// two lines rather than the end the caret scrolled to.
+    @State private var titleRestID = 0
     /// The New Song open whose title focus has already been granted, so a
     /// re-created editor does not raise the keyboard again.
     @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
@@ -846,15 +849,28 @@ struct EditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 // Title Field
-                TextField("Song Title...", text: $viewModel.title)
+                // A long title wraps to a second line instead of scrolling out
+                // of sight; Return still ends editing rather than adding a line.
+                TextField("Song Title...", text: $viewModel.title, axis: .vertical)
                     .font(.system(.largeTitle, design: .serif, weight: .bold))
+                    .lineLimit(1...2)
                     .textFieldStyle(.plain)
+                    .submitLabel(.done)
                     .padding(.horizontal, editorSidePadding)
                     .padding(.top, RhymeAITokens.Spacing.md)
                     .padding(.bottom, RhymeAITokens.Spacing.xxs)
                     .accessibilityIdentifier("songTitleEditor")
                     .focused($titleFocusedOpen, equals: viewModel.editorOpen)
+                    .id(titleRestID)
+                    .onChange(of: titleFocusedOpen) { _, focused in
+                        if focused == nil { titleRestID += 1 }
+                    }
                     .onChange(of: viewModel.title) {
+                        if viewModel.title.contains(where: \.isNewline) {
+                            viewModel.title.removeAll(where: \.isNewline)
+                            titleFocusedOpen = nil
+                            return
+                        }
                         viewModel.triggerAutoSave()
                     }
 
@@ -1012,14 +1028,16 @@ struct EditorView: View {
                     }
                     HStack(spacing: RhymeAITokens.Spacing.xxs) {
                         Spacer()
-                        topBarTrailing
+                        topBarTrailing()
                     }
                 }
             } else {
+                // The Focus words stay on one line; on iPhone a save warning
+                // leaves no room for them, so the icon stands in instead.
                 HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     topBarLeading
                     Spacer()
-                    topBarTrailing
+                    topBarTrailing(focusIcon: horizontalSizeClass == .compact && viewModel.saveStatus == .failed)
                 }
             }
         }
@@ -1099,7 +1117,13 @@ struct EditorView: View {
         }
     }
 
-    private var topBarTrailing: some View {
+    private var focusModeIcon: some View {
+        Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
+            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+            .foregroundStyle(appearance.palette.secondaryInk)
+    }
+
+    private func topBarTrailing(focusIcon: Bool = false) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.xxs) {
             Button {
                 withRhymeAnimation(nil, reduceMotion: reduceMotion) {
@@ -1107,10 +1131,8 @@ struct EditorView: View {
                 }
             } label: {
                 Group {
-                    if usesCompactControlChrome {
-                        Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
-                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                    if usesCompactControlChrome || focusIcon {
+                        focusModeIcon
                     } else {
                         // The hidden label reserves the wider title so the
                         // bar does not shift; the visible one sits against
@@ -1121,8 +1143,9 @@ struct EditorView: View {
                         }
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(appearance.palette.secondaryInk)
+                        .lineLimit(1)
                         .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .fixedSize()
                     }
                 }
                 .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)

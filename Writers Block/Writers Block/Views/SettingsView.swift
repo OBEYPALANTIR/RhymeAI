@@ -8,6 +8,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var editingKeys: [String: String] = [:]
     /// Keys as last read from or written to the Keychain. API keys are the
@@ -83,6 +85,15 @@ struct SettingsView: View {
                 } else {
                     ToolbarItem(placement: .cancellationAction) { doneButton }
                 }
+                // The system bar title ignores Dynamic Type; this one follows it
+                // under the editor top bar's clamp.
+                ToolbarItem(placement: .principal) {
+                    Text("Settings")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .dynamicTypeSize(topBarTypeSize)
+                        .accessibilityAddTraits(.isHeader)
+                }
             }
             .confirmationDialog(
                 "Save your API key before closing?",
@@ -117,8 +128,18 @@ struct SettingsView: View {
                 dismiss()
             }
         } label: {
-            Text("Done").foregroundStyle(appearance.palette.action)
+            Text("Done")
+                .font(.body)
+                .foregroundStyle(appearance.palette.action)
+                .lineLimit(1)
+                .dynamicTypeSize(topBarTypeSize)
         }
+    }
+
+    /// The editor top bar's rule: an iPhone at accessibility sizes keeps the
+    /// bar at the default size so its controls fit one row.
+    private var topBarTypeSize: DynamicTypeSize {
+        horizontalSizeClass == .compact && dynamicTypeSize.isAccessibilitySize ? .large : dynamicTypeSize
     }
 
     @ViewBuilder

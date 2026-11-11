@@ -16,7 +16,9 @@ struct WelcomeView: View {
             GeometryReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        Spacer(minLength: dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Spacing.md : proxy.size.height * 0.08)
+                        // A short lead-in keeps the One Liners actions on the first
+                        // screen of a phone at the default text size.
+                        Spacer(minLength: dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Spacing.md : proxy.size.height * 0.04)
 
                         if !dynamicTypeSize.isAccessibilitySize {
                             // App Icon
@@ -55,21 +57,28 @@ struct WelcomeView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: RhymeAITokens.Layout.assistantReadableWidth)
                                 .padding(.horizontal, RhymeAITokens.Spacing.xl)
-                                .padding(.bottom, RhymeAITokens.Spacing.xxl)
+                                .padding(.bottom, RhymeAITokens.Spacing.xl)
                         }
 
                         // Action Cards — horizontal on iPad, vertical at accessibility sizes.
                         Group {
                             if usesHorizontalCards {
-                                // Cards stretch to the tallest one so a wrapped
-                                // subtitle cannot leave them at unequal heights.
-                                HStack(spacing: RhymeAITokens.Spacing.lg) {
-                                    cardContent
-                                }
-                                .fixedSize(horizontal: false, vertical: true)
-                            } else {
+                                // The three song options share a row and stretch to
+                                // the tallest so a wrapped subtitle cannot leave them
+                                // uneven; One Liners, the card with its own buttons,
+                                // spans the width below rather than making the row tall.
                                 VStack(spacing: RhymeAITokens.Spacing.lg) {
-                                    cardContent
+                                    HStack(spacing: RhymeAITokens.Spacing.lg) {
+                                        songCards
+                                    }
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                    oneLinersCard
+                                }
+                            } else {
+                                VStack(spacing: RhymeAITokens.Spacing.md) {
+                                    songCards
+                                    oneLinersCard
                                 }
                             }
                         }
@@ -82,6 +91,9 @@ struct WelcomeView: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
                 .scrollIndicators(.hidden)
+                // Content stops at the safe area, so the status bar keeps the
+                // canvas behind it instead of cards scrolling under the clock.
+                .clipped()
                 .accessibilityIdentifier("welcomeScroll")
             }
         }
@@ -91,7 +103,7 @@ struct WelcomeView: View {
     // accessibility sizes it stretched each card to a third of the screen with
     // its content pinned to the top, so the stack uses the row layout instead.
     @ViewBuilder
-    private var cardContent: some View {
+    private var songCards: some View {
         WelcomeCard(
             icon: "plus",
             title: "New Song",
@@ -118,13 +130,14 @@ struct WelcomeView: View {
         ) {
             viewModel.showTemplatesSheet = true
         }
+    }
 
+    private var oneLinersCard: some View {
         // The root's full-screen cover is the one path to the screen, so its routing guards apply.
         WelcomeCard(
             icon: "text.quote",
             title: "One Liners",
             subtitle: "Catch a line before it goes",
-            compact: usesHorizontalCards,
             action: { OneLinerRouter.shared.request(.open) },
             actions: { OneLinerQuickActions() }
         )
@@ -149,6 +162,8 @@ private struct OneLinerQuickActions: View {
         } label: {
             Label("Record", systemImage: "mic.fill")
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .frame(minHeight: RhymeAITokens.Touch.minimum)
                 .appearanceActionSurface(cornerRadius: RhymeAITokens.Touch.minimum / 2)
@@ -162,6 +177,8 @@ private struct OneLinerQuickActions: View {
         } label: {
             Label("Type", systemImage: "keyboard")
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(appearance.palette.primaryInk)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .frame(minHeight: RhymeAITokens.Touch.minimum)
@@ -176,6 +193,7 @@ private struct OneLinerQuickActions: View {
 
 private struct WelcomeCard<Actions: View>: View {
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let icon: String
     let title: String
@@ -202,7 +220,7 @@ private struct WelcomeCard<Actions: View>: View {
 
                 actions
                     // Under the title and subtitle: past the icon on the row layout.
-                    .padding(.leading, compact ? 0 : RhymeAITokens.Spacing.lg * 2 + RhymeAITokens.Touch.minimum)
+                    .padding(.leading, actionsLeadingInset)
                     .padding(.horizontal, compact ? RhymeAITokens.Spacing.md : 0)
                     .padding(.bottom, compact ? RhymeAITokens.Spacing.md : RhymeAITokens.Spacing.lg)
             }
@@ -210,6 +228,34 @@ private struct WelcomeCard<Actions: View>: View {
             // The card with its own actions (One Liners) floats above the raised options.
             .surfaceLevel(.floating, cornerRadius: RhymeAITokens.Radius.lg)
         }
+    }
+
+    private var actionsLeadingInset: CGFloat {
+        if compact { return 0 }
+        if dynamicTypeSize.isAccessibilitySize { return RhymeAITokens.Spacing.lg }
+        return RhymeAITokens.Spacing.lg * 2 + RhymeAITokens.Touch.minimum
+    }
+
+    private var iconTile: some View {
+        Image(systemName: icon)
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(appearance.palette.action)
+            .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
+            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(appearance.palette.secondaryInk)
+            .frame(width: RhymeAITokens.Spacing.lg, height: RhymeAITokens.Spacing.lg)
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(appearance.palette.primaryInk)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var row: some View {
@@ -237,20 +283,32 @@ private struct WelcomeCard<Actions: View>: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(RhymeAITokens.Spacing.md)
+            } else if dynamicTypeSize.isAccessibilitySize {
+                // At accessibility sizes the icon and chevron sit above the
+                // title so it gets the card's full width and words stay whole.
+                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+                    HStack {
+                        iconTile
+                        Spacer(minLength: 0)
+                        chevron
+                    }
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
+                        titleText
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(RhymeAITokens.Spacing.lg)
             } else {
                 // Horizontal card layout for iPhone
                 HStack(spacing: RhymeAITokens.Spacing.lg) {
-                    Image(systemName: icon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(appearance.palette.action)
-                        .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+                    iconTile
 
                     VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
-                        Text(title)
-                            .font(.headline)
-                            .foregroundStyle(appearance.palette.primaryInk)
-                            .fixedSize(horizontal: false, vertical: true)
+                        titleText
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(appearance.palette.secondaryInk)
@@ -259,10 +317,7 @@ private struct WelcomeCard<Actions: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
 
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(appearance.palette.secondaryInk)
-                        .frame(width: RhymeAITokens.Spacing.lg, height: RhymeAITokens.Spacing.lg)
+                    chevron
                 }
                 .padding(RhymeAITokens.Spacing.lg)
             }

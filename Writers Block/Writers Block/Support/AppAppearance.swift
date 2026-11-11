@@ -74,6 +74,33 @@ enum AppAppearanceStyle: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
+    /// On-state switch track. The action colour on the light appearances; on
+    /// Graphite the cream action colour sat behind the white thumb at 1.1:1, so
+    /// the track is the strong outline tone (4.5:1 to the thumb, 4.0:1 to the canvas).
+    var switchTrackHexValue: UInt32 {
+        switch self {
+        case .ink:
+            0x050505
+        case .paper:
+            0x302E2A
+        case .graphite:
+            0x7B766D
+        }
+    }
+
+    /// Label of a disabled button: at least 3:1 on the canvas and on the
+    /// raised fill a disabled button sits on, and plainly dimmer than secondary ink.
+    var disabledInkHexValue: UInt32 {
+        switch self {
+        case .ink:
+            0x7A7A74
+        case .paper:
+            0x756F64
+        case .graphite:
+            0x857F77
+        }
+    }
+
     var palette: AppAppearancePalette {
         switch self {
         case .ink:
@@ -104,6 +131,9 @@ struct AppAppearancePalette {
     let outlineStrong: Color
     let action: Color
     let onAction: Color
+    let switchTrack: Color
+    /// Label of a disabled button, drawn on the raised surface instead of the action fill.
+    let disabledInk: Color
     let caret: Color
     let placeholder: Color
     let selectionTint: Color
@@ -127,6 +157,8 @@ struct AppAppearancePalette {
         outlineStrong: Color(hex: 0x5E5E58),
         action: Color(hex: 0x050505),
         onAction: Color(hex: 0xFCFCF8),
+        switchTrack: Color(hex: AppAppearanceStyle.ink.switchTrackHexValue),
+        disabledInk: Color(hex: AppAppearanceStyle.ink.disabledInkHexValue),
         caret: Color(hex: 0x050505),
         placeholder: Color(hex: AppAppearanceStyle.ink.placeholderHexValue),
         selectionTint: Color(hex: 0xDADAD2),
@@ -150,6 +182,8 @@ struct AppAppearancePalette {
         outlineStrong: Color(hex: 0x696257),
         action: Color(hex: 0x302E2A),
         onAction: Color(hex: 0xFFF9EB),
+        switchTrack: Color(hex: AppAppearanceStyle.paper.switchTrackHexValue),
+        disabledInk: Color(hex: AppAppearanceStyle.paper.disabledInkHexValue),
         caret: Color(hex: 0x302E2A),
         placeholder: Color(hex: AppAppearanceStyle.paper.placeholderHexValue),
         selectionTint: Color(hex: 0xD8CDB4),
@@ -173,6 +207,8 @@ struct AppAppearancePalette {
         outlineStrong: Color(hex: 0x7B766D),
         action: Color(hex: 0xF6F2E8),
         onAction: Color(hex: 0x171716),
+        switchTrack: Color(hex: AppAppearanceStyle.graphite.switchTrackHexValue),
+        disabledInk: Color(hex: AppAppearanceStyle.graphite.disabledInkHexValue),
         caret: Color(hex: 0xF6F2E8),
         placeholder: Color(hex: AppAppearanceStyle.graphite.placeholderHexValue),
         selectionTint: Color(hex: 0x41413D),

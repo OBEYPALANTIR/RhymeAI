@@ -400,6 +400,7 @@ struct CloudPrivacyFlowTests {
         #expect(await Self.waitUntil { !emptyViewModel.isLoading && emptyViewModel.errorMessage != nil })
         #expect(emptyViewModel.suggestions.isEmpty)
         #expect(emptyViewModel.errorMessage == "AI did not return suggestions. Try again.")
+        #expect(emptyViewModel.suggestionsFailed, "the assistant offers Try again only after a failed request")
     }
 
     /// The ink burst keys off this signal. Each case streams one line, holds
@@ -455,15 +456,18 @@ struct CloudPrivacyFlowTests {
             case .none:
                 #expect(viewModel.completedSuggestionsRequestID == requestID)
                 #expect(viewModel.suggestions.count == 1)
+                #expect(!viewModel.suggestionsFailed)
             case .consume:
                 #expect(viewModel.completedSuggestionsRequestID == nil)
                 #expect(viewModel.errorMessage == nil, "consumed lines are not an empty answer")
+                #expect(!viewModel.suggestionsFailed)
             case .stop, .setting:
                 #expect(viewModel.completedSuggestionsRequestID == nil, "\(interruption)")
                 #expect(viewModel.suggestions.count == 1, "\(interruption): the line already shown stays")
             case .streamError:
                 #expect(viewModel.completedSuggestionsRequestID == nil)
                 #expect(viewModel.errorMessage != nil)
+                #expect(viewModel.suggestionsFailed)
                 #expect(viewModel.suggestions.count == 1)
             }
         }
