@@ -639,6 +639,7 @@ Dynamic Type behaviour on iOS is enforced in code, not left to chance:
 - At accessibility sizes on a compact width, the editor top bar and the floating action row are clamped to the `large` size so the toolbar stays on one row; on a regular width the top bar instead splits into two rows.
 - Multi-option rows restack vertically at accessibility sizes: welcome cards, custom segmented controls with more than two options, suggestion actions, and notebook actions. Rewrite chips instead switch to a horizontally scrolling row at natural width so the bar stays one line tall.
 - The welcome screen drops the app icon and the subtitle at accessibility sizes so the three actions stay reachable.
+- At accessibility sizes the songs drawer scrolls Create New Song, One Liners and the Recent Songs heading with the list, and each song row puts its trash button under the text. One Liners scrolls its header and footer with the list, under the floating Record and Type actions, and its back button drops the "Songs" label so it clears the centred title.
 
 Letter spacing stays neutral. Do not tighten display text; the heavy serif forms already carry enough character.
 

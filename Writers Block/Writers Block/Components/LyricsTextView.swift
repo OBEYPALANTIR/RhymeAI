@@ -141,6 +141,17 @@ struct LyricsTextView: UIViewRepresentable {
         }
     }
 
+    /// Measured at the width SwiftUI offers. Without this SwiftUI reads the
+    /// intrinsic size, which counts each line unwrapped, so the last wrapped
+    /// lines fell below the frame and could not be scrolled to. A taller offer
+    /// (the editor's minimum height) is still filled, so the whole area takes taps.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        let fitting = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        let offered = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? 0
+        return CGSize(width: width, height: max(fitting.height, offered))
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
