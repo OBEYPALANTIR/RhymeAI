@@ -234,7 +234,15 @@ nonisolated enum GGUFModelSelection {
     ) -> URL? {
         guard let directory = modelsDirectory
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        // A previous version left under a catalog name (the same-size E2B v2.1) is skipped, as
+        // Settings skips it: loading it would hash gigabytes and fail on every request.
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).filter { name in
+            guard let option = GGUFModelCatalog.descriptor(fileName: name),
+                  let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(name).path) else {
+                return true
+            }
+            return !GGUFModelStorage.isStaleArtifact(identity, of: option, defaults: defaults)
+        }
         guard let preferred = preferredFileName(
             in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
             totalRAMBytes: totalRAMBytes

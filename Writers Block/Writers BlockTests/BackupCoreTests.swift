@@ -53,6 +53,30 @@ struct BackupCoreTests {
     // MARK: Google sign-in
 
     @MainActor
+    @Test func recordingPropertiesLeaveOutANameDriveWouldRefuse() {
+        let sha = RecordingBackupManifest.sha256Hex(Data([1, 2, 3]))
+        // 124 bytes of name alone: with its key it is over Drive's per-property cap.
+        // A real UUID id: the test initializer would derive one from the long name.
+        var long = SyncRecording(projectId: "song-a", fileName: String(repeating: "歌", count: 40) + ".m4a", bytes: 3, sha256: sha)
+        long.id = "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b"
+
+        let properties = BackupService.recordingAppProperties(long)
+
+        #expect(properties["fileName"] == nil)
+        #expect(properties["id"] == long.id)
+        #expect(properties["projectId"] == "song-a")
+        #expect(properties["sha256"] == sha)
+        #expect(properties["bytes"] == "3")
+        #expect(properties.allSatisfy { ($0.key + $0.value).utf8.count <= 124 })
+        let short = SyncRecording(projectId: "song-a", fileName: "late.m4a", bytes: 3, sha256: sha)
+        #expect(BackupService.recordingAppProperties(short)["fileName"] == "late.m4a")
+        // Deleting the Drive object by tombstone needs its id, so a long valid id is never dropped.
+        var longId = short
+        longId.id = String(repeating: "a", count: 128)
+        #expect(BackupService.recordingAppProperties(longId)["id"] == longId.id)
+    }
+
+    @MainActor
     @Test func oauthWithoutClientIdThrowsNotConfigured() async throws {
         let service = GoogleDriveOAuthService(
             configuration: .init(clientID: nil, redirectScheme: nil),
