@@ -56,8 +56,15 @@ struct OneLinersView: View {
                         .padding(.top, RhymeAITokens.Rhythm.standard)
                 }
 
-                list
-                    .overlay(alignment: dominantHand.clusterAlignment(in: layoutDirection)) { floatingActions }
+                if pageScrolls {
+                    // Below the list, not over it, so no row or caption sits under the actions at rest.
+                    list
+                    floatingActions
+                        .frame(maxWidth: .infinity, alignment: dominantHand.clusterAlignment(in: layoutDirection))
+                } else {
+                    list
+                        .overlay(alignment: dominantHand.clusterAlignment(in: layoutDirection)) { floatingActions }
+                }
 
                 if !pageScrolls {
                     footer
@@ -265,7 +272,7 @@ struct OneLinersView: View {
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.immediately)
         // Room under the last row for the floating Record and Type actions.
-        .contentMargins(.bottom, RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
+        .contentMargins(.bottom, pageScrolls ? 0 : RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
         .padding(.top, RhymeAITokens.Rhythm.related)
         .rhymeAnimation(RhymeAITokens.Motion.state, value: lines.isEmpty)
     }
@@ -388,6 +395,9 @@ struct OneLinersView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.bottom, RhymeAITokens.Spacing.md)
+        // The editor's floating-action clamp, on every width: Type is a fixed 56pt circle
+        // whose glyph would otherwise outgrow it and run into Record.
+        .dynamicTypeSize(pageScrolls ? .large : dynamicTypeSize)
     }
 
     private var typeButton: some View {
