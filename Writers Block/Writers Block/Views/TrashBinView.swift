@@ -191,7 +191,9 @@ struct TrashBinView: View {
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
-        .liquidGlassSurface(cornerRadius: 0)
+        // A plain band with a bottom divider: the bordered surface drew a box
+        // whose side edges ran down the screen edges.
+        .background(appearance.palette.surface)
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -504,40 +506,42 @@ struct TrashBinView: View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.sm))
+        // The system bordered styles faded the disabled labels to about 1.5:1;
+        // the palette's disabled ink keeps them readable until a row is selected.
+        let enabled = activeSelectionCount > 0
         return layout {
             Button {
                 restoreSelected()
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(enabled ? appearance.palette.primaryInk : appearance.palette.disabledInk)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .background(appearance.palette.raisedSurface, in: Capsule())
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .disabled(activeSelectionCount == 0)
+            .buttonStyle(.rhymePress)
+            .disabled(!enabled)
 
             Button(role: .destructive) {
                 confirmPermanentDelete = true
             } label: {
                 Label("Delete", systemImage: "trash")
                     .font(.subheadline.weight(.semibold))
-                    // The prominent style draws white on the action fill,
-                    // which is warm white on Graphite.
-                    .foregroundStyle(appearance.palette.onAction)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .appearanceActionSurface(cornerRadius: RhymeAITokens.Touch.minimum / 2, isEnabled: enabled)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .disabled(activeSelectionCount == 0)
+            .buttonStyle(.rhymePress)
+            .disabled(!enabled)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
-        .liquidGlassSurface(cornerRadius: 0)
+        .background(appearance.palette.surface)
+        .overlay(Divider(), alignment: .top)
     }
 
     /// On regular width the screen keeps the editor's 740pt column, centred.

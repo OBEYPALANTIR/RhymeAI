@@ -57,7 +57,7 @@ struct AssistantPanelView: View {
     private var localStatusTitle: String {
         if inferenceStatus.loadingCount > 0 { return "Loading model" }
         if viewModel.isLoading { return "Writing locally" }
-        if viewModel.errorMessage != nil { return "Try again" }
+        if viewModel.suggestionsFailed && viewModel.errorMessage != nil { return "Try again" }
         if downloads.activeDownloadID != nil && !readiness.canGenerate { return "Downloading model" }
         return readiness.title
     }
@@ -157,8 +157,10 @@ struct AssistantPanelView: View {
             .onChange(of: viewModel.suggestions.isEmpty) { _, isEmpty in
                 if !isEmpty { revealResults(scroll) }
             }
-            .onChange(of: viewModel.errorMessage) { _, error in
-                if error != nil { revealResults(scroll) }
+            // Only a failed request scrolls; other editor errors share
+            // errorMessage and must not move the panel off its top.
+            .onChange(of: viewModel.suggestionsFailed) { _, failed in
+                if failed { revealResults(scroll) }
             }
         }
     }
@@ -225,12 +227,10 @@ struct AssistantPanelView: View {
             }
             .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.isLoading)
             .font(.body.weight(.semibold))
-            .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity)
             .padding(.vertical, RhymeAITokens.Rhythm.tight)
             .frame(minHeight: RhymeAITokens.Rhythm.primary)
-            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md)
-            .opacity(isDisabled ? 0.45 : 1)
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.md, isEnabled: !isDisabled)
         }
         .disabled(suggestionDisabled)
         .buttonStyle(.rhymePress)
@@ -669,7 +669,7 @@ struct AssistantPanelView: View {
             Spacer()
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(appearance.palette.action)
+                .tint(appearance.palette.switchTrack)
                 .accessibilityLabel(text)
         }
     }

@@ -190,12 +190,14 @@ private struct AppearanceActionSurfaceModifier: ViewModifier {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let cornerRadius: CGFloat
+    let isEnabled: Bool
 
     func body(content: Content) -> some View {
+        let palette = appearance.palette
         content
-            .foregroundStyle(appearance.palette.onAction)
+            .foregroundStyle(isEnabled ? palette.onAction : palette.disabledInk)
             .background(
-                appearance.palette.action,
+                isEnabled ? palette.action : palette.raisedSurface,
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
     }
@@ -300,8 +302,10 @@ extension View {
         )
     }
 
-    func appearanceActionSurface(cornerRadius: CGFloat) -> some View {
-        modifier(AppearanceActionSurfaceModifier(cornerRadius: cornerRadius))
+    /// The action fill. A disabled action drops to the raised surface with the
+    /// disabled ink, which keeps the label at 3:1 or more instead of fading it.
+    func appearanceActionSurface(cornerRadius: CGFloat, isEnabled: Bool = true) -> some View {
+        modifier(AppearanceActionSurfaceModifier(cornerRadius: cornerRadius, isEnabled: isEnabled))
     }
 
     @ViewBuilder

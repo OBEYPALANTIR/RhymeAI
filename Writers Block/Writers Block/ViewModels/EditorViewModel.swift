@@ -373,6 +373,10 @@ final class EditorViewModel: ObservableObject {
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    /// True once the latest suggestions request failed. `errorMessage` also
+    /// carries editor errors, so the assistant only offers "Try again" and
+    /// scrolls to the error when this is set.
+    @Published private(set) var suggestionsFailed = false
     /// The request whose stream ended on its own with its lines still listed.
     /// Cleared when a request starts and on every cancel, so Stop, Settings
     /// changes, navigation, errors and lines used before the end never leave it set.
@@ -1072,6 +1076,7 @@ final class EditorViewModel: ObservableObject {
         // The first autosave can assign a project ID while generation is in flight.
         isLoading = true
         errorMessage = nil
+        suggestionsFailed = false
         suggestions = []
         completedSuggestionsRequestID = nil
 
@@ -1128,6 +1133,7 @@ final class EditorViewModel: ObservableObject {
                 if !Task.isCancelled, self.suggestionsRequestID == requestID {
                     if !emittedSuggestion {
                         self.errorMessage = "AI did not return suggestions. Try again."
+                        self.suggestionsFailed = true
                     } else if !self.suggestions.isEmpty {
                         // Lines can be used or cleared while the stream finishes
                         // (an inserted line clears the list); only results still
@@ -1140,6 +1146,7 @@ final class EditorViewModel: ObservableObject {
             } catch {
                 guard self.suggestionsRequestID == requestID else { return }
                 self.errorMessage = error.localizedDescription
+                self.suggestionsFailed = true
             }
         }
     }
@@ -1194,6 +1201,7 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask = nil
         suggestionsRequestID = nil
         completedSuggestionsRequestID = nil
+        suggestionsFailed = false
         isLoading = false
     }
 

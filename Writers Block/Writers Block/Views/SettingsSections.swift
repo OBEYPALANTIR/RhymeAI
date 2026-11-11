@@ -112,8 +112,6 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
 }
 
 struct SettingsSaveBar: View {
-    @Environment(\.appAppearanceStyle) private var appearance
-
     let saved: Bool
     /// Only API keys wait for Save, so the button is live only while a typed
     /// key differs from the stored one.
@@ -127,10 +125,8 @@ struct SettingsSaveBar: View {
                 systemImage: saved ? "checkmark.circle.fill" : "checkmark"
             )
             .font(.headline)
-            .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
-            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
-            .opacity(saved || hasChanges ? 1 : 0.45)
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg, isEnabled: saved || hasChanges)
         }
         .buttonStyle(.rhymePress)
         .disabled(saved || !hasChanges)
@@ -484,7 +480,7 @@ struct SettingsEditorSection: View {
 
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(appearance.palette.action)
+                .tint(appearance.palette.switchTrack)
                 .accessibilityLabel(text)
         }
     }
@@ -970,6 +966,7 @@ struct FirstRunRestoreSheet: View {
 
 struct SettingsSectionTitle: View {
     @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let title: String
     let systemImage: String
@@ -984,6 +981,20 @@ struct SettingsSectionTitle: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(appearance.palette.secondaryInk)
             .textCase(.uppercase)
-            .labelStyle(.titleAndIcon)
+            // At accessibility sizes the icon gives its width to the title, so
+            // a one-word heading such as APPEARANCE is not hyphenated.
+            .labelStyle(SettingsSectionTitleLabelStyle(showsIcon: !dynamicTypeSize.isAccessibilitySize))
+    }
+}
+
+private struct SettingsSectionTitleLabelStyle: LabelStyle {
+    let showsIcon: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if showsIcon {
+            Label(configuration)
+        } else {
+            configuration.title
+        }
     }
 }

@@ -119,4 +119,37 @@ struct AppAppearanceTests {
         #expect(AppAppearanceStyle.paper.placeholderHexValue == 0x5D574E)
         #expect(AppAppearanceStyle.graphite.placeholderHexValue == 0xAAA49A)
     }
+
+    /// WCAG non-text contrast (3:1): a switch's on track against its white
+    /// thumb and the canvas, and disabled labels against the canvas and the
+    /// raised surface they sit on. Canvas and raised values are DESIGN.md's.
+    @Test
+    func switchTracksAndDisabledInkMeetNonTextContrast() {
+        let surfaces: [(AppAppearanceStyle, canvas: UInt32, raised: UInt32)] = [
+            (.ink, 0xFCFCF8, 0xE5E5DE),
+            (.paper, 0xF3EEDF, 0xDDD4BF),
+            (.graphite, 0x171716, 0x2B2B28),
+        ]
+        for (style, canvas, raised) in surfaces {
+            #expect(Self.contrast(style.switchTrackHexValue, 0xFFFFFF) >= 3, "\(style) track to thumb")
+            #expect(Self.contrast(style.switchTrackHexValue, canvas) >= 3, "\(style) track to canvas")
+            #expect(Self.contrast(style.disabledInkHexValue, canvas) >= 3, "\(style) disabled ink on canvas")
+            #expect(Self.contrast(style.disabledInkHexValue, raised) >= 3, "\(style) disabled ink on raised")
+        }
+        // Ink and Paper keep their action-coloured tracks.
+        #expect(AppAppearanceStyle.ink.switchTrackHexValue == 0x050505)
+        #expect(AppAppearanceStyle.paper.switchTrackHexValue == 0x302E2A)
+    }
+
+    private static func contrast(_ a: UInt32, _ b: UInt32) -> Double {
+        func luminance(_ hex: UInt32) -> Double {
+            func channel(_ shift: UInt32) -> Double {
+                let c = Double((hex >> shift) & 0xFF) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        }
+        let (l1, l2) = (luminance(a), luminance(b))
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
 }

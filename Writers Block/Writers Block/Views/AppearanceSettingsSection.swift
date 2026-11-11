@@ -5,10 +5,7 @@ struct AppearanceSettingsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            Label("Appearance", systemImage: "circle.lefthalf.filled")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(appearance.wrappedValue.palette.secondaryInk)
-                .textCase(.uppercase)
+            SettingsSectionTitle("Appearance", systemImage: "circle.lefthalf.filled")
 
             RhymeSegmentedControl(
                 options: AppAppearanceStyle.allCases,
