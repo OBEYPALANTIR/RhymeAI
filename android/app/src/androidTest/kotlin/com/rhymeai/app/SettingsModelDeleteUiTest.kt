@@ -37,6 +37,7 @@ class SettingsModelDeleteUiTest {
     private val model = GEMMA_DOWNLOADS.first()
     private val installed = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, model.fileName)
     private val downloading = mutableStateOf<GemmaDownload?>(null)
+    private val loading = mutableStateOf(false)
     private val revision = mutableStateOf(0)
     private val verified = mutableStateOf(setOf(model.fileName))
     private val deleted = mutableListOf<GemmaDownload>()
@@ -65,14 +66,14 @@ class SettingsModelDeleteUiTest {
 
     @Test fun confirmingDeleteTurnsTheDownloadedRowBackIntoADownloadRow() {
         showSettings()
-        compose.onNodeWithText("Downloaded - 3.43 GB").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Quick drafts · 3.43 GB on this device").performScrollTo().assertIsDisplayed()
         deleteButton().assertIsEnabled().performClick()
         compose.onNodeWithText("Delete ${model.label}?").assertIsDisplayed()
         compose.onNodeWithText("Frees 3.43 GB on this device. You can download it again later.").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithText("Delete ${model.label}?").assertDoesNotExist()
         assertFalse(deleted.contains(model))
-        compose.onNodeWithText("Downloaded - 3.43 GB").assertIsDisplayed()
+        compose.onNodeWithText("Quick drafts · 3.43 GB on this device").assertIsDisplayed()
 
         deleteButton().performClick()
         compose.onNodeWithText("Delete").performClick()
@@ -80,16 +81,26 @@ class SettingsModelDeleteUiTest {
         compose.onNodeWithText("Delete ${model.label}?").assertDoesNotExist()
         assertFalse(installed.exists())
         deleteButton().assertDoesNotExist()
-        compose.onNodeWithText("Downloaded - 3.43 GB").assertDoesNotExist()
-        compose.onNodeWithText(model.description).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Quick drafts · 3.43 GB on this device").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Download ${model.label}").performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun deleteIsDisabledWhileThatModelDownloads() {
+    @Test fun whileThatModelDownloadsTheColumnCancelsInsteadOfDeleting() {
         showSettings()
         deleteButton().performScrollTo().assertIsEnabled()
         compose.runOnIdle { downloading.value = model }
-        deleteButton().assertIsNotEnabled()
+        deleteButton().assertDoesNotExist()
+        compose.onNodeWithContentDescription("Cancel download of ${model.label}").assertIsEnabled()
         compose.runOnIdle { downloading.value = null }
+        deleteButton().assertIsEnabled()
+    }
+
+    @Test fun deleteIsDisabledWhileTheLocalModelLoads() {
+        showSettings()
+        deleteButton().performScrollTo().assertIsEnabled()
+        compose.runOnIdle { loading.value = true }
+        deleteButton().assertIsNotEnabled()
+        compose.runOnIdle { loading.value = false }
         deleteButton().assertIsEnabled()
     }
 
@@ -102,7 +113,7 @@ class SettingsModelDeleteUiTest {
                     apiKeyPresence = emptyMap(),
                     currentProvider = AIProvider.LOCAL,
                     currentModel = AIModel.LOCAL_MODEL,
-                    localModelLoading = false,
+                    localModelLoading = loading.value,
                     localModelLoaded = false,
                     localModelPath = null,
                     localModelError = null,
