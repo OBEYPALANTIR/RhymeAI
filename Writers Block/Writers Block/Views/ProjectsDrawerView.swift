@@ -545,7 +545,7 @@ struct ProjectsDrawerView: View {
                     Text(oneLinersSubtitle)
                         .font(.footnote)
                         .foregroundStyle(appearance.palette.secondaryInk)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                         .truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
