@@ -1,6 +1,6 @@
 ---
 name: rhymeai-pr-evidence
-description: "How a RhymeAI change gets from a worktree to main: branch and commit conventions, the evidence the PR hook requires (path-free test summary as a secret gist, 'Run evidence' section), the Codex / CodeRabbit / Copilot review loop, rebase-merge and worktree cleanup. Use for: open a PR, evidence, gist, review findings, merge, worktree, release APK, pre-release, TestFlight."
+description: "How a RhymeAI change gets from a worktree to main: branch and commit conventions, the evidence the PR hook requires (path-free test summary as a secret gist, 'Run evidence' section), the Codex / CodeRabbit / Copilot review loop, rebase-merge (squash when GitHub can't rebase) and worktree cleanup. Use for: open a PR, evidence, gist, review findings, merge, worktree, release APK, pre-release, TestFlight."
 ---
 
 # RhymeAI PR and evidence
@@ -56,9 +56,12 @@ numbers), `## Run evidence` (gist raw URL), `## Not covered` (honest gaps). Link
   (Codex's 👍 or "no major issues", or a `code-reviewer` run posted to the PR).
 - `gh pr merge <n> --rebase --match-head-commit <sha>`, with `<sha>` the final commit those
   verdicts cover, so a later push cannot land unreviewed (no `--delete-branch`: the branch is
-  still checked out in the worktree, so gh would skip the local delete). Then delete the
-  untracked evidence files, `git worktree remove .agents/worktrees/<slug>` without `--force`,
-  `git branch -D <branch>` (a rebase-merge leaves it looking unmerged), and
+  still checked out in the worktree, so gh would skip the local delete). If GitHub refuses
+  because the branch can't be rebased (`gh api repos/{owner}/{repo}/pulls/<n> --jq .rebaseable`
+  prints `false`, usually because a merge from `main` resolved a conflict), run the same command
+  with `--squash` in place of `--rebase`, keeping the pin. Then delete the untracked evidence
+  files, `git worktree remove .agents/worktrees/<slug>` without `--force`,
+  `git branch -D <branch>` (a rebase or squash merge leaves it looking unmerged), and
   `git push origin --delete <branch>` if the remote branch still exists. When the PR names an
   issue, record the merge sha on it with `gh issue comment`, and run `gh issue close <n>` if it
   is still open (`Fixes #<n>` closes it only when the PR merges into the default branch).
