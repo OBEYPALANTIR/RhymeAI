@@ -62,12 +62,23 @@ class WritingCompanionUiTest {
         }
     }
 
+    @OptIn(ExperimentalTestApi::class)
     @Test fun openingTheNotebookKeepsTheSelectionForKeepSelectedLyrics() {
-        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(0, 11))) }
+        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric")) }
+        // Select in the focused field, as a touch does, so opening the notebook takes focus away from it.
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 11))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 11) }
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
         composeRule.onNodeWithText("Song Notebook").performClick()
         composeRule.onNodeWithText("Keep selected lyrics").assertIsEnabled().performClick()
         onMain { assertEquals(listOf("first lyric"), vm.songWorkspace.alternates.map { it.text }) }
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(0, 11)))
+            vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(15)))
+            assertNull("A cursor away from the selection's ends clears it", vm.pendingRewriteRange)
+        }
     }
 
     @Test fun localUnavailableDisablesSuggestionsAndLinksToSetup() {

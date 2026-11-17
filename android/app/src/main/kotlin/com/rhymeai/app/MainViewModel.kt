@@ -2849,6 +2849,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (hasActiveRewrite || openingSong) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
+        // cancelEditorAIWork clears the range; a cursor collapsing onto one of its ends (focus leaving the field) keeps it.
+        val previousPendingRange = pendingRewriteRange
         if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
         if (nextValue.text != previousText) {
             suggestionInsertion = null
@@ -2879,11 +2881,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        pendingRewriteRange?.let { pendingRange ->
-            if (nextSelection.start != pendingRange.min && nextSelection.start != pendingRange.max) {
-                pendingRewriteRange = null
-            }
-        }
+        pendingRewriteRange = previousPendingRange?.takeIf { nextSelection.start == it.min || nextSelection.start == it.max }
         lyricsFieldValue = nextValue
         rememberEditorPosition()
     }
