@@ -68,6 +68,7 @@ enum EditorViewConstants {
         static let surfaceTintOpacity: Double = 0.08
         static let surfaceFallbackOpacity: Double = 0.85
         static let statusLineLimit = 1
+        static let noTopInset: CGFloat = 0
     }
 
     enum Wordmark {
@@ -135,6 +136,7 @@ struct EditorView: View {
     /// re-created editor does not raise the keyboard again.
     @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
     @State private var rewriteAccessoryHeight: CGFloat = EditorViewConstants.EditorLayout.noAccessoryHeight
+    @State private var topBarHeight: CGFloat = EditorViewConstants.RewriteReview.noTopInset
     // UnBlock collapses into a pencil circle while the mic is recording.
     @State private var unblockWordmarkOpacity: Double = EditorViewConstants.UnBlockChrome.visibleWordmarkOpacity
     @State private var unblockButtonWidth: CGFloat = EditorViewConstants.UnBlockChrome.expandedButtonWidth
@@ -395,6 +397,7 @@ struct EditorView: View {
 
             VStack(spacing: EditorViewConstants.EditorLayout.stackSpacing) {
                 topBar
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { topBarHeight = $0 }
                 editorScrollView
                     .padding(.bottom, iPhoneEditorBottomClearance)
             }
@@ -402,6 +405,8 @@ struct EditorView: View {
             .accessibilityHidden(assistantSheetIsActive)
 
             rewriteAccessoryBar
+                // Bounds an error bar that can scroll to the space below the toolbar; other bars keep their layout.
+                .padding(.top, InlineRewriteReviewBar.scrollsError(viewModel.rewriteError, at: dynamicTypeSize) ? topBarHeight + RhymeAITokens.Spacing.xs : EditorViewConstants.RewriteReview.noTopInset)
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, keyboardIsVisible ? keyboardHeight + RhymeAITokens.Spacing.xs : RhymeAITokens.Spacing.sm)
                 .zIndex(EditorViewConstants.EditorLayout.accessoryZIndex)
@@ -1219,6 +1224,12 @@ private struct InlineRewriteReviewBar: View {
     var onRetry: () -> Void
     var onSetUpModel: () -> Void
 
+    /// Only a stacked error bar (an error from XXL up) can grow tall enough to need scrolling;
+    /// the side-by-side row keeps its plain layout.
+    static func scrollsError(_ error: String?, at size: DynamicTypeSize) -> Bool {
+        error != nil && size >= .xxLarge
+    }
+
     var body: some View {
         // An error has to stay readable, so it wraps without a cap; at accessibility sizes,
         // and for an error at the two largest standard sizes, the actions drop below
@@ -1228,37 +1239,19 @@ private struct InlineRewriteReviewBar: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xs))
 
-        layout {
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                if loading {
-                    ProgressView()
-                        .scaleEffect(EditorViewConstants.RewriteReview.progressScale)
-                } else {
-                    Image(systemName: error == nil ? "sparkles" : "exclamationmark.triangle")
-                        .font(.caption.weight(.semibold))
-                }
-
-                Text(statusText)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : nil)
-                    .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(error == nil ? appearance.palette.action : appearance.palette.error)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Group {
-                if stacked {
-                    // Multi-option rows restack vertically when one row would overflow.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
-                        VStack(alignment: .trailing, spacing: RhymeAITokens.Spacing.xxs) { actionButtons }
+        Group {
+            if Self.scrollsError(error, at: dynamicTypeSize) {
+                // A message taller than the room below the toolbar scrolls; the actions stay visible.
+                ViewThatFits(in: .vertical) {
+                    layout { statusRow; actionsRow(stacked: stacked) }
+                    VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
+                        ScrollView { statusRow }
+                        actionsRow(stacked: stacked)
                     }
-                } else {
-                    HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
                 }
+            } else {
+                layout { statusRow; actionsRow(stacked: stacked) }
             }
-            .frame(maxWidth: stacked ? .infinity : nil, alignment: .trailing)
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .padding(.vertical, RhymeAITokens.Spacing.xs)
@@ -1266,6 +1259,41 @@ private struct InlineRewriteReviewBar: View {
         .liquidGlassSurface(cornerRadius: surfaceRadius, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("inlineRewriteReviewBar")
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: RhymeAITokens.Spacing.xs) {
+            if loading {
+                ProgressView()
+                    .scaleEffect(EditorViewConstants.RewriteReview.progressScale)
+            } else {
+                Image(systemName: error == nil ? "sparkles" : "exclamationmark.triangle")
+                    .font(.caption.weight(.semibold))
+            }
+
+            Text(statusText)
+                .font(.caption.weight(.semibold))
+                .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : nil)
+                .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(error == nil ? appearance.palette.action : appearance.palette.error)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func actionsRow(stacked: Bool) -> some View {
+        Group {
+            if stacked {
+                // Multi-option rows restack vertically when one row would overflow.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
+                    VStack(alignment: .trailing, spacing: RhymeAITokens.Spacing.xxs) { actionButtons }
+                }
+            } else {
+                HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
+            }
+        }
+        .frame(maxWidth: stacked ? .infinity : nil, alignment: .trailing)
     }
 
     @ViewBuilder
