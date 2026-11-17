@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIProvider
@@ -84,6 +85,24 @@ class WritingCompanionUiTest {
             .assertIsEnabled()
             .performClick()
         composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+    }
+
+    @Test fun rewriteWithoutLocalModelOffersSetupInsteadOfRetry() {
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("A quiet line", TextRange(0, 7)))
+            vm.saveProvider(AIProvider.LOCAL)
+            vm.unloadLocalModel()
+            vm.localModelError = null
+            vm.localModelLoading = false
+            vm.requestRewrite(RewriteAction.REPHRASE)
+        }
+        val bar = hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))
+        composeRule.onNode(hasText(REWRITE_NEEDS_MODEL) and bar).assertIsDisplayed()
+        composeRule.onNode(hasText("Cancel") and bar).assertIsDisplayed()
+        composeRule.onAllNodes(hasText("Retry") and bar).assertCountEquals(0)
+        composeRule.onNode(hasText("Set up model") and bar).assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+        onMain { assertTrue(vm.showSettingsDialog) }
     }
 
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {

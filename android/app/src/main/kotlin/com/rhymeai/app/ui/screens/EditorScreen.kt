@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -1672,6 +1673,8 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         onApply = { viewModel.applyRewrite() },
                         onCancel = { viewModel.cancelRewriteReview() },
                         onRetry = { viewModel.retryRewrite() },
+                        needsModelSetup = viewModel.rewriteNeedsModelSetup,
+                        onModelSetup = viewModel::openModelSetup,
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                     }
@@ -1848,6 +1851,7 @@ private fun selectedTextVerticalRange(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun InlineRewriteReviewBar(
     action: RewriteAction,
@@ -1857,16 +1861,21 @@ private fun InlineRewriteReviewBar(
     onApply: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    needsModelSetup: Boolean,
+    onModelSetup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag("inlineRewriteReviewBar")
             .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.sheet))
             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sheet))
             .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+    ) {
+    Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
     ) {
@@ -1890,23 +1899,13 @@ private fun InlineRewriteReviewBar(
             color = if (error == null) colorScheme.onSurface else colorScheme.error,
             fontSize = DesignTokens.Typography.caption,
             fontWeight = FontWeight.Medium,
-            maxLines = if (error == null) 1 else 2,
+            // An error wraps in full: its actions sit on their own line below it.
+            maxLines = if (error == null) 1 else Int.MAX_VALUE,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
 
-        if (error != null) {
-            Button(
-                onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
-            ) {
-                Text("Retry", fontSize = 12.sp)
-            }
-        } else if (preview != null && !loading) {
+        if (error == null && preview != null && !loading) {
             Button(
                 onClick = onApply,
                 colors = ButtonDefaults.buttonColors(
@@ -1930,16 +1929,46 @@ private fun InlineRewriteReviewBar(
             }
         }
 
-        Button(
-            onClick = onCancel,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colorScheme.surfaceContainer,
-                contentColor = colorScheme.onSurfaceVariant
-            ),
-            shape = RoundedCornerShape(DesignTokens.Radius.pill)
+        if (error == null) InlineRewriteCancelButton(onCancel)
+    }
+    if (error != null) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
         ) {
-            Text("Cancel", fontSize = 12.sp)
+            Button(
+                // No local model: Retry cannot succeed, so open the same AI setup as the Assistant.
+                onClick = if (needsModelSetup) onModelSetup else onRetry,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                ),
+                shape = RoundedCornerShape(DesignTokens.Radius.pill)
+            ) {
+                Text(
+                    if (needsModelSetup) stringResource(R.string.assistant_set_up_model) else "Retry",
+                    fontSize = 12.sp
+                )
+            }
+            InlineRewriteCancelButton(onCancel)
         }
+    }
+    }
+}
+
+@Composable
+private fun InlineRewriteCancelButton(onCancel: () -> Unit) {
+    val colorScheme = MaterialTheme.colorScheme
+    Button(
+        onClick = onCancel,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = colorScheme.surfaceContainer,
+            contentColor = colorScheme.onSurfaceVariant
+        ),
+        shape = RoundedCornerShape(DesignTokens.Radius.pill)
+    ) {
+        Text("Cancel", fontSize = 12.sp)
     }
 }
 

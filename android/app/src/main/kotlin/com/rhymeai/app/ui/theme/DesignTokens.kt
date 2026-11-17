@@ -103,6 +103,9 @@ object DesignTokens {
         val compactWidth = 304.dp
         val width = 360.dp
         val expandedWidth = 584.dp
+        // Secondary text on the selected song row: onPrimaryContainer at this alpha clears 4.6:1 on
+        // primaryContainer in every appearance (Paper's muted ink there was 4.30:1).
+        const val selectedRowSecondaryAlpha = 0.8f
     }
 
     /** Surface scale: page (flat), raised (tonal slab), floating (hairline + soft ink shadow). */

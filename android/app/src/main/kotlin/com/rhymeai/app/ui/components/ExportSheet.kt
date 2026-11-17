@@ -49,6 +49,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rhymeai.app.data.model.ExportFormat
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.SurfaceLevel
+import com.rhymeai.app.ui.theme.raisedSurface
 import com.rhymeai.app.ui.theme.appWritingSurface
 
 @Composable
@@ -187,12 +189,16 @@ private fun FormatRow(
     onClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(DesignTokens.Radius.lg)
+    // An option card on the raised step: tone, no resting border.
     OutlinedButton(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp),
-        shape = RoundedCornerShape(DesignTokens.Radius.lg)
+            .heightIn(min = 64.dp)
+            .raisedSurface(SurfaceLevel.Raised, shape),
+        shape = shape,
+        border = null
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

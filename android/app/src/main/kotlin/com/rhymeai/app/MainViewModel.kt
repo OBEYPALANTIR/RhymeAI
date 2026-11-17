@@ -155,6 +155,7 @@ internal object SongOpenTestHooks {
 /** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
 /** Persisted when the selected local model was deleted: restore must not pick another one. */
 private const val NO_LOCAL_MODEL_SELECTION = ""
+internal const val REWRITE_NEEDS_MODEL = "Choose a local model in Settings to rewrite."
 
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -1466,6 +1467,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rewritePreview by mutableStateOf<String?>(null)
     var rewriteOriginal by mutableStateOf<String?>(null)
     var rewriteError by mutableStateOf<String?>(null)
+    /** The rewrite failed for want of a local model and none is ready yet: the bar offers setup, not Retry. */
+    val rewriteNeedsModelSetup: Boolean get() = rewriteError == REWRITE_NEEDS_MODEL && !localReady
     var pendingRewriteRange by mutableStateOf<TextRange?>(null)
         private set
     private var rewriteRange: TextRange? = null
@@ -1949,7 +1952,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteError = null
         rewriteLoading = false
         if (selectedProvider == AIProvider.LOCAL && !localReady) {
-            rewriteError = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to rewrite."
+            rewriteError = if (localModelLoading) "Wait for your local model to finish loading." else REWRITE_NEEDS_MODEL
             return
         }
         if (!authorizeCloudAI("rewrite") { beginRewrite(action, range, original, rejectedCandidates) }) return

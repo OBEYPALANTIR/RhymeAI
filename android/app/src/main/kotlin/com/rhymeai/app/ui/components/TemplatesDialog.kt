@@ -1,6 +1,5 @@
 package com.rhymeai.app.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,7 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Card
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -39,8 +38,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhymeai.app.data.model.SONG_TEMPLATES
+import androidx.compose.ui.graphics.Color
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
+import com.rhymeai.app.ui.theme.raisedSurface
 import kotlinx.coroutines.launch
 
 // The native sheet applies its travel after the caller modifier, so node bounds alone miss it.
@@ -125,18 +127,21 @@ fun TemplatesDialog(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.md)
             ) {
                 SONG_TEMPLATES.forEach { template ->
-                    OutlinedCard(
+                    val cardShape = RoundedCornerShape(DesignTokens.Radius.lg)
+                    Card(
                         onClick = { closeSheet { onSelectTemplate(template.name, template.theme, template.lyrics) } },
                         enabled = !isClosing,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = DesignTokens.Touch.minTarget),
-                        shape = RoundedCornerShape(DesignTokens.Radius.lg),
-                        colors = CardDefaults.outlinedCardColors(
-                            containerColor = colorScheme.surfaceContainer,
-                            contentColor = colorScheme.onSurface
-                        ),
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                            .heightIn(min = DesignTokens.Touch.minTarget)
+                            .raisedSurface(SurfaceLevel.Raised, cardShape),
+                        shape = cardShape,
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.Transparent,
+                            contentColor = colorScheme.onSurface,
+                            disabledContainerColor = Color.Transparent,
+                            disabledContentColor = colorScheme.onSurface
+                        )
                     ) {
                         Column(modifier = Modifier.padding(DesignTokens.Spacing.lg)) {
                             Text(

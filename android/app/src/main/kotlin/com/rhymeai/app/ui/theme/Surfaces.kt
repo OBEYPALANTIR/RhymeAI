@@ -59,12 +59,19 @@ private fun Modifier.inkShadow(elevation: Dp, shape: Shape, ink: Color, visibleA
 fun Modifier.raisedSurface(level: SurfaceLevel, shape: Shape, topHighlight: Boolean = false): Modifier {
     val colorScheme = MaterialTheme.colorScheme
     val tokens = DesignTokens.Elevation
+    // High-contrast text puts a strong 1dp border back on raised and floating surfaces.
+    val highContrast = LocalHighTextContrastEnabled.current
     val filled = when (level) {
         SurfaceLevel.Page -> background(colorScheme.surface, shape)
         SurfaceLevel.Raised -> background(colorScheme.surfaceContainerLow, shape)
+            .then(if (highContrast) Modifier.border(tokens.hairline, colorScheme.outlineVariant, shape) else Modifier)
         SurfaceLevel.Floating -> inkShadow(tokens.floatingShadow, shape, shadowInk(), tokens.floatingShadowAlpha)
             .background(colorScheme.surfaceContainerHigh, shape)
-            .border(tokens.hairline, colorScheme.outlineVariant.copy(alpha = tokens.hairlineAlpha), shape)
+            .border(
+                tokens.hairline,
+                if (highContrast) colorScheme.outlineVariant else colorScheme.outlineVariant.copy(alpha = tokens.hairlineAlpha),
+                shape
+            )
     }
     if (!topHighlight) return filled
     // surfaceBright, not surface: under Graphite the surface is darker than the slab.
