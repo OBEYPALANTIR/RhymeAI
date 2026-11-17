@@ -169,8 +169,8 @@ fun SongRecordingsDialog(
             OutlinedTextField(
                 value = search, onValueChange = { search = it },
                 placeholder = { Text("Search recordings") }, singleLine = true,
-                // The placeholder hides once text is typed; the description keeps the field named.
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search recordings" },
+                // The placeholder names the empty field; once typed text hides it, the description keeps the field named.
+                modifier = Modifier.fillMaxWidth().semantics { if (search.isNotEmpty()) contentDescription = "Search recordings" },
                 shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 // A raised search field, as in the songs drawer: borderless at rest, outlined when focused.
                 colors = OutlinedTextFieldDefaults.colors(
