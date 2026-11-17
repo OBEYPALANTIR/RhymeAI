@@ -2853,7 +2853,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Focus leaving for a modal that uses the selection collapses the cursor onto one of its ends; keep the range
         // through that. A selection restored on song open never set the range, so the field's own selection stands in.
         val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners)) {
-            pendingRewriteRange ?: lyricsFieldValue.selection.takeUnless { it.collapsed }
+            // Collapsed or blank selections get no range, as in the expanded-selection branch below.
+            pendingRewriteRange ?: lyricsFieldValue.selection.takeUnless {
+                val text = lyricsFieldValue.text
+                text.substring(it.min.coerceIn(0, text.length), it.max.coerceIn(0, text.length)).isBlank()
+            }
         } else null
         if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
         if (nextValue.text != previousText) {

@@ -93,6 +93,18 @@ class WritingCompanionUiTest {
         onMain { assertNull(vm.pendingRewriteRange) }
     }
 
+    @Test fun blankSelectionGetsNoRangeWhenTheNotebookTakesFocus() {
+        val lyrics = "first lyric\n  \nsecond lyric"
+        onMain {
+            vm.onLyricsChanged(TextFieldValue(lyrics))
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(12, 14)))
+            vm.showSongNotebook = true
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(14)))
+            assertNull(vm.pendingRewriteRange)
+            vm.showSongNotebook = false
+        }
+    }
+
     @Test fun reopenedSongKeepsItsRestoredSelectionWhenFocusLeaves() {
         val lyrics = "first lyric\nsecond lyric"
         onMain {
