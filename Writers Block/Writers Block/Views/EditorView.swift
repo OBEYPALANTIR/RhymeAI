@@ -68,7 +68,6 @@ enum EditorViewConstants {
         static let surfaceTintOpacity: Double = 0.08
         static let surfaceFallbackOpacity: Double = 0.85
         static let statusLineLimit = 1
-        static let errorLineLimit = 4
     }
 
     enum Wordmark {
@@ -1221,9 +1220,10 @@ private struct InlineRewriteReviewBar: View {
     var onSetUpModel: () -> Void
 
     var body: some View {
-        // An error has to stay readable, so it wraps; at accessibility sizes
-        // the actions drop below the status instead of squeezing it out.
-        let stacked = dynamicTypeSize.isAccessibilitySize
+        // An error has to stay readable, so it wraps without a cap; at accessibility sizes,
+        // and for an error at the two largest standard sizes, the actions drop below
+        // the status instead of squeezing it out.
+        let stacked = dynamicTypeSize.isAccessibilitySize || (error != nil && dynamicTypeSize >= .xxLarge)
         let layout = stacked
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xs))
@@ -1240,55 +1240,23 @@ private struct InlineRewriteReviewBar: View {
 
                 Text(statusText)
                     .font(.caption.weight(.semibold))
-                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : (stacked ? nil : EditorViewConstants.RewriteReview.errorLineLimit))
+                    .lineLimit(error == nil ? EditorViewConstants.RewriteReview.statusLineLimit : nil)
                     .minimumScaleFactor(EditorViewConstants.RewriteReview.statusMinimumScale)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .foregroundStyle(error == nil ? appearance.palette.action : appearance.palette.error)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
-                if let error {
-                    // Without a model, Retry fails the same way; send the writer to model setup.
-                    let needsModel = AIErrorRecoveryAction(errorMessage: error) == .setUpModel
-                    Button(action: needsModel ? onSetUpModel : onRetry) {
-                        Text(needsModel ? "Set up model" : "Retry")
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                            .foregroundStyle(appearance.palette.action)
-                            .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
-                            .fixedSize()
+            Group {
+                if stacked {
+                    // Multi-option rows restack vertically when one row would overflow.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
+                        VStack(alignment: .trailing, spacing: RhymeAITokens.Spacing.xxs) { actionButtons }
                     }
-                    .buttonStyle(.rhymePress)
-                } else if preview != nil {
-                    Button(action: onApply) {
-                        Text("Apply")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(appearance.palette.onAction)
-                            .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
-                            .background(appearance.palette.action, in: Capsule())
-                    }
-                    .buttonStyle(.rhymePress)
-                    Button {
-                        onRetry()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(appearance.palette.action)
-                            .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
-                    }
-                    .buttonStyle(.rhymePress)
-                    .accessibilityLabel("Regenerate rewrite")
+                } else {
+                    HStack(spacing: RhymeAITokens.Spacing.xs) { actionButtons }
                 }
-
-                Button(action: onCancel) {
-                    Text("Cancel")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
-                        .fixedSize()
-                }
-                .buttonStyle(.rhymePress)
             }
             .frame(maxWidth: stacked ? .infinity : nil, alignment: .trailing)
         }
@@ -1298,6 +1266,51 @@ private struct InlineRewriteReviewBar: View {
         .liquidGlassSurface(cornerRadius: surfaceRadius, tint: .indigo.opacity(EditorViewConstants.RewriteReview.surfaceTintOpacity), fallbackOpacity: EditorViewConstants.RewriteReview.surfaceFallbackOpacity)
         .liquidGlassGroup(spacing: RhymeAITokens.Spacing.sm)
         .accessibilityIdentifier("inlineRewriteReviewBar")
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        if let error {
+            // Without a model, Retry fails the same way; send the writer to model setup.
+            let needsModel = AIErrorRecoveryAction(errorMessage: error) == .setUpModel
+            Button(action: needsModel ? onSetUpModel : onRetry) {
+                Text(needsModel ? "Set up model" : "Retry")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(appearance.palette.action)
+                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+                    .fixedSize()
+            }
+            .buttonStyle(.rhymePress)
+        } else if preview != nil {
+            Button(action: onApply) {
+                Text("Apply")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(appearance.palette.onAction)
+                    .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+                    .background(appearance.palette.action, in: Capsule())
+            }
+            .buttonStyle(.rhymePress)
+            Button {
+                onRetry()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(appearance.palette.action)
+                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.rhymePress)
+            .accessibilityLabel("Regenerate rewrite")
+        }
+
+        Button(action: onCancel) {
+            Text("Cancel")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
+                .fixedSize()
+        }
+        .buttonStyle(.rhymePress)
     }
 
     /// A pill only suits a single line; taller content gets the card radius
