@@ -81,6 +81,46 @@ class WritingCompanionUiTest {
         }
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun movingTheCursorOntoTheSelectionEndInTheFocusedFieldClearsIt() {
+        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric")) }
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 11))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 11) }
+        editor.performTextInputSelection(TextRange(11))
+        waitUntil { vm.lyricsFieldValue.selection == TextRange(11) }
+        onMain { assertNull(vm.pendingRewriteRange) }
+    }
+
+    @Test fun reopenedSongKeepsItsRestoredSelectionWhenFocusLeaves() {
+        val lyrics = "first lyric\nsecond lyric"
+        onMain {
+            vm.onTitleChanged("Restored Selection QA")
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(0, 11)))
+            vm.rememberEditorPosition()
+            vm.newProject()
+        }
+        waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
+        val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Restored Selection QA" } }
+        waitUntil { !vm.savingBeforeNavigation }
+        onMain { vm.loadProject(saved) }
+        waitUntil { vm.currentProjectId == saved.id && !vm.openingSong && !vm.savingBeforeNavigation }
+        onMain {
+            assertEquals(TextRange(0, 11), vm.lyricsFieldValue.selection)
+            assertNull(vm.pendingRewriteRange)
+            // Opening the notebook takes focus, which collapses the cursor onto the selection's end.
+            vm.showSongNotebook = true
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(11)))
+            assertEquals(TextRange(0, 11), vm.pendingRewriteRange)
+            vm.keepSelectedLyrics()
+            assertEquals(listOf("first lyric"), vm.songWorkspace.alternates.map { it.text })
+            vm.moveProjectToTrash(saved.id)
+        }
+        waitUntil { vm.trashedProjects.any { it.project.id == saved.id } && !vm.savingBeforeNavigation }
+        onMain { vm.permanentlyDeleteTrashedProject(saved.id) }
+    }
+
     @Test fun localUnavailableDisablesSuggestionsAndLinksToSetup() {
         onMain {
             vm.onLyricsChanged(TextFieldValue("A quiet line"))

@@ -827,8 +827,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 text = { Text("Song Notebook") },
                                 onClick = {
                                     songActionsExpanded = false
-                                    focusManager.clearFocus()
+                                    // Open first, so the cursor collapse from losing focus keeps the selection.
                                     viewModel.showSongNotebook = true
+                                    focusManager.clearFocus()
                                 }
                             )
                             if (!(viewModel.pendingRewriteRange ?: viewModel.lyricsFieldValue.selection).collapsed) {
