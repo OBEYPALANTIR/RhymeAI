@@ -115,7 +115,7 @@ class WritingCompanionUiTest {
         composeRule.onAllNodes(hasText("Retry") and bar).assertCountEquals(0)
         composeRule.onNode(hasText("Set up model") and bar).assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
-        onMain { assertTrue(vm.showSettingsDialog) }
+        onMain { assertTrue(vm.showSettingsDialog && vm.settingsOpensAiSetup) }
     }
 
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {

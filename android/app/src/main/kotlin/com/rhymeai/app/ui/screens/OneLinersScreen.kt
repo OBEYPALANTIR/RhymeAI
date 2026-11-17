@@ -126,6 +126,7 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalHighTextContrastEnabled
 import com.rhymeai.app.ui.components.chromeEdgePadding
 import com.rhymeai.app.ui.components.chromeSide
 import com.rhymeai.app.ui.theme.SurfaceLevel
@@ -231,7 +232,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                     // Raised: a tonal slab; the stroke appears only for focus.
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) colorScheme.outlineVariant else Color.Transparent,
                         focusedBorderColor = colorScheme.primary,
                         unfocusedContainerColor = colorScheme.surfaceContainerLow,
                         focusedContainerColor = colorScheme.surfaceContainerLow

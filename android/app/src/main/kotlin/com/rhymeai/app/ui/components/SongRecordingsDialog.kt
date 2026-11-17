@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
@@ -166,8 +168,10 @@ fun SongRecordingsDialog(
             Spacer(Modifier.height(DesignTokens.Spacing.sm))
             OutlinedTextField(
                 value = search, onValueChange = { search = it },
-                label = { Text("Search recordings") }, singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search recordings") }, singleLine = true,
+                // The placeholder hides once text is typed; the description keeps the field named.
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search recordings" },
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
                 // A raised search field, as in the songs drawer: borderless at rest, outlined when focused.
                 colors = OutlinedTextFieldDefaults.colors(
                     unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) MaterialTheme.colorScheme.outlineVariant else Color.Transparent,

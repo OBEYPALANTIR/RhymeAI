@@ -31,7 +31,7 @@ class AppearanceThemeTest {
     }
 
     @Test
-    fun `selected song row secondary text clears 4_6 to 1 in every appearance`() {
+    fun `selected song row secondary text clears 5 to 1 in every appearance`() {
         AppAppearance.entries.forEach { appearance ->
             val scheme = colorSchemeFor(appearance)
             val text = scheme.onPrimaryContainer
@@ -39,7 +39,7 @@ class AppearanceThemeTest {
                 .compositeOver(scheme.primaryContainer)
             val (light, dark) = listOf(text.luminance(), scheme.primaryContainer.luminance()).sortedDescending()
             val ratio = (light + 0.05f) / (dark + 0.05f)
-            assertTrue(ratio >= 4.6f, "$appearance selected-row secondary text is $ratio:1")
+            assertTrue(ratio >= 5.0f, "$appearance selected-row secondary text is $ratio:1")
         }
     }
 

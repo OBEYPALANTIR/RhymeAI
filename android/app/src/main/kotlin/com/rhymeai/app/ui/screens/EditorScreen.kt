@@ -1875,85 +1875,85 @@ private fun InlineRewriteReviewBar(
             .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
     ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
-    ) {
-        if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                color = colorScheme.primary,
-                strokeWidth = 2.dp
-            )
-        } else {
-            Icon(
-                if (error == null) Icons.Default.AutoAwesome else Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = if (error == null) colorScheme.primary else colorScheme.error,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Text(
-            text = inlineRewriteStatusText(action, loading, preview, error),
-            color = if (error == null) colorScheme.onSurface else colorScheme.error,
-            fontSize = DesignTokens.Typography.caption,
-            fontWeight = FontWeight.Medium,
-            // An error wraps in full: its actions sit on their own line below it.
-            maxLines = if (error == null) 1 else Int.MAX_VALUE,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-
-        if (error == null && preview != null && !loading) {
-            Button(
-                onClick = onApply,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
-            ) {
-                Text("Apply", fontSize = 12.sp)
-            }
-            IconButton(
-                onClick = onRetry,
-                modifier = Modifier.semantics { contentDescription = "Regenerate rewrite" }
-            ) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = null,
-                    tint = colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        if (error == null) InlineRewriteCancelButton(onCancel)
-    }
-    if (error != null) {
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm, Alignment.End),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
         ) {
-            Button(
-                // No local model: Retry cannot succeed, so open the same AI setup as the Assistant.
-                onClick = if (needsModelSetup) onModelSetup else onRetry,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
-            ) {
-                Text(
-                    if (needsModelSetup) stringResource(R.string.assistant_set_up_model) else "Retry",
-                    fontSize = 12.sp
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = colorScheme.primary,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Icon(
+                    if (error == null) Icons.Default.AutoAwesome else Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = if (error == null) colorScheme.primary else colorScheme.error,
+                    modifier = Modifier.size(18.dp)
                 )
             }
-            InlineRewriteCancelButton(onCancel)
+
+            Text(
+                text = inlineRewriteStatusText(action, loading, preview, error),
+                color = if (error == null) colorScheme.onSurface else colorScheme.error,
+                fontSize = DesignTokens.Typography.caption,
+                fontWeight = FontWeight.Medium,
+                // An error wraps in full: its actions sit on their own line below it.
+                maxLines = if (error == null) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (error == null && preview != null && !loading) {
+                Button(
+                    onClick = onApply,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
+                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                ) {
+                    Text("Apply", fontSize = 12.sp)
+                }
+                IconButton(
+                    onClick = onRetry,
+                    modifier = Modifier.semantics { contentDescription = "Regenerate rewrite" }
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (error == null) InlineRewriteCancelButton(onCancel)
         }
-    }
+        if (error != null) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
+                Button(
+                    // No local model: Retry cannot succeed, so open the same AI setup as the Assistant.
+                    onClick = if (needsModelSetup) onModelSetup else onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
+                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                ) {
+                    Text(
+                        if (needsModelSetup) stringResource(R.string.assistant_set_up_model) else "Retry",
+                        fontSize = 12.sp
+                    )
+                }
+                InlineRewriteCancelButton(onCancel)
+            }
+        }
     }
 }
 
