@@ -807,6 +807,7 @@ struct EditorView: View {
                         onRetry: { viewModel.retryRewrite() },
                         onSetUpModel: {
                             viewModel.dismissRewrite()
+                            dismissKeyboard()
                             viewModel.showSettingsSheet = true
                         }
                     )
@@ -1253,8 +1254,10 @@ private struct InlineRewriteReviewBar: View {
                     Button(action: needsModel ? onSetUpModel : onRetry) {
                         Text(needsModel ? "Set up model" : "Retry")
                             .font(.caption.weight(.semibold))
+                            .lineLimit(1)
                             .foregroundStyle(appearance.palette.action)
                             .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
+                            .fixedSize()
                     }
                     .buttonStyle(.rhymePress)
                 } else if preview != nil {
@@ -1283,6 +1286,7 @@ private struct InlineRewriteReviewBar: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(minWidth: RhymeAITokens.Spacing.xxl, minHeight: RhymeAITokens.Touch.minimum)
+                        .fixedSize()
                 }
                 .buttonStyle(.rhymePress)
             }

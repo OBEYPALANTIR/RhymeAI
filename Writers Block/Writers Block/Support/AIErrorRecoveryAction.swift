@@ -8,9 +8,7 @@ enum AIErrorRecoveryAction: Equatable {
 
     init(errorMessage: String) {
         let normalizedMessage = errorMessage.lowercased()
-        if normalizedMessage.contains("no gguf model found")
-            || normalizedMessage.contains("apple intelligence is not enabled")
-            || normalizedMessage.contains("not eligible for apple intelligence") {
+        if AIService.noModelReasons.contains(where: { normalizedMessage.contains($0.lowercased()) }) {
             self = .setUpModel
         } else if normalizedMessage.contains("no api key set")
             || normalizedMessage.contains("check your api key in settings")
