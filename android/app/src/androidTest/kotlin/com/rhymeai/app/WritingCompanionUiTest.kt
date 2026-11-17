@@ -94,8 +94,10 @@ class WritingCompanionUiTest {
             vm.unloadLocalModel()
             vm.localModelError = null
             vm.localModelLoading = false
-            vm.requestRewrite(RewriteAction.REPHRASE)
         }
+        // The unload finishes off the main thread; the rewrite must see no model ready.
+        waitUntil { vm.selectedProvider == AIProvider.LOCAL && !vm.localReady && !vm.localModelLoading }
+        onMain { vm.requestRewrite(RewriteAction.REPHRASE) }
         val bar = hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))
         composeRule.onNode(hasText(REWRITE_NEEDS_MODEL) and bar).assertIsDisplayed()
         composeRule.onNode(hasText("Cancel") and bar).assertIsDisplayed()
