@@ -126,6 +126,7 @@ import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.motion.OffsetMotionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalHighTextContrastEnabled
 import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.raisedSurface
@@ -253,7 +254,7 @@ fun ProjectsDrawer(
     val filteredProjects = remember(sortedProjects, searchQuery) { searchProjects(sortedProjects, searchQuery) }
     val isSearching = searchQuery.isNotBlank()
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = Color.Transparent,
+        unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) colorScheme.outlineVariant else Color.Transparent,
         focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
@@ -908,6 +909,11 @@ private fun ProjectDrawerRow(
     }
     val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
     val rowShape = RoundedCornerShape(DesignTokens.Radius.xl)
+    val secondaryText = if (isActive) {
+        colorScheme.onPrimaryContainer.copy(alpha = DesignTokens.Drawer.selectedRowSecondaryAlpha)
+    } else {
+        colorScheme.onSurfaceVariant
+    }
 
     Card(
         onClick = { onLoadProject(project) },
@@ -945,16 +951,12 @@ private fun ProjectDrawerRow(
                     maxLines = 1
                 )
                 com.rhymeai.app.util.SectionMap.lyricContent(project.lyrics).lineSequence().firstOrNull { it.isNotBlank() }?.let { preview ->
-                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = secondaryText, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Text(
                     "$dateStr \u2022 $wordCount words",
                     fontSize = DesignTokens.Typography.caption,
-                    color = if (isActive) {
-                        colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                    } else {
-                        colorScheme.onSurfaceVariant
-                    }
+                    color = secondaryText
                 )
             }
             IconButton(
@@ -964,7 +966,7 @@ private fun ProjectDrawerRow(
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
-                    tint = colorScheme.error.copy(alpha = 0.75f),
+                    tint = colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
             }

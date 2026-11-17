@@ -492,7 +492,7 @@ struct AssistantPanelView: View {
                         .font(.caption)
                         .foregroundStyle(appearance.palette.error)
 
-                    Button(recoveryAction == .openSettings ? "Open Settings" : "Retry") {
+                    Button(recoveryAction == .openSettings ? "Open Settings" : recoveryAction == .setUpModel ? "Set up model" : "Retry") {
                         switch recoveryAction {
                         case .openSettings:
                             if let onOpenSettings {
@@ -500,12 +500,14 @@ struct AssistantPanelView: View {
                             } else {
                                 viewModel.showSettingsSheet = true
                             }
+                        case .setUpModel:
+                            showModelSetup = true
                         case .retry:
                             viewModel.getSuggestions()
                         }
                     }
                     .buttonStyle(.bordered)
-                    .tint(recoveryAction == .openSettings ? appearance.palette.action : appearance.palette.error)
+                    .tint(recoveryAction == .retry ? appearance.palette.error : appearance.palette.action)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
                 }
                 .padding(RhymeAITokens.Rhythm.standard)

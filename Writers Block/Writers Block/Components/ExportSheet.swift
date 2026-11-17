@@ -42,7 +42,7 @@ struct ExportSheet: View {
                             }
                             .padding(.horizontal, RhymeAITokens.Spacing.sm)
                             .padding(.vertical, RhymeAITokens.Spacing.sm)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, interactive: true)
+                            .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
                         }
                         .buttonStyle(.rhymePress)
                     }

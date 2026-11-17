@@ -2,6 +2,8 @@ package com.rhymeai.app.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import com.rhymeai.app.data.model.AppAppearance
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +28,19 @@ class AppearanceThemeTest {
         assertEquals(InkSurfaceHighest, selectionColorFor(AppAppearance.INK))
         assertEquals(PaperSurfaceHighest, selectionColorFor(AppAppearance.PAPER))
         assertEquals(GraphiteSelection, selectionColorFor(AppAppearance.GRAPHITE))
+    }
+
+    @Test
+    fun `selected song row secondary text clears 5 to 1 in every appearance`() {
+        AppAppearance.entries.forEach { appearance ->
+            val scheme = colorSchemeFor(appearance)
+            val text = scheme.onPrimaryContainer
+                .copy(alpha = DesignTokens.Drawer.selectedRowSecondaryAlpha)
+                .compositeOver(scheme.primaryContainer)
+            val (light, dark) = listOf(text.luminance(), scheme.primaryContainer.luminance()).sortedDescending()
+            val ratio = (light + 0.05f) / (dark + 0.05f)
+            assertTrue(ratio >= 5.0f, "$appearance selected-row secondary text is $ratio:1")
+        }
     }
 
     @Test

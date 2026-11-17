@@ -363,7 +363,7 @@ final class UXAuditWalkthroughUITests: XCTestCase {
         if app.buttons["Rephrase"].waitForExistence(timeout: 6) {
             shot(app, "rewrite-chip-bar")
             tap(app.buttons["Rephrase"], "Rephrase")
-            _ = app.buttons["Retry"].waitForExistence(timeout: 8)
+            _ = app.buttons.matching(NSPredicate(format: "label IN %@", ["Retry", "Set up model"])).firstMatch.waitForExistence(timeout: 8)
             shot(app, "rewrite-review-local-result")
         }
         app.terminate()
