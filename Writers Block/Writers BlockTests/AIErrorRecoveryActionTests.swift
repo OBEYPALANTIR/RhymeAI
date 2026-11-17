@@ -17,6 +17,20 @@ struct AIErrorRecoveryActionTests {
     }
 
     @Test
+    func missingLocalModelRequiresModelSetup() throws {
+        let message = try #require(AIServiceError.localModelUnavailable(reason: AIService.noGGUFModelReason).errorDescription)
+
+        #expect(AIErrorRecoveryAction(errorMessage: message) == .setUpModel)
+    }
+
+    @Test
+    func modelStillDownloadingAllowsRetry() throws {
+        let message = try #require(AIServiceError.localModelUnavailable(reason: "the local model is still downloading or not ready yet.").errorDescription)
+
+        #expect(AIErrorRecoveryAction(errorMessage: message) == .retry)
+    }
+
+    @Test
     func providerFailureAllowsRetry() {
         let message = "Provider request failed — check your connection and try again."
 

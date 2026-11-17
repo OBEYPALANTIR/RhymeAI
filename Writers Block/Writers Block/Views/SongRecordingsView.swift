@@ -519,7 +519,7 @@ struct SongRecordingsView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .frame(height: RhymeAITokens.Touch.minimum)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+        .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
     }
 
     /// Glyph and text in the appearance's secondary ink (not the system grey),

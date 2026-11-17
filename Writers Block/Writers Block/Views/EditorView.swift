@@ -804,7 +804,11 @@ struct EditorView: View {
                         error: viewModel.rewriteError,
                         onApply: { viewModel.applyRewrite() },
                         onCancel: { viewModel.dismissRewrite() },
-                        onRetry: { viewModel.retryRewrite() }
+                        onRetry: { viewModel.retryRewrite() },
+                        onSetUpModel: {
+                            viewModel.dismissRewrite()
+                            viewModel.showSettingsSheet = true
+                        }
                     )
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 } else if shouldShowRewriteChipBar {
@@ -1213,6 +1217,7 @@ private struct InlineRewriteReviewBar: View {
     var onApply: () -> Void
     var onCancel: () -> Void
     var onRetry: () -> Void
+    var onSetUpModel: () -> Void
 
     var body: some View {
         // An error has to stay readable, so it wraps; at accessibility sizes
@@ -1242,9 +1247,11 @@ private struct InlineRewriteReviewBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: RhymeAITokens.Spacing.xs) {
-                if error != nil {
-                    Button(action: onRetry) {
-                        Text("Retry")
+                if let error {
+                    // Without a model, Retry fails the same way; send the writer to model setup.
+                    let needsModel = AIErrorRecoveryAction(errorMessage: error) == .setUpModel
+                    Button(action: needsModel ? onSetUpModel : onRetry) {
+                        Text(needsModel ? "Set up model" : "Retry")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(appearance.palette.action)
                             .frame(minWidth: EditorViewConstants.RewriteReview.actionButtonMinWidth, minHeight: RhymeAITokens.Touch.minimum)
