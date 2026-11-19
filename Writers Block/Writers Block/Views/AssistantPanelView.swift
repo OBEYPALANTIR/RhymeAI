@@ -233,6 +233,8 @@ struct AssistantPanelView: View {
             .opacity(isDisabled ? 0.45 : 1)
         }
         .disabled(suggestionDisabled)
+        // One name even mid cross-fade, when both labels are on screen.
+        .accessibilityLabel(viewModel.isLoading ? "Stop" : "Suggest Next Line")
         .buttonStyle(.rhymePress)
         .padding(.horizontal, RhymeAITokens.Rhythm.section)
         .padding(.top, RhymeAITokens.Rhythm.tight)
@@ -476,7 +478,8 @@ struct AssistantPanelView: View {
                     // text in the ink-coloured tint it read as a caption.
                     Button("Local model setup") {
                         #if os(macOS)
-                        // The Mac shows Settings in its own window.
+                        // The Mac shows Settings in its own window, on the tab for the model.
+                        UserDefaults.standard.set("ai", forKey: "macSettingsTab")
                         viewModel.showSettingsSheet = true
                         #else
                         showModelSetup = true
