@@ -615,16 +615,20 @@ final class EditorViewModel: ObservableObject {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
                 recordingsLaunchChecksRunning += 1
+                // Each check acts only on the context it started with: one replaced
+                // meanwhile leaves deletions and expiry to the check of its successor.
+                let checkedContext = modelContext
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
                     // anything a row or the staging journal claims stays (T1.7).
-                    if let library = self.recordingLibrary, let context = self.modelContext {
+                    if let library = self.recordingLibrary, let context = checkedContext, self.modelContext === context {
                         await library.withGate { library.clearStaging(context: context) }
                     }
-                    let checked = await self.reconcileRecordings()
+                    var checked = false
+                    if self.modelContext === checkedContext { checked = await self.reconcileRecordings() }
                     self.recordingsLaunchChecksRunning -= 1
-                    guard checked else { return }
+                    guard checked, self.modelContext === checkedContext else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -654,6 +658,9 @@ final class EditorViewModel: ObservableObject {
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
+    /// What the library held for the open song when it was last loaded or saved
+    /// here. Nil is unknown, which counts as an unsaved edit.
+    private var savedDraft: OpenDraft?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
 
@@ -1664,6 +1671,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        savedDraft = openDraft
         trackSelectedDraftDuringCloudOperation()
     }
 
@@ -1701,6 +1709,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        savedDraft = openDraft
         trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
     }
 
@@ -1716,11 +1725,30 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
-        // The flush cancels the open song's pending autosave; trashing another song leaves it running.
-        if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
+        // The open song's unsaved edit is saved first (the flush cancels its pending
+        // autosave); trashing another song leaves that running. Without an edit
+        // nothing is written, so a synced change the editor shows stale is what goes.
+        if currentProjectId == project.id, hasUnsavedEdit, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
 
-        let trashedProject = TrashedSongProject(project: project)
+        // Every copy of the song goes, so Trash keeps the copy the library resolves
+        // the song to (A37: an edit beats a repair, of two edits the later), which a
+        // newer copy the list hides may be. Any other copy is kept in the song
+        // recovery folder first, read back (A41); a failure changes nothing.
+        let songId = project.id
+        let copies = (try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == songId }))) ?? []
+        let winner = SyncMerger.mergeProjects(local: copies.map { SyncSongProject(project: $0) }, remote: []).first
+        let kept = copies.first { SyncSongProject(project: $0) == winner } ?? project
+        do {
+            let recoveryRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
+            for copy in copies where copy !== kept {
+                try SongRecoveryStore.keep(.init(project: SyncSongProject(project: copy)), memosRoot: recoveryRoot)
+            }
+        } catch {
+            errorMessage = "Couldn't move this song to Trash. Your song was kept."
+            return false
+        }
+        let trashedProject = TrashedSongProject(project: kept)
         removeExistingTrashEntries(id: project.id, in: context)
         context.insert(trashedProject)
         let clearsCurrentEditor = currentProjectId == project.id
@@ -2266,6 +2294,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showProjectsSheet = false
         resetLyricsHistory()
+        savedDraft = openDraft
         trackSelectedDraftDuringCloudOperation()
         // A different song is on screen, as after loadProject.
         editorOpen = EditorOpen(isNewSong: false)
@@ -2290,6 +2319,7 @@ final class EditorViewModel: ObservableObject {
         showWelcome = false
         showTemplatesSheet = false
         resetLyricsHistory()
+        savedDraft = nil
         trackSelectedDraftDuringCloudOperation(isUnsaved: true)
         editorOpen = EditorOpen(isNewSong: false)
         triggerAutoSave()
@@ -2320,6 +2350,7 @@ final class EditorViewModel: ObservableObject {
             return nil
         }
         currentProjectId = project.id
+        savedDraft = openDraft
         showWelcome = false
         return project.id
     }
@@ -2357,6 +2388,30 @@ final class EditorViewModel: ObservableObject {
 
             _ = persistCurrentDraft(checkpoint: false)
         }
+    }
+
+    /// The editor holds an edit the library does not have: it differs from what
+    /// was last loaded or saved here, or its last save failed. A synced change
+    /// to the open song does not count, so it is never overwritten by an editor
+    /// that was only showing the older text.
+    var hasUnsavedEdit: Bool {
+        guard !showWelcome || currentProjectId != nil else { return false }
+        return savedDraft != openDraft || saveStatus == .failed
+    }
+
+    /// A backup or restore holds the library; saves wait for it to finish and the
+    /// open song's edits go to its recovery copy meanwhile.
+    var cloudOperationHoldsEditor: Bool { activeCloudEditorOperation != nil }
+
+    /// The save for moving to the background, closing the window and quitting:
+    /// only an unsaved edit is written. True when nothing is at risk: there was
+    /// no edit, it saved, or a running backup or restore holds it in its
+    /// recovery copy.
+    @discardableResult
+    func saveUnsavedEdit() -> Bool {
+        guard hasUnsavedEdit else { return true }
+        if cloudOperationHoldsEditor { return saveStatus != .failed }
+        return flushCurrentDraft()
     }
 
     @discardableResult
@@ -2405,6 +2460,7 @@ final class EditorViewModel: ObservableObject {
                 pendingRecordingRecovery = nil
             }
             saveStatus = .saved
+            savedDraft = openDraft
             removeDraftRecoveryCopy()
             saveCompanion(checkpoint: checkpoint)
             return true
@@ -3662,6 +3718,8 @@ final class EditorViewModel: ObservableObject {
                 throw CocoaError(.fileReadUnknown)
             }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            // Every path below leaves the editor matching the library, except the catch.
+            defer { if currentProjectId != nil { savedDraft = openDraft } }
             if edited {
                 if stored?.1 == draft {
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
@@ -3723,6 +3781,7 @@ final class EditorViewModel: ObservableObject {
             // so a later autosave or flush cannot overwrite that remote winner.
             cancelEditorAIWork()
             currentProjectId = nil
+            savedDraft = nil
             showWelcome = false
             saveStatus = .idle
             errorMessage = "Could not reconcile the backup with your open song. Your edits remain open."
@@ -3744,7 +3803,9 @@ final class EditorViewModel: ObservableObject {
               !cloudBackupIsWorking else {
             return
         }
-        guard flushCurrentDraft() else {
+        // Only an unsaved edit is written: an editor showing older text than a
+        // synced change must not overwrite it on the way to the background.
+        guard !hasUnsavedEdit || flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Background backup canceled. Your open draft could not be saved."
             return

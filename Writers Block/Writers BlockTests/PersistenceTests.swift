@@ -657,3 +657,57 @@ struct PersistenceTests {
         }
     }
 }
+
+/// Moving to the background, closing the Mac window and quitting save only an edit made
+/// in this editor; a change that arrived in the library meanwhile is never overwritten.
+@MainActor
+struct UnsavedEditSaveTests {
+    private static func openSong() throws -> (EditorViewModel, SongProject, ModelContainer) {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let viewModel = EditorViewModel()
+        viewModel.modelContext = container.mainContext
+        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        return (viewModel, song, container)
+    }
+
+    @Test func aNewerStoredSongIsNotOverwrittenByAnEditorThatOnlyShowedOlderWords() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        let synced = Date(timeIntervalSince1970: 2_000)
+        song.lyrics = "ropes and newer tide"
+        song.updatedAt = synced
+        try container.mainContext.save()
+
+        #expect(viewModel.saveUnsavedEdit())
+
+        #expect(song.lyrics == "ropes and newer tide")
+        #expect(song.updatedAt == synced)
+    }
+
+    @Test func aPendingEditIsStillSaved() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.saveUnsavedEdit())
+
+        #expect(song.lyrics == "ropes and tide")
+    }
+
+    @Test func anEditAlreadySavedDoesNotOverwriteALaterStoredChange() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.lyrics = "ropes and tide"
+        #expect(viewModel.flushCurrentDraft())
+        song.lyrics = "ropes, tide and a newer line"
+        try container.mainContext.save()
+
+        #expect(viewModel.saveUnsavedEdit())
+
+        #expect(song.lyrics == "ropes, tide and a newer line")
+    }
+}

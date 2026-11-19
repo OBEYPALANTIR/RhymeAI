@@ -119,6 +119,9 @@ struct Writers_BlockApp: App {
     #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(ModelDownloadAppDelegate.self) private var downloadDelegate
     #endif
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var macDelegate
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
@@ -205,6 +208,10 @@ struct Writers_BlockApp: App {
                 persistenceDegradedBanner
             }
             .task {
+                #if os(macOS)
+                // Quit saves the open song's unsaved edit first (MacAppDelegate).
+                macDelegate.viewModel = viewModel
+                #endif
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
@@ -236,7 +243,8 @@ struct Writers_BlockApp: App {
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
                     // Save the open song first: the backup below runs only when Drive is connected.
-                    viewModel.flushCurrentDraft()
+                    // Only an unsaved edit: a synced change the editor shows stale stays.
+                    viewModel.saveUnsavedEdit()
                     // Back up now rather than at the end of a pending countdown.
                     // Ask for run time past the move to the background so the backup
                     // can finish and reconcile the open draft instead of being
