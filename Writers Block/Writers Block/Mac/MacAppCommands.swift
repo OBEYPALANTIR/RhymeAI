@@ -99,19 +99,8 @@ struct MacAppCommands: Commands {
         }
     }
 
-    /// The editor is one window on the shared view model: bring it back if it
-    /// is open or minimized, and open it again only after it was closed.
     private func showEditorWindow() {
-        let editor = NSApp.windows.first { window in
-            window.identifier?.rawValue.hasPrefix(Writers_BlockApp.editorWindowID) == true
-                && (window.isVisible || window.isMiniaturized)
-        }
-        if let editor {
-            if editor.isMiniaturized { editor.deminiaturize(nil) }
-            editor.makeKeyAndOrderFront(nil)
-        } else {
-            openWindow(id: Writers_BlockApp.editorWindowID)
-        }
+        MacEditorWindow.bringForward(openWindow: openWindow)
     }
 }
 #endif

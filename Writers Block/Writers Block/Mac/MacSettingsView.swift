@@ -9,7 +9,10 @@ extension SettingsView {
     var macBody: some View {
         TabView(selection: $macSettingsTab) {
             Tab("General", systemImage: "gearshape", value: "general") {
-                MacSettingsPage { AppearanceSettingsSection() }
+                MacSettingsPage {
+                    AppearanceSettingsSection()
+                    MenuBarCaptureSetting()
+                }
             }
             Tab("AI & Models", systemImage: "sparkles", value: "ai") {
                 MacSettingsPage {

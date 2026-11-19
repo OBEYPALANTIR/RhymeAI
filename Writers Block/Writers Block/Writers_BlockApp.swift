@@ -131,6 +131,7 @@ struct Writers_BlockApp: App {
     @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
     #if os(macOS)
     @StateObject private var workspace = MacWorkspaceModel()
+    @AppStorage(MacQuickCaptureView.shownKey) private var showsMenuBarQuickCapture = true
     #endif
 
     private let sharedModelContainer: ModelContainer?
@@ -249,6 +250,12 @@ struct Writers_BlockApp: App {
         #endif
 
         #if os(macOS)
+        MenuBarExtra("Catch a One Liner", systemImage: "text.quote", isInserted: $showsMenuBarQuickCapture) {
+            MacQuickCaptureView(container: persistenceState.persistenceDegraded ? nil : sharedModelContainer)
+                .modifier(appEnvironment)
+        }
+        .menuBarExtraStyle(.window)
+
         Settings {
             SettingsView()
                 .frame(width: 600)
