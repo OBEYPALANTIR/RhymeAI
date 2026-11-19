@@ -68,6 +68,10 @@ struct OneLinersView: View {
                         .padding(.top, RhymeAITokens.Rhythm.standard)
                 }
 
+                #if os(macOS)
+                // Record and Type sit in the header row on the Mac.
+                list
+                #else
                 if pageScrolls {
                     // Below the list, not over it, so no row or caption sits under the actions at rest.
                     list
@@ -77,6 +81,7 @@ struct OneLinersView: View {
                     list
                         .overlay(alignment: dominantHand.clusterAlignment(in: layoutDirection)) { floatingActions }
                 }
+                #endif
 
                 if !pageScrolls {
                     footer
@@ -90,8 +95,8 @@ struct OneLinersView: View {
                 toastView(toast)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, RhymeAITokens.Spacing.lg)
-                    // Clear the floating Record and Type actions.
-                    .padding(.bottom, RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section + RhymeAITokens.Rhythm.standard)
+                    // Clear the floating Record and Type actions (in the header on the Mac).
+                    .padding(.bottom, Self.toastBottomInset)
                     .transition(reduceMotion ? .opacity : .offset(y: RhymeAITokens.Spacing.lg).combined(with: .opacity))
                     .zIndex(1)
             }
@@ -162,10 +167,21 @@ struct OneLinersView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Rhythm.related) {
-            Text("One Liners")
-                .font(.largeTitle.weight(.bold))
-                .fontDesign(.serif)
-                .accessibilityAddTraits(.isHeader)
+            #if os(macOS)
+            HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
+                title
+                Spacer(minLength: RhymeAITokens.Spacing.sm)
+                macCaptureButton("Record", systemImage: "mic.fill", label: "Record a one liner") {
+                    viewModel.voiceMemoService.stopPlayback()
+                    openCapture(.record)
+                }
+                macCaptureButton("Type", systemImage: "keyboard", label: "Type a one liner") {
+                    openCapture(.type)
+                }
+            }
+            #else
+            title
+            #endif
             Text("\(Self.lineCountText(lines.count)), newest first. Nothing here belongs to a song until you send it.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondaryInk)
@@ -173,6 +189,32 @@ struct OneLinersView: View {
             searchField
         }
     }
+
+    private var title: some View {
+        Text("One Liners")
+            .font(.largeTitle.weight(.bold))
+            .fontDesign(.serif)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    #if os(macOS)
+    private static let toastBottomInset = RhymeAITokens.Rhythm.standard
+    private static let listBottomInset: CGFloat = 0
+
+    /// A standard Mac push button: no floating chrome, the 28pt Mac target.
+    private func macCaptureButton(_ title: String, systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(minHeight: RhymeAITokens.Touch.minimum)
+        }
+        .buttonStyle(.bordered)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+    #else
+    private static let toastBottomInset = RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section + RhymeAITokens.Rhythm.standard
+    private static let listBottomInset = RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section
+    #endif
 
     private var footer: some View {
         #if os(macOS)
@@ -313,7 +355,7 @@ struct OneLinersView: View {
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
             // Room under the last row for the floating Record and Type actions.
-            .contentMargins(.bottom, pageScrolls ? 0 : RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
+            .contentMargins(.bottom, pageScrolls ? 0 : Self.listBottomInset, for: .scrollContent)
             .padding(.top, RhymeAITokens.Rhythm.related)
             .rhymeAnimation(RhymeAITokens.Motion.state, value: lines.isEmpty)
     }
@@ -420,6 +462,7 @@ struct OneLinersView: View {
 
     // MARK: - Floating actions
 
+    #if !os(macOS)
     private var dominantHand: DominantHand { DominantHand.resolve(dominantHandRawValue) }
 
     /// Shaped like the editor's UnBlock + mic cluster: the wide Record pill
@@ -476,6 +519,7 @@ struct OneLinersView: View {
         .buttonStyle(.rhymePress)
         .accessibilityLabel("Record a one liner")
     }
+    #endif
 
     /// A Record or Type from outside opens its capture; while one is opening or open
     /// it is left for that capture, which keeps its words and says so.

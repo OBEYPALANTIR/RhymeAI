@@ -476,7 +476,9 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
 
+            #if !os(macOS)
             // Puts UnBlock + mic and the One Liners Record + Type on this side.
+            // The Mac has no floating clusters, so the setting is iOS-only.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Dominant hand")
                     .font(SettingsMetrics.rowFont)
@@ -491,6 +493,7 @@ struct SettingsEditorSection: View {
                     title: \.displayName
                 )
             }
+            #endif
         }
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
