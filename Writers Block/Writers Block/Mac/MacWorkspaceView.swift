@@ -79,6 +79,18 @@ struct MacWorkspaceView: View {
         } message: { message in
             Text(message)
         }
+        // Record with microphone access denied: the iOS mic button's alert,
+        // which the Mac's Recordings menu has no button to carry.
+        .alert("Microphone Access Denied", isPresented: Bindable(viewModel.voiceMemoService).permissionDenied) {
+            Button("Open System Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow microphone access in System Settings to record melody ideas.")
+        }
         // Settings is its own window on the Mac; the shared code asks for it
         // through the iOS sheet flag.
         .onChange(of: viewModel.showSettingsSheet, initial: true) { _, show in
@@ -103,7 +115,15 @@ struct MacWorkspaceView: View {
             if UITestFlags.isEnabled(UITestFlags.openTemplates) { viewModel.showTemplatesSheet = true }
             if UITestFlags.isEnabled(UITestFlags.openOneLiners) { workspace.detail = .oneLiners }
         }
-        .onDisappear { workspace.windowOpen = false }
+        // Closing the window or quitting saves the open song now rather than
+        // after the autosave's one-second wait, whether or not backup is set up.
+        .onDisappear {
+            viewModel.flushCurrentDraft()
+            workspace.windowOpen = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            viewModel.flushCurrentDraft()
+        }
     }
 
     @ViewBuilder
@@ -253,6 +273,7 @@ private struct MacWorkspaceToolbar: ToolbarContent {
         Button { viewModel.redoLyrics() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
             .help("Redo")
             .disabled(!state.canRedo)
+        MacSaveFailedButton()
     }
 
     @ViewBuilder
@@ -276,7 +297,8 @@ private struct MacWorkspaceToolbar: ToolbarContent {
             Label("Recordings", systemImage: viewModel.voiceMemoService.isRecording ? "stop.circle" : "mic")
         }
         .help("Recordings")
-        .disabled(!songOpen)
+        // Stop stays reachable while a recording runs, wherever the window is.
+        .disabled(!songOpen && !viewModel.voiceMemoService.isRecording)
 
         Button { viewModel.showExportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
             .help("Export")
@@ -285,6 +307,29 @@ private struct MacWorkspaceToolbar: ToolbarContent {
         Button { workspace.toggleAssistant() } label: { Label("Assistant", systemImage: "sidebar.trailing") }
             .help(workspace.assistantVisible ? "Hide Assistant" : "Show Assistant")
             .disabled(!songOpen)
+    }
+}
+
+/// The iOS top bar's "Save failed" retry: shown only while the open song's
+/// last save (autosave or File › Save) failed. Retrying is the autosave path.
+private struct MacSaveFailedButton: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.appAppearanceStyle) private var appearance
+
+    var body: some View {
+        if viewModel.saveStatus == .failed {
+            Button { viewModel.triggerAutoSave() } label: {
+                Label {
+                    Text("Save Failed")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(appearance.palette.error)
+                }
+                .labelStyle(.titleAndIcon)
+            }
+            .help("Save failed. Click to retry saving")
+            .accessibilityLabel("Save failed. Retry saving")
+        }
     }
 }
 
@@ -314,6 +359,7 @@ struct MacRecordingItems: View {
     @EnvironmentObject private var workspace: MacWorkspaceModel
 
     var body: some View {
+        let songOpen = workspace.songOpen(in: viewModel)
         if viewModel.voiceMemoService.isRecording {
             Button("Stop Recording") { viewModel.voiceMemoService.stopRecording() }
         } else {
@@ -321,9 +367,23 @@ struct MacRecordingItems: View {
                 guard let projectId = viewModel.ensureProjectForRecording() else { return }
                 Task { await viewModel.voiceMemoService.startRecording(projectId: projectId) }
             }
+            .disabled(!songOpen)
         }
         Button("Show Recordings") { workspace.showRecordings(for: viewModel) }
+            .disabled(!songOpen)
         Button("Import Audio…") { workspace.audioImporterPresented = true }
+            .disabled(!songOpen)
+    }
+}
+
+/// Song › Stop Recording, for a voice memo left running with the window
+/// closed or away from the song. A view so it follows the recorder.
+struct MacStopRecordingCommand: View {
+    let voiceMemoService: VoiceMemoService
+
+    var body: some View {
+        Button("Stop Recording") { voiceMemoService.stopRecording() }
+            .disabled(!voiceMemoService.isRecording)
     }
 }
 #endif

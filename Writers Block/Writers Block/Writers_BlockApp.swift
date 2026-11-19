@@ -235,6 +235,8 @@ struct Writers_BlockApp: App {
                     viewModel.refreshCloudBackupState()
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
+                    // Save the open song first: the backup below runs only when Drive is connected.
+                    viewModel.flushCurrentDraft()
                     // Back up now rather than at the end of a pending countdown.
                     // Ask for run time past the move to the background so the backup
                     // can finish and reconcile the open draft instead of being

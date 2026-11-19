@@ -25,6 +25,7 @@ struct MacAppCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .saveItem) {
+            // A failed save sets saveStatus, which the toolbar's Save Failed retry shows.
             Button("Save") { viewModel.flushCurrentDraft(checkpoint: true) }
                 .keyboardShortcut("s")
                 .disabled(!state.songOpen)
@@ -96,6 +97,7 @@ struct MacAppCommands: Commands {
                 .disabled(!state.songOpen)
             Button("Recordings") { workspace.showRecordings(for: viewModel) }
                 .disabled(!state.songOpen)
+            MacStopRecordingCommand(voiceMemoService: viewModel.voiceMemoService)
         }
     }
 
