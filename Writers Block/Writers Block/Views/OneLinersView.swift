@@ -185,7 +185,9 @@ struct OneLinersView: View {
             Text("\(Self.lineCountText(lines.count)), newest first. Nothing here belongs to a song until you send it.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondaryInk)
+                #if !os(macOS)
                 .fixedSize(horizontal: false, vertical: true)
+                #endif
             searchField
         }
     }

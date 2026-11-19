@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 import SwiftData
+import SwiftUI
 import Testing
 @testable import Writers_Block
 
@@ -460,6 +461,22 @@ struct MacWorkspaceLibraryTests {
         viewModel.rewriteLoading = true
         workspace.cancelGeneration(viewModel)
         #expect(viewModel.rewriteAction == nil && !viewModel.rewriteLoading)
+    }
+}
+
+@MainActor
+struct MacDetailSizeTests {
+    /// The window takes the detail pane's minimum size, so One Liners must fit the
+    /// default 780pt window or opening it grows the window (its wrapped caption did).
+    @Test
+    func oneLinersFitsTheDefaultWindow() throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let host = NSHostingController(rootView: OneLinersView(onDismiss: {})
+            .environmentObject(EditorViewModel())
+            .modelContainer(container))
+
+        #expect(host.sizeThatFits(in: .zero).height < 780)
     }
 }
 #endif
