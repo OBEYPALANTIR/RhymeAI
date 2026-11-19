@@ -132,9 +132,17 @@ struct MacSongSidebarTests {
         let songs = [SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes"),
                      SongProject(id: "b", title: "Paper Moon", lyrics: "tide")]
 
-        #expect(MacSongSidebar.songToDelete(selectedID: "a", in: songs, searchText: "moon") == nil)
-        #expect(MacSongSidebar.songToDelete(selectedID: "b", in: songs, searchText: "moon")?.id == "b")
-        #expect(MacSongSidebar.songToDelete(selectedID: nil, in: songs, searchText: "") == nil)
+        #expect(MacSongSidebar.visibleSong(selectedID: "a", in: songs, searchText: "moon") == nil)
+        #expect(MacSongSidebar.visibleSong(selectedID: "b", in: songs, searchText: "moon")?.id == "b")
+        #expect(MacSongSidebar.visibleSong(selectedID: nil, in: songs, searchText: "") == nil)
+    }
+
+    @Test
+    func aClickOpensTheCopyTheSearchShows() {
+        let newer = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes")
+        let older = SongProject(id: "a", title: "Paper Moon", lyrics: "tide")
+
+        #expect(MacSongSidebar.visibleSong(selectedID: "a", in: [newer, older], searchText: "moon") === older)
     }
 }
 

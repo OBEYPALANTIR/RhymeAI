@@ -44,7 +44,7 @@ struct MacSongSidebar: View {
         // search hides is never deleted, even when it is the open one.
         .onDeleteCommand {
             guard case .song(let id) = selection.wrappedValue,
-                  let project = Self.songToDelete(selectedID: id, in: projects, searchText: searchText) else { return }
+                  let project = Self.visibleSong(selectedID: id, in: projects, searchText: searchText) else { return }
             viewModel.moveProjectToTrash(project)
         }
         .scrollContentBackground(.hidden)
@@ -103,7 +103,7 @@ struct MacSongSidebar: View {
                 case .song(let id):
                     workspace.detail = .editor
                     guard id != viewModel.currentProjectId || viewModel.showWelcome,
-                          let project = projects.first(where: { $0.id == id }) else { return }
+                          let project = Self.visibleSong(selectedID: id, in: projects, searchText: searchText) else { return }
                     viewModel.loadProject(project)
                 case .oneLiners:
                     workspace.detail = .oneLiners
@@ -123,8 +123,9 @@ struct MacSongSidebar: View {
         Button("Move to Trash", role: .destructive) { viewModel.moveProjectToTrash(project) }
     }
 
-    /// The song Delete acts on: the selected one, only while the list shows it.
-    static func songToDelete(selectedID: String?, in projects: [SongProject], searchText: String) -> SongProject? {
+    /// The song a click or Delete acts on: the selected one as the list shows it, so
+    /// a hidden copy stored under the same id is never the one opened or deleted.
+    static func visibleSong(selectedID: String?, in projects: [SongProject], searchText: String) -> SongProject? {
         guard let selectedID else { return nil }
         return SongProject.matching(projects, searchText: searchText).first { $0.id == selectedID }
     }
