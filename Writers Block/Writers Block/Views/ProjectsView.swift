@@ -1,3 +1,5 @@
+// The iPhone and iPad screens; the Mac window has its own sidebar and empty state.
+#if !os(macOS)
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
@@ -252,3 +254,4 @@ struct ProjectsView: View {
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self], inMemory: true)
 }
+#endif

@@ -1,3 +1,5 @@
+// The iPhone and iPad screens; the Mac window has its own sidebar and empty state.
+#if !os(macOS)
 import SwiftUI
 
 struct WelcomeView: View {
@@ -280,3 +282,4 @@ extension WelcomeCard where Actions == EmptyView {
     WelcomeView()
         .environmentObject(EditorViewModel())
 }
+#endif

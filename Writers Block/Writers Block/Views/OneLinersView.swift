@@ -12,7 +12,13 @@ struct OneLinersView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(macOS)
+    /// The Mac window keeps the reading width of regular width.
+    private let isRegularWidth = true
+    #else
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    #endif
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \OneLiner.createdAt, order: .reverse) private var lines: [OneLiner]
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
@@ -49,7 +55,10 @@ struct OneLinersView: View {
             AppWritingBackground()
 
             VStack(alignment: .leading, spacing: 0) {
+                #if !os(macOS)
+                // On the Mac the window's sidebar leads back to the songs.
                 topBar
+                #endif
                 if !pageScrolls {
                     header
                         .padding(.horizontal, RhymeAITokens.Rhythm.standard)
@@ -72,7 +81,7 @@ struct OneLinersView: View {
                         .padding(.bottom, RhymeAITokens.Rhythm.related)
                 }
             }
-            .frame(maxWidth: horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity)
+            .frame(maxWidth: isRegularWidth ? RhymeAITokens.Layout.editorMaxWidth : .infinity)
 
             if let toast {
                 toastView(toast)

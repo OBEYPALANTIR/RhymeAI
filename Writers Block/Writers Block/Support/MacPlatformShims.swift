@@ -1,19 +1,9 @@
 #if os(macOS)
 import SwiftUI
 
-// The Mac app runs the iPad layout. These stand-ins let the shared views keep
-// their iOS-only modifiers without an `#if` at every call site; on macOS each
-// one is the regular-width value or a no-op.
-
-/// macOS has no size classes; every Mac window is laid out as regular width,
-/// and `RhymeAITokens.Layout.fitsSideColumn` still decides the side column.
-enum UserInterfaceSizeClass: Hashable {
-    case compact, regular
-}
-
-extension EnvironmentValues {
-    var horizontalSizeClass: UserInterfaceSizeClass? { .regular }
-}
+// Stand-ins that let the screens shared with iOS keep their iOS-only
+// navigation-bar and keyboard modifiers without an `#if` at every call site.
+// On macOS each one is a no-op or the matching window-toolbar placement.
 
 enum NavigationBarTitleDisplayModeShim {
     case automatic, inline, large
@@ -32,17 +22,6 @@ extension View {
 
     /// A Mac keyboard has no automatic capitalization to configure.
     func textInputAutocapitalization(_ autocapitalization: TextInputAutocapitalizationShim?) -> some View { self }
-
-    /// A Mac window has no full-screen cover; the content opens as a sheet.
-    func fullScreenCover<Content: View>(
-        isPresented: Binding<Bool>,
-        onDismiss: (() -> Void)? = nil,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        sheet(isPresented: isPresented, onDismiss: onDismiss) {
-            content().frame(minWidth: 520, minHeight: 560)
-        }
-    }
 }
 
 extension ToolbarItemPlacement {

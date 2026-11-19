@@ -96,6 +96,7 @@ enum EditorViewConstants {
     }
 }
 
+#if !os(macOS)
 /// A menu bar action run by the focused editor window. Equal per editor, so
 /// the closure is not re-published on every update.
 struct EditorMenuAction: Equatable {
@@ -110,6 +111,8 @@ extension FocusedValues {
     @Entry var unblockAction: EditorMenuAction?
 }
 
+#endif
+
 /// The tablet assistant's two places: the writer's show/hide choice for the
 /// inline column, and the bottom panel used below the side-column width.
 struct TabletAssistantVisibility: Equatable {
@@ -122,6 +125,8 @@ struct TabletAssistantVisibility: Equatable {
     }
 }
 
+// The iPhone and iPad editor. The Mac window is `MacWorkspaceView`.
+#if !os(macOS)
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
@@ -919,6 +924,7 @@ struct EditorView: View {
         }
     }
 }
+#endif
 
 /// The song whose recordings sheet is open.
 struct SongRecordingTarget: Identifiable {
@@ -1191,7 +1197,12 @@ struct RewriteAccessoryBar: View {
 /// feedback timer, for whichever layout hosts the writing column.
 struct EditorSheetsModifier: ViewModifier {
     @EnvironmentObject private var viewModel: EditorViewModel
+    #if os(macOS)
+    private let isRegularWidth = true
+    #else
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var recordingSong: SongRecordingTarget?
     @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
@@ -1285,7 +1296,7 @@ struct EditorSheetsModifier: ViewModifier {
                         )
                         // A medium detent pins the sheet to the bottom edge on iPad;
                         // large alone presents it as a centred form sheet there.
-                        .presentationDetents(horizontalSizeClass == .regular ? [.large] : [.medium, .large])
+                        .presentationDetents(isRegularWidth ? [.large] : [.medium, .large])
                         .presentationDragIndicator(.visible)
                     } else {
                         WordInspectorSheetView(
@@ -1473,8 +1484,10 @@ private struct ScribbleUnderline: View {
 }
 
 
+#if !os(macOS)
 #Preview {
     EditorView()
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }
+#endif

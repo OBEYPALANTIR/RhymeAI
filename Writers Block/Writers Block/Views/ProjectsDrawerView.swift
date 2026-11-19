@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+// The iPhone and iPad songs drawer; the Mac window has its own sidebar.
+#if !os(macOS)
 private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
 enum ProjectsDrawerPresentation {
@@ -155,21 +157,7 @@ struct ProjectsDrawerView: View {
     }
 
     private var filteredProjects: [SongProject] {
-        Self.songs(projects, matching: searchText)
-    }
-
-    /// The song search shared with the Mac sidebar: title (or "Untitled
-    /// Song"), lyrics and theme, ignoring case.
-    static func songs(_ projects: [SongProject], matching searchText: String) -> [SongProject] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return projects }
-
-        return projects.filter { project in
-            let title = project.title.isEmpty ? "Untitled Song" : project.title
-            return title.localizedCaseInsensitiveContains(query)
-                || project.lyrics.localizedCaseInsensitiveContains(query)
-                || project.theme.localizedCaseInsensitiveContains(query)
-        }
+        SongProject.matching(projects, searchText: searchText)
     }
 
     private var filteredRecordingFolders: [RecordingFolder] {
@@ -1066,4 +1054,21 @@ struct ProjectsDrawerView: View {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
+}
+#endif
+
+extension SongProject {
+    /// The song search of the drawer and the Mac sidebar: title (or
+    /// "Untitled Song"), lyrics and theme, ignoring case.
+    static func matching(_ projects: [SongProject], searchText: String) -> [SongProject] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return projects }
+
+        return projects.filter { project in
+            let title = project.title.isEmpty ? "Untitled Song" : project.title
+            return title.localizedCaseInsensitiveContains(query)
+                || project.lyrics.localizedCaseInsensitiveContains(query)
+                || project.theme.localizedCaseInsensitiveContains(query)
+        }
+    }
 }
