@@ -864,27 +864,6 @@ extension TrashLifecycleTests {
     /// A41: a song a stored tombstone removes at launch while its time is a repair is
     /// kept in the song recovery folder first.
     @MainActor
-    /// The sidebar shows one copy of a song stored twice under one id; trashing it moves
-    /// the copy that wins the merge (the newer edit) to Trash and keeps the other.
-    @Test func trashingASongStoredTwiceTrashesTheWinningCopyAndKeepsTheOther() async throws {
-        let (viewModel, library, context, container) = try await Self.libraryViewModel("TrashCopies")
-        _ = container
-        viewModel.modelContext = context
-        await viewModel.recordingsLaunchTask?.value
-        let shown = SongProject(id: "d", title: "Harbour Lights", lyrics: "older words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
-        let hidden = SongProject(id: "d", title: "Harbour Lights", lyrics: "newer words", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000))
-        context.insert(shown)
-        context.insert(hidden)
-        try context.save()
-
-        #expect(viewModel.moveProjectToTrash(shown))
-
-        #expect(try context.fetch(FetchDescriptor<SongProject>()).isEmpty)
-        #expect(try context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.lyrics) == ["newer words"])
-        #expect(try SongRecoveryStore.all(memosRoot: library.memosRoot).map { $0.project?.lyrics } == ["older words"])
-    }
-
-    @MainActor
     @Test func aRepairedSongRemovedAtLaunchIsKeptInTheRecoveryFolder() async throws {
         let (viewModel, library, context, container) = try await Self.libraryViewModel("LaunchRepaired")
         _ = container

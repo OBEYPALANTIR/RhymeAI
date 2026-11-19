@@ -209,7 +209,7 @@ struct Writers_BlockApp: App {
             }
             .task {
                 #if os(macOS)
-                // Quit saves the open song's unsaved edit first (MacAppDelegate).
+                // Quit runs the open song's pending autosave first (MacAppDelegate).
                 macDelegate.viewModel = viewModel
                 #endif
                 UITestFlags.seedCustomGGUFModelIfRequested()
@@ -242,9 +242,6 @@ struct Writers_BlockApp: App {
                     viewModel.refreshCloudBackupState()
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
-                    // Save the open song first: the backup below runs only when Drive is connected.
-                    // Only an unsaved edit: a synced change the editor shows stale stays.
-                    viewModel.saveUnsavedEdit()
                     // Back up now rather than at the end of a pending countdown.
                     // Ask for run time past the move to the background so the backup
                     // can finish and reconcile the open draft instead of being

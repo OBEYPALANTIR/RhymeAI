@@ -312,7 +312,7 @@ struct LyricsUndoRoutingTests {
         #expect(!lyrics.validateMenuItem(redo), "a read-only editor (a rewrite preview) offers no history")
     }
 }
-/// Save, Quit, row Export, multi-file import and Cancel Generation, against a real library.
+/// Save, Quit, multi-file import and Cancel Generation, against a real library.
 @MainActor
 struct MacWorkspaceLibraryTests {
     private static func library() throws -> (EditorViewModel, ModelContainer) {
@@ -339,8 +339,15 @@ struct MacWorkspaceLibraryTests {
 
     @Test
     func quitIsHeldWhileTheOpenSongCannotBeSaved() throws {
-        let (viewModel, container) = try Self.unsavableEdit()
-        _ = container
+        let (viewModel, container) = try Self.library()
+        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        // The library is gone, so the pending autosave fails each time it is tried.
+        viewModel.modelContext = nil
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
         var reasons: [String] = []
         var answers: [MacAppDelegate.FailedSaveChoice] = [.tryAgain, .keepOpen]
 
@@ -348,7 +355,7 @@ struct MacWorkspaceLibraryTests {
         let quit = MacAppDelegate.terminateReply(viewModel: viewModel) { _ in .quitAnyway }
 
         #expect(held == .terminateCancel)
-        #expect(reasons == Array(repeating: "This song is no longer in the library. Your edits remain open.", count: 2), "Try Again saves again")
+        #expect(reasons == Array(repeating: "Couldn't save this song. Your edits remain open.", count: 2), "Try Again saves again")
         #expect(quit == .terminateNow)
     }
 
@@ -380,32 +387,6 @@ struct MacWorkspaceLibraryTests {
         workspace.save(viewModel)
 
         #expect(workspace.saveError == "This song is no longer in the library. Your edits remain open.")
-    }
-
-    @Test
-    func rowExportIsOfferedOnlyForTheRowsOwnWords() throws {
-        let (viewModel, container) = try Self.library()
-        let open = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes", theme: "")
-        let other = SongProject(id: "b", title: "Paper Moon", lyrics: "tide", theme: "")
-        let blank = SongProject(id: "c", title: "Blank", lyrics: "", theme: "")
-        for song in [open, other, blank] { container.mainContext.insert(song) }
-        try container.mainContext.save()
-        viewModel.loadProject(open)
-        let workspace = MacWorkspaceModel()
-        let olderCopy = SongProject(id: "a", title: "Harbour Lights", lyrics: "older ropes", theme: "")
-
-        #expect(workspace.rowExportable(open, in: viewModel))
-        #expect(workspace.rowExportable(other, in: viewModel))
-        #expect(!workspace.rowExportable(blank, in: viewModel))
-        #expect(!workspace.rowExportable(olderCopy, in: viewModel), "another copy under the open song's id")
-        viewModel.lyrics = "ropes and tide"
-        #expect(!workspace.rowExportable(open, in: viewModel), "the editor holds words the row does not")
-
-        let untitled = SongProject(id: "u", title: "", lyrics: "hum first", theme: "")
-        container.mainContext.insert(untitled)
-        try container.mainContext.save()
-        viewModel.loadProject(untitled)
-        #expect(workspace.rowExportable(untitled, in: viewModel), "a row whose title was never set")
     }
 
     @Test

@@ -1,7 +1,7 @@
 #if os(macOS)
 import AppKit
 
-/// Holds Quit while the open song's unsaved edit cannot be saved, so it is not
+/// Holds Quit while the open song's pending autosave cannot be saved, so it is not
 /// lost silently: the writer chooses to try again, keep the app open, or quit.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     weak var viewModel: EditorViewModel?
@@ -21,11 +21,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         return reply
     }
 
-    /// Saves the open song's unsaved edit; while that fails, asks what to do.
+    /// Runs the open song's pending autosave now; while that fails, asks what to do.
     @MainActor
     static func terminateReply(viewModel: EditorViewModel?, ask: (String) -> FailedSaveChoice) -> NSApplication.TerminateReply {
         guard let viewModel else { return .terminateNow }
-        while !viewModel.saveUnsavedEdit() {
+        while !viewModel.savePendingEdit() {
             switch ask(viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open.") {
             case .tryAgain: continue
             case .keepOpen: return .terminateCancel
