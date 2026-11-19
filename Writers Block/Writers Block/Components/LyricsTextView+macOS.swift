@@ -4,14 +4,15 @@ import SwiftUI
 
 /// The macOS lyrics editor: a non-scrolling TextKit 2 NSTextView sized to its
 /// text inside the editor's SwiftUI ScrollView, as the UITextView is on iOS.
-/// Plain text only, so copy and cut never put the syllable underline on the
-/// pasteboard.
+/// Plain text only (`isRichText = false`), so copy and cut put only the
+/// lyric text on the pasteboard. Colours, span motion and the syllable
+/// underline come from `LyricsTextAttributes.swift`, shared with iOS.
 final class LyricsNSTextView: NSTextView {
     /// Set when this view replaces a focused one (the writing column is
     /// re-created per song open); it takes the focus as soon as it is on screen.
     var resumesEditingOnAttach = false
     var onFocusChange: ((Bool) -> Void)?
-    /// A new width rewraps the lines, so drawn highlight rects go stale.
+    /// A new width rewraps the lines, so drawn highlight rects and underlines go stale.
     var onWidthChange: (() -> Void)?
 
     /// ⌘Z and ⇧⌘Z drive the app's one lyric history (the toolbar's undo and
@@ -89,6 +90,7 @@ struct LyricsTextView: NSViewRepresentable {
         }
         textView.onWidthChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshRewriteHighlight()
+            coordinator?.refreshUnderlines(animated: false)
         }
         textView.historyUndo = { [weak viewModel] in viewModel?.undoLyrics() }
         textView.historyRedo = { [weak viewModel] in viewModel?.redoLyrics() }
@@ -238,7 +240,10 @@ struct LyricsTextView: NSViewRepresentable {
         private var lastBottomOverlayHeight: CGFloat?
         private var colorTask: Task<Void, Never>?
         private var colorRequest: ColorRequest?
-        private var appliedColorSpans: [LyricsColorSpan] = []
+        private(set) var underlineView: SyllableUnderlineView?
+        /// The spans on screen. An edit moves them with the text at once and the
+        /// next analysis replaces them, so a word never loses its colour in between.
+        private(set) var appliedColorSpans: [LyricsColorSpan] = []
         private var appliedForeground: NSColor?
         private var appliedColorText: String?
         private var pendingColorEdit: (source: String, range: NSRange, replacement: String)?
@@ -277,8 +282,19 @@ struct LyricsTextView: NSViewRepresentable {
 
         func attach(to textView: NSTextView) {
             self.textView = textView
-            guard rewriteHighlightView == nil else { return }
-            let view = RewriteHighlightOverlayView()
+            if underlineView == nil {
+                let view = SyllableUnderlineView()
+                pin(view, to: textView)
+                underlineView = view
+            }
+            if rewriteHighlightView == nil {
+                let view = RewriteHighlightOverlayView()
+                pin(view, to: textView)
+                rewriteHighlightView = view
+            }
+        }
+
+        private func pin(_ view: NSView, to textView: NSTextView) {
             view.translatesAutoresizingMaskIntoConstraints = false
             textView.addSubview(view)
             NSLayoutConstraint.activate([
@@ -287,7 +303,6 @@ struct LyricsTextView: NSViewRepresentable {
                 view.trailingAnchor.constraint(equalTo: textView.trailingAnchor),
                 view.bottomAnchor.constraint(equalTo: textView.bottomAnchor)
             ])
-            rewriteHighlightView = view
         }
 
         func shouldApplyText(_ text: String) -> Bool {
@@ -397,53 +412,63 @@ struct LyricsTextView: NSViewRepresentable {
             }
         }
 
-        private func installColors(_ spans: [LyricsColorSpan], for text: String, on textView: NSTextView, foreground: NSColor) {
+        /// `movedSpans` maps each previous span's start to its start after an
+        /// edit, so its underline keeps its identity while the text shifts.
+        func installColors(
+            _ spans: [LyricsColorSpan],
+            for text: String,
+            on textView: NSTextView,
+            foreground: NSColor,
+            movedSpans: [Int: Int]? = nil,
+            animated: Bool = true
+        ) {
             appliedColorSpans = spans
             appliedForeground = foreground
             appliedColorText = text
-            // Restyling the storage would end an in-progress composition.
-            if !textView.hasMarkedText(), let storage = textView.textStorage {
-                let selection = textView.selectedRange()
-                if LyricsTextAttributes.applyUnderlines(spans, to: storage), textView.selectedRange() != selection {
-                    textView.setSelectedRange(selection)
-                }
-                removeUnderlineFromTypingAttributes(textView)
+            if let layout = textView.textLayoutManager {
+                Self.applyRenderingColors(
+                    spans,
+                    text: textView.string,
+                    storageLength: textView.textStorage?.length ?? 0,
+                    layout: layout,
+                    foreground: foreground,
+                    sectionLabelForeground: NSColor(parent.appearance.palette.secondaryInk)
+                )
             }
-            guard let layout = textView.textLayoutManager else { return }
-            LyricsTextAttributes.applyRenderingColors(
-                spans,
-                text: textView.string,
-                storageLength: textView.textStorage?.length ?? 0,
-                layout: layout,
-                foreground: foreground,
-                sectionLabelForeground: NSColor(parent.appearance.palette.secondaryInk)
-            )
             textView.needsDisplay = true
+            refreshUnderlines(movedSpans: movedSpans, animated: animated)
+        }
+
+        func refreshUnderlines(movedSpans: [Int: Int]? = nil, animated: Bool) {
+            guard let textView else { return }
+            // Measuring touches neither the storage nor the selection, so the
+            // lines follow marked text too; the analysis waits for the commit.
+            underlineView?.update(
+                Self.underlineSegments(
+                    for: appliedColorSpans,
+                    layout: textView.textLayoutManager,
+                    storage: textView.textStorage,
+                    font: textView.font ?? LyricsTextView.lyricsFont,
+                    origin: textView.textContainerOrigin
+                ),
+                movedLocations: movedSpans,
+                animated: animated
+            )
         }
 
         private func resetColorsAfterProgrammaticTextChange(_ textView: NSTextView) {
             installColors([], for: textView.string, on: textView,
-                          foreground: NSColor(parent.appearance.palette.primaryInk))
+                          foreground: NSColor(parent.appearance.palette.primaryInk), animated: false)
         }
 
+        /// Moves the spans with the user's edit before the debounced analysis
+        /// replaces them, exactly as the iOS editor does (`spansAfterEdit`).
         private func reconcileColorsAfterEdit(_ textView: NSTextView) {
             defer { pendingColorEdit = nil }
-            guard let edit = pendingColorEdit,
-                  appliedColorText == edit.source,
-                  let foreground = appliedForeground,
-                  let adjusted = LyricsTextAttributes.spansAfterEdit(
-                      appliedColorSpans,
-                      source: edit.source,
-                      range: edit.range,
-                      replacement: edit.replacement,
-                      newText: textView.string
-                  ) else { return }
-            installColors(adjusted, for: textView.string, on: textView, foreground: foreground)
-        }
-
-        private func removeUnderlineFromTypingAttributes(_ textView: NSTextView) {
-            guard let attributes = LyricsTextAttributes.removingUnderline(from: textView.typingAttributes) else { return }
-            textView.typingAttributes = attributes
+            let text = textView.string
+            guard let source = appliedColorText, let foreground = appliedForeground, source != text else { return }
+            let moved = Self.spansAfterEdit(appliedColorSpans, source: source, pending: pendingColorEdit, text: text)
+            installColors(moved.spans, for: text, on: textView, foreground: foreground, movedSpans: moved.locations)
         }
 
         func updatePlaceholder(_ textView: NSTextView, text: String) {
@@ -495,7 +520,6 @@ struct LyricsTextView: NSViewRepresentable {
             replacementString: String?
         ) -> Bool {
             pendingColorEdit = (textView.string, affectedCharRange, replacementString ?? "")
-            removeUnderlineFromTypingAttributes(textView)
             return true
         }
 
