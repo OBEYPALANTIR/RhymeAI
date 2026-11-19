@@ -222,7 +222,7 @@ private struct MacEmptyState: View {
     }
 }
 
-/// The window toolbar. The sidebar button comes from the split view.
+/// The window toolbar. The app draws the sidebar button; the split view's own is removed.
 private struct MacWorkspaceToolbar: ToolbarContent {
     @EnvironmentObject private var viewModel: EditorViewModel
     @EnvironmentObject private var workspace: MacWorkspaceModel

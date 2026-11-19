@@ -49,27 +49,34 @@ struct MacSongSidebar: View {
         .scrollContentBackground(.hidden)
         .background(appearance.palette.surfaceHigh)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search songs")
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Button {
-                newSong()
-            } label: {
-                Label("New Song", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, RhymeAITokens.Spacing.sm)
-            .padding(.vertical, RhymeAITokens.Spacing.xs)
-            .accessibilityIdentifier("macNewSong")
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let notice = viewModel.projectDeletionNotice {
-                Text(notice)
-                    .font(.caption)
-                    .foregroundStyle(appearance.palette.warning)
-                    .padding(RhymeAITokens.Spacing.sm)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 0) {
+                if let notice = viewModel.projectDeletionNotice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(appearance.palette.warning)
+                        .padding(RhymeAITokens.Spacing.sm)
+                }
+                // The sidebar's bottom bar, as Mac source lists put their add button.
+                Rectangle()
+                    .fill(appearance.palette.outline)
+                    .frame(height: RhymeAITokens.Spacing.hairline)
+                Button {
+                    newSong()
+                } label: {
+                    Label("New Song", systemImage: "plus")
+                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appearance.palette.primaryInk)
+                .help("New Song")
+                .padding(.horizontal, RhymeAITokens.Spacing.sm)
+                .padding(.vertical, RhymeAITokens.Spacing.xxs)
+                .accessibilityIdentifier("macNewSong")
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(appearance.palette.surfaceHigh)
         }
     }
 
