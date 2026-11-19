@@ -1263,6 +1263,7 @@ struct GGUFDownloadCompletionTests {
         #expect(GGUFModelSelection.resolvedModelURL(
             defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: 64 << 30
         )?.lastPathComponent == e4b.fileName)
+        #expect(GGUFModelSelection.currentFileName(defaults: sandbox.defaults) == e2b.fileName, "the choice is kept for when it is whole")
     }
 
     /// The persisted selection can name a stale file while the manager shows the verified

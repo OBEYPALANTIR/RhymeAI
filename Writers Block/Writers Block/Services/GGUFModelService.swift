@@ -236,7 +236,8 @@ nonisolated enum GGUFModelSelection {
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
         // A catalog file whose size is not the catalog's is partial or stale, so it is not
         // offered; one stat per catalog file, never a digest, as this runs on the main thread.
-        let files = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).filter { name in
+        let listed = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let files = listed.filter { name in
             guard let model = GGUFModelCatalog.descriptor(fileName: name) else { return true }
             let path = directory.appendingPathComponent(name).path
             let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value
@@ -246,7 +247,10 @@ nonisolated enum GGUFModelSelection {
             in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
             totalRAMBytes: totalRAMBytes
         ) else { return nil }
-        if preferred != currentFileName(defaults: defaults) { save(fileName: preferred, defaults: defaults) }
+        let current = currentFileName(defaults: defaults)
+        // A selected catalog file that is only the wrong size stays selected; the fallback is used meanwhile.
+        let selectedIsWrongSize = current.map { listed.contains($0) && !files.contains($0) } ?? false
+        if preferred != current, !selectedIsWrongSize { save(fileName: preferred, defaults: defaults) }
         return directory.appendingPathComponent(preferred)
 
     }
