@@ -1049,6 +1049,17 @@ struct EditorWritingColumn: View {
         .accessibilityHidden(isFocusMode)
     }
 
+    /// On the Mac an existing song opens with the insertion point in the lyrics,
+    /// so the window does not pick the title as its first key view and select it.
+    /// A New Song keeps the title focus above; iOS never raises the keyboard here.
+    static func lyricsTakeFocusOnOpen(_ open: EditorViewModel.EditorOpen) -> Bool {
+        #if os(macOS)
+        return !open.isNewSong
+        #else
+        return false
+        #endif
+    }
+
     private var lyricsEditorInput: some View {
         LyricsTextView(
             text: Binding(
@@ -1076,7 +1087,7 @@ struct EditorWritingColumn: View {
             rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
             syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
             isEditable: !viewModel.hasActiveRewrite,
-            resumesEditingOnCreate: lyricsEditorIsFocused
+            resumesEditingOnCreate: lyricsEditorIsFocused || Self.lyricsTakeFocusOnOpen(viewModel.editorOpen)
         )
         .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
         .padding(.horizontal, sidePadding)
