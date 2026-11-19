@@ -257,6 +257,10 @@ struct OneLinersView: View {
             .textInputAutocapitalization(.never)
             .submitLabel(.search)
             .focused($searchFocused)
+            #if os(macOS)
+            // The row draws the field; the Mac's default bezel would add a second outline.
+            .textFieldStyle(.plain)
+            #endif
             if !searchText.isEmpty {
                 Button {
                     searchText = ""

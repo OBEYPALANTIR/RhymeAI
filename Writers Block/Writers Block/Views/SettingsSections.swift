@@ -19,12 +19,14 @@ enum SettingsMetrics {
     // The Mac shell's small radii: cards like a grouped Form, fields like text fields.
     static let groupRadius: CGFloat = RhymeAITokens.Radius.sm
     static let fieldRadius: CGFloat = RhymeAITokens.Radius.xs
+    static let chipRadius: CGFloat = RhymeAITokens.Radius.xs
     #else
     static let rowFont: Font = .subheadline
     static let rowSpacing: CGFloat = RhymeAITokens.Spacing.md
     static let buttonLabelMinHeight: CGFloat? = RhymeAITokens.Touch.minimum
     static let groupRadius: CGFloat = RhymeAITokens.Radius.xl
     static let fieldRadius: CGFloat = RhymeAITokens.Radius.lg
+    static let chipRadius: CGFloat = RhymeAITokens.Radius.md
     #endif
 }
 
@@ -412,7 +414,7 @@ struct SettingsLocalModelSection: View {
                         .fixedSize()
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
                         .padding(.vertical, 7)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
+                        .liquidGlassSurface(cornerRadius: SettingsMetrics.chipRadius, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
                 }
 
                 if isDownloading {
