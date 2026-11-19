@@ -72,10 +72,20 @@ struct MenuBarCaptureSetting: View {
     @AppStorage(MacQuickCaptureView.shownKey) private var shown = true
 
     var body: some View {
-        Toggle("Show quick capture in the menu bar", isOn: $shown)
-            .font(SettingsMetrics.rowFont)
-            .foregroundStyle(appearance.palette.primaryInk)
-            .accessibilityIdentifier("menuBarQuickCaptureToggle")
+        // A card like Appearance above it.
+        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+            Label("Menu Bar", systemImage: "menubar.rectangle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(appearance.palette.secondaryInk)
+                .textCase(.uppercase)
+            Toggle("Show quick capture in the menu bar", isOn: $shown)
+                .font(SettingsMetrics.rowFont)
+                .foregroundStyle(appearance.palette.primaryInk)
+                .accessibilityIdentifier("menuBarQuickCaptureToggle")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(RhymeAITokens.Spacing.md)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius)
     }
 }
 

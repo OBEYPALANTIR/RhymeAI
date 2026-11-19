@@ -18,6 +18,7 @@ struct AppearanceSettingsSection: View {
                 title: \.displayName
             )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius)
     }
