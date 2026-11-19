@@ -742,6 +742,24 @@ Six small touches from the owner's "More life" board, on the DESIGN.md ladder (1
 
 - Settings → Editor → "Dominant hand: Right / Left", persisted (default Right). Right keeps the floating chrome on the trailing edge; Left mirrors it to the physical left edge in every locale, including right-to-left layouts: the round button (mic, Type) outermost and the wide pill (UnBlock, Record) inside, for the editor's mic + UnBlock and One Liners' Type + Record, with the editor cluster's paddings (Android 21dp side, 34dp above the safe area, 8dp gap; iOS 20pt side and bottom, 12pt gap). The expanded recording pill grows toward the centre on both hands. The One Liners cluster takes the editor cluster's shape. iPad follows the same rule; toolbar, drawer, welcome cards, rewrite bar and assistant sheet do not move. Android: landed on main (`ProjectRepository.dominantHandFlow`; `chromeEdge` / `chromeEdgePadding` place it physically), unit-verified round trip and unknown-value fallback in `ProjectRepositoryTest`, bounds-verified for both hands on both screens plus Settings switching in `DominantHandUiTest`. iOS: `DominantHand` with `@AppStorage` and `usesLeadingEdge(in:)` (hand XOR right-to-left), unit-verified in `DominantHandTests` (round trip, default, fallback, side resolution in both layout directions) and `DominantHandUITests` (both hands, right-to-left launches, Settings switching, left-handed recording pill stays on screen); checked by eye on the iOS 26.5 simulator in Ink.
 
+## Mac
+
+The native Mac app (branch `feat/macos-native`) shares the iOS views, view model and services; DESIGN.md (Mac) has its layout decisions. Status states: **exercised** (driven in the running Mac app), **built, not exercised** (compiles and has unit tests or renders, but nobody has driven it with real clicks or keystrokes), **never run** (no Mac run of any kind), **omitted** (with the reason). As of this writing nothing on the Mac has been driven by real clicks or keystrokes; the only Mac evidence is launch arguments (`Support/UITestFlags.swift`), the macOS unit-test scheme "Writers Block macOS Tests", and window renders.
+
+- Window, sidebar, editor, Assistant inspector, toolbar, menu bar commands: built, not exercised. Rendered from launch arguments in all three appearances, with a seeded song, the Assistant open and the empty state; command enablement is unit-tested (`MacCommandState`).
+- Lyric editor (`NSTextView`) with rhyme and syllable colours, right-click rewrites and Word Inspector: built, not exercised. Colours rendered; the right-click item rules are unit-tested (`LyricsContextMenuItem`).
+- Settings window (General, AI & Models, Backup, Editor): built, not exercised. Each tab rendered; keys saving on Return, focus loss, tab change and window close is code-read only.
+- One Liners (list, right-click menu, Delete, Type sheet) and the menu bar "Catch a One Liner": built, not exercised. Rendered empty and with the Type sheet.
+- Trash, templates, song import and drag-and-drop routing: built, not exercised. Drop routing is unit-tested (`MacDropRoute`).
+- TXT and PDF export: built, not exercised in the app. The PDF renderer's AppKit path passes the shared `LyricsExporterTests` on macOS; the save panel has not been opened.
+- Voice memo recording, One Liner recording and on-device speech transcription: never run. No microphone or speech permission has been requested on the Mac.
+- Local model download and local inference (GGUF), and the Mac-only 12B download option: never run. Apple Foundation Models has only been seen reporting "Loading model" in a render.
+- Google Drive backup sign-in, backup and restore: never run (the test build has no OAuth client ID configured).
+- Cloud providers (Gemini, OpenAI, Claude): never run on the Mac.
+- `writersblock://one-liners/...` links: never run on the Mac; the scheme is in the shared Info.plist.
+- iCloud sync of songs and recordings: never run on the Mac.
+- Omitted: One Liner Live Activity and its Stop Recording intent (ActivityKit is iOS only), Home Screen widget and Control Center control (the widget extension builds for iOS only; the menu bar item stands in), haptics (no Mac counterpart), audio-session interruption handling (`AVAudioSession` is iOS only), and the editor's floating UnBlock and mic (the toolbar's Assistant and Recordings buttons and the Song menu replace them).
+
 ## Open parity checks
 
 - Local model live/inference path: Android has current emulator evidence for GGUF load and nonblank generation through `scripts/android-local-model-smoke.sh`; iOS local provider has a simulator/device smoke gate that passes when Apple Foundation Models either return text or surface an on-device availability reason.
