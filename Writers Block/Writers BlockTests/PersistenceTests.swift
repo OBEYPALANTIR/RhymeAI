@@ -742,6 +742,34 @@ struct PendingEditSaveTests {
         viewModel.triggerAutoSave()
 
         #expect(!viewModel.savePendingEdit())
-        #expect(!viewModel.savePendingEdit(), "a failed save is tried again")
+        #expect(!viewModel.savePendingEdit(), "a failed save is still reported")
+    }
+
+    @Test func anAutosaveScheduledForTheSongBeforeIsNotWrittenIntoTheOpenOne() throws {
+        let (viewModel, _, container) = try Self.openSong()
+        let other = SongProject(id: "b", title: "Paper Moon", lyrics: "old line", theme: "night")
+        container.mainContext.insert(other)
+        try container.mainContext.save()
+        // Loading sets the theme while the first song is still current, which schedules an autosave for it.
+        viewModel.loadProject(other)
+        other.lyrics = "a synced line"
+        try container.mainContext.save()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(other.lyrics == "a synced line")
+    }
+
+    @Test func aFailedSaveWithNothingWaitingIsReportedNotWritten() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.modelContext = nil
+        #expect(!viewModel.flushCurrentDraft())
+        viewModel.modelContext = container.mainContext
+        song.lyrics = "ropes and a synced line"
+        try container.mainContext.save()
+
+        #expect(!viewModel.savePendingEdit())
+
+        #expect(song.lyrics == "ropes and a synced line")
     }
 }

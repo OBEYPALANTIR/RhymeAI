@@ -131,9 +131,9 @@ struct MacWorkspaceView: View {
             if UITestFlags.isEnabled(UITestFlags.openTemplates) { viewModel.showTemplatesSheet = true }
             if UITestFlags.isEnabled(UITestFlags.openOneLiners) { workspace.detail = .oneLiners }
         }
-        // Closing the window runs a pending autosave now rather than after its
-        // one-second wait. Quitting saves through MacAppDelegate, which holds Quit
-        // when that fails.
+        // Closing the window runs a waiting autosave now rather than after its
+        // one-second wait; that save failing, or a last save that had failed, is
+        // reported. Quitting saves through MacAppDelegate, which holds Quit then.
         .onDisappear {
             workspace.windowOpen = false
             guard !MacAppDelegate.isTerminating, !viewModel.savePendingEdit() else { return }

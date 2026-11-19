@@ -661,6 +661,8 @@ final class EditorViewModel: ObservableObject {
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
+    /// The song that was open when `autoSaveTask` was scheduled.
+    private var autoSaveProjectId: String?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
 
@@ -2343,8 +2345,10 @@ final class EditorViewModel: ObservableObject {
             return
         }
         let projectIdAtTrigger = currentProjectId
+        autoSaveProjectId = projectIdAtTrigger
         autoSaveTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            // A cancelled task leaves every state alone, even one cancelled before it first ran.
+            guard let self, !Task.isCancelled else { return }
             // Finished: no autosave is pending. A replaced or stopped task was cancelled and leaves it.
             defer { if !Task.isCancelled { autoSaveTask = nil } }
             guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
@@ -2355,33 +2359,37 @@ final class EditorViewModel: ObservableObject {
 
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-
-            // The editor switched projects (or cleared) during the debounce —
-            // saving now would write into the wrong project or create an empty one.
-            guard currentProjectId == projectIdAtTrigger,
-                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
-                saveStatus = .idle
-                return
-            }
-
-            _ = persistCurrentDraft(checkpoint: false)
+            runAutoSave(projectIdAtTrigger: projectIdAtTrigger)
         }
+    }
+
+    /// The autosave once its wait is over; Mac close and quit run it early.
+    /// False when the write was refused.
+    @discardableResult
+    private func runAutoSave(projectIdAtTrigger: String?) -> Bool {
+        // The editor switched projects (or cleared) during the debounce —
+        // saving now would write into the wrong project or create an empty one.
+        guard currentProjectId == projectIdAtTrigger,
+              !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            saveStatus = .idle
+            return true
+        }
+        return persistCurrentDraft(checkpoint: false)
     }
 
     /// A backup or restore holds the library; saves wait for it to finish and the
     /// open song's edits go to its recovery copy meanwhile.
     var cloudOperationHoldsEditor: Bool { activeCloudEditorOperation != nil }
 
-    /// Closing the Mac window and quitting: an autosave still waiting, or one that
-    /// failed, is run now; with neither nothing is written, so a newer synced copy
-    /// the editor shows stale is kept. False when that save did not succeed.
+    /// Closing the Mac window and quitting: the waiting autosave fires now. With none
+    /// waiting nothing is written, and a failed last save is reported, not retried.
+    /// False when the open song's edits are not saved.
     func savePendingEdit() -> Bool {
-        guard autoSaveTask?.isCancelled == false || saveStatus == .failed else { return true }
-        // As the autosave: an empty editor is not written.
-        guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
-        autoSaveTask?.cancel()
-        guard persistCurrentDraft(checkpoint: false) else {
-            // Not every refusal marks the save failed; Try Again must find it still unsaved.
+        guard let task = autoSaveTask, !task.isCancelled else { return saveStatus != .failed }
+        task.cancel()
+        autoSaveTask = nil
+        guard runAutoSave(projectIdAtTrigger: autoSaveProjectId) else {
+            // Not every refusal marks the save failed; the next close or quit must still report it.
             saveStatus = .failed
             return false
         }

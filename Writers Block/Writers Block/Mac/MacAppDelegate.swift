@@ -21,13 +21,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         return reply
     }
 
-    /// Runs the open song's pending autosave now; while that fails, asks what to do.
+    /// Runs the open song's waiting autosave now; while that fails, or the last save
+    /// had failed, asks what to do. Only Try Again writes again.
     @MainActor
     static func terminateReply(viewModel: EditorViewModel?, ask: (String) -> FailedSaveChoice) -> NSApplication.TerminateReply {
         guard let viewModel else { return .terminateNow }
         while !viewModel.savePendingEdit() {
             switch ask(viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open.") {
-            case .tryAgain: continue
+            case .tryAgain:
+                // As the Save Failed button: schedule the autosave, which the loop then runs now.
+                viewModel.triggerAutoSave()
             case .keepOpen: return .terminateCancel
             case .quitAnyway: return .terminateNow
             }
