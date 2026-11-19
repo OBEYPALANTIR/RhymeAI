@@ -112,6 +112,19 @@ struct MacCommandStateTests {
     }
 }
 
+struct MacPickerFailureTests {
+    @Test
+    func aCancelledPickerIsSilentAndAFailedOneIsShown() {
+        let workspace = MacWorkspaceModel()
+
+        workspace.reportPickerFailure(CocoaError(.userCancelled))
+        #expect(workspace.importError == nil)
+
+        workspace.reportPickerFailure(CocoaError(.fileReadNoPermission))
+        #expect(workspace.importError != nil)
+    }
+}
+
 struct MacSongSidebarTests {
     @Test
     func deleteIgnoresASelectedSongTheSearchHides() {

@@ -243,7 +243,7 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .selectedContext) }
                 )
             )
-            .tint(.indigo)
+            .tint(consentTint)
             .accessibilityIdentifier("cloudAISelectedContextConsent")
 
             Toggle(
@@ -253,7 +253,7 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .wholeSong) }
                 )
             )
-            .tint(.indigo)
+            .tint(consentTint)
             .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
         .padding(RhymeAITokens.Spacing.md)
@@ -327,21 +327,37 @@ struct SettingsView: View {
         if hasUnsavedKeys { saveAll() }
     }
 
+    /// iOS keeps system indigo on the consent switches for Graphite contrast; the
+    /// Mac's checkboxes take the action colour, as its other Settings checkboxes do.
+    private var consentTint: Color {
+        #if os(macOS)
+        appearance.palette.action
+        #else
+        .indigo
+        #endif
+    }
+
+    /// The keys to write, in provider order: only keys the writer changed. An
+    /// untouched key that read as empty (a Keychain read failure) must not be
+    /// saved as a removal.
+    static func changedKeys(editing: [String: String], stored: [String: String]) -> [(AIProvider, String)] {
+        AIProvider.allCases.compactMap { provider in
+            guard let key = editing[provider.rawValue], key != stored[provider.rawValue] else { return nil }
+            return (provider, key)
+        }
+    }
+
     @discardableResult
     func saveAll() -> Bool {
         savedConfirmation = false
         saveError = nil
-        for provider in AIProvider.allCases {
-            // Only keys the writer changed: an untouched key that read as empty
-            // (a Keychain read failure) must not be saved as a removal.
-            if let key = editingKeys[provider.rawValue], key != storedKeys[provider.rawValue] {
-                guard viewModel.saveApiKey(provider: provider, key: key) else {
-                    let action = key.isEmpty ? "remove" : "save"
-                    saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
-                    return false
-                }
-                storedKeys[provider.rawValue] = key
+        for (provider, key) in Self.changedKeys(editing: editingKeys, stored: storedKeys) {
+            guard viewModel.saveApiKey(provider: provider, key: key) else {
+                let action = key.isEmpty ? "remove" : "save"
+                saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
+                return false
             }
+            storedKeys[provider.rawValue] = key
         }
         savedConfirmation = true
         Task {

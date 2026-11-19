@@ -805,7 +805,7 @@ These describe the current code. They are not rules to copy.
 - In iPadOS windowed-app mode the window controls sit over the songs drawer button at the leading end of the editor top bar; the bar does not inset for them.
 - Graphite switches have weak contrast on iOS: the on-state track is the warm white action colour (`#F6F2E8`) behind a white thumb.
 - The iOS layout tokens `drawerMinWidth` and `drawerMaxWidth` do not size the drawer (they only cap the welcome cards and chip bar), and Android's `Drawer.compactWidth` and `Drawer.width` are unused; the Android drawer stays full-width on tablets.
-- iOS still passes legacy hue tints (indigo, teal, cyan, purple, blue, white) into `liquidGlassSurface` for some settings groups and the rewrite review bar. They are applied at very low opacity and are not part of the palette. The `liquidGlass*` names are legacy too.
+- iOS still passes legacy hue tints (indigo, teal, cyan, purple, blue, white) into `liquidGlassSurface` for some settings groups and the rewrite review bar; the Mac shares those views, so its Settings cards carry the same faint tints. They are applied at very low opacity and are not part of the palette. The `liquidGlass*` names are legacy too.
 - iOS hardcodes black for the drawer and toast shadows; on Graphite they do not show.
 - Token names disagree across platforms (for example `Spacing.lg` is 24pt on iOS and 20dp on Android; `Radius.pill` is 52pt and 28dp).
 - Paper's ruled texture exists only on iOS, and Paper's selection colour differs (`#D8CDB4` iOS, `#D2C8B0` Android).
@@ -813,7 +813,7 @@ These describe the current code. They are not rules to copy.
 - Android has no save-failed state in the top bar and no persistent assistant side panel on large screens.
 - Lyric size and bottom rest differ: 16pt and 200pt on iOS, 17sp and 300dp on Android.
 - The iOS lyric editor's Ink and Paper rhyme colours come from a second array whose amber, green, orange, cyan, yellow, and lime entries differ from `AppAppearance` and from Android; the iOS assistant help sheet has a third copy.
-- iOS uses system hues outside the palettes: system indigo on the two cloud-sharing consent switches (deliberate, for Graphite contrast; the Mac's checkboxes keep it, since a Graphite-ink checkbox hides its checkmark); and system indigo, green, and orange for the suggestion tier badge. Android draws the tier badge from the colour scheme.
+- iOS uses system hues outside the palettes: system indigo on the two cloud-sharing consent switches (deliberate, for Graphite contrast; on the Mac these are checkboxes in the action colour, like its other Settings checkboxes); and system indigo, green, and orange for the suggestion tier badge. Android draws the tier badge from the colour scheme.
 - The mic button is an action fill on iOS and an outlined high-container surface on Android. The recording timer is monospaced on iOS only.
 - Welcome differs by platform: two sentences of copy and tiled icons on a raised surface on iOS; one line of copy, bare icons on `surfaceContainerLow`, and an extra "Continue" card on Android.
 - Two iOS views use non-continuous rounded rectangles: `RhymeSchemeDisplayView` and the beat-grid preview.
