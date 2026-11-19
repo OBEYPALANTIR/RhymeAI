@@ -200,7 +200,9 @@ struct Writers_BlockApp: App {
                 reconcileOneLinerAudio()
                 publishOneLinersSnapshot()
                 // A recording activity left by a process that ended has no take behind it.
+                #if os(iOS)
                 if !OneLinerRouter.shared.isRecording { await OneLinerActivityAttributes.endAll() }
+                #endif
             }
             .task {
                 // After the first frames, so launch is not competing with it.

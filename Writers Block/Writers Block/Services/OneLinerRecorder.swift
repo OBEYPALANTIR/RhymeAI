@@ -294,6 +294,7 @@ final class OneLinerRecorder {
 
     /// A call, Siri or another app took the microphone: the take ends where it was.
     private func observeInterruptions() {
+        #if os(iOS)
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
@@ -307,6 +308,7 @@ final class OneLinerRecorder {
                 self.notice = "Recording stopped by an interruption. The take so far is kept."
             }
         }
+        #endif
     }
 
     private func pushLevel(_ level: Float, forTake take: UInt64) {

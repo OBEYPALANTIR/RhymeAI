@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum OneLinerCaptureMode: Identifiable {
     case record
@@ -346,7 +348,9 @@ struct OneLinerCaptureView: View {
             return
         }
         saved = true
+        #if canImport(UIKit)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
         dismiss()
     }
 
