@@ -171,7 +171,7 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     @ViewBuilder
@@ -224,7 +224,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, RhymeAITokens.Spacing.sm)
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
@@ -256,7 +256,7 @@ struct SettingsView: View {
             .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     var modelSection: some View {
@@ -275,7 +275,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, RhymeAITokens.Spacing.sm)
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             // Cloud model ids are what the provider's docs call the model; the
             // on-device placeholder id ("local-model") means nothing to a writer.
@@ -288,7 +288,7 @@ struct SettingsView: View {
             }
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var apiKeyBinding: Binding<String> {

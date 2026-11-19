@@ -19,7 +19,7 @@ struct AppearanceSettingsSection: View {
             )
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius)
     }
 }
 

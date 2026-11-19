@@ -13,12 +13,18 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 enum SettingsMetrics {
     #if os(macOS)
     static let rowFont: Font = .body
-    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.xs
+    // 28pt controls + 4pt = a 32pt row pitch.
+    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.xxs
     static let buttonLabelMinHeight: CGFloat? = nil
+    // The Mac shell's small radii: cards like a grouped Form, fields like text fields.
+    static let groupRadius: CGFloat = RhymeAITokens.Radius.sm
+    static let fieldRadius: CGFloat = RhymeAITokens.Radius.xs
     #else
     static let rowFont: Font = .subheadline
     static let rowSpacing: CGFloat = RhymeAITokens.Spacing.md
     static let buttonLabelMinHeight: CGFloat? = RhymeAITokens.Touch.minimum
+    static let groupRadius: CGFloat = RhymeAITokens.Radius.xl
+    static let fieldRadius: CGFloat = RhymeAITokens.Radius.lg
     #endif
 }
 
@@ -161,7 +167,7 @@ struct SettingsSaveBar: View {
             .font(.headline)
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
-            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+            .appearanceActionSurface(cornerRadius: SettingsMetrics.fieldRadius)
             .opacity(saved || hasChanges ? 1 : 0.45)
         }
         .buttonStyle(.rhymePress)
@@ -324,7 +330,7 @@ struct SettingsLocalModelSection: View {
             Spacer(minLength: 0)
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var enginePickerRow: some View {
@@ -346,7 +352,7 @@ struct SettingsLocalModelSection: View {
             )
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private func gemmaDownloadRow(_ option: GGUFDownloadOption) -> some View {
@@ -419,7 +425,7 @@ struct SettingsLocalModelSection: View {
             // Room for the overlaid Delete control (44pt tall over the 16pt padding).
             .padding(.bottom, isOnDisk ? RhymeAITokens.Touch.minimum - RhymeAITokens.Spacing.md : 0)
             .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
@@ -496,7 +502,7 @@ struct SettingsEditorSection: View {
             #endif
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
         .accessibilityIdentifier("editorSettingsSection")
     }
 
@@ -586,7 +592,7 @@ struct SettingsCloudBackupSection: View {
             .clipped()
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
         .alert("Migrate older encrypted backup", isPresented: $migratePromptShown) {
             SecureField("Backup passphrase", text: $migratePassphrase)
                 .accessibilityIdentifier("migratePassphrase")
