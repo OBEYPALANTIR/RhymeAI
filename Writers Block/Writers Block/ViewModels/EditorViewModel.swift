@@ -564,6 +564,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var recordingListsSuspended = false
     /// The launch check of the recordings, awaited by tests.
     private(set) var recordingsLaunchTask: Task<Void, Never>?
+    /// True until the launch check of the recordings has run: expiry asked for
+    /// meanwhile is left to that check, which runs it once it succeeds.
+    private var recordingsLaunchCheckPending = false
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -611,6 +614,7 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
+                recordingsLaunchCheckPending = true
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
@@ -618,7 +622,9 @@ final class EditorViewModel: ObservableObject {
                     if let library = self.recordingLibrary, let context = self.modelContext {
                         await library.withGate { library.clearStaging(context: context) }
                     }
-                    guard await self.reconcileRecordings() else { return }
+                    let checked = await self.reconcileRecordings()
+                    self.recordingsLaunchCheckPending = false
+                    guard checked else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -1793,6 +1799,10 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return }
         // One liners hold no song recordings, so they expire before the recordings check.
         try? OneLinersStore(context: context).purgeExpired()
+        // Housekeeping asked for before the launch check ran (scene activation, the
+        // Trash timer) is left to that check, which expires once it succeeds; it is
+        // not reported as a refused deletion the user never asked for.
+        guard !recordingsLaunchCheckPending else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).

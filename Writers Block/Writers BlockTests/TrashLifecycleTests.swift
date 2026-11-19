@@ -331,6 +331,31 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func expiryAskedForDuringTheLaunchCheckWaitsForItQuietly() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("LaunchExpiry-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "LaunchExpiry-\(scratch.lastPathComponent)")!)
+        container.mainContext.insert(TrashedSongProject(id: "expired", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                                        deletedAt: Date(timeIntervalSince1970: 2), deleteAfter: Date(timeIntervalSince1970: 3)))
+        try container.mainContext.save()
+
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = container.mainContext
+        // Scene activation at launch, before the recordings check has run.
+        viewModel.purgeExpiredTrashedProjects()
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
+
+        // The check runs the expiry once it succeeds.
+        await viewModel.recordingsLaunchTask?.value
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).isEmpty)
+    }
+
+    @MainActor
     @Test func aRecordingAWinningDeletionCoversIsNotPlayable() async throws {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
