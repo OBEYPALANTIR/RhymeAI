@@ -1716,9 +1716,9 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
+        // The flush cancels the open song's pending autosave; trashing another song leaves it running.
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
-        autoSaveTask?.cancel()
 
         let trashedProject = TrashedSongProject(project: project)
         removeExistingTrashEntries(id: project.id, in: context)

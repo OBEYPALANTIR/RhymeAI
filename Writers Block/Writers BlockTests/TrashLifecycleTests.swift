@@ -6,6 +6,26 @@ import Testing
 struct TrashLifecycleTests {
 
     @MainActor
+    @Test func trashingAnotherSongKeepsTheOpenSongsPendingAutosave() async throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let context = harness.context
+        let open = SongProject(id: "open", title: "Open", lyrics: "first words", theme: "")
+        let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
+        context.insert(open)
+        context.insert(other)
+        try context.save()
+        viewModel.loadProject(open)
+
+        viewModel.lyrics = "first words, then more"
+        viewModel.triggerAutoSave()
+        #expect(viewModel.moveProjectToTrash(other))
+        try await Task.sleep(for: .milliseconds(1_500))
+
+        #expect(try Self.fetchProjects(context).first { $0.id == "open" }?.lyrics == "first words, then more")
+    }
+
+    @MainActor
     @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
