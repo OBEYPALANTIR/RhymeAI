@@ -68,8 +68,9 @@ final class MacWorkspaceModel: ObservableObject {
     func rowExportable(_ project: SongProject, in viewModel: EditorViewModel) -> Bool {
         guard !project.lyrics.isEmpty else { return false }
         guard project.id == viewModel.currentProjectId, !viewModel.showWelcome else { return true }
-        let open = viewModel.snapshotForExport()
-        return open.title == project.title && open.lyrics == project.lyrics && open.theme == project.theme
+        // An empty title is saved as "Untitled", and a synced or imported row may keep it empty.
+        let titleMatches = viewModel.title == project.title || viewModel.snapshotForExport().title == project.title
+        return titleMatches && viewModel.lyrics == project.lyrics && viewModel.theme == project.theme
     }
 
     /// File › Save: writes the open song now. When it cannot, says why.

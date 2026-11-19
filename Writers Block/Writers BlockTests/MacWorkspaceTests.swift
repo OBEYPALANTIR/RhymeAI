@@ -400,6 +400,12 @@ struct MacWorkspaceLibraryTests {
         #expect(!workspace.rowExportable(olderCopy, in: viewModel), "another copy under the open song's id")
         viewModel.lyrics = "ropes and tide"
         #expect(!workspace.rowExportable(open, in: viewModel), "the editor holds words the row does not")
+
+        let untitled = SongProject(id: "u", title: "", lyrics: "hum first", theme: "")
+        container.mainContext.insert(untitled)
+        try container.mainContext.save()
+        viewModel.loadProject(untitled)
+        #expect(workspace.rowExportable(untitled, in: viewModel), "a row whose title was never set")
     }
 
     @Test
