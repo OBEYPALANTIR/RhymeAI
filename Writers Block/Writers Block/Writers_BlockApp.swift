@@ -195,6 +195,11 @@ struct Writers_BlockApp: App {
                     .background(appearance.palette.canvas)
                 }
             }
+            #if os(macOS)
+            // One window on shared state: an incoming writersblock:// link goes to the
+            // open window instead of making the group open another.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            #endif
             .modifier(appEnvironment)
             .safeAreaInset(edge: .top) {
                 persistenceDegradedBanner
