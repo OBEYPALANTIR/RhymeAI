@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import Testing
 @testable import Writers_Block
@@ -178,6 +179,28 @@ struct MacDropRouteTests {
     @Test
     func otherFilesAreRefused() {
         #expect(MacDropRoute.route([image], songOpen: true) == .none)
+    }
+}
+
+/// Edit › Undo is AppKit's responder-chain item: the lyric editor answers it
+/// with the lyric history, any other field with its own undo.
+@MainActor
+struct LyricsUndoRoutingTests {
+    @Test
+    func theEditMenusUndoReachesTheLyricHistoryOnlyInTheLyricEditor() {
+        let lyrics = LyricsNSTextView(usingTextLayoutManager: true)
+        var steps: [String] = []
+        lyrics.historyUndo = { steps.append("undo") }
+        lyrics.historyRedo = { steps.append("redo") }
+        lyrics.canUndoHistory = { true }
+        lyrics.canRedoHistory = { false }
+        let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+
+        #expect(lyrics.validateMenuItem(undo))
+        #expect(!lyrics.validateMenuItem(redo))
+        #expect(lyrics.tryToPerform(Selector(("undo:")), with: nil))
+        #expect(steps == ["undo"])
     }
 }
 #endif

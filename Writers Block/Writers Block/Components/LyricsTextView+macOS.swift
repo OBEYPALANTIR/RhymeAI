@@ -34,6 +34,15 @@ final class LyricsNSTextView: NSTextView {
         }
     }
 
+    // Menu items are validated here first (NSTextView adopts NSMenuItemValidation).
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): return canUndoHistory()
+        case #selector(redo(_:)): return canRedoHistory()
+        default: return super.validateMenuItem(menuItem)
+        }
+    }
+
     /// Files dropped on the lyrics go to the window's drop target (song
     /// import, recordings) instead of being pasted in as a path.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {

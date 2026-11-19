@@ -42,15 +42,9 @@ struct MacAppCommands: Commands {
                 .disabled(!state.canExport)
         }
 
-        // The lyric history, as the toolbar's Undo and Redo.
-        CommandGroup(replacing: .undoRedo) {
-            Button("Undo") { viewModel.undoLyrics() }
-                .keyboardShortcut("z")
-                .disabled(!state.canUndo)
-            Button("Redo") { viewModel.redoLyrics() }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!state.canRedo)
-        }
+        // Edit › Undo and Redo stay AppKit's: they go to the first responder, so
+        // the lyric editor steps the app's lyric history (LyricsNSTextView) and
+        // the title and every other field undo their own typing.
 
         CommandGroup(replacing: .sidebar) {
             Button(workspace.sidebarVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar") {
