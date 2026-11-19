@@ -25,8 +25,8 @@ struct MacAppCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .saveItem) {
-            // A failed save sets saveStatus, which the toolbar's Save Failed retry shows.
-            Button("Save") { viewModel.flushCurrentDraft(checkpoint: true) }
+            // A save that cannot run or fails says why in the workspace's Couldn't Save alert.
+            Button("Save") { workspace.save(viewModel) }
                 .keyboardShortcut("s")
                 .disabled(!state.songOpen)
         }
@@ -78,10 +78,7 @@ struct MacAppCommands: Commands {
             Button("Suggest Next Line") { workspace.suggestNextLine(viewModel) }
                 .keyboardShortcut("u", modifiers: [.command, .shift])
                 .disabled(!state.canSuggest)
-            Button("Cancel Generation") {
-                viewModel.cancelSuggestions()
-                viewModel.dismissRewrite()
-            }
+            Button("Cancel Generation") { workspace.cancelGeneration(viewModel) }
             .keyboardShortcut(".")
             .disabled(!state.canCancelGeneration)
             Divider()

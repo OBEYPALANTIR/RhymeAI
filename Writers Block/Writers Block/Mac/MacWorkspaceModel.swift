@@ -23,6 +23,8 @@ final class MacWorkspaceModel: ObservableObject {
     @Published var songImporterPresented = false
     @Published var audioImporterPresented = false
     @Published var importError: String?
+    /// Why File › Save did not save, until the writer dismisses it.
+    @Published var saveError: String?
     /// The editor window is on screen. The menus act only through it.
     @Published var windowOpen = false
 
@@ -57,6 +59,32 @@ final class MacWorkspaceModel: ObservableObject {
             viewModel.loadProject(project)
         }
         return viewModel.currentProjectId == project.id && !viewModel.showWelcome
+    }
+
+    /// Whether Export from a sidebar row would export that row: the editor shows
+    /// its words, or opening it will. A row sharing the open song's id with other
+    /// words (a second copy, or a change the editor has not loaded) is not
+    /// opened by a click, so Export would read the open copy instead.
+    func rowExportable(_ project: SongProject, in viewModel: EditorViewModel) -> Bool {
+        guard !project.lyrics.isEmpty else { return false }
+        guard project.id == viewModel.currentProjectId, !viewModel.showWelcome else { return true }
+        let open = viewModel.snapshotForExport()
+        return open.title == project.title && open.lyrics == project.lyrics && open.theme == project.theme
+    }
+
+    /// File › Save: writes the open song now. When it cannot, says why.
+    func save(_ viewModel: EditorViewModel) {
+        guard !viewModel.flushCurrentDraft(checkpoint: true) else { return }
+        saveError = viewModel.cloudOperationHoldsEditor
+            ? "A backup or restore is running. Your edits are kept and are saved when it finishes."
+            : viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open."
+    }
+
+    /// Song › Cancel Generation: stops a running suggestion or rewrite. A finished
+    /// rewrite preview stays for Accept or Dismiss.
+    func cancelGeneration(_ viewModel: EditorViewModel) {
+        viewModel.cancelSuggestions()
+        if viewModel.rewriteLoading { viewModel.dismissRewrite() }
     }
 
     /// Opens the song's recordings, saving a new song first so it has an id.
@@ -100,13 +128,28 @@ final class MacWorkspaceModel: ObservableObject {
         importError = "Couldn't open the chosen file. Try choosing it again."
     }
 
-    /// Opens a song JSON export, as the drawer's Import From File does.
-    func importSong(_ url: URL, into viewModel: EditorViewModel) {
-        do {
-            if try viewModel.importSongFile(at: url) { detail = .editor }
-        } catch {
-            importError = "Could not import this file. Pick a RhymeAI project JSON."
+    /// Opens song JSON exports, as the drawer's Import From File does; the last
+    /// one imported is open. Files that fail are named, with how many imported.
+    func importSongs(_ urls: [URL], into viewModel: EditorViewModel) {
+        var failed: [String] = []
+        var reason = ""
+        for url in urls {
+            do {
+                if try viewModel.importSongFile(at: url) {
+                    detail = .editor
+                    continue
+                }
+                // Read, but not saved (or the open song could not be kept first).
+                reason = viewModel.errorMessage ?? "Couldn't save the imported song. The file was not imported."
+            } catch {
+                reason = "Could not import this file. Pick a RhymeAI project JSON."
+            }
+            failed.append(url.lastPathComponent)
         }
+        guard !failed.isEmpty else { return }
+        importError = urls.count == 1
+            ? reason
+            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.joined(separator: ", ")). Pick RhymeAI project JSON files."
     }
 }
 

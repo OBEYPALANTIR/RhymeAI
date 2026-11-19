@@ -104,8 +104,18 @@ struct LyricsTextView: NSViewRepresentable {
 
     static let lyricsFont = NSFont.systemFont(ofSize: 16, weight: .regular)
 
-    func makeNSView(context: Context) -> LyricsNSTextView {
+    /// The editor's text view with ⌘Z and ⇧⌘Z on the lyric history and AppKit's own undo off.
+    static func makeTextView(history viewModel: EditorViewModel, isEditable: @escaping () -> Bool) -> LyricsNSTextView {
         let textView = LyricsNSTextView(usingTextLayoutManager: true)
+        textView.connectHistory(to: viewModel, isEditable: isEditable)
+        textView.allowsUndo = false
+        return textView
+    }
+
+    func makeNSView(context: Context) -> LyricsNSTextView {
+        let textView = Self.makeTextView(history: viewModel) { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isEditable == true
+        }
         textView.delegate = context.coordinator
         textView.resumesEditingOnAttach = resumesEditingOnCreate
         textView.onFocusChange = { [weak coordinator = context.coordinator] focused in
@@ -115,13 +125,9 @@ struct LyricsTextView: NSViewRepresentable {
             coordinator?.refreshRewriteHighlight()
             coordinator?.refreshUnderlines(animated: false)
         }
-        textView.connectHistory(to: viewModel) { [weak coordinator = context.coordinator] in
-            coordinator?.parent.isEditable == true
-        }
         textView.font = Self.lyricsFont
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = false
         textView.drawsBackground = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false

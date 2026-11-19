@@ -14,6 +14,7 @@ struct MacWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView(columnVisibility: $workspace.sidebarVisibility) {
@@ -47,14 +48,14 @@ struct MacWorkspaceView: View {
         .foregroundStyle(appearance.palette.primaryInk)
         .fileImporter(isPresented: $workspace.songImporterPresented, allowedContentTypes: [.json]) { result in
             switch result {
-            case .success(let url): workspace.importSong(url, into: viewModel)
+            case .success(let url): workspace.importSongs([url], into: viewModel)
             case .failure(let error): workspace.reportPickerFailure(error)
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
             switch MacDropRoute.route(urls, songOpen: workspace.songOpen(in: viewModel)) {
             case .songs(let urls):
-                for url in urls { workspace.importSong(url, into: viewModel) }
+                workspace.importSongs(urls, into: viewModel)
                 return true
             case .recordings(let audio):
                 workspace.importRecordings(audio, into: viewModel)
@@ -80,6 +81,15 @@ struct MacWorkspaceView: View {
             "Import Failed",
             isPresented: Binding(get: { workspace.importError != nil }, set: { if !$0 { workspace.importError = nil } }),
             presenting: workspace.importError
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
+        .alert(
+            "Couldn't Save",
+            isPresented: Binding(get: { workspace.saveError != nil }, set: { if !$0 { workspace.saveError = nil } }),
+            presenting: workspace.saveError
         ) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
@@ -121,14 +131,30 @@ struct MacWorkspaceView: View {
             if UITestFlags.isEnabled(UITestFlags.openTemplates) { viewModel.showTemplatesSheet = true }
             if UITestFlags.isEnabled(UITestFlags.openOneLiners) { workspace.detail = .oneLiners }
         }
-        // Closing the window or quitting saves the open song now rather than
-        // after the autosave's one-second wait, whether or not backup is set up.
+        // Closing the window saves an unsaved edit now rather than after the
+        // autosave's one-second wait, whether or not backup is set up. Quitting
+        // saves through MacAppDelegate, which holds Quit when that fails.
         .onDisappear {
-            viewModel.flushCurrentDraft()
             workspace.windowOpen = false
+            guard !MacAppDelegate.isTerminating, !viewModel.saveUnsavedEdit() else { return }
+            reportUnsavedSongAfterClose()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            viewModel.flushCurrentDraft()
+    }
+
+    /// The window is gone, and its Save Failed control with it: the failure is
+    /// reported in an alert that can bring the window back to retry.
+    private func reportUnsavedSongAfterClose() {
+        let reason = viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open."
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Your Song Couldn't Be Saved"
+            alert.informativeText = "\(reason) Reopen the window to try saving again."
+            alert.addButton(withTitle: "Reopen Window")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                MacEditorWindow.bringForward(openWindow: openWindow)
+            }
         }
     }
 
