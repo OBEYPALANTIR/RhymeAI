@@ -1246,6 +1246,25 @@ struct GGUFDownloadCompletionTests {
         #expect(manager.errorMessage == nil)
     }
 
+    /// A truncated catalog file (an interrupted copy) is never the model Suggest runs on,
+    /// even while it is the persisted selection; the full-size install is used instead.
+    @Test func aTruncatedCatalogFileIsNotResolvedForSuggest() throws {
+        let e2b = GGUFDownloadCatalog.options[0]
+        let e4b = GGUFDownloadCatalog.options[1]
+        let sandbox = try Sandbox()
+        defer { sandbox.tearDown() }
+        let truncated = sandbox.root.appendingPathComponent(e2b.fileName)
+        #expect(FileManager.default.createFile(atPath: truncated.path, contents: Data("GGUF".utf8)))
+        GGUFModelSelection.save(fileName: e2b.fileName, defaults: sandbox.defaults)
+        #expect(GGUFModelSelection.resolvedModelURL(defaults: sandbox.defaults, modelsDirectory: sandbox.root) == nil)
+
+        try sandbox.install([e4b])
+        GGUFModelSelection.save(fileName: e2b.fileName, defaults: sandbox.defaults)
+        #expect(GGUFModelSelection.resolvedModelURL(
+            defaults: sandbox.defaults, modelsDirectory: sandbox.root, totalRAMBytes: 64 << 30
+        )?.lastPathComponent == e4b.fileName)
+    }
+
     /// The persisted selection can name a stale file while the manager shows the verified
     /// fallback; deleting that file still clears the selection, and nothing is taken up.
     @Test func deletingAStaleFileThatIsThePersistedSelectionClearsIt() async throws {
