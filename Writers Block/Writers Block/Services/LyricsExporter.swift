@@ -23,7 +23,11 @@ enum LyricsExporter {
         switch format {
         case .txt: return buildTxt(project)
         case .json: return try buildJson(project)
-        case .pdf: return buildPdf(project)
+        case .pdf:
+            // An empty PDF means the drawing context could not be made; do not save it.
+            let pdf = buildPdf(project)
+            guard !pdf.isEmpty else { throw CocoaError(.fileWriteUnknown) }
+            return pdf
         case .lrc: return buildLrc(project)
         }
     }

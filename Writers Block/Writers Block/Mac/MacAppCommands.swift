@@ -90,6 +90,12 @@ struct MacAppCommands: Commands {
                     .disabled(!state.canRewrite)
             }
             Divider()
+            Menu("Insert Section") {
+                ForEach(SectionMap.standardLabels, id: \.self) { label in
+                    Button(label) { viewModel.insertSection(label) }
+                }
+            }
+            .disabled(!state.canInsertSection)
             Button("Word Inspector") { viewModel.openInspectorForSelection() }
                 .keyboardShortcut("i", modifiers: [.command, .control])
                 .disabled(!state.canInspectWord)

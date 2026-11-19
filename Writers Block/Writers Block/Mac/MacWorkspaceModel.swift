@@ -88,8 +88,16 @@ final class MacWorkspaceModel: ObservableObject {
                     return
                 }
             }
-            showRecordings(for: viewModel)
+            // Only if that song is still open: another song's recordings, or a
+            // blank song saved to hold them, would be the wrong result.
+            if viewModel.currentProjectId == projectId { showRecordings(for: viewModel) }
         }
+    }
+
+    /// A file picker that failed, other than by the writer cancelling it.
+    func reportPickerFailure(_ error: Error) {
+        guard (error as? CocoaError)?.code != .userCancelled else { return }
+        importError = "Couldn't open the chosen file. Try choosing it again."
     }
 
     /// Opens a song JSON export, as the drawer's Import From File does.
@@ -114,7 +122,16 @@ struct MacCommandState: Equatable {
     var canRewrite = false
     var canInspectWord = false
 
-    init(viewModel: EditorViewModel, workspace: MacWorkspaceModel) {
+    var canInsertSection = false
+
+    /// `localModelReady` is whether the on-device model can answer; nil reads it
+    /// now. Tests pass it so they do not depend on installed files.
+    @MainActor
+    init(
+        viewModel: EditorViewModel,
+        workspace: MacWorkspaceModel,
+        localModelReady: Bool? = nil
+    ) {
         let songOpen = workspace.songOpen(in: viewModel)
         self.songOpen = songOpen
         guard songOpen else { return }
@@ -123,16 +140,19 @@ struct MacCommandState: Equatable {
         canUndo = viewModel.canUndoLyrics && !rewriting
         canRedo = viewModel.canRedoLyrics && !rewriting
         canSuggest = !viewModel.lyrics.isEmpty && !viewModel.isLoading
-        canCancelGeneration = viewModel.isLoading || rewriting
-        canRewrite = viewModel.selectedRange.length > 0 && !rewriting
+            && (viewModel.selectedProvider != .local || (localModelReady ?? LocalReadiness.current().canGenerate))
+        // A finished rewrite preview has nothing to cancel; Accept or Dismiss close it.
+        canCancelGeneration = viewModel.isLoading || viewModel.rewriteLoading
+        canRewrite = LyricsContextMenuItem.hasText(viewModel.lyrics, in: viewModel.selectedRange) && !rewriting
+        canInsertSection = !rewriting
         canInspectWord = viewModel.singleWordSelection != nil && !rewriting
     }
 }
 
 /// Where files dropped on the window go.
 enum MacDropRoute: Equatable {
-    /// A RhymeAI song export, opened as a song.
-    case song(URL)
+    /// RhymeAI song exports, each opened as a song.
+    case songs([URL])
     /// Audio for the open song's recordings.
     case recordings([URL])
     case none
@@ -140,9 +160,8 @@ enum MacDropRoute: Equatable {
     static let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac"]
 
     static func route(_ urls: [URL], songOpen: Bool) -> MacDropRoute {
-        if let song = urls.first(where: { $0.pathExtension.lowercased() == "json" }) {
-            return .song(song)
-        }
+        let songs = urls.filter { $0.pathExtension.lowercased() == "json" }
+        if !songs.isEmpty { return .songs(songs) }
         let audio = urls.filter { audioExtensions.contains($0.pathExtension.lowercased()) }
         guard songOpen, !audio.isEmpty else { return .none }
         return .recordings(audio)
@@ -167,18 +186,27 @@ enum LyricsContextMenuItem: Equatable {
     /// is shown, since the text on screen is then not the lyric.
     static func items(lyrics: String, selection: NSRange, clickedIndex: Int, rewriteActive: Bool) -> [Self] {
         guard !rewriteActive else { return [] }
+        // NSMaxRange is the first index after the selection.
         let clickInSelection = selection.length > 0
             && clickedIndex >= selection.location
-            && clickedIndex <= NSMaxRange(selection)
+            && clickedIndex < NSMaxRange(selection)
         if clickInSelection {
             var items: [Self] = []
             if let word = EditorViewModel.singleWord(in: lyrics, range: selection) {
                 items.append(.wordInspector(word: word.word, range: word.range))
             }
+            guard hasText(lyrics, in: selection) else { return items }
             return items + RewriteAction.allCases.map { .rewrite($0, range: selection) }
         }
         guard let word = word(in: lyrics, at: clickedIndex) else { return [] }
         return [.wordInspector(word: word.word, range: word.range)]
+    }
+
+    /// The range holds more than spaces and line breaks, as a rewrite needs.
+    static func hasText(_ lyrics: String, in range: NSRange) -> Bool {
+        let ns = lyrics as NSString
+        guard range.length > 0, NSMaxRange(range) <= ns.length else { return false }
+        return !ns.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The word around a UTF-16 index, by the Word Inspector's word rule.

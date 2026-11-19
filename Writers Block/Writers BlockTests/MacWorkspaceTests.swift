@@ -4,6 +4,7 @@ import Foundation
 import Testing
 @testable import Writers_Block
 
+@MainActor
 struct MacCommandStateTests {
     @Test
     func songCommandsAreDisabledWithNoSongOpen() {
@@ -32,12 +33,37 @@ struct MacCommandStateTests {
         viewModel.selectedRange = NSRange(location: 0, length: 4)
 
         // When
-        let state = MacCommandState(viewModel: viewModel, workspace: workspace)
+        let state = MacCommandState(viewModel: viewModel, workspace: workspace, localModelReady: true)
 
         // Then
         #expect(state.songOpen && state.canExport && state.canUndo && state.canSuggest)
         #expect(!state.canRedo && !state.canCancelGeneration)
-        #expect(state.canRewrite && state.canInspectWord)
+        #expect(state.canRewrite && state.canInspectWord && state.canInsertSection)
+    }
+
+    @Test
+    func suggestNeedsAReadyModelWhenTheLocalProviderIsChosen() {
+        let viewModel = EditorViewModel()
+        let workspace = MacWorkspaceModel()
+        workspace.windowOpen = true
+        viewModel.newProject()
+        viewModel.onLyricsChanged("city lights", timestampMilliseconds: 0)
+        viewModel.selectedProvider = .local
+
+        #expect(!MacCommandState(viewModel: viewModel, workspace: workspace, localModelReady: false).canSuggest)
+        #expect(MacCommandState(viewModel: viewModel, workspace: workspace, localModelReady: true).canSuggest)
+    }
+
+    @Test
+    func rewriteIsOffForASelectionOfOnlySpaces() {
+        let viewModel = EditorViewModel()
+        let workspace = MacWorkspaceModel()
+        workspace.windowOpen = true
+        viewModel.newProject()
+        viewModel.onLyricsChanged("city   lights", timestampMilliseconds: 0)
+        viewModel.selectedRange = NSRange(location: 4, length: 3)
+
+        #expect(!MacCommandState(viewModel: viewModel, workspace: workspace, localModelReady: true).canRewrite)
     }
 
     @Test
@@ -52,11 +78,16 @@ struct MacCommandStateTests {
 
         // When
         viewModel.rewriteAction = .rephrase
-        let state = MacCommandState(viewModel: viewModel, workspace: workspace)
+        viewModel.rewriteLoading = true
+        let loading = MacCommandState(viewModel: viewModel, workspace: workspace)
+        viewModel.rewriteLoading = false
+        let preview = MacCommandState(viewModel: viewModel, workspace: workspace)
 
         // Then
-        #expect(state.canCancelGeneration)
-        #expect(!state.canUndo && !state.canRewrite && !state.canInspectWord)
+        #expect(loading.canCancelGeneration)
+        #expect(!loading.canUndo && !loading.canRewrite && !loading.canInspectWord && !loading.canInsertSection)
+        #expect(!preview.canCancelGeneration, "a finished preview is closed by Accept or Dismiss")
+        #expect(!preview.canUndo && !preview.canRewrite)
     }
 
     @Test
@@ -177,6 +208,25 @@ struct LyricsContextMenuItemTests {
     }
 
     @Test
+    func rightClickJustAfterTheSelectionIsOutsideIt() {
+        // Index 4 is the space after "city": the selection's end, not inside it.
+        let items = LyricsContextMenuItem.items(
+            lyrics: lyrics, selection: NSRange(location: 0, length: 4), clickedIndex: 4, rewriteActive: false
+        )
+
+        #expect(items.isEmpty)
+    }
+
+    @Test
+    func aSelectionOfOnlySpacesOffersNoRewrites() {
+        let items = LyricsContextMenuItem.items(
+            lyrics: "city   lights", selection: NSRange(location: 4, length: 3), clickedIndex: 5, rewriteActive: false
+        )
+
+        #expect(items.isEmpty)
+    }
+
+    @Test
     func anActiveRewriteHidesTheCustomItems() {
         let items = LyricsContextMenuItem.items(
             lyrics: lyrics, selection: NSRange(location: 0, length: 11), clickedIndex: 6, rewriteActive: true
@@ -194,8 +244,15 @@ struct MacDropRouteTests {
 
     @Test
     func aSongFileOpensAsASongEvenWithNoSongOpen() {
-        #expect(MacDropRoute.route([song], songOpen: false) == .song(song))
-        #expect(MacDropRoute.route([memo, song], songOpen: true) == .song(song))
+        #expect(MacDropRoute.route([song], songOpen: false) == .songs([song]))
+        #expect(MacDropRoute.route([memo, song], songOpen: true) == .songs([song]))
+    }
+
+    @Test
+    func everyDroppedSongFileIsImported() {
+        let second = URL(fileURLWithPath: "/tmp/Second.json")
+
+        #expect(MacDropRoute.route([song, memo, second], songOpen: true) == .songs([song, second]))
     }
 
     @Test
@@ -219,20 +276,26 @@ struct MacDropRouteTests {
 @MainActor
 struct LyricsUndoRoutingTests {
     @Test
-    func theEditMenusUndoReachesTheLyricHistoryOnlyInTheLyricEditor() {
+    func theEditMenusUndoStepsTheViewModelsLyricHistory() {
+        // Given: the editor wired as makeNSView wires it, after one edit
+        let viewModel = EditorViewModel()
+        viewModel.newProject()
+        viewModel.onLyricsChanged("city lights", timestampMilliseconds: 0)
         let lyrics = LyricsNSTextView(usingTextLayoutManager: true)
-        var steps: [String] = []
-        lyrics.historyUndo = { steps.append("undo") }
-        lyrics.historyRedo = { steps.append("redo") }
-        lyrics.canUndoHistory = { true }
-        lyrics.canRedoHistory = { false }
+        var editable = true
+        lyrics.connectHistory(to: viewModel) { editable }
         let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
         let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
 
+        // Then
         #expect(lyrics.validateMenuItem(undo))
         #expect(!lyrics.validateMenuItem(redo))
         #expect(lyrics.tryToPerform(Selector(("undo:")), with: nil))
-        #expect(steps == ["undo"])
+        #expect(viewModel.lyrics.isEmpty)
+        #expect(lyrics.validateMenuItem(redo))
+
+        editable = false
+        #expect(!lyrics.validateMenuItem(redo), "a read-only editor (a rewrite preview) offers no history")
     }
 }
 #endif

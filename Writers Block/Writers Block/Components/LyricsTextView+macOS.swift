@@ -23,6 +23,14 @@ final class LyricsNSTextView: NSTextView {
     var canUndoHistory: () -> Bool = { false }
     var canRedoHistory: () -> Bool = { false }
 
+    /// Points ⌘Z and ⇧⌘Z at the view model's lyric history, while `isEditable`.
+    func connectHistory(to viewModel: EditorViewModel, isEditable: @escaping () -> Bool) {
+        historyUndo = { [weak viewModel] in viewModel?.undoLyrics() }
+        historyRedo = { [weak viewModel] in viewModel?.redoLyrics() }
+        canUndoHistory = { [weak viewModel] in isEditable() && viewModel?.canUndoLyrics == true }
+        canRedoHistory = { [weak viewModel] in isEditable() && viewModel?.canRedoLyrics == true }
+    }
+
     @objc func undo(_ sender: Any?) { historyUndo?() }
     @objc func redo(_ sender: Any?) { historyRedo?() }
 
@@ -107,13 +115,8 @@ struct LyricsTextView: NSViewRepresentable {
             coordinator?.refreshRewriteHighlight()
             coordinator?.refreshUnderlines(animated: false)
         }
-        textView.historyUndo = { [weak viewModel] in viewModel?.undoLyrics() }
-        textView.historyRedo = { [weak viewModel] in viewModel?.redoLyrics() }
-        textView.canUndoHistory = { [weak viewModel, weak coordinator = context.coordinator] in
-            coordinator?.parent.isEditable == true && viewModel?.canUndoLyrics == true
-        }
-        textView.canRedoHistory = { [weak viewModel, weak coordinator = context.coordinator] in
-            coordinator?.parent.isEditable == true && viewModel?.canRedoLyrics == true
+        textView.connectHistory(to: viewModel) { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isEditable == true
         }
         textView.font = Self.lyricsFont
         textView.isRichText = false

@@ -38,17 +38,23 @@ struct MacWorkspaceView: View {
                     allowedContentTypes: EditorViewModel.importableAudioTypes,
                     allowsMultipleSelection: true
                 ) { result in
-                    if case .success(let urls) = result { workspace.importRecordings(urls, into: viewModel) }
+                    switch result {
+                    case .success(let urls): workspace.importRecordings(urls, into: viewModel)
+                    case .failure(let error): workspace.reportPickerFailure(error)
+                    }
                 }
         }
         .foregroundStyle(appearance.palette.primaryInk)
         .fileImporter(isPresented: $workspace.songImporterPresented, allowedContentTypes: [.json]) { result in
-            if case .success(let url) = result { workspace.importSong(url, into: viewModel) }
+            switch result {
+            case .success(let url): workspace.importSong(url, into: viewModel)
+            case .failure(let error): workspace.reportPickerFailure(error)
+            }
         }
         .dropDestination(for: URL.self) { urls, _ in
             switch MacDropRoute.route(urls, songOpen: workspace.songOpen(in: viewModel)) {
-            case .song(let url):
-                workspace.importSong(url, into: viewModel)
+            case .songs(let urls):
+                for url in urls { workspace.importSong(url, into: viewModel) }
                 return true
             case .recordings(let audio):
                 workspace.importRecordings(audio, into: viewModel)
