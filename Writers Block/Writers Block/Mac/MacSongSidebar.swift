@@ -10,6 +10,8 @@ struct MacSongSidebar: View {
     @Environment(\.appAppearanceStyle) private var appearance
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
+    /// The row last clicked; two rows can hold one song id (a restore on two devices, then sync).
+    @State private var pickedRow: PersistentIdentifier?
 
     var body: some View {
         List(selection: selection) {
@@ -27,24 +29,24 @@ struct MacSongSidebar: View {
             }
 
             Section("Songs") {
-                let songs = SongProject.matching(projects, searchText: searchText)
+                let songs = visibleSongs
                 if songs.isEmpty {
                     Text(searchText.isEmpty ? "No songs yet" : "No matching songs")
                         .foregroundStyle(appearance.palette.secondaryInk)
                 }
                 ForEach(songs) { project in
                     MacSongRow(project: project)
-                        .tag(SidebarItem.song(project.id))
+                        .tag(SidebarItem.song(project.persistentModelID))
                         .contextMenu { rowMenu(project) }
                 }
             }
         }
         .listStyle(.sidebar)
-        // Delete on the selected song: the right-click Move to Trash. A song the
-        // search hides is never deleted, even when it is the open one.
+        // Delete on the selected row: the right-click Move to Trash. A song the
+        // search hides is never selected, so never deleted, even when it is the open one.
         .onDeleteCommand {
-            guard case .song(let id) = selection.wrappedValue,
-                  let project = Self.visibleSong(selectedID: id, in: projects, searchText: searchText) else { return }
+            guard case .song(let row) = selection.wrappedValue,
+                  let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
             viewModel.moveProjectToTrash(project)
         }
         .scrollContentBackground(.hidden)
@@ -82,7 +84,7 @@ struct MacSongSidebar: View {
     }
 
     private enum SidebarItem: Hashable {
-        case song(String)
+        case song(PersistentIdentifier)
         case oneLiners
         case trash
     }
@@ -95,15 +97,15 @@ struct MacSongSidebar: View {
                 switch workspace.detail {
                 case .oneLiners: .oneLiners
                 case .trash: .trash
-                case .editor: viewModel.showWelcome ? nil : viewModel.currentProjectId.map(SidebarItem.song)
+                case .editor: openRow.map { SidebarItem.song($0.persistentModelID) }
                 }
             },
             set: { item in
                 switch item {
-                case .song(let id):
+                case .song(let row):
                     workspace.detail = .editor
-                    guard id != viewModel.currentProjectId || viewModel.showWelcome,
-                          let project = Self.visibleSong(selectedID: id, in: projects, searchText: searchText) else { return }
+                    guard let project = Self.songToOpen(clicked: row, openRow: openRow, in: visibleSongs) else { return }
+                    pickedRow = row
                     viewModel.loadProject(project)
                 case .oneLiners:
                     workspace.detail = .oneLiners
@@ -123,11 +125,23 @@ struct MacSongSidebar: View {
         Button("Move to Trash", role: .destructive) { viewModel.moveProjectToTrash(project) }
     }
 
-    /// The song a click or Delete acts on: the selected one as the list shows it, so
-    /// a hidden copy stored under the same id is never the one opened or deleted.
-    static func visibleSong(selectedID: String?, in projects: [SongProject], searchText: String) -> SongProject? {
-        guard let selectedID else { return nil }
-        return SongProject.matching(projects, searchText: searchText).first { $0.id == selectedID }
+    private var visibleSongs: [SongProject] { SongProject.matching(projects, searchText: searchText) }
+
+    private var openRow: SongProject? {
+        viewModel.showWelcome ? nil : Self.openRow(picked: pickedRow, openID: viewModel.currentProjectId, in: visibleSongs)
+    }
+
+    /// The shown row holding the open song: the row last clicked while it still holds
+    /// that id (a sibling copy stays selected), otherwise the first row with it.
+    static func openRow(picked: PersistentIdentifier?, openID: String?, in songs: [SongProject]) -> SongProject? {
+        guard let openID else { return nil }
+        return songs.first { $0.persistentModelID == picked && $0.id == openID } ?? songs.first { $0.id == openID }
+    }
+
+    /// The song a click opens: the clicked row itself, unless it is already the open row.
+    static func songToOpen(clicked: PersistentIdentifier, openRow: SongProject?, in songs: [SongProject]) -> SongProject? {
+        guard clicked != openRow?.persistentModelID else { return nil }
+        return songs.first { $0.persistentModelID == clicked }
     }
 
     private func newSong() {

@@ -126,23 +126,49 @@ struct MacPickerFailureTests {
     }
 }
 
+@MainActor
 struct MacSongSidebarTests {
-    @Test
-    func deleteIgnoresASelectedSongTheSearchHides() {
-        let songs = [SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes"),
-                     SongProject(id: "b", title: "Paper Moon", lyrics: "tide")]
-
-        #expect(MacSongSidebar.visibleSong(selectedID: "a", in: songs, searchText: "moon") == nil)
-        #expect(MacSongSidebar.visibleSong(selectedID: "b", in: songs, searchText: "moon")?.id == "b")
-        #expect(MacSongSidebar.visibleSong(selectedID: nil, in: songs, searchText: "") == nil)
+    /// Two rows holding one song id, as a restore on two devices leaves them after sync.
+    private static func copies() throws -> (SongProject, SongProject, ModelContainer) {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let first = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes")
+        let second = SongProject(id: "a", title: "Paper Moon", lyrics: "tide")
+        container.mainContext.insert(first)
+        container.mainContext.insert(second)
+        try container.mainContext.save()
+        return (first, second, container)
     }
 
     @Test
-    func aClickOpensTheCopyTheSearchShows() {
-        let newer = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes")
-        let older = SongProject(id: "a", title: "Paper Moon", lyrics: "tide")
+    func clickingTheSecondCopyOpensThatCopy() throws {
+        let (first, second, container) = try Self.copies()
+        _ = container
+        let songs = [first, second]
 
-        #expect(MacSongSidebar.visibleSong(selectedID: "a", in: [newer, older], searchText: "moon") === older)
+        #expect(MacSongSidebar.songToOpen(clicked: second.persistentModelID, openRow: nil, in: songs) === second)
+        #expect(MacSongSidebar.openRow(picked: second.persistentModelID, openID: "a", in: songs) === second)
+        #expect(MacSongSidebar.openRow(picked: nil, openID: "a", in: songs) === first, "opened elsewhere: the first row with the id")
+    }
+
+    @Test
+    func withOneCopyOpenTheOtherCopyStillOpens() throws {
+        let (first, second, container) = try Self.copies()
+        _ = container
+        let songs = [first, second]
+        let open = MacSongSidebar.openRow(picked: first.persistentModelID, openID: "a", in: songs)
+
+        #expect(MacSongSidebar.songToOpen(clicked: second.persistentModelID, openRow: open, in: songs) === second)
+        #expect(MacSongSidebar.songToOpen(clicked: first.persistentModelID, openRow: open, in: songs) == nil, "the open row is not reloaded")
+    }
+
+    @Test
+    func aRowTheSearchHidesIsNeverTheOpenRow() throws {
+        let (first, second, container) = try Self.copies()
+        _ = container
+
+        #expect(MacSongSidebar.openRow(picked: first.persistentModelID, openID: "a", in: [second]) === second)
+        #expect(MacSongSidebar.openRow(picked: nil, openID: "a", in: []) == nil)
     }
 }
 
