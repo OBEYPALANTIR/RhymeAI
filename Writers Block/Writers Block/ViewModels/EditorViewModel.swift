@@ -2410,7 +2410,11 @@ final class EditorViewModel: ObservableObject {
     @discardableResult
     func saveUnsavedEdit() -> Bool {
         guard hasUnsavedEdit else { return true }
-        if cloudOperationHoldsEditor { return saveStatus != .failed }
+        if cloudOperationHoldsEditor {
+            // Write the latest words to the recovery copy now, whether or not the view's autosave ran.
+            triggerAutoSave()
+            return saveStatus != .failed
+        }
         return flushCurrentDraft()
     }
 

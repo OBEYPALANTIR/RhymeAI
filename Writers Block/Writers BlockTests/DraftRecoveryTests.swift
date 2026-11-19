@@ -34,6 +34,25 @@ struct DraftRecoveryTests {
         #expect(!disk.recoveryCopyExists)
     }
 
+    /// Quitting or backgrounding during a restore puts the latest words in the recovery
+    /// copy even when the view's autosave has not run for them yet.
+    @Test func lifecycleSaveDuringRestoreKeepsTheLatestEdit() async throws {
+        let harness = try RecoveryHarness()
+        let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
+        let service = GatedBackupService()
+        let viewModel = harness.makeViewModel(service: service)
+        viewModel.loadProject(project)
+
+        Task { await viewModel.restoreBackupNow() }
+        try await service.waitUntilStarted()
+        viewModel.lyrics = "typed during restore"
+
+        #expect(viewModel.saveUnsavedEdit())
+
+        let relaunched = try harness.reopened().makeViewModel()
+        #expect(relaunched.lyrics == "typed during restore")
+    }
+
     @Test func editsTypedDuringRestoreSurviveKillWithoutOverwritingRestoredSong() async throws {
         let harness = try RecoveryHarness()
         let project = try harness.seedProject(id: "song-a", title: "A", lyrics: "saved A")
