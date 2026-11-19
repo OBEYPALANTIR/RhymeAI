@@ -23,6 +23,7 @@ struct SettingsView: View {
     /// The Settings window opens on the tab it last showed, as Mac apps do.
     @AppStorage("macSettingsTab") var macSettingsTab = "general"
     @FocusState private var apiKeyFieldFocused: Bool
+    @Environment(\.openSettings) var openSettingsWindow
     #endif
 
     var body: some View {
@@ -331,7 +332,9 @@ struct SettingsView: View {
         savedConfirmation = false
         saveError = nil
         for provider in AIProvider.allCases {
-            if let key = editingKeys[provider.rawValue] {
+            // Only keys the writer changed: an untouched key that read as empty
+            // (a Keychain read failure) must not be saved as a removal.
+            if let key = editingKeys[provider.rawValue], key != storedKeys[provider.rawValue] {
                 guard viewModel.saveApiKey(provider: provider, key: key) else {
                     let action = key.isEmpty ? "remove" : "save"
                     saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
