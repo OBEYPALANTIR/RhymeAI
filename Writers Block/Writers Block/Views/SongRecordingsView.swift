@@ -189,7 +189,7 @@ struct SongRecordingsView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -247,6 +247,11 @@ struct SongRecordingsView: View {
                                                 Label("Delete", systemImage: "trash")
                                             }
                                         }
+                                        #if os(macOS)
+                                        .contextMenu {
+                                            Button("Delete", role: .destructive) { trashRecordingWithUndo(item) }
+                                        }
+                                        #endif
                                     }
                                 }
                             }
@@ -254,6 +259,10 @@ struct SongRecordingsView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    #if os(macOS)
+                    // Delete with recordings selected asks as the Delete button does.
+                    .onDeleteCommand { if !selectedRecordingIDs.isEmpty { pendingBulkDelete = true } }
+                    #endif
                 }
             }
         }

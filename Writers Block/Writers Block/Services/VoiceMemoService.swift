@@ -240,7 +240,7 @@ final class VoiceMemoService {
             }
         } catch {
             pendingTakesUnreadable = true
-            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; tap Retry to try again."
+            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
             return
         }
         pendingTakesUnreadable = false
@@ -815,7 +815,7 @@ final class VoiceMemoService {
         do {
             try RecordingFiles.writeFinishedMarker(finishedAt, in: folder)
         } catch {
-            lastError = "Couldn't finish saving the recording. It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't finish saving the recording. It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             refreshPendingTakes()
             return
         }
@@ -854,7 +854,7 @@ final class VoiceMemoService {
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .unconfirmed:
                 guard let audio = take.audio else { continue }
@@ -865,12 +865,12 @@ final class VoiceMemoService {
                         try RecordingFiles.writeFinishedMarker(finishedAt, in: take.folder)
                         publish(PendingTake(id: take.id, projectId: take.projectId, folder: take.folder, audio: audio, state: .finished(finishedAt)))
                     } catch {
-                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                     }
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .failed:
                 break
@@ -899,7 +899,7 @@ final class VoiceMemoService {
         } catch {
             // Before or after the move, the take keeps its marker and waits; a retry
             // resolves it by id.
-            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             return
         }
         forget(take)

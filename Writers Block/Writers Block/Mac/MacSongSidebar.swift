@@ -40,6 +40,12 @@ struct MacSongSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // Delete on the selected song: the right-click Move to Trash.
+        .onDeleteCommand {
+            if case .song(let id) = selection.wrappedValue, let project = projects.first(where: { $0.id == id }) {
+                viewModel.moveProjectToTrash(project)
+            }
+        }
         .scrollContentBackground(.hidden)
         .background(appearance.palette.surfaceHigh)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search songs")

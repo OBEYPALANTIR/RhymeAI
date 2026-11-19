@@ -582,7 +582,7 @@ struct ProjectsDrawerView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {

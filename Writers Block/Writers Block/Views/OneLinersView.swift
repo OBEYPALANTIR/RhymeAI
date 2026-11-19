@@ -28,6 +28,9 @@ struct OneLinersView: View {
     @FocusState private var searchFocused: Bool
     @State private var capture: OneLinerCaptureMode?
     @State private var sendingLine: OneLiner?
+    #if os(macOS)
+    @State private var selectedLineID: String?
+    #endif
     @State private var toast: Toast?
     @State private var player = OneLinerPlayer()
 
@@ -172,9 +175,15 @@ struct OneLinersView: View {
     }
 
     private var footer: some View {
+        #if os(macOS)
+        Text("Right-click a line to send it to a song or move it to Trash. Used lines stay.")
+            .font(.caption)
+            .foregroundStyle(palette.secondaryInk)
+        #else
         Text("Swipe right to send to a song, left to trash. Used lines stay.")
             .font(.caption)
             .foregroundStyle(palette.secondaryInk)
+        #endif
     }
 
     /// At accessibility sizes the header and footer scroll with the list, as
@@ -226,64 +235,87 @@ struct OneLinersView: View {
     // MARK: - List
 
     private var list: some View {
-        List {
-            if pageScrolls {
-                pageRow(header, top: RhymeAITokens.Rhythm.standard, bottom: 0)
-            }
-            if lines.isEmpty {
-                emptyState(title: "No one liners yet.", caption: "Tap Record or Type to catch a line before it slips away.")
-            } else if filteredLines.isEmpty {
-                emptyState(title: "No one liners match your search.", caption: nil)
-            } else {
-                ForEach(filteredLines, id: \.id) { line in
-                    row(line)
-                        // A raised slab per line, 2pt apart, inset so the text keeps its 21pt margin.
-                        .listRowBackground(
-                            Color.clear
-                                .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
-                                .padding(.vertical, 1)
-                                .padding(.horizontal, RhymeAITokens.Rhythm.tight)
-                        )
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(
-                            top: RhymeAITokens.Rhythm.related,
-                            leading: RhymeAITokens.Rhythm.standard,
-                            bottom: RhymeAITokens.Rhythm.related,
-                            trailing: RhymeAITokens.Rhythm.standard
-                        ))
-                        .swipeActions(edge: .leading, allowsFullSwipe: !line.text.isEmpty) {
-                            Button {
-                                // Released first, or the sheet hands focus (and the
-                                // keyboard) back to the search field when it closes.
-                                searchFocused = false
-                                sendingLine = line
-                            } label: {
-                                Label("Send to song", systemImage: "arrow.turn.down.right")
-                            }
-                            .tint(palette.action)
-                            // An audio-only line has no words to send yet.
+        #if os(macOS)
+        // The Mac has no swipes: the same two actions on a right-click, and
+        // Delete moves the selected line to Trash as a trailing swipe does.
+        styledList(List(selection: $selectedLineID) { listRows }
+            .onDeleteCommand {
+                if let line = filteredLines.first(where: { $0.id == selectedLineID }) { trash(line) }
+            })
+        #else
+        styledList(List { listRows })
+        #endif
+    }
+
+    @ViewBuilder
+    private var listRows: some View {
+        if pageScrolls {
+            pageRow(header, top: RhymeAITokens.Rhythm.standard, bottom: 0)
+        }
+        if lines.isEmpty {
+            emptyState(title: "No one liners yet.", caption: "\(PlatformWording.tap) Record or Type to catch a line before it slips away.")
+        } else if filteredLines.isEmpty {
+            emptyState(title: "No one liners match your search.", caption: nil)
+        } else {
+            ForEach(filteredLines, id: \.id) { line in
+                row(line)
+                    // A raised slab per line, 2pt apart, inset so the text keeps its 21pt margin.
+                    .listRowBackground(
+                        Color.clear
+                            .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.md)
+                            .padding(.vertical, 1)
+                            .padding(.horizontal, RhymeAITokens.Rhythm.tight)
+                    )
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(
+                        top: RhymeAITokens.Rhythm.related,
+                        leading: RhymeAITokens.Rhythm.standard,
+                        bottom: RhymeAITokens.Rhythm.related,
+                        trailing: RhymeAITokens.Rhythm.standard
+                    ))
+                    .swipeActions(edge: .leading, allowsFullSwipe: !line.text.isEmpty) {
+                        Button {
+                            // Released first, or the sheet hands focus (and the
+                            // keyboard) back to the search field when it closes.
+                            searchFocused = false
+                            sendingLine = line
+                        } label: {
+                            Label("Send to song", systemImage: "arrow.turn.down.right")
+                        }
+                        .tint(palette.action)
+                        // An audio-only line has no words to send yet.
+                        .disabled(line.text.isEmpty)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            trash(line)
+                        } label: {
+                            Label("Trash", systemImage: "trash")
+                        }
+                    }
+                    #if os(macOS)
+                    .contextMenu {
+                        Button("Send to Song…") { sendingLine = line }
                             .disabled(line.text.isEmpty)
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                trash(line)
-                            } label: {
-                                Label("Trash", systemImage: "trash")
-                            }
-                        }
-                }
-            }
-            if pageScrolls {
-                pageRow(footer, top: RhymeAITokens.Rhythm.related, bottom: RhymeAITokens.Rhythm.related)
+                        Button("Move to Trash", role: .destructive) { trash(line) }
+                    }
+                    #endif
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.immediately)
-        // Room under the last row for the floating Record and Type actions.
-        .contentMargins(.bottom, pageScrolls ? 0 : RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
-        .padding(.top, RhymeAITokens.Rhythm.related)
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: lines.isEmpty)
+        if pageScrolls {
+            pageRow(footer, top: RhymeAITokens.Rhythm.related, bottom: RhymeAITokens.Rhythm.related)
+        }
+    }
+
+    private func styledList(_ list: some View) -> some View {
+        list
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.immediately)
+            // Room under the last row for the floating Record and Type actions.
+            .contentMargins(.bottom, pageScrolls ? 0 : RhymeAITokens.Rhythm.primary + RhymeAITokens.Rhythm.section, for: .scrollContent)
+            .padding(.top, RhymeAITokens.Rhythm.related)
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: lines.isEmpty)
     }
 
     private func row(_ line: OneLiner) -> some View {
@@ -298,7 +330,7 @@ struct OneLinersView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if isVoiceOnly {
-                    Text("Transcribe or type the words first. Tap to add them.")
+                    Text("Transcribe or type the words first. \(PlatformWording.tap) to add them.")
                         .font(.caption)
                         .foregroundStyle(palette.secondaryInk)
                 }
