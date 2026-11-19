@@ -7,7 +7,7 @@ struct SettingsView: View {
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.appAppearanceStyle) var appearance
 
     @State private var editingKeys: [String: String] = [:]
     /// Keys as last read from or written to the Keychain. API keys are the
@@ -15,12 +15,19 @@ struct SettingsView: View {
     @State private var storedKeys: [String: String] = [:]
     @State private var confirmingUnsavedKeys = false
     @State private var showKey = false
-    @State private var savedConfirmation = false
-    @State private var saveError: String?
-    @State private var activeHelp: FeatureHelp?
+    @State var savedConfirmation = false
+    @State var saveError: String?
+    @State var activeHelp: FeatureHelp?
     @State private var selectedTab: SettingsTab = .general
+    #if os(macOS)
+    /// The Settings window opens on the tab it last showed, as Mac apps do.
+    @AppStorage("macSettingsTab") var macSettingsTab = "general"
+    #endif
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
         NavigationStack {
             VStack(spacing: 0) {
                 SettingsTabPicker(selection: $selectedTab)
@@ -107,6 +114,7 @@ struct SettingsView: View {
                 FirstRunRestoreSheet(offer: offer)
             }
         }
+        #endif
     }
 
     private var doneButton: some View {
@@ -145,7 +153,7 @@ struct SettingsView: View {
         }
     }
 
-    private var providerSection: some View {
+    var providerSection: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("AI Provider", systemImage: "sparkles")
 
@@ -165,7 +173,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var providerSpecificSection: some View {
+    var providerSpecificSection: some View {
         if viewModel.selectedProvider == .local {
             SettingsLocalModelSection()
                 .transition(.opacity)
@@ -240,7 +248,7 @@ struct SettingsView: View {
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
     }
 
-    private var modelSection: some View {
+    var modelSection: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("Model", systemImage: "cpu")
 
@@ -285,11 +293,11 @@ struct SettingsView: View {
         }
     }
 
-    private var hasUnsavedKeys: Bool {
+    var hasUnsavedKeys: Bool {
         editingKeys != storedKeys
     }
 
-    private func loadSettingsState() {
+    func loadSettingsState() {
         // The sheet reappears after a help sheet closes; a key being typed
         // must survive that.
         if !hasUnsavedKeys {
@@ -303,7 +311,7 @@ struct SettingsView: View {
     }
 
     @discardableResult
-    private func saveAll() -> Bool {
+    func saveAll() -> Bool {
         savedConfirmation = false
         saveError = nil
         for provider in AIProvider.allCases {
