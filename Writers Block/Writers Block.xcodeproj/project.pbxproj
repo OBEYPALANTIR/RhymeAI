@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		7B1E00012F9000000000000C /* Writers Block Widgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7B1E00012F90000000000001 /* Writers Block Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		7B1E00012F9000000000000C /* Writers Block Widgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7B1E00012F90000000000001 /* Writers Block Widgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		78A34B002F837D260033E904 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = 78A34B022F837D260033E904 /* llama */; };
 /* End PBXBuildFile section */
 
@@ -384,6 +384,7 @@
 		};
 		7B1E00012F9000000000000F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilter = ios;
 			target = 7B1E00012F90000000000005 /* Writers Block Widgets */;
 			targetProxy = 7B1E00012F9000000000000E /* PBXContainerItemProxy */;
 		};
