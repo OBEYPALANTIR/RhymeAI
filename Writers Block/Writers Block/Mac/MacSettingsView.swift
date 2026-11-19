@@ -1,9 +1,10 @@
 #if os(macOS)
 import SwiftUI
 
-/// The Settings window: the iOS sections in Mac tabs. Settings apply as they
-/// change, as on iOS; API keys wait for Save. There is no Done: the window
-/// closes like any Mac settings window, and an unsaved typed key is dropped.
+/// The Settings window: the iOS sections in Mac tabs. Everything applies as it
+/// changes, as Mac preferences do: API keys save through the iOS Save path
+/// when their field is committed, when the tab changes and when the window
+/// closes, so a typed key is never dropped.
 extension SettingsView {
     var macBody: some View {
         TabView(selection: $macSettingsTab) {
@@ -12,12 +13,12 @@ extension SettingsView {
             }
             Tab("AI & Models", systemImage: "sparkles", value: "ai") {
                 MacSettingsPage {
+                    keySaveError
                     providerSection
                     providerSpecificSection
                     modelSection
-                } footer: {
-                    keySaveFooter
                 }
+                .onDisappear(perform: saveKeysIfChanged)
             }
             Tab("Backup", systemImage: "externaldrive", value: "backup") {
                 MacSettingsPage { SettingsCloudBackupSection() }
@@ -27,6 +28,7 @@ extension SettingsView {
             }
         }
         .onAppear(perform: loadSettingsState)
+        .onDisappear(perform: saveKeysIfChanged)
         .sheet(item: $activeHelp) { help in
             FeatureHelpSheet(help: help)
                 .frame(minWidth: 420, idealWidth: 480, minHeight: 320)
@@ -34,58 +36,33 @@ extension SettingsView {
     }
 
     @ViewBuilder
-    private var keySaveFooter: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
-            if let saveError {
-                Label(saveError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(appearance.palette.error)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settingsSaveError")
-            }
-            if hasUnsavedKeys {
-                Text("Your API key is not saved yet. Other settings apply as you change them.")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settingsUnsavedKeyNote")
-            }
-            SettingsSaveBar(saved: savedConfirmation, hasChanges: hasUnsavedKeys, action: { saveAll() })
+    private var keySaveError: some View {
+        if let saveError {
+            Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(appearance.palette.error)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settingsSaveError")
         }
     }
 }
 
-/// One Settings tab: the sections on the canvas, scrolling, with an optional
-/// bar pinned below.
-private struct MacSettingsPage<Content: View, Footer: View>: View {
+/// One Settings tab: the sections on the canvas, scrolling when taller than
+/// the window.
+private struct MacSettingsPage<Content: View>: View {
     @Environment(\.appAppearanceStyle) private var appearance
     @ViewBuilder var content: Content
-    @ViewBuilder var footer: Footer
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.lg) {
-                    content
-                }
-                .padding(RhymeAITokens.Spacing.lg)
+        ScrollView {
+            VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+                content
             }
-            if Footer.self != EmptyView.self {
-                Divider()
-                footer
-                    .padding(.horizontal, RhymeAITokens.Spacing.lg)
-                    .padding(.vertical, RhymeAITokens.Spacing.sm)
-                    .background(appearance.palette.surface)
-            }
+            .padding(RhymeAITokens.Spacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .foregroundStyle(appearance.palette.primaryInk)
         .background(appearance.palette.canvas)
-    }
-}
-
-extension MacSettingsPage where Footer == EmptyView {
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-        self.footer = EmptyView()
     }
 }
 #endif

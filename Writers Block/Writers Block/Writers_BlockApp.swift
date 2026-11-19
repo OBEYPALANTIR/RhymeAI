@@ -251,7 +251,8 @@ struct Writers_BlockApp: App {
         #if os(macOS)
         Settings {
             SettingsView()
-                .frame(minWidth: 520, idealWidth: 580, minHeight: 480, idealHeight: 640)
+                .frame(width: 600)
+                .frame(minHeight: 320, idealHeight: 520, maxHeight: 760)
                 .modifier(appEnvironment)
         }
         #endif

@@ -8,6 +8,20 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// Settings row metrics: the iOS sheet's touch sizes, or the Mac's standard
+/// preference rows (13pt text, tight rows, controls at their own height).
+enum SettingsMetrics {
+    #if os(macOS)
+    static let rowFont: Font = .body
+    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.xs
+    static let buttonLabelMinHeight: CGFloat? = nil
+    #else
+    static let rowFont: Font = .subheadline
+    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.md
+    static let buttonLabelMinHeight: CGFloat? = RhymeAITokens.Touch.minimum
+    #endif
+}
+
 struct SettingsTabPicker: View {
     @Binding var selection: SettingsTab
 
@@ -35,6 +49,24 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     let title: (Option) -> String
 
     var body: some View {
+        #if os(macOS)
+        // The Mac's own segmented control, at the standard size.
+        Picker(label, selection: $selection) {
+            ForEach(options, id: \.self) { option in
+                Text(title(option)).tag(option)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityIdentifier(accessibilityIdentifier)
+        #else
+        iOSBody
+        #endif
+    }
+
+    @ViewBuilder
+    private var iOSBody: some View {
         // More than two options cannot share a row at accessibility sizes
         // without truncating ("Gemi…", "Ope…", "Clau…"), so they stack.
         let stacked = dynamicTypeSize.isAccessibilitySize && options.count > 2
@@ -140,6 +172,12 @@ struct SettingsSaveBar: View {
 }
 
 struct SettingsLocalModelSection: View {
+    #if os(macOS)
+    private static let onDeviceGlyph = "desktopcomputer"
+    #else
+    private static let onDeviceGlyph = "iphone.gen3.radiowaves.left.and.right"
+    #endif
+
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var customModelImporterPresented = false
     @State private var customImportError: String?
@@ -231,7 +269,7 @@ struct SettingsLocalModelSection: View {
                     }
                 } label: {
                     Label(model.displayName, systemImage: ggufDownloadManager.selectedModelFileName == model.fileName ? "checkmark.circle.fill" : "externaldrive")
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                 }
                 .accessibilityIdentifier("customGGUF.\(model.id)")
             }
@@ -239,7 +277,7 @@ struct SettingsLocalModelSection: View {
                 customModelImporterPresented = true
             } label: {
                 Label("Import GGUF Model", systemImage: "square.and.arrow.down")
-                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                     .contentShape(Rectangle())
             }
             .accessibilityIdentifier("importCustomGGUFModel")
@@ -267,7 +305,7 @@ struct SettingsLocalModelSection: View {
 
     private var localStatusRow: some View {
         HStack(alignment: .top, spacing: RhymeAITokens.Spacing.md) {
-            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+            Image(systemName: Self.onDeviceGlyph)
                 .font(.title2)
                 .foregroundStyle(appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
@@ -399,7 +437,7 @@ struct SettingsLocalModelSection: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(appearance.palette.error)
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.rhymePress)
@@ -428,7 +466,7 @@ struct SettingsEditorSection: View {
     @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.rowSpacing) {
             SettingsSectionTitle("Editor", systemImage: "textformat")
 
             settingsToggleRow("Whole Song Context", help: .wholeSongContext, isOn: binding(viewModel.useWholeSongContext, setter: viewModel.saveUseWholeSongContext))
@@ -441,7 +479,7 @@ struct SettingsEditorSection: View {
             // Puts UnBlock + mic and the One Liners Record + Type on this side.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Dominant hand")
-                    .font(.subheadline)
+                    .font(SettingsMetrics.rowFont)
                 RhymeSegmentedControl(
                     options: DominantHand.allCases,
                     selection: Binding(
@@ -467,7 +505,7 @@ struct SettingsEditorSection: View {
         HStack {
             HStack(spacing: RhymeAITokens.Spacing.xs) {
                 Text(text)
-                    .font(.subheadline)
+                    .font(SettingsMetrics.rowFont)
                 Button {
                     activeHelp = help
                 } label: {

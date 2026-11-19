@@ -22,6 +22,7 @@ struct SettingsView: View {
     #if os(macOS)
     /// The Settings window opens on the tab it last showed, as Mac apps do.
     @AppStorage("macSettingsTab") var macSettingsTab = "general"
+    @FocusState private var apiKeyFieldFocused: Bool
     #endif
 
     var body: some View {
@@ -168,6 +169,7 @@ struct SettingsView: View {
                 title: \.displayName
             )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(RhymeAITokens.Spacing.md)
         .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
     }
@@ -199,6 +201,15 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .textFieldStyle(.plain)
+                #if os(macOS)
+                // Mac preferences apply as they change: a key saves when the
+                // field is committed with Return or loses focus.
+                .focused($apiKeyFieldFocused)
+                .onSubmit { saveKeysIfChanged() }
+                .onChange(of: apiKeyFieldFocused) { _, focused in
+                    if !focused { saveKeysIfChanged() }
+                }
+                #endif
 
                 Button {
                     showKey.toggle()
@@ -308,6 +319,11 @@ struct SettingsView: View {
         }
         viewModel.refreshCloudBackupState()
         ggufDownloadManager.refreshInstalledModels()
+    }
+
+    /// The Save path, run only when a typed key differs from the Keychain's.
+    func saveKeysIfChanged() {
+        if hasUnsavedKeys { saveAll() }
     }
 
     @discardableResult
