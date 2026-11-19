@@ -461,7 +461,12 @@ final class EditorViewModel: ObservableObject {
     var showInspector: Bool { inspectorWord != nil }
 
     var singleWordSelection: (word: String, range: NSRange)? {
-        let range = selectedRange
+        Self.singleWord(in: lyrics, range: selectedRange)
+    }
+
+    /// The text in `range` when it is one word: two or more letters or
+    /// apostrophes. The Word Inspector looks up only such a range.
+    static func singleWord(in lyrics: String, range: NSRange) -> (word: String, range: NSRange)? {
         guard range.length > 0 else { return nil }
         let ns = lyrics as NSString
         guard range.location >= 0, range.location + range.length <= ns.length else { return nil }

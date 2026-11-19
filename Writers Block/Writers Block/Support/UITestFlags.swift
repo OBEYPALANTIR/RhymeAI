@@ -3,6 +3,12 @@ import Foundation
 enum UITestFlags {
     static let inMemoryStore = "--ui-test-in-memory-store"
     static let seedProsodySong = "--ui-test-seed-prosody-song"
+    /// Mac: opens the Settings window, on the tab `-macSettingsTab` names.
+    static let openSettings = "--ui-test-open-settings"
+    /// Mac: opens the Templates sheet over the window.
+    static let openTemplates = "--ui-test-open-templates"
+    /// Mac: shows One Liners in the detail pane.
+    static let openOneLiners = "--ui-test-open-one-liners"
     static let enableStressPreview = "--ui-test-enable-stress-preview"
     static let openAssistant = "--ui-test-open-assistant"
     static let seedRewriteSelection = "--ui-test-seed-rewrite-selection"

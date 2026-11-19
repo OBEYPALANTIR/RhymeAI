@@ -474,7 +474,14 @@ struct AssistantPanelView: View {
                     Text(readiness.detail).font(.caption).foregroundStyle(appearance.palette.secondaryInk)
                     // Bordered like the panel's other secondary actions: as plain
                     // text in the ink-coloured tint it read as a caption.
-                    Button("Local model setup") { showModelSetup = true }
+                    Button("Local model setup") {
+                        #if os(macOS)
+                        // The Mac shows Settings in its own window.
+                        viewModel.showSettingsSheet = true
+                        #else
+                        showModelSetup = true
+                        #endif
+                    }
                         .buttonStyle(.bordered)
                         .tint(appearance.palette.action)
                         .frame(minHeight: RhymeAITokens.Touch.minimum)

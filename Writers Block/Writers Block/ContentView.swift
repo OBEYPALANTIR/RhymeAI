@@ -4,7 +4,9 @@ import SwiftData
 struct ContentView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
+    #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appAppearanceStyle) private var appearance
     /// One Liners opened by a shortcut, widget, control or link, over whatever is on screen.
@@ -28,6 +30,15 @@ struct ContentView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacWorkspaceView()
+        #else
+        iOSBody
+        #endif
+    }
+
+    #if !os(macOS)
+    private var iOSBody: some View {
         Group {
             if viewModel.showWelcome {
                 WelcomeView()
@@ -79,8 +90,10 @@ struct ContentView: View {
                 )
         }
     }
+    #endif
 }
 
+#if !os(macOS)
 extension ContentView {
     private func presentOneLinersIfRequested() {
         let step = Self.oneLinersCoverStep(
@@ -111,3 +124,4 @@ extension ContentView {
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }
+#endif

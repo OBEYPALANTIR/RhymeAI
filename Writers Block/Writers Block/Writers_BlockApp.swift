@@ -129,6 +129,9 @@ struct Writers_BlockApp: App {
     )
     @StateObject private var persistenceState: AppPersistenceState
     @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
+    #if os(macOS)
+    @StateObject private var workspace = MacWorkspaceModel()
+    #endif
 
     private let sharedModelContainer: ModelContainer?
 
@@ -173,6 +176,9 @@ struct Writers_BlockApp: App {
                 if let sharedModelContainer {
                     ContentView()
                         .modelContainer(sharedModelContainer)
+                        #if os(macOS)
+                        .environmentObject(workspace)
+                        #endif
                 } else {
                     VStack(spacing: 12) {
                         Image(systemName: "externaldrive.badge.exclamationmark")
@@ -239,13 +245,13 @@ struct Writers_BlockApp: App {
         }
         #if os(macOS)
         .defaultSize(width: 1160, height: 780)
-        .commands { MacAppCommands(viewModel: viewModel) }
+        .commands { MacAppCommands(viewModel: viewModel, workspace: workspace) }
         #endif
 
         #if os(macOS)
         Settings {
             SettingsView()
-                .frame(minWidth: RhymeAITokens.Layout.assistantReadableWidth, idealWidth: 520, minHeight: 560)
+                .frame(minWidth: 520, idealWidth: 580, minHeight: 480, idealHeight: 640)
                 .modifier(appEnvironment)
         }
         #endif
@@ -409,61 +415,6 @@ private struct AppEnvironmentModifier: ViewModifier {
             .modifier(UITestDynamicTypeSizeModifier())
     }
 }
-
-#if os(macOS)
-/// Menu bar commands for the Mac app, on the same view model actions the
-/// editor's buttons use.
-private struct MacAppCommands: Commands {
-    @ObservedObject var viewModel: EditorViewModel
-    @Environment(\.openWindow) private var openWindow
-    @FocusedValue(\.unblockAction) private var unblockAction
-
-    var body: some Commands {
-        CommandGroup(replacing: .newItem) {
-            Button("New Song") {
-                showEditorWindow()
-                viewModel.newProject()
-            }
-            .keyboardShortcut("n")
-        }
-        CommandGroup(replacing: .saveItem) {
-            Button("Save") { viewModel.flushCurrentDraft(checkpoint: true) }
-                .keyboardShortcut("s")
-        }
-        CommandMenu("Song") {
-            Button("UnBlock") { unblockAction?.perform() }
-                .keyboardShortcut("u", modifiers: [.command, .shift])
-                .disabled(unblockAction == nil || viewModel.lyrics.isEmpty || viewModel.isLoading)
-            Button("Cancel Generation") {
-                viewModel.cancelSuggestions()
-                viewModel.dismissRewrite()
-            }
-            .keyboardShortcut(".")
-            .disabled(!viewModel.isLoading && !viewModel.hasActiveRewrite)
-            Divider()
-            ForEach(RewriteAction.allCases) { action in
-                Button(action.label) { viewModel.requestRewrite(action) }
-                    .disabled(viewModel.selectedRange.length == 0 || viewModel.hasActiveRewrite)
-            }
-        }
-    }
-
-    /// The editor is one window on the shared view model: bring it back if it
-    /// is open or minimized, and open it again only after it was closed.
-    private func showEditorWindow() {
-        let editor = NSApp.windows.first { window in
-            window.identifier?.rawValue.hasPrefix(Writers_BlockApp.editorWindowID) == true
-                && (window.isVisible || window.isMiniaturized)
-        }
-        if let editor {
-            if editor.isMiniaturized { editor.deminiaturize(nil) }
-            editor.makeKeyAndOrderFront(nil)
-        } else {
-            openWindow(id: Writers_BlockApp.editorWindowID)
-        }
-    }
-}
-#endif
 
 private struct UITestDynamicTypeSizeModifier: ViewModifier {
     @ViewBuilder
