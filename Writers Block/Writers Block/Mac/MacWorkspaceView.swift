@@ -25,8 +25,9 @@ struct MacWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(appearance.palette.canvas)
                 .inspector(isPresented: assistantPresented) {
-                    AssistantPanelView(isInline: true, onDismiss: { workspace.showsAssistant = false })
-                        .inspectorColumnWidth(min: 320, ideal: RhymeAITokens.Layout.assistantReadableWidth, max: 560)
+                    // No close button in the panel: the toolbar and View menu show and hide it.
+                    AssistantPanelView(isInline: true)
+                        .inspectorColumnWidth(min: 300, ideal: 360, max: 480)
                 }
                 .toolbar { MacWorkspaceToolbar() }
                 .toolbarBackground(appearance.palette.canvas, for: .windowToolbar)
