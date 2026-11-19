@@ -34,6 +34,12 @@ final class LyricsNSTextView: NSTextView {
         }
     }
 
+    /// Files dropped on the lyrics go to the window's drop target (song
+    /// import, recordings) instead of being pasted in as a path.
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes.filter { $0 != .fileURL && $0.rawValue != "NSFilenamesPboardType" }
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = newSize.width != frame.width
         super.setFrameSize(newSize)
@@ -119,6 +125,7 @@ struct LyricsTextView: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.setAccessibilityIdentifier("lyricsEditor")
+        textView.updateDragTypeRegistration()
         applyAppearance(to: textView)
         context.coordinator.attach(to: textView)
         context.coordinator.updatePlaceholder(textView, text: renderedText)
@@ -534,6 +541,47 @@ struct LyricsTextView: NSViewRepresentable {
             parent.onCursorChange(selectedRange.location)
             parent.onSelectionChange?(selectedRange)
             scheduleKeepCursorVisible()
+        }
+
+        // MARK: Context menu
+
+        private var contextMenuItems: [LyricsContextMenuItem] = []
+
+        /// Right-click: the Word Inspector and rewrites for what was clicked,
+        /// then Cut, Copy and Paste (plain text, as this view is not rich text).
+        func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            let viewModel = parent.viewModel
+            contextMenuItems = LyricsContextMenuItem.items(
+                lyrics: viewModel.lyrics,
+                selection: view.selectedRange(),
+                clickedIndex: charIndex,
+                rewriteActive: viewModel.hasActiveRewrite
+            )
+            let custom = NSMenu()
+            for (index, item) in contextMenuItems.enumerated() {
+                let menuItem = NSMenuItem(title: item.title, action: #selector(performContextItem(_:)), keyEquivalent: "")
+                menuItem.target = self
+                menuItem.tag = index
+                custom.addItem(menuItem)
+            }
+            if !contextMenuItems.isEmpty { custom.addItem(.separator()) }
+            custom.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: ""))
+            custom.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: ""))
+            custom.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: ""))
+            return custom
+        }
+
+        @objc private func performContextItem(_ sender: NSMenuItem) {
+            guard contextMenuItems.indices.contains(sender.tag) else { return }
+            let viewModel = parent.viewModel
+            switch contextMenuItems[sender.tag] {
+            case .wordInspector(let word, let range):
+                viewModel.selectedRange = range
+                viewModel.openInspector(word: word, range: range)
+            case .rewrite(let action, let range):
+                viewModel.selectedRange = range
+                viewModel.requestRewrite(action)
+            }
         }
 
         // MARK: Highlight and scrolling
