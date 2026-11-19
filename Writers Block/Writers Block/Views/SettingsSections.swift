@@ -623,10 +623,16 @@ struct SettingsCloudBackupSection: View {
             EarlierBackupsSheet()
         }
         .fileImporter(isPresented: $importerShown, allowedContentTypes: [.zip, .json], allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else { return }
+            let data: Data
+            do {
+                guard let url = try result.get().first else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                data = try Data(contentsOf: url)
+            } catch {
+                viewModel.reportBackupFileFailure("Import failed: couldn't read the chosen file.", error)
+                return
+            }
             Task { await viewModel.importBackupFile(data) }
         }
         .fileExporter(
@@ -634,13 +640,23 @@ struct SettingsCloudBackupSection: View {
             document: pendingExport?.document,
             contentType: .zip,
             defaultFilename: pendingExport?.fileName
-        ) { _ in
+        ) { result in
             pendingExport = nil
+            if case .failure(let error) = result {
+                viewModel.reportBackupFileFailure("Export failed: the file couldn't be saved.", error)
+            }
         }
     }
 
+    // The Mac keeps its 32pt preference-row pitch; iOS keeps 12pt between touch rows.
+    #if os(macOS)
+    private static let backupRowSpacing = SettingsMetrics.rowSpacing
+    #else
+    private static let backupRowSpacing = RhymeAITokens.Spacing.sm
+    #endif
+
     private var backupControls: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Self.backupRowSpacing) {
             if case .failed = viewModel.backupStatus {
                 row("Retry", systemImage: "arrow.clockwise", id: "backupRetry", enabled: viewModel.canRunCloudBackup) {
                     Task { await viewModel.backUpNow() }

@@ -564,9 +564,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var recordingListsSuspended = false
     /// The launch check of the recordings, awaited by tests.
     private(set) var recordingsLaunchTask: Task<Void, Never>?
-    /// True until the launch check of the recordings has run: expiry asked for
-    /// meanwhile is left to that check, which runs it once it succeeds.
-    private var recordingsLaunchCheckPending = false
+    /// Launch checks of the recordings still running (a context set twice starts
+    /// two): expiry asked for meanwhile is left to them, which run it once one succeeds.
+    private var recordingsLaunchChecksRunning = 0
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -614,7 +614,7 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
-                recordingsLaunchCheckPending = true
+                recordingsLaunchChecksRunning += 1
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
@@ -623,7 +623,7 @@ final class EditorViewModel: ObservableObject {
                         await library.withGate { library.clearStaging(context: context) }
                     }
                     let checked = await self.reconcileRecordings()
-                    self.recordingsLaunchCheckPending = false
+                    self.recordingsLaunchChecksRunning -= 1
                     guard checked else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
@@ -1802,7 +1802,7 @@ final class EditorViewModel: ObservableObject {
         // Housekeeping asked for before the launch check ran (scene activation, the
         // Trash timer) is left to that check, which expires once it succeeds; it is
         // not reported as a refused deletion the user never asked for.
-        guard !recordingsLaunchCheckPending else { return }
+        guard recordingsLaunchChecksRunning == 0 else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -2267,6 +2267,8 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation()
+        // A different song is on screen, as after loadProject.
+        editorOpen = EditorOpen(isNewSong: false)
         return true
     }
 
@@ -2289,6 +2291,7 @@ final class EditorViewModel: ObservableObject {
         showTemplatesSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation(isUnsaved: true)
+        editorOpen = EditorOpen(isNewSong: false)
         triggerAutoSave()
     }
 
@@ -3034,6 +3037,14 @@ final class EditorViewModel: ObservableObject {
         // Imported recordings are files, which no library save announces.
         voiceMemoService.recordingsChanged()
         scheduleAutomaticBackup()
+    }
+
+    /// A backup file the file picker could not read or the save panel could not
+    /// write, shown in the backup status line. Cancelling the panel is not one.
+    func reportBackupFileFailure(_ message: String, _ error: Error) {
+        guard (error as? CocoaError)?.code != .userCancelled else { return }
+        cloudBackupLastResultIsError = true
+        cloudBackupStatusText = message
     }
 
     /// The "Export all songs" zip, after saving the open song.

@@ -64,6 +64,23 @@ struct EditorOpenTokenTests {
     }
 
     @MainActor
+    @Test func applyingATemplateOrImportingASongIssuesAFreshToken() throws {
+        let (viewModel, _) = try Self.makeViewModel()
+        viewModel.newProject()
+        let newSongOpen = viewModel.editorOpen
+
+        viewModel.applyTemplate(try #require(SongTemplate.builtIn.first))
+        let templateOpen = viewModel.editorOpen
+        #expect(templateOpen != newSongOpen)
+        #expect(!templateOpen.isNewSong)
+
+        let source = SongProject(id: "song-2", title: "Paper Moon", lyrics: "tide", theme: "")
+        #expect(viewModel.importProject(SongProjectExport(from: source)))
+        #expect(viewModel.editorOpen != templateOpen)
+        #expect(!viewModel.editorOpen.isNewSong)
+    }
+
+    @MainActor
     @Test func anUnsavedSongsFirstSaveKeepsItsToken() throws {
         let (viewModel, _) = try Self.makeViewModel()
         viewModel.newProject()
