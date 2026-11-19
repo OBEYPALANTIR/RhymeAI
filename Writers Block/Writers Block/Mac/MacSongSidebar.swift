@@ -10,8 +10,6 @@ struct MacSongSidebar: View {
     @Environment(\.appAppearanceStyle) private var appearance
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
-    /// The row last clicked; two rows can hold one song id (a restore on two devices, then sync).
-    @State private var pickedRow: PersistentIdentifier?
 
     var body: some View {
         List(selection: selection) {
@@ -104,9 +102,8 @@ struct MacSongSidebar: View {
                 switch item {
                 case .song(let row):
                     workspace.detail = .editor
-                    guard let project = Self.songToOpen(clicked: row, openRow: openRow, in: visibleSongs) else { return }
-                    pickedRow = row
-                    viewModel.loadProject(project)
+                    guard let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
+                    workspace.openSong(project, in: viewModel)
                 case .oneLiners:
                     workspace.detail = .oneLiners
                 case .trash:
@@ -128,20 +125,14 @@ struct MacSongSidebar: View {
     private var visibleSongs: [SongProject] { SongProject.matching(projects, searchText: searchText) }
 
     private var openRow: SongProject? {
-        viewModel.showWelcome ? nil : Self.openRow(picked: pickedRow, openID: viewModel.currentProjectId, in: visibleSongs)
+        viewModel.showWelcome ? nil : Self.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: visibleSongs)
     }
 
-    /// The shown row holding the open song: the row last clicked while it still holds
-    /// that id (a sibling copy stays selected), otherwise the first row with it.
-    static func openRow(picked: PersistentIdentifier?, openID: String?, in songs: [SongProject]) -> SongProject? {
-        guard let openID else { return nil }
-        return songs.first { $0.persistentModelID == picked && $0.id == openID } ?? songs.first { $0.id == openID }
-    }
-
-    /// The song a click opens: the clicked row itself, unless it is already the open row.
-    static func songToOpen(clicked: PersistentIdentifier, openRow: SongProject?, in songs: [SongProject]) -> SongProject? {
-        guard clicked != openRow?.persistentModelID else { return nil }
-        return songs.first { $0.persistentModelID == clicked }
+    /// The shown row the editor was loaded from; none when the search hides it. Only a
+    /// song not loaded from a row (a new song after its first save) falls back to its id.
+    static func openRow(loaded: PersistentIdentifier?, openID: String?, in songs: [SongProject]) -> SongProject? {
+        if let loaded { return songs.first { $0.persistentModelID == loaded } }
+        return openID.flatMap { id in songs.first { $0.id == id } }
     }
 
     private func newSong() {

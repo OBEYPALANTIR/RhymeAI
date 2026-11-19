@@ -745,6 +745,16 @@ struct PendingEditSaveTests {
         #expect(!viewModel.savePendingEdit(), "a failed save is still reported")
     }
 
+    @Test func theLoadedRowIsKnownUntilANewSong() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        #expect(viewModel.loadedProjectRow == song.persistentModelID)
+
+        viewModel.newProject()
+
+        #expect(viewModel.loadedProjectRow == nil)
+    }
+
     @Test func anAutosaveScheduledForTheSongBeforeIsNotWrittenIntoTheOpenOne() throws {
         let (viewModel, _, container) = try Self.openSong()
         let other = SongProject(id: "b", title: "Paper Moon", lyrics: "old line", theme: "night")

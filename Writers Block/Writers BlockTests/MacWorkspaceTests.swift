@@ -128,47 +128,56 @@ struct MacPickerFailureTests {
 
 @MainActor
 struct MacSongSidebarTests {
-    /// Two rows holding one song id, as a restore on two devices leaves them after sync.
-    private static func copies() throws -> (SongProject, SongProject, ModelContainer) {
+    /// Copy A loaded, and copy B under the same song id, as a restore on two devices leaves them after sync.
+    private static func copies() throws -> (EditorViewModel, SongProject, SongProject, ModelContainer) {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
-        let first = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes")
-        let second = SongProject(id: "a", title: "Paper Moon", lyrics: "tide")
-        container.mainContext.insert(first)
-        container.mainContext.insert(second)
+        let a = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes")
+        let b = SongProject(id: "a", title: "Paper Moon", lyrics: "tide")
+        container.mainContext.insert(a)
+        container.mainContext.insert(b)
         try container.mainContext.save()
-        return (first, second, container)
+        let viewModel = EditorViewModel()
+        viewModel.modelContext = container.mainContext
+        viewModel.loadProject(a)
+        return (viewModel, a, b, container)
     }
 
     @Test
-    func clickingTheSecondCopyOpensThatCopy() throws {
-        let (first, second, container) = try Self.copies()
+    func withALoadedAndOnlyBShownNothingIsHighlightedAndBOpens() throws {
+        let (viewModel, _, b, container) = try Self.copies()
         _ = container
-        let songs = [first, second]
 
-        #expect(MacSongSidebar.songToOpen(clicked: second.persistentModelID, openRow: nil, in: songs) === second)
-        #expect(MacSongSidebar.openRow(picked: second.persistentModelID, openID: "a", in: songs) === second)
-        #expect(MacSongSidebar.openRow(picked: nil, openID: "a", in: songs) === first, "opened elsewhere: the first row with the id")
+        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: [b]) == nil)
+        #expect(MacWorkspaceModel().openSong(b, in: viewModel))
+        #expect(viewModel.loadedProjectRow == b.persistentModelID)
     }
 
     @Test
-    func withOneCopyOpenTheOtherCopyStillOpens() throws {
-        let (first, second, container) = try Self.copies()
-        _ = container
-        let songs = [first, second]
-        let open = MacSongSidebar.openRow(picked: first.persistentModelID, openID: "a", in: songs)
+    func aRefusedOpenCanBeRetried() throws {
+        let (viewModel, a, b, container) = try Self.copies()
+        let workspace = MacWorkspaceModel()
+        viewModel.modelContext = nil
+        viewModel.lyrics = "ropes and tide"
 
-        #expect(MacSongSidebar.songToOpen(clicked: second.persistentModelID, openRow: open, in: songs) === second)
-        #expect(MacSongSidebar.songToOpen(clicked: first.persistentModelID, openRow: open, in: songs) == nil, "the open row is not reloaded")
+        #expect(!workspace.openSong(b, in: viewModel), "the outgoing edit cannot be saved")
+        #expect(viewModel.loadedProjectRow == a.persistentModelID)
+
+        viewModel.modelContext = container.mainContext
+        #expect(workspace.openSong(b, in: viewModel))
+        #expect(viewModel.loadedProjectRow == b.persistentModelID)
     }
 
     @Test
-    func aRowTheSearchHidesIsNeverTheOpenRow() throws {
-        let (first, second, container) = try Self.copies()
+    func theCopyLoadedElsewhereIsHighlightedAndTheOtherOpens() throws {
+        let (viewModel, a, b, container) = try Self.copies()
         _ = container
+        viewModel.loadProject(b)
 
-        #expect(MacSongSidebar.openRow(picked: first.persistentModelID, openID: "a", in: [second]) === second)
-        #expect(MacSongSidebar.openRow(picked: nil, openID: "a", in: []) == nil)
+        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: [a, b]) === b)
+        #expect(MacWorkspaceModel().openSong(a, in: viewModel))
+        // The row, not its words: the outgoing save writes to the first row with the id (main's save path, a follow-up).
+        #expect(viewModel.loadedProjectRow == a.persistentModelID)
     }
 }
 

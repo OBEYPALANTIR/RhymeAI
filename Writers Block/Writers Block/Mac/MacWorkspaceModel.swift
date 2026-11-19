@@ -1,6 +1,7 @@
 #if os(macOS)
 import Combine
 import SwiftUI
+import SwiftData
 
 /// The Mac window's own state, shared by the workspace view and the menu bar:
 /// what the detail pane shows, which columns are open, and the panels the
@@ -50,15 +51,15 @@ final class MacWorkspaceModel: ObservableObject {
         sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
     }
 
-    /// Shows the song in the editor pane, opening it unless it is already open.
-    /// False when the open song could not be kept, so the view model stayed on it.
+    /// Shows the song in the editor pane, opening that stored row unless the editor
+    /// was loaded from it. False when the open song could not be kept, so the view model stayed on it.
     @discardableResult
     func openSong(_ project: SongProject, in viewModel: EditorViewModel) -> Bool {
         detail = .editor
-        if project.id != viewModel.currentProjectId || viewModel.showWelcome {
+        if project.persistentModelID != viewModel.loadedProjectRow || viewModel.showWelcome {
             viewModel.loadProject(project)
         }
-        return viewModel.currentProjectId == project.id && !viewModel.showWelcome
+        return viewModel.loadedProjectRow == project.persistentModelID && !viewModel.showWelcome
     }
 
     /// File › Save: writes the open song now. When it cannot, says why.

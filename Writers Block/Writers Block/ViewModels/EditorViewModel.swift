@@ -496,7 +496,13 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Project Management
 
-    @Published var currentProjectId: String?
+    @Published var currentProjectId: String? {
+        // Every other way the editor's song changes leaves it not loaded from a known row.
+        didSet { loadedProjectRow = nil }
+    }
+    /// The stored row `loadProject` loaded the editor from, so two rows sharing one
+    /// song id (a restore on two devices, then sync) are told apart. Read by the Mac sidebar.
+    @Published private(set) var loadedProjectRow: PersistentIdentifier?
     @Published var saveStatus: SaveStatus = .idle
 
     /// One song opened or started in the editor. `newProject` and `loadProject`
@@ -1702,6 +1708,7 @@ final class EditorViewModel: ObservableObject {
         theme = project.theme
         cursorPosition = 0
         currentProjectId = project.id
+        loadedProjectRow = project.persistentModelID
         editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
