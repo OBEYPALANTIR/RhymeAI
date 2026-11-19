@@ -119,14 +119,6 @@ struct MacSongSidebar: View {
     @ViewBuilder
     private func rowMenu(_ project: SongProject) -> some View {
         Button("Open") { workspace.openSong(project, in: viewModel) }
-        Button("Export…") {
-            // Export reads the open song, so only once this row's words are what is open.
-            if workspace.rowExportable(project, in: viewModel), workspace.openSong(project, in: viewModel),
-               workspace.rowExportable(project, in: viewModel) {
-                viewModel.showExportSheet = true
-            }
-        }
-        .disabled(!workspace.rowExportable(project, in: viewModel))
         Divider()
         Button("Move to Trash", role: .destructive) { viewModel.moveProjectToTrash(project) }
     }
