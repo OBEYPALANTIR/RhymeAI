@@ -20,9 +20,15 @@ struct TrashLifecycleTests {
         viewModel.lyrics = "first words, then more"
         viewModel.triggerAutoSave()
         #expect(viewModel.moveProjectToTrash(other))
-        try await Task.sleep(for: .milliseconds(1_500))
 
-        #expect(try Self.fetchProjects(context).first { $0.id == "open" }?.lyrics == "first words, then more")
+        // The 1s autosave, waited for up to 10s: parallel suites can hold the main actor.
+        var saved: String?
+        for _ in 0..<100 {
+            saved = try Self.fetchProjects(context).first { $0.id == "open" }?.lyrics
+            if saved == "first words, then more" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(saved == "first words, then more")
     }
 
     @MainActor
