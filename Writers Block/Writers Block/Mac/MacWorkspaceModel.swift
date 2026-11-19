@@ -48,6 +48,17 @@ final class MacWorkspaceModel: ObservableObject {
         sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
     }
 
+    /// Shows the song in the editor pane, opening it unless it is already open.
+    /// False when the open song could not be kept, so the view model stayed on it.
+    @discardableResult
+    func openSong(_ project: SongProject, in viewModel: EditorViewModel) -> Bool {
+        detail = .editor
+        if project.id != viewModel.currentProjectId || viewModel.showWelcome {
+            viewModel.loadProject(project)
+        }
+        return viewModel.currentProjectId == project.id && !viewModel.showWelcome
+    }
+
     /// Opens the song's recordings, saving a new song first so it has an id.
     func showRecordings(for viewModel: EditorViewModel) {
         guard let id = viewModel.ensureProjectForRecording() else { return }

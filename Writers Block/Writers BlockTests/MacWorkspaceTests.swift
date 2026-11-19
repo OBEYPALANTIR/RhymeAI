@@ -81,6 +81,38 @@ struct MacCommandStateTests {
     }
 }
 
+struct MacSongSidebarTests {
+    @Test
+    func deleteIgnoresASelectedSongTheSearchHides() {
+        let songs = [SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes"),
+                     SongProject(id: "b", title: "Paper Moon", lyrics: "tide")]
+
+        #expect(MacSongSidebar.songToDelete(selectedID: "a", in: songs, searchText: "moon") == nil)
+        #expect(MacSongSidebar.songToDelete(selectedID: "b", in: songs, searchText: "moon")?.id == "b")
+        #expect(MacSongSidebar.songToDelete(selectedID: nil, in: songs, searchText: "") == nil)
+    }
+}
+
+@MainActor
+struct MacOpenSongTests {
+    @Test
+    func openReportsWhetherTheRequestedSongIsTheOneLoaded() {
+        let song = SongProject(id: "song-1", title: "Harbour Lights", lyrics: "ropes")
+        // Unsaved words with no library to keep them: the view model stays on them.
+        let refusing = EditorViewModel()
+        refusing.newProject()
+        refusing.lyrics = "words that cannot be saved"
+        let workspace = MacWorkspaceModel()
+
+        #expect(!workspace.openSong(song, in: refusing))
+        #expect(refusing.currentProjectId == nil)
+
+        let fresh = EditorViewModel()
+        #expect(workspace.openSong(song, in: fresh))
+        #expect(fresh.currentProjectId == "song-1")
+    }
+}
+
 struct LyricsContextMenuItemTests {
     private let lyrics = "city lights don't sleep"
 

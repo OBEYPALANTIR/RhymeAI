@@ -40,11 +40,12 @@ struct MacSongSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        // Delete on the selected song: the right-click Move to Trash.
+        // Delete on the selected song: the right-click Move to Trash. A song the
+        // search hides is never deleted, even when it is the open one.
         .onDeleteCommand {
-            if case .song(let id) = selection.wrappedValue, let project = projects.first(where: { $0.id == id }) {
-                viewModel.moveProjectToTrash(project)
-            }
+            guard case .song(let id) = selection.wrappedValue,
+                  let project = Self.songToDelete(selectedID: id, in: projects, searchText: searchText) else { return }
+            viewModel.moveProjectToTrash(project)
         }
         .scrollContentBackground(.hidden)
         .background(appearance.palette.surfaceHigh)
@@ -117,21 +118,22 @@ struct MacSongSidebar: View {
 
     @ViewBuilder
     private func rowMenu(_ project: SongProject) -> some View {
-        Button("Open") { open(project) }
+        Button("Open") { workspace.openSong(project, in: viewModel) }
         Button("Export…") {
-            open(project)
-            if !viewModel.lyrics.isEmpty { viewModel.showExportSheet = true }
+            // Export reads the open song, so only once this one is open.
+            if workspace.openSong(project, in: viewModel), !viewModel.lyrics.isEmpty {
+                viewModel.showExportSheet = true
+            }
         }
         .disabled(project.lyrics.isEmpty)
         Divider()
         Button("Move to Trash", role: .destructive) { viewModel.moveProjectToTrash(project) }
     }
 
-    private func open(_ project: SongProject) {
-        workspace.detail = .editor
-        if project.id != viewModel.currentProjectId || viewModel.showWelcome {
-            viewModel.loadProject(project)
-        }
+    /// The song Delete acts on: the selected one, only while the list shows it.
+    static func songToDelete(selectedID: String?, in projects: [SongProject], searchText: String) -> SongProject? {
+        guard let selectedID else { return nil }
+        return SongProject.matching(projects, searchText: searchText).first { $0.id == selectedID }
     }
 
     private func newSong() {
