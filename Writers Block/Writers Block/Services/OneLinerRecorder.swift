@@ -192,8 +192,14 @@ final class OneLinerRecorder {
         if isRecording, let startedAt {
             takeDuration = Date().timeIntervalSince(startedAt)
         }
+        tearDown(endingActivityAs: nil)
+        // Read after the teardown, which writes the take's tail.
         let failed = wasRecording && writeFailed.withLock { $0 }
-        tearDown(endingActivityAs: failed ? .discarded : (endingActivity ? .stopped : nil))
+        if failed {
+            liveActivity.end(.discarded)
+        } else if endingActivity {
+            liveActivity.end(.stopped)
+        }
         guard failed else { return true }
         removeTakeFiles()
         takeDuration = 0
@@ -249,8 +255,8 @@ final class OneLinerRecorder {
         task?.finish()
         task = nil
         // The tap has stopped: what a resampler still holds is written, then
-        // releasing the file finalizes the .m4a. A failed tail keeps the take.
-        try? writer?.finish()
+        // releasing the file finalizes the .m4a. A tail that fails to write is a write failure.
+        do { try writer?.finish() } catch { writeFailed.withLock { $0 = true } }
         writer = nil
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         interruptionObserver = nil
@@ -523,6 +529,7 @@ nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
     /// a single live input keeps its level, and several loud ones do not wrap.
     private func mixDown(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
         guard let mixdownFormat else { return buffer }
+        // The tap's format is the input node's output format, which AVAudioEngine gives as deinterleaved Float32; anything else throws into the tap's write-failed path.
         guard !buffer.format.isInterleaved, let inputs = buffer.floatChannelData,
               let mono = AVAudioPCMBuffer(pcmFormat: mixdownFormat, frameCapacity: max(buffer.frameLength, 1)),
               let sum = mono.floatChannelData?[0] else { throw CocoaError(.featureUnsupported) }
