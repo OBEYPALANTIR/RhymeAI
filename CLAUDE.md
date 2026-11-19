@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 RhymeAI (app name "Writers Block") is a native-first songwriting assistant. The active pieces are:
 
 - `android/` — Kotlin + Jetpack Compose app, package `com.rhymeai.app`. Gradle modules: `:app`, `:benchmark`, and `:kotlinllamacpp` (vendored llama.cpp binding in `android/third_party/kotlinllamacpp`, which needs NDK 27.0.12077973 and CMake 3.22.1).
-- `Writers Block/` — SwiftUI + SwiftData iOS app. One shared scheme, `Writers Block`; unit tests in `Writers BlockTests` (Swift Testing), UI tests in `Writers BlockUITests` (XCTest).
+- `Writers Block/` — SwiftUI + SwiftData iOS app. Two shared schemes: `Writers Block` (iOS app, unit and UI tests) and `Writers Block macOS Tests` (builds the app and runs the unit tests on macOS, without the UI-test target); unit tests in `Writers BlockTests` (Swift Testing), UI tests in `Writers BlockUITests` (XCTest).
 - `shared/` — data both apps consume: `pronunciation/` (CMU dictionary TSV, word frequency, prosody fixtures) and `fixtures/` (golden JSON that pins cross-platform output).
 - `finetune/` — the on-device Gemma pipeline. `eval/` is stdlib-only Python that replays the app's on-device prompts against a GGUF and scores the output; `train/` needs unsloth, torch and trl.
 - `scripts/` — the local verification gate, release/live smoke gates, and asset generators.
