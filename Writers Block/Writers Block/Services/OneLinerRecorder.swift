@@ -183,7 +183,8 @@ final class OneLinerRecorder {
 
     /// Stops the take (or cancels a start); the file stays at `fileURL` and its length
     /// in `takeDuration`. Returns false when audio failed to write: the take is then
-    /// removed and `notice` says so. The Live Activity ends as stopped, unless
+    /// removed and `notice` says so. A tail that failed to write keeps the take, with
+    /// `tailFailureNotice` as the notice. The Live Activity ends as stopped, unless
     /// `endingActivity` is false because a save that reports the outcome follows.
     @discardableResult
     func stop(endingActivity: Bool = true) -> Bool {
@@ -192,7 +193,7 @@ final class OneLinerRecorder {
         if isRecording, let startedAt {
             takeDuration = Date().timeIntervalSince(startedAt)
         }
-        tearDown(endingActivityAs: nil)
+        let tailWritten = tearDown(endingActivityAs: nil)
         // Read after the teardown, which writes the take's tail.
         let failed = wasRecording && writeFailed.withLock { $0 }
         if failed {
@@ -200,7 +201,10 @@ final class OneLinerRecorder {
         } else if endingActivity {
             liveActivity.end(.stopped)
         }
-        guard failed else { return true }
+        guard failed else {
+            if wasRecording && !tailWritten { notice = Self.tailFailureNotice }
+            return true
+        }
         removeTakeFiles()
         takeDuration = 0
         notice = Self.writeFailureNotice
@@ -218,6 +222,7 @@ final class OneLinerRecorder {
     }
 
     static let writeFailureNotice = "Recording stopped because the audio couldn't be saved. The words so far are kept."
+    static let tailFailureNotice = "The take so far is kept, but its last moment couldn't be saved, so the end may be cut off."
 
     /// Stops or cancels, and removes the take's file. Its words still on the way are dropped.
     func discard() {
@@ -245,8 +250,10 @@ final class OneLinerRecorder {
         if isRecording { liveActivity.update(transcript: text, levels: levels) }
     }
 
-    /// `endingActivityAs` nil leaves the Live Activity for `endActivity`.
-    private func tearDown(endingActivityAs phase: OneLinerLiveActivity.Phase?) {
+    /// `endingActivityAs` nil leaves the Live Activity for `endActivity`. False when
+    /// the take's tail failed to write.
+    @discardableResult
+    private func tearDown(endingActivityAs phase: OneLinerLiveActivity.Phase?) -> Bool {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -255,8 +262,10 @@ final class OneLinerRecorder {
         task?.finish()
         task = nil
         // The tap has stopped: what a resampler still holds is written, then
-        // releasing the file finalizes the .m4a. A tail that fails to write is a write failure.
-        do { try writer?.finish() } catch { writeFailed.withLock { $0 = true } }
+        // releasing the file finalizes the .m4a. A tail that fails to write loses only
+        // the take's last moment, so the take is kept.
+        var tailWritten = true
+        do { try writer?.finish() } catch { tailWritten = false }
         writer = nil
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         interruptionObserver = nil
@@ -271,6 +280,7 @@ final class OneLinerRecorder {
             sessionHeld = false
             sessionTransitions.deactivate()
         }
+        return tailWritten
     }
 
     private func removeTakeFiles() {
@@ -312,7 +322,8 @@ final class OneLinerRecorder {
             guard type == AVAudioSession.InterruptionType.began.rawValue else { return }
             MainActor.assumeIsolated {
                 guard let self, self.isRecording else { return }
-                self.stop()
+                // A failed stop's notice, or the tail warning, stays.
+                guard self.stop(), self.notice != Self.tailFailureNotice else { return }
                 self.notice = "Recording stopped by an interruption. The take so far is kept."
             }
         }
@@ -510,8 +521,10 @@ nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
     /// Writes what a resampling converter still holds, the take's last few
     /// milliseconds. Call once, after the last `write`.
     func finish() throws {
-        guard let converter,
-              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 4096) else { return }
+        guard let converter else { return }
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 4096) else {
+            throw CocoaError(.featureUnsupported)
+        }
         var conversionError: NSError?
         while true {
             output.frameLength = 0
