@@ -37,7 +37,7 @@ final class OneLinerRecorder {
 
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
     @ObservationIgnored private var engine: AVAudioEngine?
-    @ObservationIgnored private var file: AVAudioFile?
+    @ObservationIgnored private var writer: OneLinerTakeWriter?
     @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
     @ObservationIgnored private var task: SFSpeechRecognitionTask?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
@@ -164,7 +164,7 @@ final class OneLinerRecorder {
             notice = Self.writeFailureNotice
             return false
         }
-        file = started.file
+        writer = started.writer
         request = started.request
         task = started.task
         self.engine = started.engine
@@ -248,8 +248,10 @@ final class OneLinerRecorder {
         request = nil
         task?.finish()
         task = nil
-        // Releasing the file finalizes the .m4a.
-        file = nil
+        // The tap has stopped: what a resampler still holds is written, then
+        // releasing the file finalizes the .m4a. A failed tail keeps the take.
+        try? writer?.finish()
+        writer = nil
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         interruptionObserver = nil
         isStarting = false
@@ -321,7 +323,7 @@ final class OneLinerRecorder {
     /// What `startCapture` built off the main thread, handed back to the main actor once.
     private struct StartedCapture: @unchecked Sendable {
         let engine: AVAudioEngine
-        let file: AVAudioFile
+        let writer: OneLinerTakeWriter
         let request: SFSpeechAudioBufferRecognitionRequest?
         let task: SFSpeechRecognitionTask?
 
@@ -379,7 +381,7 @@ final class OneLinerRecorder {
             task?.cancel()
             return nil
         }
-        return StartedCapture(engine: engine, file: writer.file, request: request, task: task)
+        return StartedCapture(engine: engine, writer: writer, request: request, task: task)
     }
 
     // The tap runs on the audio render thread, so it is built outside the main actor.
@@ -444,14 +446,17 @@ final class OneLinerRecorder {
 
 /// Writes a take's AAC .m4a from whatever the input delivers. AAC takes one or two
 /// channels at a standard rate, so a mono or stereo input at 44.1 or 48 kHz passes
-/// straight through, while a multichannel interface keeps its first channel (the one
-/// the level meter reads) and any other rate (96 kHz and the like) becomes 48 kHz.
+/// straight through, while a multichannel interface is summed to mono (a microphone
+/// on any of its inputs is heard, at its own level) and any other rate (96 kHz and
+/// the like) becomes 48 kHz.
 nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
     let file: AVAudioFile
     /// What the file, the transcriber and the level meter receive.
     let outputFormat: AVAudioFormat
-    /// Nil when the input already is `outputFormat`.
+    /// Nil when the input (after any mixdown) already is `outputFormat`.
     private let converter: AVAudioConverter?
+    /// Mono at the input's rate, for an input of more than two channels.
+    private let mixdownFormat: AVAudioFormat?
 
     static func outputFormat(for input: AVAudioFormat) -> AVAudioFormat? {
         let channels: AVAudioChannelCount = input.channelCount == 2 ? 2 : 1
@@ -474,22 +479,62 @@ nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
-        if inputFormat.commonFormat == output.commonFormat, inputFormat.sampleRate == output.sampleRate,
-           inputFormat.channelCount == output.channelCount, inputFormat.isInterleaved == output.isInterleaved {
+        // The converter will not fold many discrete channels into one by itself:
+        // they are summed here first, so it only changes the rate.
+        mixdownFormat = inputFormat.channelCount > 2
+            ? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate, channels: 1, interleaved: false)
+            : nil
+        let source = mixdownFormat ?? inputFormat
+        if source.commonFormat == output.commonFormat, source.sampleRate == output.sampleRate,
+           source.channelCount == output.channelCount, source.isInterleaved == output.isInterleaved {
             converter = nil
         } else {
-            guard let converter = AVAudioConverter(from: inputFormat, to: output) else { throw CocoaError(.featureUnsupported) }
-            // The converter will not fold many discrete channels into one by itself.
-            if inputFormat.channelCount > 2 { converter.channelMap = [0] }
+            guard let converter = AVAudioConverter(from: source, to: output) else { throw CocoaError(.featureUnsupported) }
             self.converter = converter
         }
     }
 
     /// Converts `buffer` if needed, appends it to the file and returns what was written.
     func write(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
-        let output = try convert(buffer)
+        let output = try convert(mixDown(buffer))
         if output.frameLength > 0 { try file.write(from: output) }
         return output
+    }
+
+    /// Writes what a resampling converter still holds, the take's last few
+    /// milliseconds. Call once, after the last `write`.
+    func finish() throws {
+        guard let converter,
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 4096) else { return }
+        var conversionError: NSError?
+        while true {
+            output.frameLength = 0
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if status == .error { throw conversionError ?? CocoaError(.featureUnsupported) }
+            if output.frameLength > 0 { try file.write(from: output) }
+            guard status == .haveData, output.frameLength > 0 else { return }
+        }
+    }
+
+    /// Sums every channel of a multichannel buffer into one, clamped to full scale:
+    /// a single live input keeps its level, and several loud ones do not wrap.
+    private func mixDown(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        guard let mixdownFormat else { return buffer }
+        guard !buffer.format.isInterleaved, let inputs = buffer.floatChannelData,
+              let mono = AVAudioPCMBuffer(pcmFormat: mixdownFormat, frameCapacity: max(buffer.frameLength, 1)),
+              let sum = mono.floatChannelData?[0] else { throw CocoaError(.featureUnsupported) }
+        mono.frameLength = buffer.frameLength
+        let frames = Int(buffer.frameLength)
+        for frame in 0..<frames { sum[frame] = 0 }
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let samples = inputs[channel]
+            for frame in 0..<frames { sum[frame] += samples[frame] }
+        }
+        for frame in 0..<frames { sum[frame] = min(1, max(-1, sum[frame])) }
+        return mono
     }
 
     private func convert(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
