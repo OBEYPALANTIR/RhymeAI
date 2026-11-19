@@ -32,6 +32,17 @@ extension View {
 
     /// A Mac keyboard has no automatic capitalization to configure.
     func textInputAutocapitalization(_ autocapitalization: TextInputAutocapitalizationShim?) -> some View { self }
+
+    /// A Mac window has no full-screen cover; the content opens as a sheet.
+    func fullScreenCover<Content: View>(
+        isPresented: Binding<Bool>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        sheet(isPresented: isPresented, onDismiss: onDismiss) {
+            content().frame(minWidth: 520, minHeight: 560)
+        }
+    }
 }
 
 extension ToolbarItemPlacement {
