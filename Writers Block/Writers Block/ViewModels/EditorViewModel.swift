@@ -2380,7 +2380,12 @@ final class EditorViewModel: ObservableObject {
         // As the autosave: an empty editor is not written.
         guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
         autoSaveTask?.cancel()
-        return persistCurrentDraft(checkpoint: false)
+        guard persistCurrentDraft(checkpoint: false) else {
+            // Not every refusal marks the save failed; Try Again must find it still unsaved.
+            saveStatus = .failed
+            return false
+        }
+        return true
     }
 
     @discardableResult

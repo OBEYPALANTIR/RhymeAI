@@ -339,14 +339,8 @@ struct MacWorkspaceLibraryTests {
 
     @Test
     func quitIsHeldWhileTheOpenSongCannotBeSaved() throws {
-        let (viewModel, container) = try Self.library()
-        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
-        container.mainContext.insert(song)
-        try container.mainContext.save()
-        viewModel.loadProject(song)
-        // The library is gone, so the pending autosave fails each time it is tried.
-        viewModel.modelContext = nil
-        viewModel.lyrics = "ropes and tide"
+        let (viewModel, container) = try Self.unsavableEdit()
+        _ = container
         viewModel.triggerAutoSave()
         var reasons: [String] = []
         var answers: [MacAppDelegate.FailedSaveChoice] = [.tryAgain, .keepOpen]
@@ -355,7 +349,7 @@ struct MacWorkspaceLibraryTests {
         let quit = MacAppDelegate.terminateReply(viewModel: viewModel) { _ in .quitAnyway }
 
         #expect(held == .terminateCancel)
-        #expect(reasons == Array(repeating: "Couldn't save this song. Your edits remain open.", count: 2), "Try Again saves again")
+        #expect(reasons == Array(repeating: "This song is no longer in the library. Your edits remain open.", count: 2), "Try Again saves again")
         #expect(quit == .terminateNow)
     }
 
