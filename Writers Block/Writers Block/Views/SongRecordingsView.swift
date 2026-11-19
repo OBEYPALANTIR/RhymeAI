@@ -149,14 +149,13 @@ struct SongRecordingsView: View {
                 if let toast = undoToast { undoToastView(toast).padding() }
             }
         }
-        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.mpeg4Audio, .mp3, .wav, UTType(filenameExtension: "aac") ?? .audio]) { result in
+        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: EditorViewModel.importableAudioTypes) { result in
             switch result {
             case .success(let url):
                 importTask = Task {
                     do {
-                        _ = try await VoiceMemoService.importMemo(from: url, projectId: projectId, publisher: viewModel.voiceMemoService.publisher)
+                        try await viewModel.importRecording(at: url, projectId: projectId)
                         reloadRecordings()
-                        viewModel.voiceMemoService.onFilesChanged?()
                     } catch is CancellationError {
                         // Cancelling leaves neither a recording nor a partial file.
                     } catch {

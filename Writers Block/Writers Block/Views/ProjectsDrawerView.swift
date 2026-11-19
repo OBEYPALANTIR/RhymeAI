@@ -155,6 +155,12 @@ struct ProjectsDrawerView: View {
     }
 
     private var filteredProjects: [SongProject] {
+        Self.songs(projects, matching: searchText)
+    }
+
+    /// The song search shared with the Mac sidebar: title (or "Untitled
+    /// Song"), lyrics and theme, ignoring case.
+    static func songs(_ projects: [SongProject], matching searchText: String) -> [SongProject] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return projects }
 
@@ -1044,11 +1050,7 @@ struct ProjectsDrawerView: View {
         case .success(let urls):
             guard let url = urls.first else { return }
             do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                if viewModel.importProject(exported) {
+                if try viewModel.importSongFile(at: url) {
                     dismissAfterNavigation()
                 }
             } catch {
