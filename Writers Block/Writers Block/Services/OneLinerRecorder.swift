@@ -348,21 +348,10 @@ final class OneLinerRecorder {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return nil }
-        let file: AVAudioFile
+        let writer: OneLinerTakeWriter
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // AAC in MPEG-4, as voice memos are recorded.
-            file = try AVAudioFile(
-                forWriting: url,
-                settings: [
-                    AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: format.sampleRate,
-                    AVNumberOfChannelsKey: format.channelCount,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-                ],
-                commonFormat: format.commonFormat,
-                interleaved: format.isInterleaved
-            )
+            writer = try OneLinerTakeWriter(url: url, inputFormat: format)
         } catch {
             return nil
         }
@@ -380,7 +369,7 @@ final class OneLinerRecorder {
             }
         }
 
-        installTap(on: input, format: format, file: file, request: request, failed: failed, level: level, writeFailed: writeFailed)
+        installTap(on: input, format: format, writer: writer, request: request, failed: failed, level: level, writeFailed: writeFailed)
         engine.prepare()
         do {
             try engine.start()
@@ -390,14 +379,14 @@ final class OneLinerRecorder {
             task?.cancel()
             return nil
         }
-        return StartedCapture(engine: engine, file: file, request: request, task: task)
+        return StartedCapture(engine: engine, file: writer.file, request: request, task: task)
     }
 
     // The tap runs on the audio render thread, so it is built outside the main actor.
     nonisolated private static func installTap(
         on input: AVAudioInputNode,
         format: AVAudioFormat,
-        file: AVAudioFile?,
+        writer: OneLinerTakeWriter,
         request: SFSpeechAudioBufferRecognitionRequest?,
         failed: OSAllocatedUnfairLock<Bool>,
         level: @escaping @Sendable (Float) -> Void,
@@ -405,15 +394,16 @@ final class OneLinerRecorder {
     ) {
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             guard !failed.withLock({ $0 }) else { return }
+            let written: AVAudioPCMBuffer
             do {
-                try file?.write(from: buffer)
+                written = try writer.write(buffer)
             } catch {
                 failed.withLock { $0 = true }
                 writeFailed()
                 return
             }
-            request?.append(buffer)
-            level(normalizedLevel(buffer))
+            request?.append(written)
+            level(normalizedLevel(written))
         }
     }
 
@@ -449,6 +439,80 @@ final class OneLinerRecorder {
                   recognizer.supportsOnDeviceRecognition else { return UncheckedSendable(value: nil) }
             return UncheckedSendable(value: recognizer)
         }.value.value
+    }
+}
+
+/// Writes a take's AAC .m4a from whatever the input delivers. AAC takes one or two
+/// channels at a standard rate, so a mono or stereo input at 44.1 or 48 kHz passes
+/// straight through, while a multichannel interface keeps its first channel (the one
+/// the level meter reads) and any other rate (96 kHz and the like) becomes 48 kHz.
+nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
+    let file: AVAudioFile
+    /// What the file, the transcriber and the level meter receive.
+    let outputFormat: AVAudioFormat
+    /// Nil when the input already is `outputFormat`.
+    private let converter: AVAudioConverter?
+
+    static func outputFormat(for input: AVAudioFormat) -> AVAudioFormat? {
+        let channels: AVAudioChannelCount = input.channelCount == 2 ? 2 : 1
+        let rate = input.sampleRate == 44_100 || input.sampleRate == 48_000 ? input.sampleRate : 48_000
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: channels, interleaved: false)
+    }
+
+    init(url: URL, inputFormat: AVAudioFormat) throws {
+        guard let output = Self.outputFormat(for: inputFormat) else { throw CocoaError(.featureUnsupported) }
+        outputFormat = output
+        // AAC in MPEG-4, as voice memos are recorded.
+        file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: output.sampleRate,
+                AVNumberOfChannelsKey: output.channelCount,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        if inputFormat.commonFormat == output.commonFormat, inputFormat.sampleRate == output.sampleRate,
+           inputFormat.channelCount == output.channelCount, inputFormat.isInterleaved == output.isInterleaved {
+            converter = nil
+        } else {
+            guard let converter = AVAudioConverter(from: inputFormat, to: output) else { throw CocoaError(.featureUnsupported) }
+            // The converter will not fold many discrete channels into one by itself.
+            if inputFormat.channelCount > 2 { converter.channelMap = [0] }
+            self.converter = converter
+        }
+    }
+
+    /// Converts `buffer` if needed, appends it to the file and returns what was written.
+    func write(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        let output = try convert(buffer)
+        if output.frameLength > 0 { try file.write(from: output) }
+        return output
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        guard let converter else { return buffer }
+        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        var supplied = false
+        var conversionError: NSError?
+        // `.noDataNow`, not `.endOfStream`: the converter keeps its state for the next buffer.
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if supplied {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        if status == .error { throw conversionError ?? CocoaError(.featureUnsupported) }
+        return output
     }
 }
 
