@@ -613,79 +613,94 @@ struct MacWorkspaceLibraryTests {
     }
 }
 
-@MainActor
-struct MacDetailSizeTests {
-    /// The window takes the detail pane's minimum size, so One Liners must fit the
-    /// default 780pt window or opening it grows the window (its wrapped caption did).
-    @Test
-    func oneLinersFitsTheDefaultWindow() throws {
-        let schema = Schema([SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self])
-        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
-        let host = NSHostingController(rootView: OneLinersView(onDismiss: {})
-            .environmentObject(EditorViewModel())
-            .modelContainer(container))
+extension OneLinerRouterSuites {
+    @MainActor
+    struct MacDetailSizeTests {
+        /// The window takes the detail pane's minimum size, so One Liners must fit the
+        /// default 780pt window or opening it grows the window (its wrapped caption did).
+        @Test
+        func oneLinersFitsTheDefaultWindow() throws {
+            let schema = Schema([SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self])
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let host = NSHostingController(rootView: OneLinersView(onDismiss: {})
+                .environmentObject(EditorViewModel())
+                .modelContainer(container))
 
-        #expect(host.sizeThatFits(in: .zero).height < 780)
-    }
+            #expect(host.sizeThatFits(in: .zero).height < 780)
+        }
 
-    /// The library the app opens: a fresh in-memory store with every model of the app's
-    /// own schema, holding a song and a One Liner so each page lays out a real row.
-    private static func appLibrary() throws -> (ModelContainer, SongProject) {
-        let schema = try #require(ModelContainerBootstrap.shared.container?.schema)
-        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
-        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes and tide", theme: "")
-        container.mainContext.insert(song)
-        container.mainContext.insert(OneLiner(text: "the harbour keeps the light we left on the water"))
-        try container.mainContext.save()
-        return (container, song)
-    }
+        /// The library the app opens: a fresh in-memory store with every model of the app's
+        /// own schema, holding a song and a One Liner so each page lays out a real row.
+        private static func appLibrary() throws -> (ModelContainer, SongProject) {
+            let schema = try #require(ModelContainerBootstrap.shared.container?.schema)
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes and tide", theme: "")
+            container.mainContext.insert(song)
+            container.mainContext.insert(OneLiner(text: "the harbour keeps the light we left on the water"))
+            try container.mainContext.save()
+            return (container, song)
+        }
 
-    /// The narrowest the window goes with this page shown, and whether a song is on screen.
-    private static func minimumWidth(of detail: MacWorkspaceModel.Detail, sidebar: NavigationSplitViewVisibility, opening song: SongProject? = nil, assistant: Bool = true, in container: ModelContainer) -> (width: CGFloat, songShown: Bool) {
-        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
-        viewModel.modelContext = container.mainContext
-        if let song { viewModel.loadProject(song) }
-        let workspace = MacWorkspaceModel()
-        workspace.sidebarVisibility = sidebar
-        workspace.detail = detail
-        workspace.windowOpen = true
-        workspace.showsAssistant = assistant
-        let view = NSHostingView(rootView: MacWorkspaceView()
-            .environmentObject(viewModel)
-            .environmentObject(workspace)
-            .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .localOnlyFallback, usesCloudBackedStore: false))
-            .environmentObject(GGUFDownloadManager.shared)
-            .modelContainer(container))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-        view.layoutSubtreeIfNeeded()
-        defer { window.close() }
-        return (view.fittingSize.width, workspace.songOpen(in: viewModel))
-    }
+        private static func workspace(_ detail: MacWorkspaceModel.Detail, sidebar: NavigationSplitViewVisibility, opening song: SongProject?, assistant: Bool, in container: ModelContainer) -> (EditorViewModel, MacWorkspaceModel) {
+            let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+            viewModel.modelContext = container.mainContext
+            if let song { viewModel.loadProject(song) }
+            let workspace = MacWorkspaceModel()
+            workspace.sidebarVisibility = sidebar
+            workspace.detail = detail
+            workspace.windowOpen = true
+            workspace.showsAssistant = assistant
+            return (viewModel, workspace)
+        }
 
-    /// With the sidebar hidden, no page may squeeze below a reading width (One Liners went
-    /// to 147pt and clipped its rows to single letters). 728 is 440 for the page, about
-    /// what it gets at the window's minimum with the sidebar shown (667 - 220), plus the
-    /// 288 this hosting harness always adds beside the detail pane: it lays out the sidebar
-    /// column even for .detailOnly, so it cannot measure the sidebar-shown minimum itself.
-    @Test
-    func everyDetailPageKeepsAReadingWidthWithTheSidebarHidden() throws {
-        let (container, _) = try Self.appLibrary()
-        let widths = [MacWorkspaceModel.Detail.editor, .oneLiners, .trash].map { Self.minimumWidth(of: $0, sidebar: .detailOnly, in: container).width }
-        #expect(widths.allSatisfy { $0 >= 728 }, "\(widths)")
-    }
+        /// The narrowest the window goes with this page shown; the sidebar's width at that
+        /// size, as AppKit lays it out (0 when hidden); and whether a song is on screen.
+        private static func minimumWidth(of detail: MacWorkspaceModel.Detail, sidebar: NavigationSplitViewVisibility, opening song: SongProject? = nil, assistant: Bool = true, in container: ModelContainer) -> (width: CGFloat, sidebar: CGFloat, songShown: Bool) {
+            let (viewModel, workspace) = Self.workspace(detail, sidebar: sidebar, opening: song, assistant: assistant, in: container)
+            let view = NSHostingView(rootView: MacWorkspaceView()
+                .environmentObject(viewModel)
+                .environmentObject(workspace)
+                .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .localOnlyFallback, usesCloudBackedStore: false))
+                .environmentObject(GGUFDownloadManager.shared)
+                .modelContainer(container))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            view.layoutSubtreeIfNeeded()
+            defer { window.close() }
+            let width = view.fittingSize.width
+            window.setContentSize(NSSize(width: width, height: 780))
+            view.layoutSubtreeIfNeeded()
+            // The outermost split view holds the sidebar and detail columns; the sidebar is the
+            // narrower visible one, whether it sits beside the detail or floats over it.
+            func splits(_ v: NSView) -> [NSSplitView] { (v as? NSSplitView).map { [$0] } ?? v.subviews.flatMap(splits) }
+            let columns = splits(view).first?.arrangedSubviews.filter { !$0.isHidden }.map(\.frame.width) ?? []
+            return (width, columns.count > 1 ? columns.min() ?? 0 : 0, workspace.songOpen(in: viewModel))
+        }
 
-    /// A song open with the sidebar and the Assistant both shown still fits the default
-    /// 1160pt window, so the detail floor cannot outgrow the window it opens in.
-    @Test
-    func aSongWithSidebarAndAssistantFitsTheDefaultWindow() throws {
-        let (container, song) = try Self.appLibrary()
-        let shown = Self.minimumWidth(of: .editor, sidebar: .all, opening: song, in: container)
-        let hidden = Self.minimumWidth(of: .editor, sidebar: .all, opening: song, assistant: false, in: container)
-        #expect(shown.songShown, "the editor, not the welcome screen")
-        #expect(shown.width - hidden.width >= 300, "the Assistant column is laid out: \(shown.width) vs \(hidden.width)")
-        #expect(shown.width <= 1160, "\(shown.width)")
+        /// With the sidebar hidden, no page may squeeze below a reading width (One Liners went
+        /// to 147pt and clipped its rows to single letters). What the page gets at the window's
+        /// minimum is the window less the sidebar, measured rather than assumed, since a host may
+        /// lay out the sidebar at any width or hide it. 440 is about what the page gets at the
+        /// window's minimum with the sidebar shown (667 - 220).
+        @Test
+        func everyDetailPageKeepsAReadingWidthWithTheSidebarHidden() throws {
+            let (container, _) = try Self.appLibrary()
+            let pages = [MacWorkspaceModel.Detail.editor, .oneLiners, .trash].map { Self.minimumWidth(of: $0, sidebar: .detailOnly, in: container) }
+            #expect(pages.allSatisfy { $0.width - $0.sidebar >= 440 }, "\(pages.map { ($0.width, $0.sidebar) })")
+        }
+
+        /// A song open with the sidebar and the Assistant both shown still fits the default
+        /// 1160pt window, so the detail floor cannot outgrow the window it opens in.
+        @Test
+        func aSongWithSidebarAndAssistantFitsTheDefaultWindow() throws {
+            let (container, song) = try Self.appLibrary()
+            let shown = Self.minimumWidth(of: .editor, sidebar: .all, opening: song, in: container)
+            let hidden = Self.minimumWidth(of: .editor, sidebar: .all, opening: song, assistant: false, in: container)
+            #expect(shown.songShown, "the editor, not the welcome screen")
+            #expect(shown.width - hidden.width >= 300, "the Assistant column is laid out: \(shown.width) vs \(hidden.width)")
+            #expect(shown.width <= 1160, "\(shown.width)")
+        }
     }
 }
 #endif
