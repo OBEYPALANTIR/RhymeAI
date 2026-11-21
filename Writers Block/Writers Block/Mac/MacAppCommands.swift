@@ -25,6 +25,11 @@ struct MacAppCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .saveItem) {
+            // Replacing this group drops the system Close, so it is put back: the same
+            // nil-targeted performClose(_:) as AppKit's item, which the key window
+            // answers as it does its close button (MacWorkspaceView's onDisappear saves).
+            Button("Close") { NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil) }
+                .keyboardShortcut("w")
             // A save that cannot run or fails says why in the workspace's Couldn't Save alert.
             Button("Save") { workspace.save(viewModel) }
                 .keyboardShortcut("s")
