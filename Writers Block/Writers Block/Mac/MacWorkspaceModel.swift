@@ -54,7 +54,8 @@ final class MacWorkspaceModel: ObservableObject {
     /// The song open the sidebar's row selection put on screen: its lyric editor
     /// leaves the focus in the list, so Delete trashes the selected song. Every other
     /// open issues a new token, so it never matches and the lyrics take the focus.
-    private(set) var sidebarSelectedOpen: EditorViewModel.EditorOpen?
+    /// The editor pane clears it as it leaves, so only its first build keeps the list.
+    var sidebarSelectedOpen: EditorViewModel.EditorOpen?
 
     /// Shows the song in the editor pane, opening that stored row unless the editor
     /// was loaded from it. False when the open song could not be kept, so the view model stayed on it.

@@ -245,6 +245,10 @@ struct MacEditorDetail: View {
                 .padding(.horizontal, RhymeAITokens.Spacing.md)
                 .padding(.bottom, RhymeAITokens.Spacing.sm)
         }
+        // Within this pane only a new open re-creates the lyrics (`.id(editorOpen)`).
+        // A pane built again for the same open (back from Trash or One Liners, a
+        // reopened window) is no sidebar selection: its lyrics take the focus.
+        .onDisappear { workspace.sidebarSelectedOpen = nil }
     }
 }
 

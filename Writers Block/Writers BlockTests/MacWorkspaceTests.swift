@@ -382,7 +382,7 @@ struct LyricsOpenFocusTests {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: HStack {
             List(selection: .constant(Optional(1))) { Text("Song").tag(1) }.listStyle(.sidebar).frame(width: 200)
-            MacEditorDetail()
+            DetailSwitch()
         }
         .environmentObject(viewModel)
         .environmentObject(workspace)
@@ -394,13 +394,23 @@ struct LyricsOpenFocusTests {
         ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
     }
 
-    /// Lets SwiftUI put the open song's editor on screen.
-    private func editor(for lyrics: String, in window: NSWindow) async throws -> LyricsNSTextView {
+    /// The workspace's detail switch, as far as these tests need it: the editor pane
+    /// leaves for another screen (Trash) and is built again on the way back.
+    private struct DetailSwitch: View {
+        @EnvironmentObject private var workspace: MacWorkspaceModel
+        var body: some View {
+            if workspace.detail == .editor { MacEditorDetail() } else { Text("Trash") }
+        }
+    }
+
+    /// Lets SwiftUI put the open song's editor on screen. `outgoing` is an editor
+    /// fading out, which shows the new lyrics too until it goes.
+    private func editor(for lyrics: String, in window: NSWindow, excluding outgoing: NSView? = nil) async throws -> LyricsNSTextView {
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
             let content = try #require(window.contentView)
             content.layoutSubtreeIfNeeded()
-            if let editor = views(LyricsNSTextView.self, in: content).first(where: { $0.string == lyrics }) {
+            if let editor = views(LyricsNSTextView.self, in: content).first(where: { $0.string == lyrics && $0 !== outgoing }) {
                 return editor
             }
             try await Task.sleep(for: .milliseconds(10))
@@ -428,10 +438,41 @@ struct LyricsOpenFocusTests {
 
         // When: the sidebar's row selection opens another song
         #expect(workspace.openSong(b, in: viewModel, bySidebarSelection: true))
-        _ = try await editor(for: b.lyrics, in: window)
+        _ = try await editor(for: b.lyrics, in: window, excluding: first)
 
         // Then
         #expect(window.firstResponder === list)
+    }
+
+    @Test
+    func theSidebarSelectedSongBackFromTrashFocusesTheLyrics() async throws {
+        // Given: the sidebar's row selection opened a song, with the list focused
+        let a = try song("a", "harbour lights")
+        let window = makeWindow()
+        #expect(workspace.openSong(a, in: viewModel, bySidebarSelection: true))
+        let open = viewModel.editorOpen
+        let first = try await editor(for: a.lyrics, in: window)
+        let list = try focusList(in: window)
+
+        // When: the detail goes to Trash and back to songs, the same open
+        workspace.detail = .trash
+        let content = try #require(window.contentView)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !views(LyricsNSTextView.self, in: content).isEmpty, ContinuousClock.now < deadline {
+            content.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        workspace.detail = .editor
+        let rebuilt = try await editor(for: a.lyrics, in: window, excluding: first)
+
+        // Then: the rebuilt editor's lyrics take the focus from the list
+        #expect(viewModel.editorOpen == open)
+        let focusDeadline = ContinuousClock.now + .seconds(2)
+        while window.firstResponder === list, ContinuousClock.now < focusDeadline {
+            content.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(window.firstResponder === rebuilt)
     }
 
     @Test
