@@ -356,6 +356,69 @@ struct LyricsUndoRoutingTests {
         #expect(!lyrics.validateMenuItem(redo), "a read-only editor (a rewrite preview) offers no history")
     }
 }
+
+/// An opened song's lyric editor takes the focus, unless a click on a sidebar
+/// row holds it: then Delete stays the list's (Move to Trash).
+@MainActor
+struct LyricsOpenFocusTests {
+    private func makeWindow(_ root: some View = EmptyView()) -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: root)
+        window.contentView?.layoutSubtreeIfNeeded()
+        return window
+    }
+
+    private func openedEditor(in window: NSWindow) -> LyricsNSTextView {
+        let editor = LyricsTextView.makeTextView(history: EditorViewModel()) { true }
+        editor.resumesEditingOnAttach = true
+        window.contentView?.addSubview(editor)
+        return editor
+    }
+
+    private func tableView(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        return view.subviews.lazy.compactMap { tableView(in: $0) }.first
+    }
+
+    @Test
+    func aSidebarRowClickKeepsTheFocusInTheList() throws {
+        // Given: a sidebar List holding the focus, as a click on its row leaves it
+        let window = makeWindow(List(selection: .constant(Optional(1))) { Text("Song").tag(1) }.listStyle(.sidebar))
+        let content = try #require(window.contentView)
+        let list = try #require(tableView(in: content), "the sidebar List is an AppKit table view")
+        #expect(window.makeFirstResponder(list))
+
+        // When: the song it opened puts its editor on screen
+        _ = openedEditor(in: window)
+
+        // Then
+        #expect(window.firstResponder === list)
+    }
+
+    @Test
+    func anOpenedSongsEditorTakesTheFocusWhenNothingHoldsIt() {
+        let window = makeWindow()
+        window.makeFirstResponder(nil)
+
+        let editor = openedEditor(in: window)
+
+        #expect(window.firstResponder === editor)
+    }
+
+    @Test
+    func anOpenedSongsEditorTakesTheFocusFromTheOutgoingEditor() {
+        // Given: the previous song's editor, still fading out, holds the focus
+        let window = makeWindow()
+        let outgoing = LyricsTextView.makeTextView(history: EditorViewModel()) { true }
+        window.contentView?.addSubview(outgoing)
+        #expect(window.makeFirstResponder(outgoing))
+
+        let editor = openedEditor(in: window)
+
+        #expect(window.firstResponder === editor)
+    }
+}
 /// Save, Quit, multi-file import and Cancel Generation, against a real library.
 @MainActor
 struct MacWorkspaceLibraryTests {
