@@ -35,8 +35,10 @@ struct TrashLifecycleTests {
     @Test func aNewTitledSongWithNoLyricsReopenedFromItsRowMovesToTrash() throws {
         // Given: New Song, a title and no lyrics, saved, then reopened from its row after another song
         let harness = try Self.makeHarness()
-        let viewModel = harness.viewModel
         let context = harness.context
+        // Its notebook stays in memory: a trashed song keeps its notebook file on disk.
+        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+        viewModel.modelContext = context
         let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
         context.insert(other)
         try context.save()

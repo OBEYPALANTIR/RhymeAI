@@ -17,8 +17,11 @@ struct MacWorkspaceView: View {
     @Environment(\.openWindow) private var openWindow
 
     /// The narrowest the detail pane gets, so hiding the sidebar cannot squeeze a page
-    /// to nothing (One Liners alone went to 147pt). No wider than the pane already is at
-    /// the window's minimum with the sidebar shown (667 - 220), so that minimum stays.
+    /// to nothing (One Liners alone went to 147pt). 440 is just under 447 (667 - 220), the
+    /// most the pane could have had at the window's 667pt minimum with the sidebar shown,
+    /// so that minimum is expected, not measured, to stay. Above 512 a song with the
+    /// sidebar and the Assistant no longer fits the default 1160pt window (as measured in
+    /// MacDetailSizeTests, whose harness gives the sidebar 288pt).
     static let detailMinWidth: CGFloat = 440
 
     var body: some View {
