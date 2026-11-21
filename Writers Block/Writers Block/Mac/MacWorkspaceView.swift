@@ -16,6 +16,11 @@ struct MacWorkspaceView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
 
+    /// The narrowest the detail pane gets, so hiding the sidebar cannot squeeze a page
+    /// to nothing (One Liners alone went to 147pt). No wider than the pane already is at
+    /// the window's minimum with the sidebar shown (667 - 220), so that minimum stays.
+    static let detailMinWidth: CGFloat = 440
+
     var body: some View {
         NavigationSplitView(columnVisibility: $workspace.sidebarVisibility) {
             MacSongSidebar()
@@ -23,7 +28,7 @@ struct MacWorkspaceView: View {
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             detailPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Self.detailMinWidth, maxWidth: .infinity, maxHeight: .infinity)
                 .background(appearance.palette.canvas)
                 .inspector(isPresented: assistantPresented) {
                     // No close button in the panel: the toolbar and View menu show and hide it.

@@ -627,5 +627,33 @@ struct MacDetailSizeTests {
 
         #expect(host.sizeThatFits(in: .zero).height < 780)
     }
+
+    /// The detail pane's minimum, not each page's own, sets the window's minimum width,
+    /// so hiding the sidebar cannot shrink a page (One Liners went to 147pt and clipped
+    /// its rows to single letters). Every page is narrower than the pane's minimum.
+    @Test
+    func everyDetailPageTakesThePanesMinimumWidth() throws {
+        let (viewModel, container) = try MacWorkspaceLibraryTests.library()
+        var widths: [CGFloat] = []
+        for detail in [MacWorkspaceModel.Detail.editor, .oneLiners, .trash] {
+            let workspace = MacWorkspaceModel()
+            workspace.sidebarVisibility = .detailOnly
+            workspace.detail = detail
+            let view = NSHostingView(rootView: MacWorkspaceView()
+                .environmentObject(viewModel)
+                .environmentObject(workspace)
+                .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .localOnlyFallback, usesCloudBackedStore: false))
+                .environmentObject(GGUFDownloadManager.shared)
+                .modelContainer(container))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            view.layoutSubtreeIfNeeded()
+            widths.append(view.fittingSize.width)
+            window.close()
+        }
+        #expect(Set(widths).count == 1, "\(widths)")
+        #expect(widths.allSatisfy { $0 >= MacWorkspaceView.detailMinWidth }, "\(widths)")
+    }
 }
 #endif
