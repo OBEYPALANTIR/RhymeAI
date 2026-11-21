@@ -210,7 +210,7 @@ struct MacWorkspaceView: View {
 
 /// The open song: title, counts, lyrics and the rewrite chips at the reading
 /// width, the iOS writing column without the iPad bar.
-private struct MacEditorDetail: View {
+struct MacEditorDetail: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @EnvironmentObject private var workspace: MacWorkspaceModel
     @State private var scrollPosition = ScrollPosition(y: 0)
@@ -236,7 +236,8 @@ private struct MacEditorDetail: View {
             lyricsEditorIsFocused: $lyricsEditorIsFocused,
             scrollPosition: $scrollPosition,
             focusedNewSongOpen: $focusedNewSongOpen,
-            titleFocusedOpen: $titleFocusedOpen
+            titleFocusedOpen: $titleFocusedOpen,
+            listKeepsFocusOnOpen: workspace.sidebarSelectedOpen == viewModel.editorOpen
         )
         .safeAreaInset(edge: .bottom, spacing: 0) {
             RewriteAccessoryBar(isHidden: false, showsChipBar: showsChipBar, height: $accessoryHeight)

@@ -357,72 +357,117 @@ struct LyricsUndoRoutingTests {
     }
 }
 
-/// An opened song's lyric editor takes the focus, unless a click on a sidebar
-/// row holds it: then Delete stays the list's (Move to Trash).
+/// An opened song's lyric editor takes the focus, unless the sidebar's row
+/// selection opened it: then the list keeps the focus and Delete stays its own.
+/// The real editor pane (`MacEditorDetail`) beside a sidebar List, in a window.
 @MainActor
 struct LyricsOpenFocusTests {
-    private func makeWindow(_ root: some View = EmptyView()) -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+    private let viewModel: EditorViewModel
+    private let container: ModelContainer
+    private let workspace = MacWorkspaceModel()
+
+    init() throws {
+        (viewModel, container) = try MacWorkspaceLibraryTests.library()
+    }
+
+    private func song(_ id: String, _ lyrics: String) throws -> SongProject {
+        let song = SongProject(id: id, title: id, lyrics: lyrics, theme: "")
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        return song
+    }
+
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: root)
-        window.contentView?.layoutSubtreeIfNeeded()
+        window.contentView = NSHostingView(rootView: HStack {
+            List(selection: .constant(Optional(1))) { Text("Song").tag(1) }.listStyle(.sidebar).frame(width: 200)
+            MacEditorDetail()
+        }
+        .environmentObject(viewModel)
+        .environmentObject(workspace)
+        .modelContainer(container))
         return window
     }
 
-    private func openedEditor(in window: NSWindow) -> LyricsNSTextView {
-        let editor = LyricsTextView.makeTextView(history: EditorViewModel()) { true }
-        editor.resumesEditingOnAttach = true
-        window.contentView?.addSubview(editor)
-        return editor
+    private func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+        ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
     }
 
-    private func tableView(in view: NSView) -> NSTableView? {
-        if let table = view as? NSTableView { return table }
-        return view.subviews.lazy.compactMap { tableView(in: $0) }.first
+    /// Lets SwiftUI put the open song's editor on screen.
+    private func editor(for lyrics: String, in window: NSWindow) async throws -> LyricsNSTextView {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            let content = try #require(window.contentView)
+            content.layoutSubtreeIfNeeded()
+            if let editor = views(LyricsNSTextView.self, in: content).first(where: { $0.string == lyrics }) {
+                return editor
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CancellationError()
+    }
+
+    /// The list with the focus, as a click on a row or Tab into it leaves it.
+    private func focusList(in window: NSWindow) throws -> NSTableView {
+        let content = try #require(window.contentView)
+        let list = try #require(views(NSTableView.self, in: content).first, "the sidebar List is an AppKit table view")
+        #expect(window.makeFirstResponder(list))
+        return list
     }
 
     @Test
-    func aSidebarRowClickKeepsTheFocusInTheList() throws {
-        // Given: a sidebar List holding the focus, as a click on its row leaves it
-        let window = makeWindow(List(selection: .constant(Optional(1))) { Text("Song").tag(1) }.listStyle(.sidebar))
-        let content = try #require(window.contentView)
-        let list = try #require(tableView(in: content), "the sidebar List is an AppKit table view")
-        #expect(window.makeFirstResponder(list))
+    func aSongTheSidebarSelectionOpensLeavesTheFocusInTheList() async throws {
+        // Given: a song opened by a command, then the list focused
+        let a = try song("a", "harbour lights"), b = try song("b", "paper moon")
+        let window = makeWindow()
+        workspace.openSong(a, in: viewModel)
+        let first = try await editor(for: a.lyrics, in: window)
+        #expect(window.firstResponder === first, "an open from elsewhere focuses the lyrics")
+        let list = try focusList(in: window)
 
-        // When: the song it opened puts its editor on screen
-        _ = openedEditor(in: window)
+        // When: the sidebar's row selection opens another song
+        #expect(workspace.openSong(b, in: viewModel, bySidebarSelection: true))
+        _ = try await editor(for: b.lyrics, in: window)
 
         // Then
         #expect(window.firstResponder === list)
     }
 
     @Test
-    func anOpenedSongsEditorTakesTheFocusWhenNothingHoldsIt() {
+    func anImportAfterASidebarSelectionThatLoadedNothingFocusesTheLyrics() async throws {
+        // Given: the sidebar selected the song already open, so nothing loaded, with the list focused
+        let a = try song("a", "harbour lights")
         let window = makeWindow()
-        window.makeFirstResponder(nil)
+        workspace.openSong(a, in: viewModel, bySidebarSelection: true)
+        let outgoing = try await editor(for: a.lyrics, in: window)
+        let list = try focusList(in: window)
+        #expect(workspace.openSong(a, in: viewModel, bySidebarSelection: true))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("focus-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("Tide.json")
+        try LyricsExporter.data(for: SongProject(id: "t", title: "Tide", lyrics: "rope and tide", theme: ""), format: .json).write(to: file)
 
-        let editor = openedEditor(in: window)
+        // When: a song opens from outside the sidebar (File › Import Song, or a drop)
+        workspace.importSongs([file], into: viewModel)
 
-        #expect(window.firstResponder === editor)
-    }
-
-    @Test
-    func anOpenedSongsEditorTakesTheFocusFromTheOutgoingEditor() {
-        // Given: the previous song's editor, still fading out, holds the focus
-        let window = makeWindow()
-        let outgoing = LyricsTextView.makeTextView(history: EditorViewModel()) { true }
-        window.contentView?.addSubview(outgoing)
-        #expect(window.makeFirstResponder(outgoing))
-
-        let editor = openedEditor(in: window)
-
-        #expect(window.firstResponder === editor)
+        // Then: the imported song's lyrics take the focus from the list
+        // (The outgoing editor shows the new lyrics too while it fades out.)
+        _ = try await editor(for: "rope and tide", in: window)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while window.firstResponder === list, ContinuousClock.now < deadline {
+            window.contentView?.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let focused = window.firstResponder as? LyricsNSTextView
+        #expect(focused != nil && focused !== outgoing && focused?.string == "rope and tide")
     }
 }
 /// Save, Quit, multi-file import and Cancel Generation, against a real library.
 @MainActor
 struct MacWorkspaceLibraryTests {
-    private static func library() throws -> (EditorViewModel, ModelContainer) {
+    static func library() throws -> (EditorViewModel, ModelContainer) {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])

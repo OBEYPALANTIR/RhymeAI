@@ -67,9 +67,6 @@ final class LyricsNSTextView: NSTextView {
         super.viewDidMoveToWindow()
         guard let window, resumesEditingOnAttach else { return }
         resumesEditingOnAttach = false
-        // A click on a sidebar row (a table view) opened this song: the focus stays
-        // in the list, so Delete trashes the selected song there.
-        guard !(window.firstResponder is NSTableView) else { return }
         window.makeFirstResponder(self)
     }
 

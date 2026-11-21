@@ -103,7 +103,7 @@ struct MacSongSidebar: View {
                 case .song(let row):
                     workspace.detail = .editor
                     guard let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
-                    workspace.openSong(project, in: viewModel)
+                    workspace.openSong(project, in: viewModel, bySidebarSelection: true)
                 case .oneLiners:
                     workspace.detail = .oneLiners
                 case .trash:

@@ -51,15 +51,22 @@ final class MacWorkspaceModel: ObservableObject {
         sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
     }
 
+    /// The song open the sidebar's row selection put on screen: its lyric editor
+    /// leaves the focus in the list, so Delete trashes the selected song. Every other
+    /// open issues a new token, so it never matches and the lyrics take the focus.
+    private(set) var sidebarSelectedOpen: EditorViewModel.EditorOpen?
+
     /// Shows the song in the editor pane, opening that stored row unless the editor
     /// was loaded from it. False when the open song could not be kept, so the view model stayed on it.
     @discardableResult
-    func openSong(_ project: SongProject, in viewModel: EditorViewModel) -> Bool {
+    func openSong(_ project: SongProject, in viewModel: EditorViewModel, bySidebarSelection: Bool = false) -> Bool {
         detail = .editor
         if project.persistentModelID != viewModel.loadedProjectRow || viewModel.showWelcome {
             viewModel.loadProject(project)
         }
-        return viewModel.loadedProjectRow == project.persistentModelID && !viewModel.showWelcome
+        let opened = viewModel.loadedProjectRow == project.persistentModelID && !viewModel.showWelcome
+        sidebarSelectedOpen = bySidebarSelection && opened ? viewModel.editorOpen : nil
+        return opened
     }
 
     /// File › Save: writes the open song now. When it cannot, says why.
