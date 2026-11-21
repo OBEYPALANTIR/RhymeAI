@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+// The iPhone and iPad songs drawer; the Mac window has its own sidebar.
+#if !os(macOS)
 private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
 enum ProjectsDrawerPresentation {
@@ -155,15 +157,7 @@ struct ProjectsDrawerView: View {
     }
 
     private var filteredProjects: [SongProject] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return projects }
-
-        return projects.filter { project in
-            let title = project.title.isEmpty ? "Untitled Song" : project.title
-            return title.localizedCaseInsensitiveContains(query)
-                || project.lyrics.localizedCaseInsensitiveContains(query)
-                || project.theme.localizedCaseInsensitiveContains(query)
-        }
+        SongProject.matching(projects, searchText: searchText)
     }
 
     private var filteredRecordingFolders: [RecordingFolder] {
@@ -588,7 +582,7 @@ struct ProjectsDrawerView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -1044,11 +1038,7 @@ struct ProjectsDrawerView: View {
         case .success(let urls):
             guard let url = urls.first else { return }
             do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                if viewModel.importProject(exported) {
+                if try viewModel.importSongFile(at: url) {
                     dismissAfterNavigation()
                 }
             } catch {
@@ -1064,4 +1054,21 @@ struct ProjectsDrawerView: View {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
+}
+#endif
+
+extension SongProject {
+    /// The song search of the drawer and the Mac sidebar: title (or
+    /// "Untitled Song"), lyrics and theme, ignoring case.
+    static func matching(_ projects: [SongProject], searchText: String) -> [SongProject] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return projects }
+
+        return projects.filter { project in
+            let title = project.title.isEmpty ? "Untitled Song" : project.title
+            return title.localizedCaseInsensitiveContains(query)
+                || project.lyrics.localizedCaseInsensitiveContains(query)
+                || project.theme.localizedCaseInsensitiveContains(query)
+        }
+    }
 }

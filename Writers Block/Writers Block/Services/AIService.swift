@@ -186,7 +186,7 @@ struct AIService {
                             makeTokens = { Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner) }
                         } else if Self.gemmaChoiceCleared() {
                             throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
-                        } else if #available(iOS 26.0, *) {
+                        } else if #available(iOS 26.0, macOS 26.0, *) {
                             makeTokens = { streamAppleLocalChunks(prompt: prompt) }
                         } else {
                             throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
@@ -1217,7 +1217,7 @@ struct AIService {
         return String(decoding: current.utf8.dropFirst(previous.utf8.count), as: UTF8.self)
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func streamAppleLocalChunks(prompt: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -1246,7 +1246,7 @@ struct AIService {
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func describe(_ availability: SystemLanguageModel.Availability) -> String {
         switch availability {
         case .available:
@@ -1603,7 +1603,7 @@ struct AIService {
                 if Self.gemmaChoiceCleared() {
                     throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
                 }
-                if #available(iOS 26.0, *) {
+                if #available(iOS 26.0, macOS 26.0, *) {
                     return try await callLocalRaw(
                         prompt: prompt,
                         instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object."
@@ -1681,7 +1681,7 @@ struct AIService {
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRaw(prompt: String, instructions: String) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -1727,7 +1727,7 @@ struct AIService {
             }
 
             // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, macOS 26.0, *) {
                 return try await callLocalRewrite(
                     action: action,
                     lyrics: fullLyrics,
@@ -1901,7 +1901,7 @@ struct AIService {
         return "https://generativelanguage.googleapis.com/v1beta"
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRewrite(
         action: RewriteAction,
         lyrics: String,
@@ -2000,7 +2000,7 @@ struct AIService {
         gemmaDownloadAvailable: Bool = GGUFModelService.isEngineAvailable
     ) -> Error {
         if error is CancellationError || error is AIServiceError { return error }
-        if #available(iOS 26.0, *),
+        if #available(iOS 26.0, macOS 26.0, *),
            let generationError = error as? LanguageModelSession.GenerationError,
            case .guardrailViolation = generationError {
             return AIServiceError.blockedResponse

@@ -94,11 +94,13 @@ struct OneLinerIntentsTests {
         _ = try await OpenOneLinersIntent().perform()
         #expect(router.take([.open]) == .open)
 
+        #if os(iOS)
         let owner = UUID()
         router.beginRecording(owner)
         defer { router.endRecording(owner) }
         _ = try await StopOneLinerRecordingIntent().perform()
         #expect(router.take([.stopRecording]) == .stopRecording)
+        #endif
     }
 
     @Test
@@ -180,6 +182,7 @@ struct OneLinerIntentsTests {
         #expect(router.pending == nil)
     }
 
+    #if os(iOS)
     @Test
     func aLongTranscriptStaysWellUnderTheActivityLimit() throws {
         let transcript = String(repeating: "Found the Lord in a gas station bathroom ", count: 125).prefix(5_000)
@@ -199,6 +202,7 @@ struct OneLinerIntentsTests {
         #expect(short.transcript == "Half a heart")
         #expect(short.levels == [0.12])
     }
+    #endif
 
     @Test
     func theLibraryStaysInApplicationSupport() {
@@ -233,6 +237,7 @@ struct OneLinerIntentsTests {
         #expect(OneLinerPendingAction.stopRecording.url == nil)
     }
 
+    #if os(iOS)
     @Test
     func liveActivityUpdatesGoAtMostEveryQuarterSecond() {
         let start = ContinuousClock.now
@@ -242,6 +247,7 @@ struct OneLinerIntentsTests {
         #expect(OneLinerLiveActivity.delay(since: start, now: start + .milliseconds(250)) == .zero)
         #expect(OneLinerLiveActivity.delay(since: start, now: start + .seconds(2)) == .zero)
     }
+    #endif
 
     @Test
     func launchArgumentNamesTheAction() {

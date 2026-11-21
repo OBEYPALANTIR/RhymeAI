@@ -4,7 +4,9 @@ import Testing
 
 struct RhymeMatchTextTests {
     private typealias SwiftUIKeys = AttributeScopes.SwiftUIAttributes
+    #if canImport(UIKit)
     private typealias UIKitKeys = AttributeScopes.UIKitAttributes
+    #endif
 
     private let violet = Color(hex: AppAppearanceStyle.ink.analysisRhymeHexValues[4])
 
@@ -28,7 +30,9 @@ struct RhymeMatchTextTests {
         let word = try #require(result.runs.first { $0[SwiftUIKeys.ForegroundColorAttribute.self] == violet })
         #expect(word[SwiftUIKeys.UnderlineStyleAttribute.self] == Text.LineStyle(pattern: .solid, color: violet.opacity(0.6)))
         #expect(word[SwiftUIKeys.UnderlineStyleAttribute.self] != Text.LineStyle(pattern: .solid, color: violet))
+        #if canImport(UIKit)
         #expect(word[UIKitKeys.UnderlineColorAttribute.self] == nil)
+        #endif
         #expect(word[SwiftUIKeys.FontAttribute.self] == Font.system(.body, design: .serif).weight(.semibold))
 
         let prefix = try #require(result.runs.first)

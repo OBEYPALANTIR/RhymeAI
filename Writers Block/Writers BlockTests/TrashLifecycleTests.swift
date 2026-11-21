@@ -6,6 +6,32 @@ import Testing
 struct TrashLifecycleTests {
 
     @MainActor
+    @Test func trashingAnotherSongKeepsTheOpenSongsPendingAutosave() async throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let context = harness.context
+        let open = SongProject(id: "open", title: "Open", lyrics: "first words", theme: "")
+        let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
+        context.insert(open)
+        context.insert(other)
+        try context.save()
+        viewModel.loadProject(open)
+
+        viewModel.lyrics = "first words, then more"
+        viewModel.triggerAutoSave()
+        #expect(viewModel.moveProjectToTrash(other))
+
+        // The 1s autosave, waited for up to 10s: parallel suites can hold the main actor.
+        var saved: String?
+        for _ in 0..<100 {
+            saved = try Self.fetchProjects(context).first { $0.id == "open" }?.lyrics
+            if saved == "first words, then more" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(saved == "first words, then more")
+    }
+
+    @MainActor
     @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
@@ -328,6 +354,31 @@ struct TrashLifecycleTests {
         #expect(!viewModel.permanentlyDeleteTrashedProject(trashed))
         #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
         #expect(try Self.fetchDeletions(container.mainContext).isEmpty)
+    }
+
+    @MainActor
+    @Test func expiryAskedForDuringTheLaunchCheckWaitsForItQuietly() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("LaunchExpiry-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "LaunchExpiry-\(scratch.lastPathComponent)")!)
+        container.mainContext.insert(TrashedSongProject(id: "expired", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                                        deletedAt: Date(timeIntervalSince1970: 2), deleteAfter: Date(timeIntervalSince1970: 3)))
+        try container.mainContext.save()
+
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = container.mainContext
+        // Scene activation at launch, before the recordings check has run.
+        viewModel.purgeExpiredTrashedProjects()
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
+
+        // The check runs the expiry once it succeeds.
+        await viewModel.recordingsLaunchTask?.value
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).isEmpty)
     }
 
     @MainActor

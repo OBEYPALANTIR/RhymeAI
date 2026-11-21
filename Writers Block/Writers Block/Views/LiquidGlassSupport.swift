@@ -32,7 +32,12 @@ enum RhymeAITokens {
     }
 
     enum Touch {
+        /// A finger's target on iOS; on the Mac, a pointer's: the standard row height.
+        #if os(macOS)
+        static let minimum: CGFloat = 28
+        #else
         static let minimum: CGFloat = 44
+        #endif
         static let comfortable: CGFloat = 56
         static let prominent: CGFloat = 82
     }

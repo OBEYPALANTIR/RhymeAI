@@ -461,7 +461,12 @@ final class EditorViewModel: ObservableObject {
     var showInspector: Bool { inspectorWord != nil }
 
     var singleWordSelection: (word: String, range: NSRange)? {
-        let range = selectedRange
+        Self.singleWord(in: lyrics, range: selectedRange)
+    }
+
+    /// The text in `range` when it is one word: two or more letters or
+    /// apostrophes. The Word Inspector looks up only such a range.
+    static func singleWord(in lyrics: String, range: NSRange) -> (word: String, range: NSRange)? {
         guard range.length > 0 else { return nil }
         let ns = lyrics as NSString
         guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
@@ -491,7 +496,13 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Project Management
 
-    @Published var currentProjectId: String?
+    @Published var currentProjectId: String? {
+        // Every other way the editor's song changes leaves it not loaded from a known row.
+        didSet { loadedProjectRow = nil }
+    }
+    /// The stored row `loadProject` loaded the editor from, so two rows sharing one
+    /// song id (a restore on two devices, then sync) are told apart. Read by the Mac sidebar.
+    @Published private(set) var loadedProjectRow: PersistentIdentifier?
     @Published var saveStatus: SaveStatus = .idle
 
     /// One song opened or started in the editor. `newProject` and `loadProject`
@@ -559,6 +570,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var recordingListsSuspended = false
     /// The launch check of the recordings, awaited by tests.
     private(set) var recordingsLaunchTask: Task<Void, Never>?
+    /// Launch checks of the recordings still running (a context set twice starts
+    /// two): expiry asked for meanwhile is left to them, which run it once one succeeds.
+    private var recordingsLaunchChecksRunning = 0
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -606,14 +620,24 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
+                recordingsLaunchChecksRunning += 1
+                // Each check acts only on the context it started with: one replaced
+                // meanwhile leaves deletions and expiry to the check of its successor.
+                let checkedContext = modelContext
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
                     // anything a row or the staging journal claims stays (T1.7).
-                    if let library = self.recordingLibrary, let context = self.modelContext {
-                        await library.withGate { library.clearStaging(context: context) }
+                    if let library = self.recordingLibrary, let context = checkedContext, self.modelContext === context {
+                        await library.withGate {
+                            // Again once the gate is held: a context set while this waited claims staging this one cannot see.
+                            if self.modelContext === context { library.clearStaging(context: context) }
+                        }
                     }
-                    guard await self.reconcileRecordings() else { return }
+                    var checked = false
+                    if self.modelContext === checkedContext { checked = await self.reconcileRecordings() }
+                    self.recordingsLaunchChecksRunning -= 1
+                    guard checked, self.modelContext === checkedContext else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -643,6 +667,8 @@ final class EditorViewModel: ObservableObject {
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
+    /// The song that was open when `autoSaveTask` was scheduled.
+    private var autoSaveProjectId: String?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
 
@@ -1682,6 +1708,7 @@ final class EditorViewModel: ObservableObject {
         theme = project.theme
         cursorPosition = 0
         currentProjectId = project.id
+        loadedProjectRow = project.persistentModelID
         editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
@@ -1705,9 +1732,9 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
+        // The flush cancels the open song's pending autosave; trashing another song leaves it running.
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
-        autoSaveTask?.cancel()
 
         let trashedProject = TrashedSongProject(project: project)
         removeExistingTrashEntries(id: project.id, in: context)
@@ -1788,6 +1815,10 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return }
         // One liners hold no song recordings, so they expire before the recordings check.
         try? OneLinersStore(context: context).purgeExpired()
+        // Housekeeping asked for before the launch check ran (scene activation, the
+        // Trash timer) is left to that check, which expires once it succeeds; it is
+        // not reported as a refused deletion the user never asked for.
+        guard recordingsLaunchChecksRunning == 0 else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -2252,6 +2283,8 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation()
+        // A different song is on screen, as after loadProject.
+        editorOpen = EditorOpen(isNewSong: false)
         return true
     }
 
@@ -2274,6 +2307,7 @@ final class EditorViewModel: ObservableObject {
         showTemplatesSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation(isUnsaved: true)
+        editorOpen = EditorOpen(isNewSong: false)
         triggerAutoSave()
     }
 
@@ -2318,8 +2352,12 @@ final class EditorViewModel: ObservableObject {
             return
         }
         let projectIdAtTrigger = currentProjectId
+        autoSaveProjectId = projectIdAtTrigger
         autoSaveTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            // A cancelled task leaves every state alone, even one cancelled before it first ran.
+            guard let self, !Task.isCancelled else { return }
+            // Finished: no autosave is pending. A replaced or stopped task was cancelled and leaves it.
+            defer { if !Task.isCancelled { autoSaveTask = nil } }
             guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
                 saveStatus = .idle
                 return
@@ -2328,17 +2366,41 @@ final class EditorViewModel: ObservableObject {
 
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-
-            // The editor switched projects (or cleared) during the debounce —
-            // saving now would write into the wrong project or create an empty one.
-            guard currentProjectId == projectIdAtTrigger,
-                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
-                saveStatus = .idle
-                return
-            }
-
-            _ = persistCurrentDraft(checkpoint: false)
+            runAutoSave(projectIdAtTrigger: projectIdAtTrigger)
         }
+    }
+
+    /// The autosave once its wait is over; Mac close and quit run it early.
+    /// False when the write was refused.
+    @discardableResult
+    private func runAutoSave(projectIdAtTrigger: String?) -> Bool {
+        // The editor switched projects (or cleared) during the debounce —
+        // saving now would write into the wrong project or create an empty one.
+        guard currentProjectId == projectIdAtTrigger,
+              !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            saveStatus = .idle
+            return true
+        }
+        return persistCurrentDraft(checkpoint: false)
+    }
+
+    /// A backup or restore holds the library; saves wait for it to finish and the
+    /// open song's edits go to its recovery copy meanwhile.
+    var cloudOperationHoldsEditor: Bool { activeCloudEditorOperation != nil }
+
+    /// Closing the Mac window and quitting: the waiting autosave fires now. With none
+    /// waiting nothing is written, and a failed last save is reported, not retried.
+    /// False when the open song's edits are not saved.
+    func savePendingEdit() -> Bool {
+        guard let task = autoSaveTask, !task.isCancelled else { return saveStatus != .failed }
+        task.cancel()
+        autoSaveTask = nil
+        guard runAutoSave(projectIdAtTrigger: autoSaveProjectId) else {
+            // Not every refusal marks the save failed; the next close or quit must still report it.
+            saveStatus = .failed
+            return false
+        }
+        return true
     }
 
     @discardableResult
@@ -3019,6 +3081,14 @@ final class EditorViewModel: ObservableObject {
         // Imported recordings are files, which no library save announces.
         voiceMemoService.recordingsChanged()
         scheduleAutomaticBackup()
+    }
+
+    /// A backup file the file picker could not read or the save panel could not
+    /// write, shown in the backup status line. Cancelling the panel is not one.
+    func reportBackupFileFailure(_ message: String, _ error: Error) {
+        guard (error as? CocoaError)?.code != .userCancelled else { return }
+        cloudBackupLastResultIsError = true
+        cloudBackupStatusText = message
     }
 
     /// The "Export all songs" zip, after saving the open song.

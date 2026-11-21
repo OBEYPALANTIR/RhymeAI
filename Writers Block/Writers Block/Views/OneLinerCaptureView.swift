@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum OneLinerCaptureMode: Identifiable {
     case record
@@ -145,8 +147,9 @@ struct OneLinerCaptureView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background, recorder.isRecording || recorder.isStarting else { return }
             let wasRecording = recorder.isRecording
-            recorder.stop()
-            if wasRecording { recorder.notice = "Recording stopped when Writers Block went to the background. The take so far is kept." }
+            // A failed stop's notice, or the tail warning, stays.
+            guard recorder.stop(), wasRecording, recorder.notice != OneLinerRecorder.tailFailureNotice else { return }
+            recorder.notice = "Recording stopped when Writers Block went to the background. The take so far is kept."
         }
         .task {
             if case .edit(let line) = mode { text = line.text }
@@ -328,6 +331,11 @@ struct OneLinerCaptureView: View {
         if recorder.isRecording || recorder.isStarting {
             // The audio failed to write: stay open so the notice is read before saving words alone.
             guard recorder.stop(endingActivity: false) else { return }
+            // The end of the take may be cut off: stay open so the warning is read; Save again keeps it.
+            if recorder.notice == OneLinerRecorder.tailFailureNotice {
+                recorder.endActivity(.stopped)
+                return
+            }
         }
         guard canSave else {
             recorder.endActivity(.stopped)
@@ -346,7 +354,9 @@ struct OneLinerCaptureView: View {
             return
         }
         saved = true
+        #if canImport(UIKit)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
         dismiss()
     }
 

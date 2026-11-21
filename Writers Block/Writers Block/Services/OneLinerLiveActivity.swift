@@ -1,3 +1,4 @@
+#if os(iOS)
 import ActivityKit
 import Foundation
 
@@ -99,3 +100,15 @@ final class OneLinerLiveActivity {
         return max(.zero, minimumInterval - (now - last))
     }
 }
+#else
+import Foundation
+
+/// macOS has no Live Activities: the recorder's start, update and end do nothing.
+final class OneLinerLiveActivity {
+    enum Phase { case recording, saved, discarded, stopped }
+
+    func start(startedAt: Date, levels: [Float]) {}
+    func update(transcript: String, levels: [Float]) {}
+    func end(_ phase: Phase) {}
+}
+#endif
