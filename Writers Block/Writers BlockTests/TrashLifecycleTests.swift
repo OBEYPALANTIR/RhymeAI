@@ -32,6 +32,29 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
+    @Test func aNewTitledSongWithNoLyricsReopenedFromItsRowMovesToTrash() throws {
+        // Given: New Song, a title and no lyrics, saved, then reopened from its row after another song
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let context = harness.context
+        let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
+        context.insert(other)
+        try context.save()
+        viewModel.newProject()
+        viewModel.title = "ZZ Test Delete 10"
+        #expect(viewModel.flushCurrentDraft())
+        let made = try #require(try Self.fetchProjects(context).first { $0.title == "ZZ Test Delete 10" })
+        viewModel.loadProject(other)
+        viewModel.loadProject(made)
+        #expect(viewModel.currentProjectId == made.id && viewModel.lyrics.isEmpty)
+
+        // When / Then: it goes to Trash and leaves the list
+        #expect(viewModel.moveProjectToTrash(made))
+        #expect(try Self.fetchProjects(context).map(\.title) == ["Other"])
+        #expect(try Self.fetchTrash(context).map(\.title) == ["ZZ Test Delete 10"])
+    }
+
+    @MainActor
     @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
