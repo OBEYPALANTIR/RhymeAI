@@ -3271,7 +3271,7 @@ struct BackupCoreTests {
         await viewModel.importBackupFile(archive)
 
         #expect(viewModel.cloudBackupLastResultIsError)
-        #expect(viewModel.cloudBackupStatusText == "Import failed: Two songs on this device share the ID pair. The merge into this device's song library was stopped.. Your open edits remain in the local library.")
+        #expect(viewModel.cloudBackupStatusText == "Import failed: Two songs on this device share the ID pair. The merge into this device's song library was stopped. Your open edits remain in the local library.")
         // Pending in the editor's context, and durable in a fresh one.
         let held = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first { $0.id == repaired.id })
         #expect(held.uploadedAt == Date(timeIntervalSince1970: 9_000) && held.precedenceRepaired)
@@ -3307,7 +3307,7 @@ struct BackupCoreTests {
 
         let description = "Two songs on this device share the ID pair. The merge into this device's song library was stopped."
         #expect(viewModel.cloudBackupLastResultIsError)
-        #expect(viewModel.cloudBackupStatusText == "Restore failed: \(description). Your open edits remain in the local library.")
+        #expect(viewModel.cloudBackupStatusText == "Restore failed: \(description) Your open edits remain in the local library.")
         #expect(harness.service.backgroundBackupFailureDescription == description)
 
         // The backup `finishAutomaticBackupRun` scheduled after the failure: a plain backup, which never applies.
@@ -3317,6 +3317,41 @@ struct BackupCoreTests {
         #expect(harness.service.backgroundBackupFailureDescription == nil)
         #expect(!viewModel.cloudBackupLastResultIsError)
         #expect(viewModel.cloudBackupStatusText == "")
+    }
+
+    /// A failure reason that already ends in a full stop keeps one; a reason without one gains one.
+    @MainActor
+    @Test(arguments: [
+        ("same-id", "Restore failed: Two songs on this device share the ID pair. The merge into this device's song library was stopped. Your open edits remain in the local library."),
+        ("missing-audio", "Restore failed: 1 recording in the backup has no audio on Google Drive: lost.m4a. Your open edits remain in the local library."),
+    ])
+    func editorRestoreFailureStatusEndsTheReasonWithOneFullStop(seed: String, expected: String) async throws {
+        let harness = try await makeHarness()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        viewModel.modelContext = harness.context
+        let open = SongProject(id: "open-song", title: "Open", lyrics: "open words", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        harness.context.insert(open)
+        if seed == "same-id" {
+            try Self.seedSameIdPair(harness, trashed: false)
+            harness.drive.seed(name: SyncBlob.driveFileName, content: try Self.incomingArchive())
+        } else {
+            let entry = SyncRecording(projectId: "song", fileName: "lost.m4a", bytes: 3, sha256: RecordingBackupManifest.sha256Hex(Data([1, 2, 3])))
+            harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+                projects: [SyncSongProject(id: "song", title: "Song", lyrics: "words", theme: "", updatedAt: Date(timeIntervalSince1970: 1))],
+                recordings: [entry]
+            ).encodedManifest())
+        }
+        viewModel.loadProject(open)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == expected)
+
+        // Cancel the backup scheduled after the failure, still in its delay, so none runs after the test.
+        await viewModel.disconnectGoogleDrive()
+        #expect(viewModel.cloudBackupStatusText == "Disconnected from Google Drive.")
     }
 
     @MainActor
