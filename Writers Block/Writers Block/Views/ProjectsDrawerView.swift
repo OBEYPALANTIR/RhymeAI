@@ -982,7 +982,7 @@ struct ProjectsDrawerView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(appearance.palette.error.opacity(0.85))
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
             }

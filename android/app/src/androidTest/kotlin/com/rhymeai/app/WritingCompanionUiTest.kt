@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rhymeai.app.data.model.RewriteAction
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIProvider
@@ -61,12 +62,75 @@ class WritingCompanionUiTest {
         }
     }
 
+    @OptIn(ExperimentalTestApi::class)
     @Test fun openingTheNotebookKeepsTheSelectionForKeepSelectedLyrics() {
-        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(0, 11))) }
+        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric")) }
+        // Select in the focused field, as a touch does, so opening the notebook takes focus away from it.
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 11))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 11) }
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
         composeRule.onNodeWithText("Song Notebook").performClick()
         composeRule.onNodeWithText("Keep selected lyrics").assertIsEnabled().performClick()
         onMain { assertEquals(listOf("first lyric"), vm.songWorkspace.alternates.map { it.text }) }
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(0, 11)))
+            vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric", TextRange(15)))
+            assertNull("A cursor away from the selection's ends clears it", vm.pendingRewriteRange)
+        }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun movingTheCursorOntoTheSelectionEndInTheFocusedFieldClearsIt() {
+        onMain { vm.onLyricsChanged(TextFieldValue("first lyric\nsecond lyric")) }
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 11))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 11) }
+        editor.performTextInputSelection(TextRange(11))
+        waitUntil { vm.lyricsFieldValue.selection == TextRange(11) }
+        onMain { assertNull(vm.pendingRewriteRange) }
+    }
+
+    @Test fun blankSelectionGetsNoRangeWhenTheNotebookTakesFocus() {
+        val lyrics = "first lyric\n  \nsecond lyric"
+        onMain {
+            vm.onLyricsChanged(TextFieldValue(lyrics))
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(12, 14)))
+            vm.showSongNotebook = true
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(14)))
+            assertNull(vm.pendingRewriteRange)
+            vm.showSongNotebook = false
+        }
+    }
+
+    @Test fun reopenedSongKeepsItsRestoredSelectionWhenFocusLeaves() {
+        val lyrics = "first lyric\nsecond lyric"
+        onMain {
+            vm.onTitleChanged("Restored Selection QA")
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(0, 11)))
+            vm.rememberEditorPosition()
+            vm.newProject()
+        }
+        waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
+        val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Restored Selection QA" } }
+        waitUntil { !vm.savingBeforeNavigation }
+        onMain { vm.loadProject(saved) }
+        waitUntil { vm.currentProjectId == saved.id && !vm.openingSong && !vm.savingBeforeNavigation }
+        onMain {
+            assertEquals(TextRange(0, 11), vm.lyricsFieldValue.selection)
+            assertNull(vm.pendingRewriteRange)
+            // Opening the notebook takes focus, which collapses the cursor onto the selection's end.
+            vm.showSongNotebook = true
+            vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(11)))
+            assertEquals(TextRange(0, 11), vm.pendingRewriteRange)
+            vm.keepSelectedLyrics()
+            assertEquals(listOf("first lyric"), vm.songWorkspace.alternates.map { it.text })
+            vm.moveProjectToTrash(saved.id)
+        }
+        waitUntil { vm.trashedProjects.any { it.project.id == saved.id } && !vm.savingBeforeNavigation }
+        onMain { vm.permanentlyDeleteTrashedProject(saved.id) }
     }
 
     @Test fun localUnavailableDisablesSuggestionsAndLinksToSetup() {
@@ -84,6 +148,26 @@ class WritingCompanionUiTest {
             .assertIsEnabled()
             .performClick()
         composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+    }
+
+    @Test fun rewriteWithoutLocalModelOffersSetupInsteadOfRetry() {
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("A quiet line", TextRange(0, 7)))
+            vm.saveProvider(AIProvider.LOCAL)
+            vm.unloadLocalModel()
+            vm.localModelError = null
+            vm.localModelLoading = false
+        }
+        // The unload finishes off the main thread; the rewrite must see no model ready.
+        waitUntil { vm.selectedProvider == AIProvider.LOCAL && !vm.localReady && !vm.localModelLoading }
+        onMain { vm.requestRewrite(RewriteAction.REPHRASE) }
+        val bar = hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))
+        composeRule.onNode(hasText(REWRITE_NEEDS_MODEL) and bar).assertIsDisplayed()
+        composeRule.onNode(hasText("Cancel") and bar).assertIsDisplayed()
+        composeRule.onAllNodes(hasText("Retry") and bar).assertCountEquals(0)
+        composeRule.onNode(hasText("Set up model") and bar).assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+        onMain { assertTrue(vm.showSettingsDialog && vm.settingsOpensAiSetup) }
     }
 
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {

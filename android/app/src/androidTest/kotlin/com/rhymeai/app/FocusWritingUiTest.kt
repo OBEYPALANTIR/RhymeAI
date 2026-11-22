@@ -2,6 +2,7 @@ package com.rhymeai.app
 
 import android.graphics.Bitmap
 import android.os.SystemClock
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.text.TextRange
@@ -47,7 +48,12 @@ class FocusWritingUiTest {
         composeRule.onNodeWithTag("songActionsMenuButton").performClick()
         composeRule.onNodeWithTag("songRecordings").assertIsDisplayed().performClick()
         waitUntil { composeRule.onAllNodesWithTag("recordingsDone").fetchSemanticsNodes().isNotEmpty() }
+        // The visible placeholder names the empty field; a description would read it twice.
         composeRule.onNodeWithText("Search recordings").assertIsDisplayed()
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription))
+            .performTextInput("zz")
+        // Once typed text hides the placeholder, the field keeps its name.
+        composeRule.onNode(hasSetTextAction() and hasText("zz")).assertContentDescriptionEquals("Search recordings")
         composeRule.onNodeWithTag("importRecording").assertIsDisplayed()
         composeRule.onNodeWithText("Record", substring = false).assertDoesNotExist()
         composeRule.onNodeWithTag("recordingsDone").assertIsDisplayed().performClick()

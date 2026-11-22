@@ -126,6 +126,7 @@ import com.rhymeai.app.service.VoiceMemoService
 import com.rhymeai.app.ui.navigation.OneLinerAction
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalHighTextContrastEnabled
 import com.rhymeai.app.ui.components.chromeEdgePadding
 import com.rhymeai.app.ui.components.chromeSide
 import com.rhymeai.app.ui.theme.SurfaceLevel
@@ -231,7 +232,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     shape = RoundedCornerShape(DesignTokens.Radius.lg),
                     // Raised: a tonal slab; the stroke appears only for focus.
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) colorScheme.outlineVariant else Color.Transparent,
                         focusedBorderColor = colorScheme.primary,
                         unfocusedContainerColor = colorScheme.surfaceContainerLow,
                         focusedContainerColor = colorScheme.surfaceContainerLow
@@ -297,6 +298,7 @@ fun OneLinersScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 val hand = viewModel.dominantHand
                 CaptureButtons(
                     hand = hand,
+                    recording = captures.current?.recorder?.isRecording == true,
                     onType = { openCapture(CaptureMode.Type) },
                     onRecord = { openCapture(CaptureMode.Record) },
                     modifier = Modifier
@@ -477,14 +479,15 @@ private fun LineRow(
 }
 
 @Composable
-private fun CaptureButtons(hand: DominantHand, onType: () -> Unit, onRecord: () -> Unit, modifier: Modifier = Modifier) {
+private fun CaptureButtons(hand: DominantHand, recording: Boolean, onType: () -> Unit, onRecord: () -> Unit, modifier: Modifier = Modifier) {
     val colorScheme = MaterialTheme.colorScheme
     val record: @Composable () -> Unit = {
         Surface(
             onClick = onRecord,
             shape = RoundedCornerShape(DesignTokens.Radius.pill),
-            color = recordingAccentColor(colorScheme.isDarkScheme()),
-            contentColor = colorScheme.background,
+            // The action fill at rest, like UnBlock; the recording accent only while a line is recording.
+            color = if (recording) recordingAccentColor(colorScheme.isDarkScheme()) else colorScheme.primary,
+            contentColor = if (recording) colorScheme.background else colorScheme.onPrimary,
             modifier = Modifier.heightIn(min = DesignTokens.Rhythm.primary)
                 .floatingChromeShadow(RoundedCornerShape(DesignTokens.Radius.pill))
                 .semantics { contentDescription = "Record a one liner" }

@@ -1,6 +1,7 @@
 package com.rhymeai.app
 
 import android.app.Application
+import com.rhymeai.app.ui.screens.modalKeepsRewriteSelection
 import com.rhymeai.app.ui.theme.DesignTokens
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -155,6 +156,7 @@ internal object SongOpenTestHooks {
 /** Lets a test hold a saved model's, or an explicit Use's, validation before it runs (null in the app). */
 /** Persisted when the selected local model was deleted: restore must not pick another one. */
 private const val NO_LOCAL_MODEL_SELECTION = ""
+internal const val REWRITE_NEEDS_MODEL = "Choose a local model in Settings to rewrite."
 
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -1466,6 +1468,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rewritePreview by mutableStateOf<String?>(null)
     var rewriteOriginal by mutableStateOf<String?>(null)
     var rewriteError by mutableStateOf<String?>(null)
+    /** The rewrite failed for want of a local model and none is ready yet: the bar offers setup, not Retry. */
+    val rewriteNeedsModelSetup: Boolean get() = rewriteError == REWRITE_NEEDS_MODEL && !localReady
     var pendingRewriteRange by mutableStateOf<TextRange?>(null)
         private set
     private var rewriteRange: TextRange? = null
@@ -1949,7 +1953,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rewriteError = null
         rewriteLoading = false
         if (selectedProvider == AIProvider.LOCAL && !localReady) {
-            rewriteError = if (localModelLoading) "Wait for your local model to finish loading." else "Choose a local model in Settings to rewrite."
+            rewriteError = if (localModelLoading) "Wait for your local model to finish loading." else REWRITE_NEEDS_MODEL
             return
         }
         if (!authorizeCloudAI("rewrite") { beginRewrite(action, range, original, rejectedCandidates) }) return
@@ -2846,6 +2850,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (hasActiveRewrite || openingSong) return
         val previousText = lyricsFieldValue.text
         val nextValue = newValue.withValidRanges()
+        // Focus leaving for a modal that uses the selection collapses the cursor onto one of its ends; keep the range
+        // through that. A selection restored on song open never set the range, so the field's own selection stands in.
+        val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners)) {
+            // Collapsed or blank selections get no range, as in the expanded-selection branch below.
+            pendingRewriteRange ?: lyricsFieldValue.selection.takeUnless {
+                val text = lyricsFieldValue.text
+                text.substring(it.min.coerceIn(0, text.length), it.max.coerceIn(0, text.length)).isBlank()
+            }
+        } else null
         if (nextValue.text != previousText || nextValue.selection != lyricsFieldValue.selection) cancelEditorAIWork()
         if (nextValue.text != previousText) {
             suggestionInsertion = null
@@ -2876,11 +2889,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        pendingRewriteRange?.let { pendingRange ->
-            if (nextSelection.start != pendingRange.min && nextSelection.start != pendingRange.max) {
-                pendingRewriteRange = null
-            }
-        }
+        pendingRewriteRange = (modalRange ?: pendingRewriteRange)?.takeIf { nextSelection.start == it.min || nextSelection.start == it.max }
         lyricsFieldValue = nextValue
         rememberEditorPosition()
     }
