@@ -1397,7 +1397,6 @@ final class BackupService {
         // once: the deferred reconcile handles the proof those reads contradict.
         let others = look.filter { $0.file.id != target.id }
         var unchanged = false
-        var stopped = false
         do {
             let after = try await stableLook(accessToken: accessToken) { _, blob in observe(blob) }
             let afterOthers = after.filter { $0.file.id != target.id }
@@ -1405,9 +1404,8 @@ final class BackupService {
                 && afterOthers.count == others.count
                 && zip(afterOthers, others).allSatisfy { $0.file == $1.file && $0.blob.manifestSha256 == $1.blob.manifestSha256 }
         } catch is CancellationError {
-            stopped = true
+            throw CancellationError()
         } catch {}
-        if stopped { throw CancellationError() }
         // Duplicate manifests are kept and gathered on every run, never deleted: another device
         // may write one after our listing, and Drive has no conditional delete to protect that write.
 
@@ -1917,7 +1915,7 @@ final class BackupService {
     /// Brings the saved delete proof in line with what a run observed. Per id, an observed
     /// entry with the proof's digest and length that no deletion covers clears it; otherwise
     /// such an entry with a repaired time replaces it. With no deletions (a run that ends
-    /// before its verified write), such an entry at another recorded time clears it, which can
+    /// before its verified write), such an entry at another recorded time or under another song clears it, which can
     /// only keep audio. It never throws, so every exit of a run can apply it.
     private func reconcileProof(observed: [String: [SyncRecording]], deletions: [SyncDeletion]?) {
         guard var proven = provenCovered, !proven.isEmpty else { return }
@@ -1925,7 +1923,8 @@ final class BackupService {
             let same = observed[id, default: []].filter { $0.sha256 == proof.sha256 && $0.bytes == proof.bytes }
             func contradicts(_ entry: SyncRecording) -> Bool {
                 guard let deletions else {
-                    return !entry.precedenceRepaired && entry.uploadedAt.epochMilliseconds != proof.uploadedAt.epochMilliseconds
+                    return !entry.precedenceRepaired
+                        && (entry.projectId, entry.uploadedAt.epochMilliseconds) != (proof.projectId, proof.uploadedAt.epochMilliseconds)
                 }
                 return !deletions.contains {
                     $0.covers(projectId: entry.projectId, recordingId: id, sha256: entry.sha256, at: entry.uploadedAt, repaired: entry.precedenceRepaired)
