@@ -220,8 +220,10 @@ class BackupFlowInstrumentedTest {
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
         instrumentation.runOnMainSync { vm.backUpNow() }
         val detail = { "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }
-        // The save queues its own automatic backup. When it lands after "Back up now" started, the run ends Pending
-        // behind the 30 s debounce; back up again (read on the main thread) so no queued backup leaks into the test.
+        // The save queues its own automatic backup. When it lands while "Back up now" runs, the run ends Pending
+        // behind the 30 s debounce; a Pending seen here (read on the main thread) is drained by backing up again.
+        // shortcut: a save collected after this check still queues a backup the test can see; no observable state proves
+        // the collector ran (status stays Paused when it schedules), so closing that needs a production hook.
         waitUntil(detail) { vm.backupStatus is BackupStatus.Connected || vm.backupStatus == BackupStatus.Pending }
         instrumentation.runOnMainSync { if (vm.backupStatus == BackupStatus.Pending) vm.backUpNow() }
         waitUntil(detail) { vm.backupStatus is BackupStatus.Connected }
