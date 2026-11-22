@@ -783,7 +783,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // replaces them keeps them as a new song, also when the app dies in between.
             val songId = currentProjectId
             val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingProjectCreationIds }
-            val edited = stored != null && createUntitledProjectSnapshot().let {
+            // Words this editor showed untouched while another window changed the song are no edit: nothing is written over that.
+            val untouched = staleEditorWords == (songId to Triple(title, lyrics, theme))
+            val edited = stored != null && !untouched && createUntitledProjectSnapshot().let {
                 stored.title != it.title || stored.lyrics != it.lyrics || stored.theme != it.theme
             }
             // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
@@ -792,7 +794,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
-            val flush = try { startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
+            val flush = try { if (untouched) null else startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
             if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
@@ -817,6 +819,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private var flushingHeldDraft = false
+    private var staleEditorWords: Pair<String?, Triple<String, String, String>>? = null
+    private fun editorShows(row: SongProject) = row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme
     private var opensInFlight = 0
     private var draftWritesInFlight = 0
 
@@ -1860,6 +1864,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 try {
                     repo.projectsFlow.collect { stored ->
+                        // The open song changed elsewhere (another window) while this editor was untouched: its words are not an edit.
+                        val openId = currentProjectId
+                        val before = projects.firstOrNull { it.id == openId }
+                        val after = stored.firstOrNull { it.id == openId }
+                        if (before != null && after != null && editorShows(before) && !editorShows(after)) staleEditorWords = openId to Triple(title, lyrics, theme)
                         val pending = projects.filter { it.id in pendingProjectCreationIds &&
                             stored.none { saved -> saved.id == it.id } }
                         projects = pending + stored

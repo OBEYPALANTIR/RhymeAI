@@ -661,6 +661,31 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** Another window saved W2 while this editor still showed W1 untouched: an import must not write W1 back. */
+    @Test fun anImportWithAnUntouchedEditorKeepsWordsAnotherWindowSaved() {
+        val vm = openSongInEditor()
+        val zip = java.io.File(context.cacheDir, "unrelated.zip")
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(SongProject("unrelated", "Unrelated", "other words", "", 100L))), emptyList(), 0L, "test"
+            )
+        }
+        try {
+            runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = 200L) else it }) }
+            waitUntil({ "view model ${vm.projects}" }) { vm.projects.any { it.id == openSong.id && it.lyrics == newerWords } }
+            assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil({ "held ${vm.editorHeld} editor ${vm.lyrics}" }) { !vm.editorHeld && vm.lyrics == newerWords }
+            val songs = runBlocking { repo.projectsFlow.first() }
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            assertEquals(setOf(openSong.id, "unrelated"), songs.map { it.id }.toSet())
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
     @Test fun aTrashRestoreOfTheOpenSongsIdKeepsItAndReturnsTheTrashCopyAsANewSong() {
         val vm = openSongInEditor(trash = listOf(TrashedSongProject(openSong.copy(lyrics = newerWords, updatedAt = 200L), deletedAt = 300L)))
         val notebook = com.rhymeai.app.data.model.SongWorkspace(checkpointAt = 123L)
