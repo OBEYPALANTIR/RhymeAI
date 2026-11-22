@@ -1120,7 +1120,11 @@ class DriveSyncService(
 
     suspend fun backUp(repository: ProjectRepository): SyncResult = run(repository, Mode.BACKUP, null)
 
-    suspend fun restore(repository: ProjectRepository): SyncResult = run(repository, Mode.RESTORE, null)
+    /** [aroundCommit] wraps only the local commit (no network or download runs inside it); it may refuse by throwing. */
+    suspend fun restore(
+        repository: ProjectRepository,
+        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
+    ): SyncResult = run(repository, Mode.RESTORE, null, aroundCommit)
 
     /**
      * Adds the songs of one earlier manifest version to this device as new songs, each with its
@@ -1373,7 +1377,12 @@ class DriveSyncService(
         revoked
     }
 
-    private suspend fun run(repository: ProjectRepository, mode: Mode, typedPassphrase: CharArray?): SyncResult =
+    private suspend fun run(
+        repository: ProjectRepository,
+        mode: Mode,
+        typedPassphrase: CharArray?,
+        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
+    ): SyncResult =
         withContext(Dispatchers.IO) {
             guarded({ it }) {
                 val token = when (val auth = authorizer.authorize()) {
@@ -1411,7 +1420,8 @@ class DriveSyncService(
                     // tombstones resolve against all of them at once.
                     extraRemote = legacy?.let(::legacyInputs),
                     requireRemote = mode == Mode.RESTORE,
-                    unlistable = legacy?.recordings.orEmpty().map { it.identityKey }.filterNot { it in move?.moved.orEmpty() }.toSet()
+                    unlistable = legacy?.recordings.orEmpty().map { it.identityKey }.filterNot { it in move?.moved.orEmpty() }.toSet(),
+                    aroundCommit = aroundCommit
                 ) ?: return@guarded SyncResult.NoBackup
 
                 var migrated = false
@@ -1492,7 +1502,8 @@ class DriveSyncService(
         applyLocally: Boolean,
         extraRemote: SyncBlob?,
         requireRemote: Boolean,
-        unlistable: Set<String> = emptySet()
+        unlistable: Set<String> = emptySet(),
+        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
     ): PushOutcome? {
         // Every input seen by an earlier attempt (its local, remote and any conflicting
         // read-back) is carried forward unresolved, so nothing seen once is dropped.
@@ -1665,8 +1676,11 @@ class DriveSyncService(
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
                 // The apply needs the last reconciliation to still hold (it throws otherwise).
-                RecordingTransitions.reconcile(repository, filesDir)
-                committed = repository.applySyncResult(gathered, base)
+                val commit: suspend () -> Unit = {
+                    RecordingTransitions.reconcile(repository, filesDir)
+                    committed = repository.applySyncResult(gathered, base)
+                }
+                if (aroundCommit != null) aroundCommit(commit) else commit()
                 quarantineDeletedRecordings(repository, filesDir)
                 // What is actually here now, not what the manifest lists.
                 val committedIds = committed.recordings.mapTo(HashSet()) { it.id }

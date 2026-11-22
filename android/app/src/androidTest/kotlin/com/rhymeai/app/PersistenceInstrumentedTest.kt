@@ -459,6 +459,58 @@ class PersistenceInstrumentedTest {
 
 
     @Test
+    fun aRelaunchRightAfterARestoreCommitShowsTheCommittedWords() {
+        val original = SongProject("changed-under-editor", "Original", "old lyric", "old theme", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            // The process ends after this commit, before any editor reloads.
+            repo.applySyncResult(
+                com.rhymeai.app.data.sync.SyncBlob(projects = listOf(original.copy(lyrics = "restored lyric", updatedAt = 200L))),
+                repo.snapshotLocalSyncBase()
+            )
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(original.id to "restored lyric", viewModel.currentProjectId to viewModel.lyrics)
+    }
+
+    @Test
+    fun aRelaunchRightAfterARestoreTrashedTheSongShowsAnEmptyEditor() {
+        val original = SongProject("trashed-under-editor", "Original", "old lyric", "old theme", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.applySyncResult(
+                com.rhymeai.app.data.sync.SyncBlob(trashed = listOf(com.rhymeai.app.data.model.TrashedSongProject(original, 200L))),
+                repo.snapshotLocalSyncBase()
+            )
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(Triple<String?, String, String>(null, "", ""), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
+    }
+
+    @Test
+    fun startupStillShowsEditorWordsSavedApartFromTheSong() {
+        val original = SongProject("legacy-editor-words", "Original", "stored lyric", "", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveEditorState(original.title, "draft words saved apart", original.theme)
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(original.id to "draft words saved apart", viewModel.currentProjectId to viewModel.lyrics)
+    }
+
+    @Test
+    fun startupKeepsTheBlankTitleOfAnUnchangedSong() {
+        val untitled = SongProject("blank-title", "Untitled Song", "some words", "", 100L)
+        runBlocking { repo.saveActiveState(untitled, true, "", untitled.lyrics, "") }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(Triple<String?, String, String>(untitled.id, "", "some words"), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
+    }
+
+    @Test
     fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {
         val model = SavedLocalModel(
             id = "custom-night-drive",

@@ -1090,7 +1090,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
                         // The song that is leaving for another one takes no input.
-                        readOnly = viewModel.openingSong,
+                        readOnly = viewModel.openingSong || viewModel.editorHeld,
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1251,7 +1251,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 }
                             },
                             onTextLayout = { lyricsTextLayout = it },
-                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong,
+                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong || viewModel.editorHeld,
                             textStyle = lyricsTextStyle.copy(color = colorScheme.onBackground),
                             visualTransformation = analysisTransformation,
                             cursorBrush = SolidColor(colorScheme.primary),
