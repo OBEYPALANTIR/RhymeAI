@@ -2666,6 +2666,19 @@ class BackupServiceTest {
         assertEquals(clock, remote().projects.single { it.id == "x" }.updatedAt)
     }
 
+    /** The current backup is live: recovery records its first sightings as sync would, and later syncs keep them. */
+    @Test
+    fun recoveryRecordsFirstSightingsOfTheCurrentBackupAsSyncDoes() = runBlocking<Unit> {
+        putRemote(SyncBlob(projects = listOf(song("old"))))
+        putRemote(SyncBlob(projects = listOf(song("c", updatedAt = 0L))))
+        val recoveredAt = clock
+        assertEquals(1, recoverOldest(service, repository).songsAdded)
+
+        clock += 60_000L
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(recoveredAt, remote().projects.single { it.id == "c" }.updatedAt)
+    }
+
     /** The oldest listed revision (A's backup); listing asks nothing of Drive but the list. */
     private suspend fun openOldest(service: DriveSyncService): BackupRevision {
         val pinsBefore = drive.pinnedRevisions()

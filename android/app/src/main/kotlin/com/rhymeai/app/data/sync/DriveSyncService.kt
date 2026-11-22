@@ -1127,7 +1127,8 @@ class DriveSyncService(
      * recordings, under recovered ids (new ids derived from the revision and the old id). A song
      * this device or the current backup holds (active or in Trash) is left out and counted as
      * already here, so no tombstone, Trash entry or other device's edit of the old id touches
-     * what is added, and nothing existing changes. A run stopped part-way is finished by the next
+     * what is added, and nothing existing changes (missing times here and in the current backup get
+     * their first-seen times, as sync gives them). A run stopped part-way is finished by the next
      * recovery of the same revision: it finds its songs by their recovered ids and attaches the
      * takes still missing. Drive is only read, except that the chosen revision is kept forever
      * (Drive's condition for reading it). The next backup uploads the new songs as new entries.
