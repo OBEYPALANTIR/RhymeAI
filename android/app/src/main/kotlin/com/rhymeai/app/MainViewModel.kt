@@ -602,14 +602,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (!saved) triggerAutoSave()
                 }
             } else {
-                val revisionAtSend = editRevision
                 val wordsAtSend = lyrics
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
                     ?: return "That song is no longer in your library."
-                // The song is the editor's (behind the start menu): its buffer follows the stored song, unless it was
-                // edited meanwhile. Those edits stay unsaved and their next save wins over the appended line, as before.
-                // Only part of the song is loaded here, so the editor is not marked saved.
-                if (currentProjectId == project.id && editRevision == revisionAtSend && lyrics == wordsAtSend) {
+                // The song is the editor's (behind the start menu): its words follow the stored song, unless they were
+                // typed over meanwhile. Typed words stay unsaved and their next save wins over the appended line, as before.
+                // Only the words are loaded here, so a title or theme edit stays unsaved too: the editor is not marked saved.
+                if (currentProjectId == project.id && lyrics == wordsAtSend) {
                     songs.firstOrNull { it.id == project.id }?.let {
                         lyricsFieldValue = TextFieldValue(it.lyrics)
                         resetLyricsHistory()

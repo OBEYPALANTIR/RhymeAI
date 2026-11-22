@@ -675,7 +675,8 @@ class BackupFlowInstrumentedTest {
         try {
             // The import starts at once, whether or not this view model has seen the other window's save yet.
             instrumentation.runOnMainSync {
-                runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = 200L) else it }) }
+                // What another window's save writes: the row and the saved editor state.
+                runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
                 assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
                 vm.importBackup(android.net.Uri.fromFile(zip))
             }
@@ -761,7 +762,7 @@ class BackupFlowInstrumentedTest {
         return line
     }
 
-    /** A title edited while a one-liner's send was suspended is not marked saved by its callback: an import keeps it. */
+    /** A title edited while a one-liner's send was suspended is not marked saved by its callback: an import keeps it and the line. */
     @Test fun aTitleEditedWhileAOneLinerIsSentIsSavedByAnImport() {
         val vm = openSongInEditor()
         val zip = unrelatedArchive()
@@ -776,6 +777,8 @@ class BackupFlowInstrumentedTest {
             waitUntil { !vm.editorHeld }
             instrumentation.waitForIdleSync()
             assertEquals("edited title" to "edited title", storedOpenSong().title to vm.title)
+            // The words were not touched: the sent line is in them, so the hold's save keeps it.
+            assertTrue("row ${storedOpenSong()}", storedOpenSong().lyrics.contains("a sent line"))
         } finally {
             zip.delete()
             line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
