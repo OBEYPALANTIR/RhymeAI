@@ -217,16 +217,12 @@ class BackupFlowInstrumentedTest {
         compose.onNodeWithText("Not now").performClick()
         waitUntil { vm.backupStatus == BackupStatus.Paused(2) }
         assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
+        assertFalse("no automatic backup queued before the save", onMain { vm.autoBackupPending })
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
+        // The save queues its own automatic backup; once it is queued, "Back up now" runs it, so none is left behind.
+        waitUntil({ "the save's automatic backup was never queued" }) { onMain { vm.autoBackupPending } }
         instrumentation.runOnMainSync { vm.backUpNow() }
-        val detail = { "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }
-        // The save queues its own automatic backup. When it lands while "Back up now" runs, the run ends Pending
-        // behind the 30 s debounce; a Pending seen here (read on the main thread) is drained by backing up again.
-        // shortcut: a save collected after this check still queues a backup the test can see; no observable state proves
-        // the collector ran (status stays Paused when it schedules), so closing that needs a production hook.
-        waitUntil(detail) { vm.backupStatus is BackupStatus.Connected || vm.backupStatus == BackupStatus.Pending }
-        instrumentation.runOnMainSync { if (vm.backupStatus == BackupStatus.Pending) vm.backUpNow() }
-        waitUntil(detail) { vm.backupStatus is BackupStatus.Connected }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
     }
 
     @After fun restore() {
@@ -580,6 +576,12 @@ class BackupFlowInstrumentedTest {
 
     private fun waitForText(text: String) =
         compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun <T> onMain(read: () -> T): T {
+        var value: T? = null
+        instrumentation.runOnMainSync { value = read() }
+        @Suppress("UNCHECKED_CAST") return value as T
+    }
 
     private fun waitUntil(detail: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 10_000
