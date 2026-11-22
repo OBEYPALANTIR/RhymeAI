@@ -802,6 +802,7 @@ extension OneLinerRouterSuites {
                 #expect(window.firstResponder === window, "the focused lyrics left with the editor")
             }
             #expect(window.firstResponder !== outline)
+            let before = window.firstResponder
 
             // When: the sidebar selects a song (songs are the last rows, newest first)
             let opening = start == .backFromTrashToTheOpenSong ? a : b
@@ -812,11 +813,12 @@ extension OneLinerRouterSuites {
             let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
             if start == .refusedOpen {
                 #expect(viewModel.loadedProjectRow == a.persistentModelID, "the refused open keeps Alpha")
-                #expect(window.firstResponder !== outline, "Delete would trash Alpha: \(responder)")
-                // Give the edit its library back and save it, or closing the window reports
-                // the unsaved song in a modal alert.
+                #expect(window.firstResponder === before, "the lyrics keep the keyboard, not the list, where Delete would trash Alpha: \(responder)")
+                // Save the edit to its library now; the close's own save does not retry a failed
+                // one and would report the song unsaved in a modal alert.
                 viewModel.modelContext = container.mainContext
-                #expect(viewModel.savePendingEdit())
+                #expect(viewModel.flushCurrentDraft())
+                #expect(a.lyrics == "harbour lights and tide")
             } else {
                 #expect(viewModel.loadedProjectRow == opening.persistentModelID && workspace.detail == .editor)
                 #expect(window.firstResponder === outline, "\(start): \(responder)")
