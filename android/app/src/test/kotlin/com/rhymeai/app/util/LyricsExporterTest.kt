@@ -149,6 +149,23 @@ class LyricsExporterTest {
         assertFailsWith<SerializationException> { LyricsExporter.parseJson(text) }
     }
 
+    @Test
+    fun jsonImportRejectsQuotedMillisWithTrailingText() {
+        for (date in listOf("1780374654123,not-a-date", "1780374654123abc", "1780374654123 ")) {
+            val text = """{"id":"s","title":"t","lyrics":"","theme":"","updatedAt":"$date"}"""
+
+            assertFailsWith<SerializationException>(date) { LyricsExporter.parseJson(text) }
+        }
+    }
+
+    @Test
+    fun jsonImportRejectsATopLevelValueThatIsNotAnObjectAsADecodeError() {
+        // The import screen catches Exception; this pins the error type the decoder threw before this change.
+        for (text in listOf("""[{"id":"s"}]""", "\"song\"")) {
+            assertFailsWith<SerializationException>(text) { LyricsExporter.parseJson(text) }
+        }
+    }
+
     // wrapLine tests use one unit of width per character so maxWidth doubles
     // as a character budget.
     private val charWidth: (String) -> Float = { it.length.toFloat() }

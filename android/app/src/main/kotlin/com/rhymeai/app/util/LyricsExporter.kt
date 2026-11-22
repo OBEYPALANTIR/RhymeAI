@@ -7,7 +7,6 @@ import com.rhymeai.app.data.model.SongProject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
 import java.io.ByteArrayOutputStream
 import java.time.OffsetDateTime
 
@@ -37,14 +36,16 @@ object LyricsExporter {
 
     /** Reads a project JSON file for import; the counterpart of [buildJson], like iOS `decodeJsonExport`.
      *  Also reads iOS's export, whose `updatedAt` is an ISO-8601 string rather than epoch millis.
-     *  A string that is not ISO-8601 is left for the decoder, which still reads quoted millis and
-     *  throws on anything else, so the importer reports the file instead of guessing a time. */
+     *  Anything else is decoded from the text exactly as before, which reads quoted millis and throws
+     *  on any other value, so the importer reports the file instead of guessing a time. (The tree
+     *  decoder is avoided there: it accepts a quoted number with trailing text.) */
     fun parseJson(text: String): SongProject {
-        val obj = json.parseToJsonElement(text).jsonObject
+        fun asBefore() = json.decodeFromString(SongProject.serializer(), text)
+        val obj = json.parseToJsonElement(text) as? JsonObject ?: return asBefore()
         val iso = (obj["updatedAt"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         val millis = iso?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
-        val fields = if (millis == null) obj else JsonObject(obj + ("updatedAt" to JsonPrimitive(millis)))
-        return json.decodeFromJsonElement(SongProject.serializer(), fields)
+            ?: return asBefore()
+        return json.decodeFromJsonElement(SongProject.serializer(), JsonObject(obj + ("updatedAt" to JsonPrimitive(millis))))
     }
 
     fun buildLrc(project: SongProject): ByteArray {
