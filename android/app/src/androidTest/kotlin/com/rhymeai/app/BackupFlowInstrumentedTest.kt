@@ -733,7 +733,8 @@ class BackupFlowInstrumentedTest {
             runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
             assertTrue(storedOpenSong().lyrics.contains("a sent line"))
             instrumentation.runOnMainSync {
-                runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()) else it }) }
+                // What another window's save writes: the row and the saved editor state.
+                runBlocking { repo.saveActiveState(storedOpenSong().copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()), false, openSong.title, newerWords, openSong.theme) }
                 vm.importBackup(android.net.Uri.fromFile(zip))
             }
             waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
