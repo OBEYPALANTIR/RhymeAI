@@ -383,6 +383,45 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    @Test fun exportRefusesTwoSongsSharingAnIdAndLeavesTheOldFileIntact() {
+        val vm = launchConnectedWithEmptyLibrary()
+        runBlocking { repo.saveProjects(listOf(SongProject(id = "twin", title = "First"), SongProject(id = "twin", title = "Second"))) }
+        val zip = java.io.File(context.cacheDir, "export-twins.zip")
+        val old = byteArrayOf(4, 3, 2, 1)
+        zip.writeBytes(old)
+        try {
+            instrumentation.runOnMainSync { vm.exportBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice != null }
+            assertEquals("Export failed: Two songs on this device share the id twin, so nothing was exported.", vm.backupNotice)
+            assertTrue(old.contentEquals(zip.readBytes()))
+        } finally {
+            zip.delete()
+        }
+    }
+
+    @Test fun exportStillWritesAnActiveAndATrashedSongSharingAnId() {
+        val vm = launchConnectedWithEmptyLibrary()
+        runBlocking {
+            repo.saveProjects(listOf(SongProject(id = "twin", title = "Active")))
+            repo.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "twin", title = "Trashed"), deletedAt = System.currentTimeMillis())))
+        }
+        val zip = java.io.File(context.cacheDir, "export-active-and-trash.zip")
+        try {
+            instrumentation.runOnMainSync { vm.exportBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Exported") == true }
+            java.util.zip.ZipFile(zip).use { archive ->
+                assertEquals(1, archive.entries().asSequence().count { it.name == "songs/twin.json" })
+                val manifest = BackupManifest.decode(
+                    archive.getInputStream(archive.getEntry(com.rhymeai.app.data.sync.BackupArchive.MANIFEST_ENTRY)).use { it.readBytes() }
+                )
+                assertEquals(listOf("twin"), manifest.projects.map { it.id })
+                assertEquals(listOf("twin"), manifest.trashed.map { it.project.id })
+            }
+        } finally {
+            zip.delete()
+        }
+    }
+
     @Test fun aPreExistingMemoKeepsItsStampedTimeAcrossRestartAndRename() {
         launchConnectedWithEmptyLibrary()
         val dir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, "stamped").also { it.mkdirs() }
