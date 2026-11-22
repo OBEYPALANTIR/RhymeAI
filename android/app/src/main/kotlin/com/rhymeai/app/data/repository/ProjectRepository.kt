@@ -54,6 +54,9 @@ internal class MissingActiveProjectException(id: String) :
 internal class SameIdTrashCopiesException(id: String) :
     IllegalStateException("Trash holds more than one song with id $id")
 
+internal class SameIdActiveCopiesException(id: String) :
+    IllegalStateException("More than one active song has id $id")
+
 /** A coherent local membership and deletion view captured before Drive network work. */
 /**
  * A41: a song (active or in Trash) whose repaired time lost to a tombstone in a merge.
@@ -393,7 +396,10 @@ class ProjectRepository internal constructor(
     data class TrashTransition(
         val projects: List<SongProject>,
         val trashedProjects: List<TrashedSongProject>,
-        val wasCurrent: Boolean = false
+        val wasCurrent: Boolean = false,
+        /** A restore whose id was already active: that song stayed; true when the Trash copy's other words came back as a new song. */
+        val activeKept: Boolean = false,
+        val copied: Boolean = false
     )
 
     data class TrashPurge(val trashedProjects: List<TrashedSongProject>, val purgedIds: List<String>)
@@ -429,18 +435,28 @@ class ProjectRepository internal constructor(
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
-            // An active song with this id and other words stays, as a new song: restoring never drops words.
-            val displaced = active.firstOrNull { it.id == id }?.takeIf {
-                it.title != entry.project.title || it.lyrics != entry.project.lyrics || it.theme != entry.project.theme
-            }?.copy(id = java.util.UUID.randomUUID().toString())
-            val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) +
-                listOfNotNull(displaced) + active.filterNot { it.id == id }
+            // A repeated id is refused before anything is written.
+            if (trash.count { it.project.id == id } > 1) throw SameIdTrashCopiesException(id)
+            if (active.count { it.id == id } > 1) throw SameIdActiveCopiesException(id)
+            val held = active.firstOrNull { it.id == id }
+            val copy = entry.project.takeIf {
+                held != null && (it.title != held.title || it.lyrics != held.lyrics || it.theme != held.theme)
+            }
+            val nextActive = if (held == null) {
+                listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active
+            } else {
+                // The active song keeps its id, words, recordings and notebook, and outranks the Trash copy
+                // at the next merge; the Trash copy's other words come back as a new song.
+                val kept = held.copy(updatedAt = maxOf(held.updatedAt, entry.deletedAt + 1), precedenceRepaired = false)
+                listOfNotNull(copy?.copy(id = java.util.UUID.randomUUID().toString(), updatedAt = now, precedenceRepaired = false)) +
+                    active.map { if (it.id == id) kept else it }
+            }
             val nextTrash = trash.filterNot { it.project.id == id }
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
-            committed = TrashTransition(nextActive, nextTrash)
+            committed = TrashTransition(nextActive, nextTrash, activeKept = held != null, copied = copy != null)
         }
         committed
     }
@@ -847,6 +863,22 @@ class ProjectRepository internal constructor(
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
+                // The editor's saved state follows a selected song this edit changed or removed, so a relaunch
+                // before the editor reloads shows what is stored; an unchanged song keeps its saved editor words.
+                prefs[CURRENT_PROJECT_ID_KEY]?.let { selectedId ->
+                    val before = current.projects.firstOrNull { it.id == selectedId } ?: return@let
+                    val after = nextProjects.firstOrNull { it.id == selectedId }
+                    if (after == null) {
+                        prefs.remove(CURRENT_PROJECT_ID_KEY)
+                        prefs[CURRENT_TITLE_KEY] = ""
+                        prefs[CURRENT_LYRICS_KEY] = ""
+                        prefs[CURRENT_THEME_KEY] = ""
+                    } else if (before.title != after.title ||before.lyrics != after.lyrics || before.theme != after.theme) {
+                        prefs[CURRENT_TITLE_KEY] = after.title
+                        prefs[CURRENT_LYRICS_KEY] = after.lyrics
+                        prefs[CURRENT_THEME_KEY] = after.theme
+                    }
+                }
                 committed = resolved
             }
             // A41: the songs kept aside in that edit are read back before the run goes on.

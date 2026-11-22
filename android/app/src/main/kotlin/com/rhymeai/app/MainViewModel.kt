@@ -30,6 +30,7 @@ import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
 import com.rhymeai.app.data.repository.SameIdTrashCopiesException
+import com.rhymeai.app.data.repository.SameIdActiveCopiesException
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupGate
 import com.rhymeai.app.data.sync.BackupManifest
@@ -630,7 +631,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
-        if (notebookError != null || restoringDraft) return
+        if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val next = transform(workspaces[id] ?: SongWorkspace())
         workspaces = workspaces + (id to next)
         viewModelScope.launch {
@@ -639,7 +640,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
-                if (currentProjectId == id) persistenceError = "This song is no longer active. Notebook changes were not saved."
+                if (currentProjectId == id && !editorHeld) persistenceError = "This song is no longer active. Notebook changes were not saved."
             } catch (_: Exception) {
                 notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
             }
@@ -648,7 +649,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun rememberEditorPosition(scrollOffset: Float = editorScrollOffset) {
         editorScrollOffset = scrollOffset.coerceAtLeast(0f)
-        if (notebookError != null || restoringDraft) return
+        if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val id = currentProjectId ?: return
         val range = lyricsFieldValue.selection
         workspaces = workspaces + (id to songWorkspace.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = editorScrollOffset))
@@ -660,7 +661,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
-                if (currentProjectId == id) persistenceError = "This song is no longer active. Notebook changes were not saved."
+                if (currentProjectId == id && !editorHeld) persistenceError = "This song is no longer active. Notebook changes were not saved."
             } catch (_: Exception) {
                 notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
             }
@@ -769,19 +770,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * held until it shows what storage then holds. False, with nothing run, when the draft could not be saved.
      */
     private suspend fun holdEditorFor(operation: suspend () -> Unit): Boolean {
-        // A draft save or draft-version restore already running finishes first; nothing captured before is replayed.
-        while (restoringDraft || savingBeforeNavigation || editorHeld) delay(20)
+        // A draft save, song open or draft-version restore already running finishes first; nothing captured before is replayed.
+        while (restoringDraft || savingBeforeNavigation || editorHeld || opensInFlight > 0 || draftWritesInFlight > 0) delay(20)
         editorHeld = true
         try {
             autoSaveJob?.cancelAndJoin()
             positionSaveJob?.cancelAndJoin()
+            // Words the flush is about to write over the stored song: kept as a new song if the operation replaces them.
+            val openId = currentProjectId
+            val stored = projects.firstOrNull { it.id == openId }?.takeIf { it.id !in pendingProjectCreationIds }
+            val flushedEdits = stored != null &&
+                (stored.title != title.ifEmpty { "Untitled Song" } || stored.lyrics != lyrics || stored.theme != theme)
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
-            if (startDraftFlush {}?.await() == false) return false
+            flushingHeldDraft = true
+            val flush = try { startDraftFlush {} } finally { flushingHeldDraft = false }
+            if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
             restoringDraft = true
             // Also after a failed or cancelled operation: whatever it committed is what the editor shows.
-            try { operation() } finally { withContext(NonCancellable) { showStoredOpenSong() } }
+            try { operation() } finally {
+                withContext(NonCancellable) {
+                    if (!(flushedEdits && openId != null && keepFlushedEditsIfReplaced(openId))) showStoredOpenSong()
+                }
+            }
             return true
         } finally {
             restoringDraft = false
@@ -790,11 +802,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var flushingHeldDraft = false
+    private var opensInFlight = 0
+    private var draftWritesInFlight = 0
+
+    /**
+     * The edits the hold just saved under [id] were replaced or removed by the operation: they stay in the
+     * editor and are saved as a new song. False, with nothing done, when the stored song still holds them.
+     */
+    private suspend fun keepFlushedEditsIfReplaced(id: String): Boolean {
+        val stored = try { repo.projectsFlow.first() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return false }
+        val row = stored.firstOrNull { it.id == id }
+        if (currentProjectId != id || (row != null && row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme)) return false
+        val copy = createUntitledProjectSnapshot()
+        pendingProjectCreationIds.add(copy.id)
+        projects = listOf(copy) + stored
+        currentProjectId = copy.id
+        persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
+        val attempt = ++saveAttempts
+        try {
+            persistActiveProjectSnapshot(copy, title, lyrics, theme, attempt)
+        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+            reconcileFailedProjectSave(copy, error, attempt)
+        }
+        return true
+    }
+
     /** The editor shows the open song as stored (its selection written with it), or clears when the song is gone. */
     private suspend fun showStoredOpenSong() {
         val id = currentProjectId ?: return
         try {
             val stored = repo.projectsFlow.first()
+            if (currentProjectId != id) return
             projects = projects.filter { it.id in pendingProjectCreationIds && stored.none { s -> s.id == it.id } } + stored
             val row = stored.firstOrNull { it.id == id }
             if (row == null) {
@@ -804,6 +843,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
             val selected = repo.selectProject(id)
+            if (currentProjectId != id) return
             dismissRewrite()
             title = selected.title
             lyricsFieldValue = TextFieldValue(selected.lyrics)
@@ -1251,11 +1291,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupBusyLabel = "Restoring…"
         backupStatus = BackupStatus.BackingUp
         viewModelScope.launch {
-            var result: SyncResult? = null
-            val ran = holdEditorFor { result = backupMutex.withLock { driveSyncService.restore(repo) } }
+            var refused = false
+            // Only the local commit holds the editor; sign-in, Drive reads and downloads run while it stays editable.
+            val result = backupMutex.withLock {
+                driveSyncService.restore(repo) { commit ->
+                    withContext(Dispatchers.Main.immediate) {
+                        refused = !holdEditorFor { withContext(Dispatchers.IO) { commit() } }
+                    }
+                    if (refused) throw IllegalStateException("The open draft could not be saved")
+                }
+            }
             backupBusyLabel = null
-            result?.let { handleBackupResult(it, BackupAction.Restore, interactive = true) }
-            if (!ran) {
+            if (!refused) handleBackupResult(result, BackupAction.Restore, interactive = true)
+            else {
                 backupStatus = if (isBackupConnected()) BackupStatus.Connected(lastBackupAt) else BackupStatus.NotConnected
                 backupNotice = "Your open draft could not be saved, so nothing was restored."
             }
@@ -1565,19 +1613,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         backupBusyLabel = "Importing…"
         viewModelScope.launch {
             backupNotice = try {
-                var imported: BackupArchive.ImportSummary? = null
-                val ran = holdEditorFor { imported = withContext(Dispatchers.IO) {
+                // Copied and read before the editor is held: a stalled file provider never locks the editor.
+                val contents = withContext(Dispatchers.IO) {
                     val temp = java.io.File.createTempFile("import-", ".backup", app.cacheDir)
                     try {
                         app.contentResolver.openInputStream(uri)?.use { input ->
                             temp.outputStream().use { input.copyTo(it) }
                         } ?: throw java.io.IOException("The file could not be opened")
-                        val contents = BackupArchive.read(temp)
-                        backupMutex.withLock { BackupArchive.import(contents, repo, app.filesDir) }
+                        BackupArchive.read(temp)
                     } finally {
                         temp.delete()
                     }
-                } }
+                }
+                var imported: BackupArchive.ImportSummary? = null
+                val ran = backupMutex.withLock {
+                    holdEditorFor { imported = withContext(Dispatchers.IO) { BackupArchive.import(contents, repo, app.filesDir) } }
+                }
                 if (!ran) throw java.io.IOException("your open draft could not be saved")
                 val summary = checkNotNull(imported)
                 // Recordings added by an import change no song list, so queue the backup here.
@@ -1734,10 +1785,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Load projects; a song created while this loaded (its identity reserved) stays listed.
                 val pendingAtLoad = projects.filter { it.id in pendingProjectCreationIds }
-                var libraryRead = false
                 projects = if (!established) emptyList() else try {
                     pendingAtLoad + repo.projectsFlow.first().filterNot { stored -> pendingAtLoad.any { it.id == stored.id } }
-                        .also { libraryRead = true }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: CorruptLibraryException) {
@@ -1785,21 +1834,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (startedMeanwhile) {
                     triggerAutoSave()
                 } else {
-                    // Every save writes the song and the editor state together, so a stored song that differs (or
-                    // is gone) was changed by a restore, import or Trash restore that ended before the editor followed.
-                    val row = projects.firstOrNull { it.id == savedProjectId }
-                    val removed = libraryRead && savedProjectId != null && row == null
-                    val changed = row != null && (row.title != savedTitle.ifEmpty { "Untitled Song" } ||
-                        row.lyrics != savedLyrics || row.theme != savedTheme)
-                    val (shownTitle, shownLyrics, shownTheme) = when {
-                        removed -> Triple("", "", "")
-                        row != null && changed -> Triple(row.title, row.lyrics, row.theme)
-                        else -> Triple(savedTitle, savedLyrics, savedTheme)
-                    }
-                    currentProjectId = savedProjectId.takeUnless { removed }
-                    title = shownTitle
-                    lyricsFieldValue = TextFieldValue(shownLyrics)
-                    theme = shownTheme
+                    currentProjectId = savedProjectId
+                    title = savedTitle
+                    lyricsFieldValue = TextFieldValue(savedLyrics)
+                    theme = savedTheme
                     restoreEditorPosition()
                 }
                 useWholeSongContext = toggles.useWholeSongContext
@@ -2521,6 +2559,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
             autoSaveJob?.cancel()
+            opensInFlight++ // a hold waits for it
             viewModelScope.launch {
                 try {
                     showProjectsDialog = false
@@ -2545,6 +2584,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open the song", error)
                 } finally {
+                    opensInFlight--
                     if (openRequest == request) openingSong = false
                 }
             }
@@ -2590,14 +2630,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             var restored = false
             try {
-                var committed: ProjectRepository.TrashTransition? = null
-                suspend fun restore() { committed = repo.restoreTrashedProject(id, System.currentTimeMillis()) }
-                // Restoring the open song's id replaces its stored words: the editor is held and then shows them.
-                if (id == currentProjectId) { if (!holdEditorFor { restore() }) return@launch } else restore()
-                val transition = committed ?: return@launch reportMissingTrashProject()
-                projects = transition.projects
-                trashedProjects = transition.trashedProjects
+                val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
+                    ?: return@launch reportMissingTrashProject()
+                projects = committed.projects
+                trashedProjects = committed.trashedProjects
                 restored = true
+                // The active song with this id is never changed; only a Trash copy with other words returns, as a new song.
+                if (committed.activeKept) persistenceError = if (committed.copied)
+                    "This song was already in your songs, so its Trash copy was restored as a new song."
+                else "This song was already in your songs, so its Trash copy was removed."
                 scheduleTrashPurge()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -2733,7 +2774,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun trashFailureMessage(action: String, error: Exception): String = when (error) {
         is CorruptLibraryException -> corruptLibraryMessage(error)
         is MissingActiveProjectException -> "The song is no longer active. No changes were made."
-        is SameIdTrashCopiesException -> "Trash holds more than one copy of this song, so none was deleted. Stored songs were left untouched."
+        is SameIdTrashCopiesException -> "Trash holds more than one copy of this song, so none was ${if (action == "restore the song") "restored" else "deleted"}. Stored songs were left untouched."
+        is SameIdActiveCopiesException -> "More than one of your songs has this song's identity, so nothing was restored. Stored songs were left untouched."
         else -> "Could not $action. Stored songs were left untouched. Try again."
     }
 
@@ -2861,11 +2903,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         attempt: Long
     ): List<SongProject> {
         if (currentProjectId != project.id) throw CancellationException("Song changed")
-        DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
-        if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
-        val committed = repo.saveActiveState(
-            project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme
-        )
+        draftWritesInFlight++ // a hold waits for it
+        val committed = try {
+            DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
+            if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
+            repo.saveActiveState(project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme)
+        } finally { draftWritesInFlight-- }
         pendingProjectCreationIds.remove(project.id)
         if (currentProjectId == project.id) projects = committed
         val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme

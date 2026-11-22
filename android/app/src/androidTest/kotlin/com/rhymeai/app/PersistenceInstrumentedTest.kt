@@ -459,12 +459,15 @@ class PersistenceInstrumentedTest {
 
 
     @Test
-    fun startupShowsTheStoredSongAnOperationChangedBeforeTheEditorFollowed() {
+    fun aRelaunchRightAfterARestoreCommitShowsTheCommittedWords() {
         val original = SongProject("changed-under-editor", "Original", "old lyric", "old theme", 100L)
         runBlocking {
             repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
-            // A restore committed newer words; the process ended before the editor state followed.
-            repo.saveProjects(listOf(original.copy(lyrics = "restored lyric", updatedAt = 200L)))
+            // The process ends after this commit, before any editor reloads.
+            repo.applySyncResult(
+                com.rhymeai.app.data.sync.SyncBlob(projects = listOf(original.copy(lyrics = "restored lyric", updatedAt = 200L))),
+                repo.snapshotLocalSyncBase()
+            )
         }
         val viewModel = MainViewModel(app)
         waitUntil { viewModel.initialized }
@@ -472,16 +475,30 @@ class PersistenceInstrumentedTest {
     }
 
     @Test
-    fun startupClearsTheEditorWhenAnOperationMovedItsSongToTrash() {
+    fun aRelaunchRightAfterARestoreTrashedTheSongShowsAnEmptyEditor() {
         val original = SongProject("trashed-under-editor", "Original", "old lyric", "old theme", 100L)
         runBlocking {
             repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
-            repo.saveProjects(emptyList())
-            repo.saveTrashedProjects(listOf(com.rhymeai.app.data.model.TrashedSongProject(original, 200L)))
+            repo.applySyncResult(
+                com.rhymeai.app.data.sync.SyncBlob(trashed = listOf(com.rhymeai.app.data.model.TrashedSongProject(original, 200L))),
+                repo.snapshotLocalSyncBase()
+            )
         }
         val viewModel = MainViewModel(app)
         waitUntil { viewModel.initialized }
         assertEquals(Triple<String?, String, String>(null, "", ""), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
+    }
+
+    @Test
+    fun startupStillShowsEditorWordsSavedApartFromTheSong() {
+        val original = SongProject("legacy-editor-words", "Original", "stored lyric", "", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveEditorState(original.title, "draft words saved apart", original.theme)
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(original.id to "draft words saved apart", viewModel.currentProjectId to viewModel.lyrics)
     }
 
     @Test
