@@ -579,7 +579,8 @@ below is the contract it must meet, not verified behaviour.
   downloads, free space is checked (iOS: about twice the takes' total plus the
   largest take and 128 MiB; Android: the takes' total plus 128 MiB). The import
   skips a song whose id or recovered id is held here or in any current manifest
-  (active or Trash) and adds every other song with its takes under recovered ids,
+  (active or Trash; on Android, once the manifests are resolved, so a copy in a
+  kept duplicate that a tombstone removes does not count) and adds every other song with its takes under recovered ids,
   UUID v3 of `writersblock-recovery/<file id>/<revision id>/<old id>` pinned by
   the shared vector `writersblock-recovery/f1/r1/song-1` →
   `3ec9dc72-4f40-37c0-a588-f62dc27d13de`, so a stopped recovery is finished by

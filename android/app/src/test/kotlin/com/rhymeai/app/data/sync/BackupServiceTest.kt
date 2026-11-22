@@ -962,11 +962,13 @@ class BackupServiceTest {
     @Test
     fun anOldCopyInAStaleDuplicateNeverBringsBackASongDeletedLater() = runBlocking<Unit> {
         val (written, fresh) = syncAgainstStaleDuplicate(
-            stale = SyncBlob(projects = listOf(song("s", updatedAt = 100L, lyrics = "old words"))),
-            current = SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L)))
+            // r has no time (an old backup): its first-seen repair loses to the tombstone and is set aside once.
+            stale = SyncBlob(projects = listOf(song("s", updatedAt = 100L, lyrics = "old words"), song("r", updatedAt = 0L, lyrics = "timeless words"))),
+            current = SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L), SyncDeletion("r", deletedAt = 200L)))
         )
 
-        assertTrue(written.projects.none { it.id == "s" } && written.trashed.none { it.project.id == "s" })
+        assertEquals(listOf("timeless words"), repository.recoveredSongs().map { it.project.lyrics })
+        assertTrue(written.projects.none { it.id == "s" || it.id == "r" } && written.trashed.none { it.project.id == "s" })
         assertTrue(written.deletions.any { it.projectId == "s" && it.isSongTombstone && it.deletedAt == 200L })
         assertTrue(fresh.projectsFlow.first().none { it.id == "s" } && fresh.trashedProjectsFlow.first().none { it.project.id == "s" })
         assertTrue(repository.projectsFlow.first().none { it.id == "s" })
@@ -2522,6 +2524,22 @@ class BackupServiceTest {
         assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
         assertTrue(remote().projects.isEmpty())
         return fresh to freshSide.second
+    }
+
+    @Test
+    fun aSongDeletedSinceStaysRecoverableWhileAStaleDuplicateStillListsIt() = runBlocking<Unit> {
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "old words"))), 0L, "stale"))
+        val current = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "old words"))), 0L, "a"))
+        // The song is deleted after the revision that lists it; the older duplicate still holds it.
+        drive.updateFile("token", current, BackupManifest.MIME_TYPE, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))), 0L, "a"), emptyMap())
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        val summary = recoverOldest(service, repository)
+
+        assertEquals(1, summary.songsAdded)
+        val recovered = repository.projectsFlow.first().single { it.id != "s" }
+        assertEquals("old words", recovered.lyrics)
+        assertEquals(2, drive.count(BackupManifest.FILE_NAME))
     }
 
     /** The oldest listed revision (A's backup); listing asks nothing of Drive but the list. */

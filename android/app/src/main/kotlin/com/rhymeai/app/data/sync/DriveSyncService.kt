@@ -1149,7 +1149,9 @@ class DriveSyncService(
     ): RecoverySummary {
         val activeHere = repository.projectsFlow.first().mapTo(HashSet()) { it.id }
         val trashedHere = repository.trashedProjectsFlow.first().mapTo(HashSet()) { it.project.id }
-        val remoteIds = (current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
+        // Songs the backup holds once resolved: an older copy in a kept duplicate that a tombstone removes is not held.
+        val held = current?.let(SyncMerger::resolve)
+        val remoteIds = (held?.projects.orEmpty().map { it.id } + held?.trashed.orEmpty().map { it.project.id }).toSet()
         // Deletions here and in the current backup: a recovered song or take deleted since stays deleted.
         val deletions = SyncMerger.mergeDeletions(repository.syncDeletions() + current?.deletions.orEmpty())
         // A deletion of unknown date (0) also keeps the item out, but is reported apart from confirmed ones.
@@ -1310,7 +1312,7 @@ class DriveSyncService(
         }
     }
 
-    /** The manifest [readRemote] keeps: the newest of those named [BackupManifest.FILE_NAME]. */
+    /** The manifest a backup writes: the newest of those named [BackupManifest.FILE_NAME]. */
     private suspend fun primaryManifest(token: String): DriveFileMetadata? =
         driveClient.listFilesByNamePrefix(token, BackupManifest.FILE_NAME)
             .filter { it.name == BackupManifest.FILE_NAME }
