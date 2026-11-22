@@ -2,6 +2,16 @@ package com.rhymeai.app
 
 import android.app.Application
 import android.os.SystemClock
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -27,13 +37,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
-import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
 import org.junit.runner.RunWith
 import java.util.UUID
 
@@ -197,7 +200,11 @@ class LaunchLoadingInstrumentedTest {
                 assertNull(vm.persistenceError)
                 assertEquals(SaveStatus.FAILED, vm.saveStatus)
             }
-            compose.onNodeWithContentDescription(app.getString(R.string.editor_save_failed_retry)).assertIsDisplayed().performClick()
+            compose.onNodeWithContentDescription(app.getString(R.string.editor_save_failed_retry))
+                .assertIsDisplayed()
+                .assertWidthIsAtLeast(48.dp)
+                .assertHeightIsAtLeast(48.dp)
+                .performClick()
             waitUntil { runBlocking { repo.projectsFlow.first() }.any { it.id == id && it.lyrics == draft } }
             waitUntil { vm.saveStatus == SaveStatus.SAVED }
             compose.onAllNodesWithTag("retrySave").assertCountEquals(0)
