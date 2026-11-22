@@ -813,6 +813,10 @@ extension OneLinerRouterSuites {
             if start == .refusedOpen {
                 #expect(viewModel.loadedProjectRow == a.persistentModelID, "the refused open keeps Alpha")
                 #expect(window.firstResponder !== outline, "Delete would trash Alpha: \(responder)")
+                // Give the edit its library back and save it, or closing the window reports
+                // the unsaved song in a modal alert.
+                viewModel.modelContext = container.mainContext
+                #expect(viewModel.savePendingEdit())
             } else {
                 #expect(viewModel.loadedProjectRow == opening.persistentModelID && workspace.detail == .editor)
                 #expect(window.firstResponder === outline, "\(start): \(responder)")
