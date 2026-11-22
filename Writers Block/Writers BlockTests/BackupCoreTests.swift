@@ -2990,6 +2990,84 @@ struct BackupCoreTests {
         #expect(drive.content(named: take.driveName) == audio, "the 300 entry read before the stop cleared the proof")
     }
 
+    /// The proof invariant: a failed delete left proof at 100 for take X. The next run reads
+    /// evidence against it in a kept file (X at 300, or X with no time) and ends one of several
+    /// ways: completing with another take of the same id as the gathered winner, a failed or a
+    /// stopped look after the write, or a failed first look before any write. However it ends,
+    /// a relaunch that sees no listing keeps X's audio.
+    @MainActor
+    @Test(arguments: ["at 300", "repaired"], ["conflicting winner", "failed look after the write", "stopped look after the write", "failed look before the write"])
+    func evidenceAgainstProofOutlivesEveryExit(evidence: String, exit: String) async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let (audio, audioY) = (Data("take x".utf8), Data("take y".utf8))
+        let take = Self.take("t", of: "s", audio)
+        harness.context.insert(SyncRecordingDeletion(projectId: "s", recordingId: "t", fileName: take.fileName, deletedAt: 200))
+        try harness.context.save()
+        drive.seed(name: SyncBlob.driveFileName, content: try Self.listing(take, at: 100, by: "x"))
+        drive.seedRecording(take, content: audio)
+        drive.failNextDelete(named: take.driveName)
+        await #expect(throws: BackupError.self) { try await harness.service.backupNow(modelContext: harness.context) }
+
+        let empty = try SyncBlob(projects: [Self.song("s")], savedByClientId: "y").encodedManifest()
+        let against = try Self.listing(take, at: evidence == "at 300" ? 300 : 0, by: "y")
+        let main = try #require(try await drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
+        let writes = drive.uploads(named: SyncBlob.driveFileName)
+        var kept: [DriveAppDataFile] = []
+        var stage = 0
+        var task: Task<Void, Error>?
+        switch exit {
+        case "conflicting winner":
+            kept.append(drive.seedDuplicateManifest(against, modifiedTime: "c-1"))
+            // Read after the main file, so its take Y (same id, other audio) is gathered.
+            kept.append(drive.seedDuplicateManifest(try Self.listing(Self.take("t", of: "s", audioY), at: 100, by: "z"), modifiedTime: "zzz-1"))
+        case "failed look before the write":
+            kept.append(drive.seedDuplicateManifest(against, modifiedTime: "c-1"))
+            drive.downloadFailures[main.id] = .invalidResponse  // read after the kept file
+        default:
+            kept.append(drive.seedDuplicateManifest(empty, modifiedTime: "c-1"))
+            drive.duringDownload = { id in
+                if stage == 0, id == main.id, drive.uploads(named: SyncBlob.driveFileName) > writes {
+                    stage = 1  // the read-back of the written manifest
+                    drive.rewriteExtra(id: kept[0].id, content: against, modifiedTime: "c-2")
+                } else if stage == 1, id == kept[0].id {
+                    stage = 2  // the look after the write reads the kept file, then the main file fails
+                    if exit == "failed look after the write" {
+                        drive.downloadFailures[main.id] = .invalidResponse
+                    } else {
+                        task?.cancel()
+                    }
+                } else if stage == 2, id == main.id, exit == "stopped look after the write" {
+                    stage = 3
+                    throw CancellationError()
+                }
+            }
+        }
+        task = Task { @MainActor in try await harness.service.backupNow(modelContext: harness.context) }
+        switch exit {
+        case "conflicting winner":
+            try await task!.value
+            #expect(harness.service.lastReport?.conflictingDriveObjects == [take.driveName])
+        case "failed look before the write":
+            await #expect(throws: BackupError.self) { try await task!.value }
+            #expect(drive.uploads(named: SyncBlob.driveFileName) == writes, "nothing was written")
+        case "failed look after the write":
+            try await task!.value
+            #expect(stage == 2)
+        default:
+            await #expect(throws: CancellationError.self) { try await task!.value }
+            #expect(stage == 3)
+        }
+        #expect(drive.content(named: take.driveName) == audio)
+
+        drive.duringDownload = nil
+        for (index, file) in kept.enumerated() { drive.rewriteExtra(id: file.id, content: empty, modifiedTime: "e-\(index)") }
+        drive.seed(name: SyncBlob.driveFileName, content: empty)
+        let relaunched = try await harness.reopened()
+        try await relaunched.service.backupNow(modelContext: relaunched.context)
+        #expect(drive.content(named: take.driveName) == audio, "the evidence read in the run cleared or replaced the proof")
+    }
+
     /// The first-run probe counts the backup resolved across every manifest file:
     /// an empty first file does not hide another's songs, and a stale one does not
     /// report songs another file deleted.
