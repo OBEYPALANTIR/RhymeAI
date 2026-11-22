@@ -571,6 +571,211 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    private val openSong = SongProject("open-song", "Open Song", "older words W1", "", 100L)
+    private val newerWords = "newer words W2"
+
+    /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
+    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList()): MainViewModel {
+        check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
+        repo = ProjectRepository(context)
+        runBlocking {
+            savedProjects = repo.projectsFlow.first()
+            savedTrash = repo.trashedProjectsFlow.first()
+            repo.saveProjects(emptyList())
+            repo.saveTrashedProjects(emptyList())
+            repo.saveActiveState(openSong, true, openSong.title, openSong.lyrics, openSong.theme)
+            // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
+            repo.saveTrashedProjects(trash)
+        }
+        BackupTestHooks.driveClient = drive
+        BackupTestHooks.authorizer = object : DriveAuthorizer {
+            override suspend fun authorize() = DriveAuthorization.Granted("token")
+        }
+        prefs().edit().clear().putBoolean("drive_connected", true).commit()
+        val vm = MainViewModel(context.applicationContext as android.app.Application)
+        waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == openSong.lyrics }
+        instrumentation.runOnMainSync { vm.showStartMenu = false }
+        return vm
+    }
+
+    private fun storedOpenSong() = runBlocking { repo.projectsFlow.first() }.single { it.id == openSong.id }
+
+    /** After the operation stored W2: the next save of the open song keeps W2 and the editor shows it. */
+    private fun assertNextSaveKeepsNewerWords(vm: MainViewModel) {
+        waitUntil({ "stored ${storedOpenSong()}" }) { storedOpenSong().lyrics == newerWords }
+        waitUntil({ "view model ${vm.projects}" }) { vm.projects.any { it.id == openSong.id && it.lyrics == newerWords } }
+        instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+        waitUntil { !vm.savingBeforeNavigation }
+        instrumentation.waitForIdleSync()
+        val stored = storedOpenSong()
+        assertEquals(
+            "(stored words, editor words); stored time ${stored.updatedAt}",
+            newerWords to newerWords, stored.lyrics to vm.lyrics
+        )
+    }
+
+    private fun resetOpenSong() = runBlocking {
+        repo.setCurrentProjectId(null)
+        repo.saveEditorState("", "", "")
+    }
+
+    @Test fun aRestoresNewerWordsForTheOpenSongSurviveTheNextSave() {
+        drive.put(
+            BackupManifest.FILE_NAME,
+            BackupManifest.encode(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))), 0L, "other-device")
+        )
+        val vm = openSongInEditor()
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice}" }) { vm.backupStatus is BackupStatus.Connected }
+            assertEquals("precondition: the restore stored W2", newerWords, storedOpenSong().lyrics)
+            assertNextSaveKeepsNewerWords(vm)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    @Test fun anImportsNewerWordsForTheOpenSongSurviveTheNextSave() {
+        val vm = openSongInEditor()
+        val zip = java.io.File(context.cacheDir, "open-song.zip")
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))), emptyList(), 0L, "test"
+            )
+        }
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            assertEquals("precondition: the import stored W2 under the same id", newerWords, storedOpenSong().lyrics)
+            assertNextSaveKeepsNewerWords(vm)
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aTrashRestoresWordsForTheOpenSongSurviveTheNextSave() {
+        val vm = openSongInEditor(trash = listOf(TrashedSongProject(openSong.copy(lyrics = newerWords, updatedAt = 200L), deletedAt = 300L)))
+        try {
+            instrumentation.runOnMainSync { vm.restoreTrashedProject(openSong.id) }
+            assertNextSaveKeepsNewerWords(vm)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    private fun putDriveSongs(blob: SyncBlob) = drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(blob, 0L, "other-device"))
+
+    @Test fun aDraftThatCannotBeSavedStopsTheRestoreAndStaysInTheEditor() {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        val vm = openSongInEditor()
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("unsaved edit")
+                DraftSaveTestHooks.failNext.set(true)
+                vm.restoreFromBackup()
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice == "Your open draft could not be saved, so nothing was restored." }
+            instrumentation.waitForIdleSync()
+            assertEquals("nothing restored or overwritten", openSong.lyrics, storedOpenSong().lyrics)
+            assertEquals("unsaved edit", vm.lyrics)
+            assertEquals(SaveStatus.FAILED, vm.saveStatus)
+            assertFalse(vm.editorHeld)
+        } finally {
+            DraftSaveTestHooks.failNext.set(false)
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aSaveInFlightWhenTheRestoreStartsIsDrainedAndNeverReplayed() {
+        // Dated ahead, so Drive's words win the merge over the in-flight save.
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+        val vm = openSongInEditor()
+        val held = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("in flight")
+                DraftSaveTestHooks.beforeWrite = held
+                vm.flushCurrentDraft()
+                vm.restoreFromBackup()
+            }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null }
+            assertTrue(vm.savingBeforeNavigation)
+            held.complete(Unit)
+            waitUntil({ "status ${vm.backupStatus}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            SystemClock.sleep(1_000)
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords to newerWords, storedOpenSong().lyrics to vm.lyrics)
+        } finally {
+            DraftSaveTestHooks.beforeWrite = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun typingAutosaveAndDraftWritesDuringTheRestoreChangeNothing() {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        val vm = openSongInEditor()
+        val paused = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        drive.beforeDownload = { if (vm.editorHeld) { paused.complete(Unit); resume.await() } }
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil { paused.isCompleted }
+            instrumentation.runOnMainSync {
+                vm.onTitleChanged("typed title")
+                vm.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue("typed words"))
+                vm.onThemeChanged("typed theme")
+                vm.triggerAutoSave(retry = true)
+                vm.saveDraftVersion()
+                vm.keepAlternate("kept line")
+            }
+            SystemClock.sleep(500)
+            instrumentation.waitForIdleSync()
+            assertTrue(vm.editorHeld)
+            assertEquals(Triple(openSong.title, openSong.lyrics, openSong.theme), Triple(vm.title, vm.lyrics, vm.theme))
+            assertEquals(openSong.lyrics, storedOpenSong().lyrics)
+            resume.complete(Unit)
+            waitUntil({ "status ${vm.backupStatus}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            assertNextSaveKeepsNewerWords(vm)
+        } finally {
+            drive.beforeDownload = null
+            resume.complete(Unit)
+            resetOpenSong()
+        }
+    }
+
+    @Test fun unsavedWordsOverWhichTheSameSongIsRestoredFromTrashAreKeptAsANewSong() {
+        val vm = openSongInEditor(trash = listOf(TrashedSongProject(openSong.copy(lyrics = newerWords, updatedAt = 200L), deletedAt = 300L)))
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("unsaved edit")
+                vm.restoreTrashedProject(openSong.id)
+            }
+            waitUntil({ "stored ${runBlocking { repo.projectsFlow.first() }}" }) { storedOpenSong().lyrics == newerWords && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            val songs = runBlocking { repo.projectsFlow.first() }
+            assertTrue("$songs", songs.any { it.id != openSong.id && it.lyrics == "unsaved edit" })
+            assertEquals(newerWords to openSong.id, vm.lyrics to vm.currentProjectId)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aRestoreThatTrashesTheOpenSongClearsTheEditor() {
+        putDriveSongs(SyncBlob(trashed = listOf(TrashedSongProject(openSong, deletedAt = 200L))))
+        val vm = openSongInEditor()
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertTrue("trashed", runBlocking { repo.trashedProjectsFlow.first() }.any { it.project.id == openSong.id })
+            assertTrue("not active", runBlocking { repo.projectsFlow.first() }.none { it.id == openSong.id })
+            assertEquals(Triple<String?, String, String>(null, "", ""), Triple(vm.currentProjectId, vm.title, vm.lyrics))
+        } finally {
+            resetOpenSong()
+        }
+    }
+
     private fun waitForText(text: String) =
         compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
 
@@ -587,6 +792,8 @@ class BackupFlowInstrumentedTest {
         private val files = LinkedHashMap<String, Pair<String, ByteArray>>()
         private var nextId = 0
         val revoked = mutableListOf<String>()
+        /** Runs before every download (a test pauses a restore here). */
+        @Volatile var beforeDownload: (suspend () -> Unit)? = null
 
         fun put(name: String, bytes: ByteArray) {
             val id = files.entries.firstOrNull { it.value.first == name }?.key ?: "id-${nextId++}"
@@ -598,7 +805,10 @@ class BackupFlowInstrumentedTest {
             files.entries.firstOrNull { it.value.first == name }?.let { DriveFileMetadata(it.key, name, version = it.value.second.size.toString()) }
         override suspend fun listFilesByNamePrefix(accessToken: String, namePrefix: String) =
             files.filter { it.value.first.startsWith(namePrefix) }.map { DriveFileMetadata(it.key, it.value.first) }
-        override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long) = files.getValue(fileId).second
+        override suspend fun downloadFile(accessToken: String, fileId: String, maxBytes: Long): ByteArray {
+            beforeDownload?.invoke()
+            return files.getValue(fileId).second
+        }
         override suspend fun uploadNewFile(
             accessToken: String, name: String, mimeType: String, content: ByteArray, appProperties: Map<String, String>
         ): String = "id-${nextId++}".also { files[it] = name to content }

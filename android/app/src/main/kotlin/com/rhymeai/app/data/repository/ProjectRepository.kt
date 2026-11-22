@@ -429,7 +429,12 @@ class ProjectRepository internal constructor(
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val entry = trash.firstOrNull { it.project.id == id } ?: return@edit
-            val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active.filterNot { it.id == id }
+            // An active song with this id and other words stays, as a new song: restoring never drops words.
+            val displaced = active.firstOrNull { it.id == id }?.takeIf {
+                it.title != entry.project.title || it.lyrics != entry.project.lyrics || it.theme != entry.project.theme
+            }?.copy(id = java.util.UUID.randomUUID().toString())
+            val nextActive = listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) +
+                listOfNotNull(displaced) + active.filterNot { it.id == id }
             val nextTrash = trash.filterNot { it.project.id == id }
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =

@@ -459,6 +459,41 @@ class PersistenceInstrumentedTest {
 
 
     @Test
+    fun startupShowsTheStoredSongAnOperationChangedBeforeTheEditorFollowed() {
+        val original = SongProject("changed-under-editor", "Original", "old lyric", "old theme", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            // A restore committed newer words; the process ended before the editor state followed.
+            repo.saveProjects(listOf(original.copy(lyrics = "restored lyric", updatedAt = 200L)))
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(original.id to "restored lyric", viewModel.currentProjectId to viewModel.lyrics)
+    }
+
+    @Test
+    fun startupClearsTheEditorWhenAnOperationMovedItsSongToTrash() {
+        val original = SongProject("trashed-under-editor", "Original", "old lyric", "old theme", 100L)
+        runBlocking {
+            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveProjects(emptyList())
+            repo.saveTrashedProjects(listOf(com.rhymeai.app.data.model.TrashedSongProject(original, 200L)))
+        }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(Triple<String?, String, String>(null, "", ""), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
+    }
+
+    @Test
+    fun startupKeepsTheBlankTitleOfAnUnchangedSong() {
+        val untitled = SongProject("blank-title", "Untitled Song", "some words", "", 100L)
+        runBlocking { repo.saveActiveState(untitled, true, "", untitled.lyrics, "") }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.initialized }
+        assertEquals(Triple<String?, String, String>(untitled.id, "", "some words"), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
+    }
+
+    @Test
     fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {
         val model = SavedLocalModel(
             id = "custom-night-drive",
