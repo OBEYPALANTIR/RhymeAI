@@ -542,8 +542,11 @@ below is the contract it must meet, not verified behaviour.
   then reports "Backup conflict, will retry" and backs off. Each retry gathers
   the fresh manifest with everything earlier attempts saw, including a
   conflicting read-back. Drive v3 exposes no file ETag, so no `If-Match` is sent.
-  Duplicate manifests are merged, the newest is kept, and the others are deleted
-  only after the merged one verifies.
+  Duplicate manifests are merged and the newest is written. Android keeps the
+  others and gathers them on every run: another device may write one after this
+  run listed it, and Drive has no conditional delete, so deleting it could lose
+  that write. iOS still deletes them after the merged one verifies; until it
+  matches, a mixed set of devices can still lose such a write.
 - Automatic backup: one 30 s debounce after any change to songs, trash,
   tombstones or recordings (recorded, saved, imported, renamed, deleted, trashed
   or restored, including recordings added by Import; a newly recorded memo starts

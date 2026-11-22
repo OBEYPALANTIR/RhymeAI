@@ -1098,7 +1098,10 @@ class DriveSyncService(
         val restored: Int = 0
     )
 
-    /** All manifests named [BackupManifest.FILE_NAME]: the newest is kept, the rest merged in and removed. */
+    /**
+     * All manifests named [BackupManifest.FILE_NAME]: the newest is written, the rest are kept
+     * and gathered on every run (never deleted, so a write another device makes to one is not lost).
+     */
     private class RemoteState(
         val primary: DriveFileMetadata?,
         val duplicates: List<DriveFileMetadata>,
@@ -1603,7 +1606,8 @@ class DriveSyncService(
                 seen = SyncMerger.gather(*repository.establishPrecedence(listOf(gathered, BackupManifest.decode(readBack)), now()).toTypedArray())
                 return@repeat
             }
-            remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
+            // Duplicate manifests are kept, never deleted: another device may write one after our
+            // listing, and Drive has no conditional delete, so removing it could lose that write.
             // A40: a raw object goes only when its stored id, digest and length match an entry
             // gathered this run that a winning tombstone covers, and only by its own Drive file id.
             // A41: a recording whose time was only a repair is never deleted for losing to a
