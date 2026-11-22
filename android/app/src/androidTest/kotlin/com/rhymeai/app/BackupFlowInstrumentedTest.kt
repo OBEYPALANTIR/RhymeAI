@@ -862,10 +862,11 @@ class BackupFlowInstrumentedTest {
             instrumentation.runOnMainSync { vm.keepAlternate("seeded line") }
             waitUntil({ "alternates ${alternates()}" }) { alternates().any { it.text == "seeded line" } }
             val seeded = alternates().single { it.text == "seeded line" }.id
-            // Paused in the hold's own draft write, right before the commit.
-            DraftSaveTestHooks.beforeWrite = resume
+            // Paused inside the hold, right before the commit. The editor is untouched, so the hold writes no draft.
+            val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+            BackupTestHooks.beforeHeldOperation = { reached.complete(Unit); resume.await() }
             instrumentation.runOnMainSync { vm.restoreFromBackup() }
-            waitUntil { DraftSaveTestHooks.beforeWrite == null && vm.editorHeld }
+            waitUntil { reached.isCompleted && vm.editorHeld }
             SystemClock.sleep(300)
             val notebook = runBlocking { repo.workspacesFlow.first() }[openSong.id]
             instrumentation.runOnMainSync {
@@ -890,6 +891,7 @@ class BackupFlowInstrumentedTest {
             assertEquals(null, vm.persistenceError)
         } finally {
             DraftSaveTestHooks.beforeWrite = null
+            BackupTestHooks.beforeHeldOperation = null
             resume.complete(Unit)
             resetOpenSong()
         }
@@ -901,9 +903,10 @@ class BackupFlowInstrumentedTest {
         val vm = openSongInEditor(otherSongs = listOf(other))
         val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
         try {
-            DraftSaveTestHooks.beforeWrite = resume
+            val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+            BackupTestHooks.beforeHeldOperation = { reached.complete(Unit); resume.await() }
             instrumentation.runOnMainSync { vm.restoreFromBackup() }
-            waitUntil { DraftSaveTestHooks.beforeWrite == null && vm.editorHeld }
+            waitUntil { reached.isCompleted && vm.editorHeld }
             instrumentation.runOnMainSync {
                 vm.loadProject(other)
                 // Going to the background meanwhile saves; it must not drop the waiting open.
@@ -917,6 +920,7 @@ class BackupFlowInstrumentedTest {
             assertEquals(newerWords, storedOpenSong().lyrics)
         } finally {
             DraftSaveTestHooks.beforeWrite = null
+            BackupTestHooks.beforeHeldOperation = null
             resume.complete(Unit)
             resetOpenSong()
         }
