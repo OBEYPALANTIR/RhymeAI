@@ -182,6 +182,8 @@ internal object DraftSaveTestHooks {
     val failNextReread = java.util.concurrent.atomic.AtomicBoolean(false)
     /** Holds the next reread after a failed draft save. */
     @Volatile var beforeReread: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Holds the next autosave after its commit, before its "Saved" beat. */
+    @Volatile var afterAutosaveCommit: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Holds the next draft write before it runs, so a test can order it against another save. */
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
@@ -2792,6 +2794,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (missing) SaveFailureRules.WriteFailure.MISSING_ROW else SaveFailureRules.WriteFailure.WRITE_ERROR,
             wordsEdited = !unedited
         )
+        // Detached with the mark, before the reread suspends: edits made meanwhile autosave under a new song.
+        // A write older than a commit of the open words under this id leaves the draft where it is.
+        val detached = missing && currentProjectId == project.id && attempt >= committedAttempt
+        if (detached) {
+            // A retry saves the draft under a new song and never restores the deleted one.
+            currentProjectId = null
+            positionSaveJob?.cancel()
+        }
         try {
             DraftSaveTestHooks.beforeReread?.let { DraftSaveTestHooks.beforeReread = null; it.await() }
             if (DraftSaveTestHooks.failNextReread.compareAndSet(true, false)) throw java.io.IOException("injected reread failure")
@@ -2808,16 +2818,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {
             // The song list keeps what the view model last heard; the draft is already marked.
         }
-        if (missing && currentProjectId == project.id) {
-            // Detached: a retry saves the draft under a new song and never restores the deleted one.
-            currentProjectId = null
-            positionSaveJob?.cancel()
-        }
+        // Read after the reread: a newer commit of the open words may have landed meanwhile.
+        val stale = !detached && attempt < committedAttempt
         persistenceError = when (error) {
-            is MissingActiveProjectException -> "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
             is CorruptLibraryException -> corruptLibraryMessage(error)
-            // Read after the reread: a newer commit of the open words may have landed meanwhile.
-            else -> if (attempt < committedAttempt) persistenceError else "Your draft could not be saved. It is still open. Try again."
+            else -> if (stale) persistenceError else if (missing) {
+                "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
+            } else "Your draft could not be saved. It is still open. Try again."
         }
     }
 
@@ -2897,7 +2904,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return projectId
     }
 
-    /** [retry] is the save-status Retry: it saves at once and is the only save that writes an emptied editor. */
+    /** [retry] is the save-status Retry: it saves at once and, unlike an ordinary autosave, writes an emptied editor. */
     fun triggerAutoSave(retry: Boolean = false) {
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
@@ -2953,6 +2960,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 rememberEditorPosition()
                 persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt)
                 if (missingId != null) reportRecoveredDraft()
+                DraftSaveTestHooks.afterAutosaveCommit?.let { DraftSaveTestHooks.afterAutosaveCommit = null; it.await() }
                 delay(SAVE_STATUS_VISIBLE_MILLIS)
                 // Another save of this draft may have failed during the beat; SAVED would hide its Retry.
                 if (currentProjectId == project.id && title == currentTitle &&
