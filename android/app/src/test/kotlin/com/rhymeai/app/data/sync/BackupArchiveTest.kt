@@ -346,13 +346,15 @@ class BackupArchiveTest {
         repo.saveProjects(listOf(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 300L, precedenceRepaired = true)))
         val trashCopy = TrashedSongProject(SongProject(id = "same", title = "Trashed", lyrics = "LT", updatedAt = 400L), deletedAt = 500L)
         repo.saveTrashedProjects(listOf(trashCopy))
+        val activeBefore = repo.projectsFlow.first()
         repo.permanentlyDeleteTrashedProject("same", now = 5_000L)
+        assertEquals(activeBefore, repo.projectsFlow.first(), "active list right after Delete forever")
         val zipFile = File(root, "trash-copy.zip")
         zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(trashed = listOf(trashCopy)), emptyList(), 1_000L, "device") }
 
         BackupArchive.import(BackupArchive.read(zipFile), repo, File(root, "cross-source-files").also { it.mkdirs() })
 
-        assertTrue(repo.projectsFlow.first().none { it.lyrics == "LA" })
+        assertEquals(emptyList(), repo.projectsFlow.first(), "active list after the import")
         assertEquals(listOf("LA"), repo.recoveredSongs().map { it.project.lyrics })
         assertEquals(listOf("LT"), repo.trashedProjectsFlow.first().map { it.project.lyrics })
     }

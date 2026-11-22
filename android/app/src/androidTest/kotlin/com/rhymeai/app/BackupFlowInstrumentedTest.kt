@@ -219,7 +219,12 @@ class BackupFlowInstrumentedTest {
         assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
         instrumentation.runOnMainSync { vm.backUpNow() }
-        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
+        val detail = { "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }
+        // The save queues its own automatic backup. When it lands after "Back up now" started, the run ends Pending
+        // behind the 30 s debounce; back up again (read on the main thread) so no queued backup leaks into the test.
+        waitUntil(detail) { vm.backupStatus is BackupStatus.Connected || vm.backupStatus == BackupStatus.Pending }
+        instrumentation.runOnMainSync { if (vm.backupStatus == BackupStatus.Pending) vm.backUpNow() }
+        waitUntil(detail) { vm.backupStatus is BackupStatus.Connected }
     }
 
     @After fun restore() {
