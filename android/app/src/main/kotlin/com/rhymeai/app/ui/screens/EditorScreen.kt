@@ -65,6 +65,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -746,6 +747,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     contentDescription = stringResource(R.string.editor_saved),
                                     tint = colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
+                                )
+                            }
+                            // Stays until a save of the open words commits; the dialog explains it once.
+                            SaveStatus.FAILED -> IconButton(
+                                onClick = viewModel::retrySave,
+                                modifier = Modifier.size(DesignTokens.Touch.minTarget).testTag("retrySave")
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = stringResource(R.string.editor_save_failed_retry),
+                                    tint = colorScheme.error
                                 )
                             }
                             else -> {}

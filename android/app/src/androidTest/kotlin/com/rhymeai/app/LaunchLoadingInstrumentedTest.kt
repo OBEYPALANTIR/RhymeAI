@@ -25,7 +25,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Rule
 import org.junit.Test
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import org.junit.runner.RunWith
 import java.util.UUID
 
@@ -36,6 +44,7 @@ class LaunchLoadingInstrumentedTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val repo = ProjectRepository(app)
     private var scenario: ActivityScenario<MainActivity>? = null
+    @get:Rule val compose = createEmptyComposeRule()
     private lateinit var vm: MainViewModel
     private val ledgerKey = stringPreferencesKey("first_seen_precedence_json")
 
@@ -180,6 +189,18 @@ class LaunchLoadingInstrumentedTest {
                 assertTrue(vm.trashedProjects.none { it.project.id == id })
             }
             assertTrue(runBlocking { repo.trashedProjectsFlow.first() }.none { it.project.id == id })
+
+            // Dismissing the dialog leaves the failure in the save status (the failed Trash did not clear it); its retry stores the words.
+            compose.onNodeWithText("OK").performClick()
+            compose.waitForIdle()
+            onMain {
+                assertNull(vm.persistenceError)
+                assertEquals(SaveStatus.FAILED, vm.saveStatus)
+            }
+            compose.onNodeWithContentDescription(app.getString(R.string.editor_save_failed_retry)).assertIsDisplayed().performClick()
+            waitUntil { runBlocking { repo.projectsFlow.first() }.any { it.id == id && it.lyrics == draft } }
+            waitUntil { vm.saveStatus == SaveStatus.SAVED }
+            compose.onAllNodesWithTag("retrySave").assertCountEquals(0)
 
             // The same deletion succeeds once the draft can be saved: only the save had failed.
             onMain { vm.moveProjectToTrash(id) }

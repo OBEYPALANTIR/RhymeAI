@@ -104,7 +104,35 @@ internal data class EditorAIContext(
     val complexity: RhymeComplexity, val word: String?, val wordRange: TextRange?
 )
 
-enum class SaveStatus { IDLE, SAVING, SAVED }
+enum class SaveStatus { IDLE, SAVING, SAVED, FAILED }
+
+/** When the open draft carries a failed save: as on Apple, it stays until a save of the open words commits. */
+internal object SaveFailureRules {
+    enum class WriteFailure { WRITE_ERROR, REREAD_CORRUPT, MISSING_ROW }
+
+    /**
+     * A write of [failedId] failed: only the draft still open ([openId]) is marked. A confirmed missing
+     * row whose words were not edited has nothing unsaved; every other failure has.
+     */
+    fun failedAfterWriteError(wasFailed: Boolean, failedId: String, openId: String?, failure: WriteFailure, wordsEdited: Boolean): Boolean = when {
+        failedId != openId -> wasFailed
+        failure == WriteFailure.MISSING_ROW -> wordsEdited
+        else -> true
+    }
+
+    /** A write of [committedId] committed: it clears the failure only when it is the open song and holds the editor's words. */
+    fun failedAfterCommit(wasFailed: Boolean, committedId: String, openId: String?, wordsMatchEditor: Boolean): Boolean =
+        wasFailed && !(committedId == openId && wordsMatchEditor)
+
+    /** A song switch, close, new song or Trash of the open song clears it once it completes; one that fails leaves it. */
+    fun failedAfterTransition(wasFailed: Boolean, completed: Boolean): Boolean = wasFailed && !completed
+
+    /** An emptied editor still writes when the erase of a song it holds is the save that failed. */
+    fun emptyDraftNeedsWrite(failed: Boolean, holdsSong: Boolean): Boolean = failed && holdsSong
+
+    /** Where a save that ended or was cancelled leaves the indicator. */
+    fun restingStatus(failed: Boolean): SaveStatus = if (failed) SaveStatus.FAILED else SaveStatus.IDLE
+}
 
 /**
  * A suggestion line paired with its phonetic tier and hook flag.
@@ -692,7 +720,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingProjectCreationIds.remove(id)
         currentProjectId = null
         positionSaveJob?.cancel()
-        saveStatus = SaveStatus.IDLE
+        saveStatus = SaveFailureRules.restingStatus(saveFailed)
     }
 
     private fun reportRecoveredDraft() {
@@ -738,7 +766,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onSaved()
                 }
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                reconcileFailedProjectSave(project, error)
+                reconcileFailedProjectSave(project, error, storedBefore = existing)
             } finally {
                 savingBeforeNavigation = false
                 queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
@@ -747,6 +775,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     var saveStatus by mutableStateOf(SaveStatus.IDLE)
+    /** The open draft's last save failed and no save of its words has committed since; outlives SAVING during a retry. */
+    private var saveFailed = false
+
+    private fun setSaveFailed(failed: Boolean) {
+        saveFailed = failed
+        if (failed) saveStatus = SaveStatus.FAILED else if (saveStatus == SaveStatus.FAILED) saveStatus = SaveStatus.IDLE
+    }
+
+    private fun completeDraftTransition() = setSaveFailed(SaveFailureRules.failedAfterTransition(saveFailed, completed = true))
+
+    /** The save-status retry: saves the open words at once, under a new song when the old one is gone. */
+    fun retrySave() {
+        if (saveFailed && !openingSong) triggerAutoSave(debounce = false)
+    }
+
     var showProjectsDialog by mutableStateOf(false)
     var showTemplatesDialog by mutableStateOf(false)
     var showStartMenu by mutableStateOf(true)
@@ -2036,6 +2079,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         suggestions = emptyList()
         isSyllableColoringEnabled = true
         isRhymeHighlightEnabled = true
+        saveFailed = false
         saveStatus = SaveStatus.SAVED
         showStartMenu = false
         resetLyricsHistory()
@@ -2307,6 +2351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     lyricsFieldValue = TextFieldValue("")
                     theme = ""
                     currentProjectId = null
+                    completeDraftTransition()
                     restoreEditorPosition()
                     suggestions = emptyList()
                     showStartMenu = false
@@ -2371,6 +2416,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     lyricsFieldValue = TextFieldValue(project.lyrics)
                     theme = project.theme
                     currentProjectId = project.id
+                    completeDraftTransition()
                     restoreEditorPosition()
                     suggestions = emptyList()
                     showStartMenu = false
@@ -2607,6 +2653,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         restoreEditorPosition()
         suggestions = emptyList()
         errorMessage = null
+        completeDraftTransition()
         saveStatus = SaveStatus.IDLE
         resetLyricsHistory()
     }
@@ -2633,6 +2680,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lyricsFieldValue = TextFieldValue(project.lyrics)
                 theme = project.theme
                 currentProjectId = project.id
+                completeDraftTransition()
                 restoreEditorPosition()
                 suggestions = emptyList()
                 showStartMenu = false
@@ -2697,11 +2745,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         pendingProjectCreationIds.remove(project.id)
         if (currentProjectId == project.id) projects = committed
+        val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
+        if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
         return committed
     }
 
-    private suspend fun reconcileFailedProjectSave(project: SongProject, error: Exception) {
+    /** Marks the open draft failed, unless the failed write belongs to a draft no longer open. */
+    private fun markFailedSave(id: String, failure: SaveFailureRules.WriteFailure, wordsEdited: Boolean = true) {
+        val owned = currentProjectId == id
+        saveFailed = SaveFailureRules.failedAfterWriteError(saveFailed, id, currentProjectId, failure, wordsEdited)
+        if (owned) saveStatus = SaveFailureRules.restingStatus(saveFailed)
+    }
+
+    /** [storedBefore] is the song's row as read before the write: with it a vanished unedited song is told from lost edits. */
+    private suspend fun reconcileFailedProjectSave(project: SongProject, error: Exception, storedBefore: SongProject? = null) {
         val missing = error is MissingActiveProjectException
+        val known = storedBefore?.takeIf { it.id !in pendingProjectCreationIds }
         if (missing) pendingProjectCreationIds.remove(project.id)
         try {
             val stored = repo.projectsFlow.first()
@@ -2712,12 +2771,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             throw cancelled
         } catch (corrupt: CorruptLibraryException) {
             persistenceError = corruptLibraryMessage(corrupt)
+            markFailedSave(project.id, SaveFailureRules.WriteFailure.REREAD_CORRUPT)
             return
         }
+        val unedited = known != null && known.title == title.ifEmpty { "Untitled Song" } &&
+            known.lyrics == lyrics && known.theme == theme
+        markFailedSave(
+            project.id,
+            if (missing) SaveFailureRules.WriteFailure.MISSING_ROW else SaveFailureRules.WriteFailure.WRITE_ERROR,
+            wordsEdited = !unedited
+        )
         if (missing && currentProjectId == project.id) {
+            // Detached: a retry saves the draft under a new song and never restores the deleted one.
             currentProjectId = null
             positionSaveJob?.cancel()
-            saveStatus = SaveStatus.IDLE
         }
         persistenceError = when (error) {
             is MissingActiveProjectException -> "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
@@ -2741,6 +2808,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 theme = templateTheme
                 lyricsFieldValue = TextFieldValue(templateLyrics)
                 currentProjectId = null
+                completeDraftTransition()
                 restoreEditorPosition()
                 showStartMenu = false
                 resetLyricsHistory()
@@ -2788,12 +2856,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             theme = theme,
             updatedAt = System.currentTimeMillis()
         )
-        persistActiveProjectSnapshot(project, title, lyrics, theme)
+        try {
+            persistActiveProjectSnapshot(project, title, lyrics, theme)
+        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+            // The caller reports the recording; the open words are still unsaved.
+            markFailedSave(project.id, SaveFailureRules.WriteFailure.WRITE_ERROR)
+            throw error
+        }
         if (currentProjectId != projectId) throw CancellationException("Song changed")
         return projectId
     }
 
-    fun triggerAutoSave() {
+    fun triggerAutoSave(debounce: Boolean = true) {
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
             val currentTitle = title
@@ -2801,12 +2875,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTheme = theme
             val projectIdAtTrigger = currentProjectId
 
-            if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty()) {
+            if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty() &&
+                !SaveFailureRules.emptyDraftNeedsWrite(saveFailed, projects.any { it.id == projectIdAtTrigger })
+            ) {
+                // No song holds these empty words, so nothing is left unsaved.
+                setSaveFailed(false)
                 saveStatus = SaveStatus.IDLE
                 return@launch
             }
 
-            delay(AUTOSAVE_DEBOUNCE_MILLIS)
+            if (debounce) delay(AUTOSAVE_DEBOUNCE_MILLIS)
 
             // The editor switched projects (or this one was trashed) during the
             // debounce; saving the stale snapshot now would clobber the newly
@@ -2816,6 +2894,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (missingId != null) detachMissingActiveProject(missingId)
 
             saveStatus = SaveStatus.SAVING
+            val storedBefore = projects.firstOrNull { it.id == projectIdAtTrigger && missingId == null }
             val project = if (projectIdAtTrigger == null || missingId != null) {
                 createUntitledProjectSnapshot(
                     title = currentTitle, lyrics = currentLyrics, theme = currentTheme
@@ -2848,10 +2927,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                reconcileFailedProjectSave(project, error)
+                reconcileFailedProjectSave(project, error, storedBefore)
             } finally {
-                // Cancellation mid-save would otherwise leave the indicator stuck on SAVING.
-                if (saveStatus == SaveStatus.SAVING) saveStatus = SaveStatus.IDLE
+                // Cancellation mid-save would otherwise leave the indicator stuck on SAVING; an unresolved failure stays FAILED.
+                if (saveStatus == SaveStatus.SAVING) saveStatus = SaveFailureRules.restingStatus(saveFailed)
             }
         }
     }
@@ -2979,7 +3058,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Back cancels any open still waiting out its settle beat.
         openRequest++
         openingSong = false
-        flushCurrentDraft { suggestionInsertion = null; showStartMenu = true; onReady() }
+        flushCurrentDraft { suggestionInsertion = null; showStartMenu = true; completeDraftTransition(); onReady() }
     }
 
     private fun TextFieldValue.withValidRanges(): TextFieldValue {

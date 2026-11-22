@@ -9,6 +9,7 @@
     <!-- Editor top bar -->
     <string name="editor_saving">Saving…</string>
     <string name="editor_saved">Saved</string>
+    <string name="editor_save_failed_retry">Save failed. Retry saving</string>
     <string name="editor_open_songs_drawer">Open songs drawer</string>
     <string name="editor_export">Export</string>
     <string name="editor_share">Share</string>

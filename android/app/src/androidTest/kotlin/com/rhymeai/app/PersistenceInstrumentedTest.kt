@@ -181,6 +181,84 @@ class PersistenceInstrumentedTest {
         assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
     }
 
+    @Test
+    fun remoteTrashDuringSaveKeepsFailureAndRetrySavesDraftUnderNewIdentity() {
+        val original = SongProject("remote-race", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("edited during the race")
+            // Trashed elsewhere before the view model hears of it: the save finds its row gone.
+            runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+            viewModel.flushCurrentDraft()
+        }
+        waitUntil { viewModel.saveStatus == SaveStatus.FAILED && !viewModel.savingBeforeNavigation }
+        assertEquals(null, viewModel.currentProjectId)
+        assertTrue(viewModel.persistenceError.orEmpty().contains("no deleted song was restored"))
+
+        onMain {
+            viewModel.persistenceError = null
+            viewModel.retrySave()
+            assertEquals(SaveStatus.SAVING, viewModel.saveStatus)
+        }
+        waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals("edited during the race", replacement.lyrics)
+        assertEquals(replacement.id, viewModel.currentProjectId)
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+    }
+
+    @Test
+    fun remoteTrashDuringSaveOfUneditedSongLeavesNoFailure() {
+        val original = SongProject("remote-race-unedited", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+            viewModel.flushCurrentDraft()
+        }
+        waitUntil { viewModel.currentProjectId == null && !viewModel.savingBeforeNavigation }
+        SystemClock.sleep(300)
+        assertEquals(SaveStatus.IDLE, viewModel.saveStatus)
+        assertTrue(runBlocking { repo.projectsFlow.first() }.isEmpty())
+    }
+
+    @Test
+    fun retryOfAFailedEraseStoresTheEmptySong() {
+        val original = SongProject("erase-retry", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.title = ""
+                viewModel.lyricsFieldValue = TextFieldValue("")
+                viewModel.theme = ""
+                DraftSaveTestHooks.failNext.set(true)
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { viewModel.saveStatus == SaveStatus.FAILED && !viewModel.savingBeforeNavigation }
+
+            onMain { viewModel.retrySave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+            val stored = runBlocking { repo.projectsFlow.first().single() }
+            assertEquals(original.id, stored.id)
+            assertEquals(Triple("Untitled Song", "", ""), Triple(stored.title, stored.lyrics, stored.theme))
+        } finally {
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
 
     @Test
     fun customLocalModelRegistrationAndSelectionSurviveRepositoryRecreation() = runBlocking {
