@@ -1098,7 +1098,10 @@ class DriveSyncService(
         val restored: Int = 0
     )
 
-    /** All manifests named [BackupManifest.FILE_NAME]: the newest is kept, the rest merged in and removed. */
+    /**
+     * All manifests named [BackupManifest.FILE_NAME]: the newest is written, the rest are kept
+     * and gathered on every run (never deleted, so a write another device makes to one is not lost).
+     */
     private class RemoteState(
         val primary: DriveFileMetadata?,
         val duplicates: List<DriveFileMetadata>,
@@ -1146,9 +1149,12 @@ class DriveSyncService(
     ): RecoverySummary {
         val activeHere = repository.projectsFlow.first().mapTo(HashSet()) { it.id }
         val trashedHere = repository.trashedProjectsFlow.first().mapTo(HashSet()) { it.project.id }
-        val remoteIds = (current?.projects.orEmpty().map { it.id } + current?.trashed.orEmpty().map { it.project.id }).toSet()
+        // Songs the backup holds once resolved: an older copy in a kept duplicate that a tombstone removes is not held.
+        val held = current?.let(SyncMerger::resolve)
+        val remoteIds = (held?.projects.orEmpty().map { it.id } + held?.trashed.orEmpty().map { it.project.id }).toSet()
         // Deletions here and in the current backup: a recovered song or take deleted since stays deleted.
-        val deletions = SyncMerger.mergeDeletions(repository.syncDeletions() + current?.deletions.orEmpty())
+        // The backup's are resolved: a tombstone in a kept duplicate that a later edit defeated does not count.
+        val deletions = SyncMerger.mergeDeletions(repository.syncDeletions() + held?.deletions.orEmpty())
         // A deletion of unknown date (0) also keeps the item out, but is reported apart from confirmed ones.
         val (known, unknownDate) = deletions.partition { it.timeKnown }
         val deletedSongIds = known.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
@@ -1271,18 +1277,17 @@ class DriveSyncService(
     }
 
     /**
-     * Drive's revisions of the manifest, newest first: the [MAX_LISTED_REVISIONS] newest plus every
-     * kept-forever one, so a version pinned by an earlier recovery stays reachable. Nothing is
-     * downloaded or changed.
+     * Drive's revisions of every manifest file (duplicates are kept, and any of them can become the
+     * newest), newest first: the [MAX_LISTED_REVISIONS] newest plus every kept-forever one, so a
+     * version pinned by an earlier recovery stays reachable. Nothing is downloaded or changed.
      */
     suspend fun probeRevisions(): RevisionsResult = authorized({ RevisionsResult.Failed(it) }) { token ->
-        val manifest = primaryManifest(token) ?: return@authorized RevisionsResult.Ready(emptyList())
-        val newestFirst = driveClient.listRevisions(token, manifest.id).sortedByDescending { it.modifiedTime.orEmpty() }
-        val newest = newestFirst.take(MAX_LISTED_REVISIONS).mapTo(HashSet()) { it.id }
-        RevisionsResult.Ready(
-            newestFirst.filter { it.id in newest || it.keepForever }
-                .map { BackupRevision(manifest.id, it.id, it.modifiedTime, it.sizeBytes, kept = it.keepForever) }
-        )
+        val newestFirst = driveClient.listFilesByNamePrefix(token, BackupManifest.FILE_NAME)
+            .filter { it.name == BackupManifest.FILE_NAME }
+            .flatMap { file -> driveClient.listRevisions(token, file.id).map { BackupRevision(file.id, it.id, it.modifiedTime, it.sizeBytes, kept = it.keepForever) } }
+            .sortedByDescending { it.modifiedTime.orEmpty() }
+        val newest = newestFirst.take(MAX_LISTED_REVISIONS).toSet()
+        RevisionsResult.Ready(newestFirst.filter { it in newest || it.kept })
     }
 
     /** Drive serves an earlier blob revision only once it is kept forever, so only the chosen one is pinned. */
@@ -1306,12 +1311,6 @@ class DriveSyncService(
             }
         }
     }
-
-    /** The manifest [readRemote] keeps: the newest of those named [BackupManifest.FILE_NAME]. */
-    private suspend fun primaryManifest(token: String): DriveFileMetadata? =
-        driveClient.listFilesByNamePrefix(token, BackupManifest.FILE_NAME)
-            .filter { it.name == BackupManifest.FILE_NAME }
-            .maxByOrNull { it.modifiedTime ?: "" }
 
     /** Runs the migration with a passphrase the user typed once; it is never stored. */
     suspend fun migrateLegacyBackup(repository: ProjectRepository, passphrase: String): SyncResult {
@@ -1603,7 +1602,8 @@ class DriveSyncService(
                 seen = SyncMerger.gather(*repository.establishPrecedence(listOf(gathered, BackupManifest.decode(readBack)), now()).toTypedArray())
                 return@repeat
             }
-            remote.duplicates.forEach { driveClient.deleteFile(token, it.id) }
+            // Duplicate manifests are kept, never deleted: another device may write one after our
+            // listing, and Drive has no conditional delete, so removing it could lose that write.
             // A40: a raw object goes only when its stored id, digest and length match an entry
             // gathered this run that a winning tombstone covers, and only by its own Drive file id.
             // A41: a recording whose time was only a repair is never deleted for losing to a
