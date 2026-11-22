@@ -416,10 +416,118 @@ class BackupFlowInstrumentedTest {
                 )
                 assertEquals(listOf("twin"), manifest.projects.map { it.id })
                 assertEquals(listOf("twin"), manifest.trashed.map { it.project.id })
+                assertEquals("Active", kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString(SongProject.serializer(), archive.getInputStream(archive.getEntry("songs/twin.json")).bufferedReader().readText()).title)
             }
         } finally {
             zip.delete()
         }
+    }
+
+    /** Delete forever of a Trash copy whose id is also active: the active song keeps its notebook and recording, even after an import. */
+    @Test fun deleteForeverOfATrashCopyKeepsTheActiveSongNotebookAndRecordingThroughImport() {
+        val vm = launchConnectedWithEmptyLibrary()
+        instrumentation.runOnMainSync { vm.disconnectDrive() }
+        waitUntil { vm.backupNotice?.startsWith("Disconnected from Google Drive") == true }
+        val id = "p1-${System.nanoTime()}"
+        val audio = byteArrayOf(5, 4, 3, 2, 1)
+        val source = java.io.File(context.cacheDir, "p1-source.m4a").apply { writeBytes(audio) }
+        val entry = com.rhymeai.app.data.sync.RecordingManifestEntry(
+            id, "take.m4a", sizeBytes = audio.size.toLong(), modifiedAt = 0L, sha256 = BackupManifest.sha256Hex(audio), uploadedAt = 2_000L
+        )
+        val seedZip = java.io.File(context.cacheDir, "p1-seed.zip")
+        val emptyZip = java.io.File(context.cacheDir, "p1-empty.zip")
+        seedZip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(SongProject(id, title = "Active", updatedAt = 1_000L))),
+                listOf(com.rhymeai.app.data.sync.LocalRecordingFile(entry, source)), 0L, "test"
+            )
+        }
+        emptyZip.outputStream().use { com.rhymeai.app.data.sync.BackupArchive.write(it, SyncBlob(), emptyList(), 0L, "test") }
+        fun record() = runBlocking { repo.recordingRecords() }.singleOrNull { it.projectId == id }
+        fun fileBytes(path: String?) = path?.let { com.rhymeai.app.data.recording.RecordingFiles.containedRecordingFile(context.filesDir, it) }
+            ?.takeIf { it.exists() }?.readBytes()
+        fun keeps(workspace: com.rhymeai.app.data.model.SongWorkspace?) = workspace?.alternates?.any { it.text == "kept line" } == true
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(seedZip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice == "Imported 1 song and added 1 recording." }
+            val seeded = checkNotNull(record())
+            assertEquals(2_000L, seeded.uploadedAt)
+            assertFalse(seeded.precedenceRepaired)
+            assertTrue(audio.contentEquals(fileBytes(checkNotNull(seeded.path))))
+
+            val active = runBlocking { repo.projectsFlow.first() }.single { it.id == id }
+            instrumentation.runOnMainSync { vm.loadProject(active) { vm.keepAlternate("kept line") } }
+            waitUntil { keeps(runBlocking { repo.workspacesFlow.first()[id] }) }
+            runBlocking {
+                repo.saveTrashedProjects(listOf(TrashedSongProject(
+                    SongProject(id, title = "Trashed", updatedAt = 1_500L), deletedAt = 1_600L,
+                    deleteAfter = System.currentTimeMillis() + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+                )))
+            }
+
+            instrumentation.runOnMainSync { vm.permanentlyDeleteTrashedProject(id) }
+            waitUntil { runBlocking { repo.trashedProjectsFlow.first() }.none { it.project.id == id } }
+            // The view model applies its half after the store's edit returns.
+            waitUntil { var done = false; instrumentation.runOnMainSync { done = vm.trashedProjects.none { it.project.id == id } }; done }
+            val storedNotebook = runBlocking { repo.workspacesFlow.first()[id] }
+            var viewNotebook: com.rhymeai.app.data.model.SongWorkspace? = null
+            instrumentation.runOnMainSync { viewNotebook = vm.songWorkspace }
+
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(emptyZip)) }
+            waitUntil({ "notice was ${vm.backupNotice}" }) { vm.backupNotice == "Imported 0 songs and added 0 recordings." }
+
+            // Every check is collected, so the first loss does not hide the others.
+            val problems = mutableListOf<String>()
+            fun expect(what: String, ok: Boolean) { if (!ok) problems += what }
+            expect("stored notebook kept right after delete forever", keeps(storedNotebook))
+            expect("view-model notebook kept right after delete forever", keeps(viewNotebook))
+            expect("stored notebook kept after import", keeps(runBlocking { repo.workspacesFlow.first()[id] }))
+            var viewAfter: com.rhymeai.app.data.model.SongWorkspace? = null
+            instrumentation.runOnMainSync { viewAfter = vm.songWorkspace }
+            expect("view-model notebook kept after import", keeps(viewAfter))
+            val stillActive = runBlocking { repo.projectsFlow.first() }.singleOrNull { it.id == id }
+            expect("active song kept as Active at 1000 (was $stillActive)", stillActive?.title == "Active" && stillActive.updatedAt == 1_000L)
+            expect("no Trash row holds the id", runBlocking { repo.trashedProjectsFlow.first() }.none { it.project.id == id })
+            val kept = record()
+            expect("recording record kept with its path (was $kept)", kept?.path != null)
+            expect("recording file holds the seeded bytes", audio.contentEquals(fileBytes(kept?.path)))
+            val memos = runBlocking { vm.voiceMemoService.memosForProject(id) }
+            expect("recording listed for the song (memos ${memos.map { it.file.name }})", kept?.path != null && memos.any { it.file.name == java.io.File(kept.path!!).name })
+            val tombstones = runBlocking { repo.syncDeletions() }.filter { it.projectId == id }
+            expect("no tombstone for the id (was $tombstones)", tombstones.isEmpty())
+            expect("no pending recording deletion for the id", id !in runBlocking { repo.pendingRecordingDeletionIds() })
+            assertTrue(problems.joinToString("; "), problems.isEmpty())
+        } finally {
+            seedZip.delete()
+            emptyZip.delete()
+            source.delete()
+            com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, id).deleteRecursively()
+            runBlocking {
+                runCatching { repo.saveWorkspace(id, null) }
+                runCatching { repo.updateRecordingRecords { records -> records.filterNot { it.projectId == id } } }
+            }
+        }
+    }
+
+    /** Two Trash copies sharing an id: delete forever refuses, says why, and both stay. */
+    @Test fun deleteForeverRefusesTwoTrashCopiesSharingAnIdAndSaysWhy() {
+        val vm = launchConnectedWithEmptyLibrary()
+        val id = "p1-twin-${System.nanoTime()}"
+        val now = System.currentTimeMillis()
+        val keepUntil = now + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS
+        runBlocking {
+            repo.saveTrashedProjects(listOf(
+                TrashedSongProject(SongProject(id, lyrics = "one"), deletedAt = now, deleteAfter = keepUntil),
+                TrashedSongProject(SongProject(id, lyrics = "two"), deletedAt = now, deleteAfter = keepUntil)
+            ))
+        }
+
+        instrumentation.runOnMainSync { vm.permanentlyDeleteTrashedProject(id) }
+
+        waitUntil({ "error was ${vm.persistenceError}" }) {
+            vm.persistenceError == "Trash holds more than one copy of this song, so none was deleted. Stored songs were left untouched."
+        }
+        assertEquals(setOf("one", "two"), runBlocking { repo.trashedProjectsFlow.first() }.filter { it.project.id == id }.map { it.project.lyrics }.toSet())
     }
 
     @Test fun aPreExistingMemoKeepsItsStampedTimeAcrossRestartAndRename() {

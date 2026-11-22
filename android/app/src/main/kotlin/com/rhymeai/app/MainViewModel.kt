@@ -29,6 +29,7 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.repository.SameIdTrashCopiesException
 import com.rhymeai.app.data.sync.BackupArchive
 import com.rhymeai.app.data.sync.BackupGate
 import com.rhymeai.app.data.sync.BackupManifest
@@ -2454,11 +2455,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Every recording of the song gets a record first, so the deletion tombstones all of them.
                 val committed = repo.permanentlyDeleteTrashedProject(id, adopt = ::adoptRecordings)
                     ?: return@launch reportMissingTrashProject()
-                trashedProjects = committed
-                pendingProjectCreationIds.remove(id)
-                workspaces = workspaces - id
-                if (!retryPendingRecordingDeletions(id)) {
-                    persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
+                trashedProjects = committed.trashedProjects
+                if (id in committed.purgedIds) { // (c); on (b) the active song keeps its notebook, creation mark and recordings
+                    pendingProjectCreationIds.remove(id)
+                    workspaces = workspaces - id
+                    if (!retryPendingRecordingDeletions(id)) {
+                        persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
+                    }
                 }
                 scheduleTrashPurge()
             } catch (cancelled: CancellationException) {
@@ -2564,6 +2567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun trashFailureMessage(action: String, error: Exception): String = when (error) {
         is CorruptLibraryException -> corruptLibraryMessage(error)
         is MissingActiveProjectException -> "The song is no longer active. No changes were made."
+        is SameIdTrashCopiesException -> "Trash holds more than one copy of this song, so none was deleted. Stored songs were left untouched."
         else -> "Could not $action. Stored songs were left untouched. Try again."
     }
 
