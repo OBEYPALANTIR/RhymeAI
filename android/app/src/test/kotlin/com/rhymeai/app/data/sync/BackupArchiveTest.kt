@@ -338,6 +338,24 @@ class BackupArchiveTest {
         assertTrue(repo.projectsFlow.first().none { it.id == "r" })
         assertEquals("only copy", repo.recoveredSongs().single().project.lyrics)
     }
+
+    @Test
+    fun anImportedTrashCopyThatReplacesAnUnknownTimeSongAfterDeleteForeverLeavesItsWordsInRecovery() = runBlocking<Unit> {
+        // The active song's time is unknown, so an incoming Trash copy with a real time wins over it at import.
+        val repo = repository("cross-source")
+        repo.saveProjects(listOf(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 300L, precedenceRepaired = true)))
+        val trashCopy = TrashedSongProject(SongProject(id = "same", title = "Trashed", lyrics = "LT", updatedAt = 400L), deletedAt = 500L)
+        repo.saveTrashedProjects(listOf(trashCopy))
+        repo.permanentlyDeleteTrashedProject("same", now = 5_000L)
+        val zipFile = File(root, "trash-copy.zip")
+        zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(trashed = listOf(trashCopy)), emptyList(), 1_000L, "device") }
+
+        BackupArchive.import(BackupArchive.read(zipFile), repo, File(root, "cross-source-files").also { it.mkdirs() })
+
+        assertTrue(repo.projectsFlow.first().none { it.lyrics == "LA" })
+        assertEquals(listOf("LA"), repo.recoveredSongs().map { it.project.lyrics })
+        assertEquals(listOf("LT"), repo.trashedProjectsFlow.first().map { it.project.lyrics })
+    }
     @Test
     fun anImportWhoseKeptSongsDoNotReadBackRemovesNothing() = runBlocking<Unit> {
         // The store drops the recovery store's write: the read-back stops Import before the apply.

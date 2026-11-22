@@ -59,13 +59,14 @@ internal class SameIdTrashCopiesException(id: String) :
  * A41: a song (active or in Trash) whose repaired time lost to a tombstone in a merge.
  * Its time was unknown, so it may be newer than that deletion: it leaves the library like
  * any deleted song, but its content and its recordings' ids are kept here, never erased.
+ * Also an active song with an unknown time, kept at Delete forever of a Trash copy with its id.
  */
 @kotlinx.serialization.Serializable
 internal data class RecoveredSong(
     /** The song as it was, with its own repair flag (`precedenceRepaired`) for `updatedAt`. */
     val project: SongProject,
     val wasInTrash: Boolean,
-    /** The winning tombstone's time. */
+    /** The winning tombstone's time, or the Delete forever time for an active song kept at that delete. */
     val deletedAt: Long,
     val keptAt: Long,
     val recordingIds: List<String> = emptyList(),
@@ -530,8 +531,20 @@ class ProjectRepository internal constructor(
             if (trash.none { it.project.id == id }) return@edit // (0) unchanged
             if (trash.count { it.project.id == id } > 1) throw SameIdTrashCopiesException(id) // (a) nothing written
             val nextTrash = trash.filterNot { it.project.id == id }
-            if (projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]").any { it.id == id }) {
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            if (active.any { it.id == id }) {
                 // (b) The id is active: only this Trash copy goes; the song's notebook, recordings and tombstones stay.
+                // An unknown-time row (the merge's test) can later lose to an imported copy of this Trash song,
+                // so each distinct one is kept aside in the same write, as the tombstone path would have kept it.
+                val unknownTime = active.filter { it.id == id && (it.updatedAt <= 0L || it.precedenceRepaired) }
+                if (unknownTime.isNotEmpty()) {
+                    val stored = recoveredSongsStore.decode(prefs[RECOVERED_SONGS_KEY] ?: "[]")
+                    val recordingIds = recordsStore.decode(prefs[RECORDING_RECORDS_KEY] ?: "[]")
+                        .filter { it.projectId == id }.map { it.id }
+                    val fresh = unknownTime.map { RecoveredSong(it, false, now, now, recordingIds) }
+                        .fold(emptyList<RecoveredSong>()) { kept, song -> if ((stored + kept).any { it.sameAs(song) }) kept else kept + song }
+                    if (fresh.isNotEmpty()) prefs[RECOVERED_SONGS_KEY] = explicitJson.encodeToString(stored + fresh)
+                }
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 committed = TrashPurge(nextTrash, emptyList())
                 return@edit
@@ -730,7 +743,7 @@ class ProjectRepository internal constructor(
         return KeptLosers(losers, fresh.size)
     }
 
-    /** Songs kept aside after their repaired time lost to a deletion (A41), oldest first. */
+    /** Songs kept aside after their repaired time lost to a deletion (A41), or at Delete forever of a same-id Trash copy, oldest first. */
     internal suspend fun recoveredSongs(): List<RecoveredSong> =
         recoveredSongsStore.decode(dataStore.data.first()[RECOVERED_SONGS_KEY] ?: "[]")
 
