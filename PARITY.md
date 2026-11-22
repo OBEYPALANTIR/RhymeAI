@@ -542,8 +542,10 @@ below is the contract it must meet, not verified behaviour.
   then reports "Backup conflict, will retry" and backs off. Each retry gathers
   the fresh manifest with everything earlier attempts saw, including a
   conflicting read-back. Drive v3 exposes no file ETag, so no `If-Match` is sent.
-  Duplicate manifests are merged, the newest is kept, and the others are deleted
-  only after the merged one verifies.
+  Duplicate manifests are merged and the newest is written. iOS keeps the
+  others and gathers them on every run: another device may write one after this
+  run listed it, and Drive has no conditional delete, so deleting it could lose
+  that write. Android still deletes them after the merged one verifies.
 - Automatic backup: one 30 s debounce after any change to songs, trash,
   tombstones or recordings (recorded, saved, imported, renamed, deleted, trashed
   or restored, including recordings added by Import; a newly recorded memo starts
@@ -565,7 +567,8 @@ below is the contract it must meet, not verified behaviour.
   (`BackupGate`); a library or Drive count that cannot be read never uploads. Not
   now leaves Drive untouched and keeps backup paused; Back up now in that state
   asks before merging Drive's songs with nothing. "Recover an earlier backup"
-  lists the manifest's Drive revisions newest first, the 50 newest plus every
+  lists the manifest's Drive revisions newest first (iOS: of every kept
+  manifest file), the 50 newest plus every
   kept-forever one (marked Kept), by time and size without downloading them.
   Choosing one only asks for confirmation; on Recover that revision alone is
   marked `keepForever` (Drive serves an earlier blob revision only then; at most
@@ -576,12 +579,14 @@ below is the contract it must meet, not verified behaviour.
   downloads, free space is checked (iOS: about twice the takes' total plus the
   largest take and 128 MiB; Android: the takes' total plus 128 MiB). The import
   skips a song whose id or recovered id is held here or in any current manifest
-  (active or Trash) and adds every other song with its takes under recovered ids,
+  (active or Trash; on iOS, once the manifests are resolved, so a copy in a
+  kept duplicate that a tombstone removes does not count) and adds every other song with its takes under recovered ids,
   UUID v3 of `writersblock-recovery/<file id>/<revision id>/<old id>` pinned by
   the shared vector `writersblock-recovery/f1/r1/song-1` →
   `3ec9dc72-4f40-37c0-a588-f62dc27d13de`, so a stopped recovery is finished by
   the next one of the same revision without duplicates. A tombstone with a known
-  time naming a recovered song or take, here or in the backup, keeps it deleted;
+  time naming a recovered song or take, here or in the backup (iOS: once
+  resolved, so one a later edit defeated does not count), keeps it deleted;
   a recovered song's own tombstone decides first, so a deleted recovered song gets
   no takes even when an earlier run's copy is still on the device. A tombstone of
   unknown date also keeps a recovered item from being placed and is reported

@@ -830,8 +830,9 @@ struct RemoteBackupSummary: Equatable, Sendable {
     var recordings: Int
 }
 
-/// A kept Drive revision of the manifest: "Recover an earlier backup".
-struct BackupRevision: Equatable, Sendable, Identifiable {
+/// A kept Drive revision of the manifest: "Recover an earlier backup". `id` is
+/// Drive's revision id, unique only within its file, so a row is the pair.
+struct BackupRevision: Hashable, Sendable {
     var fileId: String
     var id: String
     var modifiedAt: Date?
@@ -1015,13 +1016,13 @@ final class BackupService {
         }
     }
 
-    /// Songs and recordings in the v4 backup, or nil when there is none.
+    /// Songs and recordings in the v4 backup, every manifest file resolved together,
+    /// or nil when there is none.
     func remoteBackupSummary() async throws -> RemoteBackupSummary? {
         guard isConnected else { return nil }
         let accessToken = try await oauthProvider.accessToken(interactive: false)
-        guard let file = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken) else { return nil }
-        let blob = try await downloadManifest(file, accessToken: accessToken)
-        return RemoteBackupSummary(songs: blob.projects.count, recordings: blob.recordings.count)
+        guard let backup = try await resolvedRemoteManifests(accessToken: accessToken) else { return nil }
+        return RemoteBackupSummary(songs: backup.projects.count, recordings: backup.recordings.count)
     }
 
     // MARK: Earlier backups (Drive revisions)
@@ -1030,19 +1031,24 @@ final class BackupService {
     /// Google Drive keeps at most 200 revisions of a file forever.
     static let keptRevisionLimit = 200
 
-    /// The manifest's revisions newest first: the latest 50 and every one already
+    /// The revisions of every manifest file (duplicates are kept, and any of them can
+    /// become the newest) newest first: the latest 50 overall and every one already
     /// kept forever (those can always be recovered), by time and size. Their content
     /// cannot be downloaded before it is kept forever, so nothing is read here.
     func probeRevisions() async throws -> [BackupRevision] {
         guard isConnected else { return [] }
         let accessToken = try await oauthProvider.accessToken(interactive: true)
-        guard let manifest = try await manifestFiles(accessToken: accessToken).max(by: { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }) else { return [] }
-        // Drive's RFC 3339 UTC times sort as text; on a tie the later-listed one is newer.
-        let newestFirst = try await driveClient.listRevisions(fileId: manifest.id, accessToken: accessToken).enumerated()
-            .sorted { ($0.element.modifiedTime ?? "", $0.offset) > ($1.element.modifiedTime ?? "", $1.offset) }.map(\.element)
-        return newestFirst.enumerated().filter { $0.offset < Self.revisionListLimit || $0.element.keepForever == true }
-            .map { BackupRevision(fileId: manifest.id, id: $0.element.id, modifiedAt: $0.element.modifiedTime.flatMap(Self.driveDate),
-                                  bytes: $0.element.size.flatMap { Int64($0) }, keptForever: $0.element.keepForever == true) }
+        var listed: [(fileId: String, revision: DriveFileRevision)] = []
+        for file in try await manifestFiles(accessToken: accessToken) {
+            listed += try await driveClient.listRevisions(fileId: file.id, accessToken: accessToken).map { (file.id, $0) }
+        }
+        // Drive's RFC 3339 UTC times sort as text; on a tie the later-listed one is newer
+        // (files are listed oldest first, then by id, so this holds across files too).
+        let newestFirst = listed.enumerated()
+            .sorted { ($0.element.revision.modifiedTime ?? "", $0.offset) > ($1.element.revision.modifiedTime ?? "", $1.offset) }.map(\.element)
+        return newestFirst.enumerated().filter { $0.offset < Self.revisionListLimit || $0.element.revision.keepForever == true }
+            .map { BackupRevision(fileId: $0.element.fileId, id: $0.element.revision.id, modifiedAt: $0.element.revision.modifiedTime.flatMap(Self.driveDate),
+                                  bytes: $0.element.revision.size.flatMap { Int64($0) }, keptForever: $0.element.revision.keepForever == true) }
     }
 
     /// Recovers an earlier backup the user confirmed: asks Drive to keep that
@@ -1084,15 +1090,10 @@ final class BackupService {
         try? FileManager.default.removeItem(at: recoveryDownloadsRoot)
         library.clearStaging(context: modelContext)
         try await library.reconcile(context: modelContext)
-        // Every manifest under the backup's name counts (a race can leave more than one):
-        // a song or tombstone held only by an older one is still held.
-        var current = SyncBlob()
-        for file in try await manifestFiles(accessToken: accessToken) {
-            let blob = try await downloadManifest(file, accessToken: accessToken)
-            current.projects += blob.projects
-            current.trashed += blob.trashed
-            current.deletions += blob.deletions
-        }
+        // Every manifest under the backup's name counts (a race can leave more than one),
+        // resolved together: a song or tombstone held only by an older one is still held,
+        // but a copy another file's tombstone removes, or a tombstone a later edit defeated, is not.
+        let current = try await resolvedRemoteManifests(accessToken: accessToken) ?? SyncBlob()
         let remote = try await recordingFiles(accessToken: accessToken)
         let active = Set(try modelContext.fetch(FetchDescriptor<SongProject>()).map(\.id))
         let trashed = Set(try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id))
@@ -1361,10 +1362,8 @@ final class BackupService {
         }
         guard verified, let target else { throw BackupError.backupConflict }
         try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
-        // Duplicates are folded into the verified manifest above; only now remove them.
-        for duplicate in manifests where duplicate.id != target.id {
-            try await driveClient.deleteFile(id: duplicate.id, accessToken: accessToken)
-        }
+        // Duplicate manifests are kept and gathered on every run, never deleted: another device
+        // may write one after our listing, and Drive has no conditional delete to protect that write.
 
         // Precedence times of every recording this run gathered, before resolution.
         let gatheredRecordings = try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs.map(fixingPrecedence)).recordings
@@ -1389,7 +1388,7 @@ final class BackupService {
 
         if let legacy {
             report.unmovedLegacyRecordings = legacy.unmovedRecordings
-            if try await legacyBackupIsPreserved(legacy, in: merged, remote: try await recordingFiles(accessToken: accessToken), accessToken: accessToken) {
+            if try await legacyBackupIsPreserved(legacy, in: merged, written: target, remote: try await recordingFiles(accessToken: accessToken), accessToken: accessToken) {
                 let moved = Set(legacy.allRecordings.map { RecordingBackupManifest.legacyDriveName(projectId: $0.projectId, fileName: $0.fileName) })
                 report.retainedLegacyObjects = try await removeLegacyBackup(movedRecordingNames: moved, verifiedObjects: legacy.verifiedObjects,
                                                                             remoteRecordings: remoteRecordings, accessToken: accessToken)
@@ -1500,10 +1499,10 @@ final class BackupService {
     /// True only when the v4 backup on Drive holds everything the old one did:
     /// every song not deleted there, at the same or a newer version, and every
     /// recording as raw audio whose SHA-256 and size match.
-    private func legacyBackupIsPreserved(_ legacy: LegacyBackup, in merged: SyncBlob, remote: RemoteFiles, accessToken: String) async throws -> Bool {
+    private func legacyBackupIsPreserved(_ legacy: LegacyBackup, in merged: SyncBlob, written: DriveAppDataFile, remote: RemoteFiles, accessToken: String) async throws -> Bool {
+        // The file this run wrote and verified, by id: a kept duplicate may be listed first.
         guard legacy.unmovedRecordings == 0,
-              let uploaded = try await manifestFiles(accessToken: accessToken).first,
-              try await downloadManifest(uploaded, accessToken: accessToken).manifestSha256 == merged.manifestSha256 else { return false }
+              try await downloadManifest(written, accessToken: accessToken).manifestSha256 == merged.manifestSha256 else { return false }
         // Each old song or Trash entry, its times fixed and flagged like any input
         // (T2.37), is kept when v4 holds the same or a later standing version of it,
         // each time compared with its own repair flag (A38, T2.38), or a tombstone
@@ -1566,10 +1565,22 @@ final class BackupService {
 
     // MARK: Manifest and recordings on Drive
 
-    /// Every file named like the manifest; normally one.
+    /// Every file named like the manifest; normally one. Oldest first, then by id, so
+    /// in a merge (where the later input wins a tie) the newest file's entries win.
     private func manifestFiles(accessToken: String) async throws -> [DriveAppDataFile] {
         try await driveClient.listFiles(prefix: SyncBlob.driveFileName, accessToken: accessToken)
             .filter { $0.name == SyncBlob.driveFileName }
+            .sorted { ($0.modifiedTime ?? "", $0.id) < ($1.modifiedTime ?? "", $1.id) }
+    }
+
+    /// Every manifest file gathered and resolved once, recordings included, without
+    /// this device's library; nil when there is none.
+    private func resolvedRemoteManifests(accessToken: String) async throws -> SyncBlob? {
+        let files = try await manifestFiles(accessToken: accessToken)
+        guard !files.isEmpty else { return nil }
+        var blobs: [SyncBlob] = []
+        for file in files { blobs.append(try await downloadManifest(file, accessToken: accessToken)) }
+        return try SyncMerger.resolve(try SyncMerger.gather(blobs))
     }
 
     private func downloadManifest(_ file: DriveAppDataFile, accessToken: String) async throws -> SyncBlob {

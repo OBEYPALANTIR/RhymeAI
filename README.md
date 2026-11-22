@@ -148,7 +148,8 @@ resets on success. Just before writing, the manifest is checked for writes by
 another device and merged if there were; every write is then downloaded again
 and its hash compared; on a mismatch the backup merges again, keeping everything
 earlier attempts saw (up to three times, then "Backup conflict, will retry"), and
-duplicate manifests are merged and the extras removed after verification.
+duplicate manifests are merged on every run and kept (iOS; Android still removes
+the extras after verification).
 Restore merges both ways, uploads local-only items, then downloads recordings
 this device does not hold, applying everything in one transaction that resolves
 the incoming data with what is here at commit time: an edit saved meanwhile is
