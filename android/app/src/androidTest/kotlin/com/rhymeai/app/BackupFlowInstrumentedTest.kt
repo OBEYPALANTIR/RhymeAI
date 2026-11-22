@@ -675,9 +675,10 @@ class BackupFlowInstrumentedTest {
         }
         try {
             // The import starts at once, whether or not this view model has seen the other window's save yet.
+            // What another window's save writes: the row and the saved editor state. Off the main thread: a store write
+            // blocking it can wait forever behind a view-model write whose edit runs on the main thread.
+            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
             instrumentation.runOnMainSync {
-                // What another window's save writes: the row and the saved editor state.
-                runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
                 assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
                 vm.importBackup(android.net.Uri.fromFile(zip))
             }
@@ -733,11 +734,9 @@ class BackupFlowInstrumentedTest {
             instrumentation.runOnMainSync { vm.sendOneLinerToSong(line, storedOpenSong()) { sent.complete(it) } }
             runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
             assertTrue(storedOpenSong().lyrics.contains("a sent line"))
-            instrumentation.runOnMainSync {
-                // What another window's save writes: the row and the saved editor state.
-                runBlocking { repo.saveActiveState(storedOpenSong().copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()), false, openSong.title, newerWords, openSong.theme) }
-                vm.importBackup(android.net.Uri.fromFile(zip))
-            }
+            // What another window's save writes, off the main thread as above.
+            runBlocking { repo.saveActiveState(storedOpenSong().copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()), false, openSong.title, newerWords, openSong.theme) }
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
             waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
             waitUntil({ "held ${vm.editorHeld} editor ${vm.lyrics}" }) { !vm.editorHeld && vm.lyrics == newerWords }
             assertEquals(newerWords, storedOpenSong().lyrics)
@@ -797,7 +796,8 @@ class BackupFlowInstrumentedTest {
             assertEquals("typed words", vm.lyrics)
         } finally {
             // The typing queued an autosave that would otherwise write "typed words" into the next test's open song.
-            runBlocking { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() }
+            // Bounded: a join that never returns fails the test instead of hanging the run.
+            runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
             line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
             resetOpenSong()
         }
