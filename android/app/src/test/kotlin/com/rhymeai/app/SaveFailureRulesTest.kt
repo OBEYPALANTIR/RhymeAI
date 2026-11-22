@@ -22,10 +22,14 @@ class SaveFailureRulesTest {
             Row("stale completion after a switch leaves the new draft clear", r.failedAfterWriteError(false, "old", "new", write, wordsEdited = true), false),
             Row("stale completion after a switch keeps the new draft's own failure", r.failedAfterWriteError(true, "old", "new", missing, wordsEdited = false), true),
             Row("stale completion after a detach", r.failedAfterWriteError(false, "old", null, write, wordsEdited = true), false),
-            // Retry of an intentional erase still writes; with no song there is nothing to save
-            Row("empty editor, failed erase of a held song", r.emptyDraftNeedsWrite(failed = true, holdsSong = true), true),
-            Row("empty editor, no failure", r.emptyDraftNeedsWrite(failed = false, holdsSong = true), false),
-            Row("empty editor, detached draft", r.emptyDraftNeedsWrite(failed = true, holdsSong = false), false),
+            Row("failure of a write older than a commit of the open words", r.failedAfterWriteError(false, "a", "a", write, wordsEdited = true, supersededByCommit = true), false),
+            // Only Retry writes an intentional erase; with no song there is nothing to save
+            Row("Retry of a failed erase of a held song", r.emptyDraftNeedsWrite(failed = true, holdsSong = true, retry = true), true),
+            Row("autosave of an emptied editor after a failure", r.emptyDraftNeedsWrite(failed = true, holdsSong = true, retry = false), false),
+            Row("Retry with no failure", r.emptyDraftNeedsWrite(failed = false, holdsSong = true, retry = true), false),
+            Row("Retry of a detached empty draft", r.emptyDraftNeedsWrite(failed = true, holdsSong = false, retry = true), false),
+            Row("skipped empty autosave keeps the held song's failure", r.failedAfterEmptySkip(failed = true, holdsSong = true), true),
+            Row("skipped empty autosave of a detached draft clears it", r.failedAfterEmptySkip(failed = true, holdsSong = false), false),
             // Cancellation and finished saves
             Row("cancelled retry of a failed draft", r.restingStatus(failed = true), SaveStatus.FAILED),
             Row("cancelled ordinary save", r.restingStatus(failed = false), SaveStatus.IDLE),
