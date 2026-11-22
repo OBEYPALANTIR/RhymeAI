@@ -2761,6 +2761,115 @@ struct BackupCoreTests {
         #expect(harness.service.lastReport?.deferredRepairedCleanup.contains(take.fileName) == true, "the kept take is reported")
     }
 
+    /// A kept file holds a tombstone for the take at 200 and the main file lists it at 100.
+    /// While the run reads Drive, the take is restored here at 300: the candidate sees that
+    /// copy before it takes Drive's time onto the row, so the audio stays.
+    @MainActor
+    @Test func aRecordingRestoredHereDuringTheReadKeepsItsAudio() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        harness.context.insert(SongProject(id: "s", title: "s", updatedAt: Date(timeIntervalSince1970: 1)))
+        try harness.context.save()
+        drive.seedDuplicateManifest(try Self.takeTombstone(take), modifiedTime: "c-1")
+        drive.seed(name: SyncBlob.driveFileName, content: try Self.listing(take, at: 100, by: "x"))
+        drive.seedRecording(take, content: audio)
+        let main = try #require(try await drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
+        var restored = false
+        drive.duringDownload = { id in
+            guard !restored, id == main.id else { return }
+            restored = true
+            var here = take
+            here.uploadedAt = Date(millisecondsSince1970: 300)
+            _ = try harness.service.library.commitRestored(audio, entry: here, origin: .restored, context: harness.context)
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(restored)
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).contains { $0.id == take.id }, "the take is held here")
+        #expect(drive.content(named: take.driveName) == audio, "the copy restored here at 300 keeps the audio")
+    }
+
+    /// A failed delete left proof at 100 for take b. The next run sees b at 300 in an older
+    /// kept file (the main file still lists it at 100, so it is not written) and fails to
+    /// delete take a, which sorts first: b's proof is still cleared, so a relaunch that sees
+    /// neither listing keeps b's audio.
+    @MainActor
+    @Test func aVetoBehindAFailedDeleteStillClearsTheProof() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let (audioA, audioB) = (Data("take a".utf8), Data("take b".utf8))
+        let (a, b) = (Self.take("a", of: "s", audioA), Self.take("b", of: "s", audioB))
+        for take in [a, b] { harness.context.insert(SyncRecordingDeletion(projectId: "s", recordingId: take.id, fileName: take.fileName, deletedAt: 200)) }
+        try harness.context.save()
+        drive.seed(name: SyncBlob.driveFileName, content: try Self.listing(b, at: 100, by: "x"))
+        drive.seedRecording(b, content: audioB)
+        drive.failNextDelete(named: b.driveName)
+        await #expect(throws: BackupError.self) { try await harness.service.backupNow(modelContext: harness.context) }
+        #expect(harness.defaults.data(forKey: "backup-proven-covered-recordings") != nil, "b's proof was persisted before the failed delete")
+
+        let empty = try SyncBlob(projects: [Self.song("s")], savedByClientId: "y").encodedManifest()
+        let keptB = drive.seedDuplicateManifest(try Self.listing(b, at: 300, by: "y"), modifiedTime: "c-1")
+        let keptA = drive.seedDuplicateManifest(try Self.listing(a, at: 100, by: "z"), modifiedTime: "c-2")
+        drive.seed(name: SyncBlob.driveFileName, content: try Self.listing(b, at: 100, by: "x"))
+        drive.seedRecording(a, content: audioA)
+        drive.failNextDelete(named: a.driveName)
+        await #expect(throws: BackupError.self) { try await harness.service.backupNow(modelContext: harness.context) }
+        #expect(drive.content(named: b.driveName) == audioB, "b is listed at 300: its delete is vetoed")
+
+        drive.rewriteExtra(id: keptB.id, content: empty, modifiedTime: "d-1")
+        drive.rewriteExtra(id: keptA.id, content: empty, modifiedTime: "d-2")
+        drive.seed(name: SyncBlob.driveFileName, content: empty)
+        let relaunched = try await harness.reopened()
+        try await relaunched.service.backupNow(modelContext: relaunched.context)
+        #expect(drive.content(named: b.driveName) == audioB, "the veto cleared b's proof before a's delete failed")
+    }
+
+    /// A failed delete left proof at 100 for the take. In the next run an older kept file is
+    /// rewritten to list it at 300 while the written manifest is read back, and the look after
+    /// the write reads that file, then fails on the main file. The run still completes and the
+    /// 300 entry it read clears the proof, so a relaunch that sees no listing keeps the audio.
+    @MainActor
+    @Test func aFailedLookAfterTheWriteStillClearsTheProof() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        harness.context.insert(SyncRecordingDeletion(projectId: "s", recordingId: "t", fileName: take.fileName, deletedAt: 200))
+        try harness.context.save()
+        drive.seed(name: SyncBlob.driveFileName, content: try Self.listing(take, at: 100, by: "x"))
+        drive.seedRecording(take, content: audio)
+        drive.failNextDelete(named: take.driveName)
+        await #expect(throws: BackupError.self) { try await harness.service.backupNow(modelContext: harness.context) }
+
+        let empty = try SyncBlob(projects: [Self.song("s")], savedByClientId: "y").encodedManifest()
+        let kept = drive.seedDuplicateManifest(empty, modifiedTime: "c-1")
+        let main = try #require(try await drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
+        let writes = drive.uploads(named: SyncBlob.driveFileName)
+        let later = try Self.listing(take, at: 300, by: "y")
+        var stage = 0
+        drive.beforeDownload = {
+            guard let id = drive.downloadAttempts.last else { return }
+            if stage == 0, id == main.id, drive.uploads(named: SyncBlob.driveFileName) > writes {
+                stage = 1  // the read-back of the written manifest
+                drive.rewriteExtra(id: kept.id, content: later, modifiedTime: "c-2")
+            } else if stage == 1, id == kept.id {
+                stage = 2  // the look after the write: the kept file is read, the main file fails
+                drive.downloadFailures[main.id] = .invalidResponse
+            }
+        }
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(stage == 2)
+        #expect(drive.content(named: take.driveName) == audio)
+
+        drive.beforeDownload = nil
+        drive.rewriteExtra(id: kept.id, content: empty, modifiedTime: "c-3")
+        let relaunched = try await harness.reopened()
+        try await relaunched.service.backupNow(modelContext: relaunched.context)
+        #expect(drive.content(named: take.driveName) == audio, "the 300 entry read before the failure cleared the proof")
+    }
+
     /// The first-run probe counts the backup resolved across every manifest file:
     /// an empty first file does not hide another's songs, and a stale one does not
     /// report songs another file deleted.
@@ -4246,6 +4355,8 @@ private final class FakeDriveClient: DriveAppDataClient {
     var downloadFailures: [String: BackupError] = [:]
     /// Runs before each download (a test cancels the run from here).
     var beforeDownload: (() -> Void)?
+    /// Runs on the main actor before each download, given the file id (a local change mid-read).
+    var duringDownload: (@MainActor (String) throws -> Void)?
     private(set) var downloadAttempts: [String] = []
 
     func listRevisions(fileId: String, accessToken: String) async throws -> [DriveFileRevision] {
@@ -4354,6 +4465,7 @@ private final class FakeDriveClient: DriveAppDataClient {
     func downloadFile(id: String, accessToken: String) async throws -> Data {
         downloadAttempts.append(id)
         beforeDownload?()
+        if let hook = duringDownload { try await MainActor.run { try hook(id) } }
         if let failure = downloadFailures.removeValue(forKey: id) { throw failure }
         if let extra = extraFiles.first(where: { $0.file.id == id }) { return extra.content }
         guard let (name, stored) = filesByName.first(where: { $0.value.file.id == id }).map({ ($0.key, $0.value) }) else {
