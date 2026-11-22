@@ -12,18 +12,25 @@ nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
 // deactivation before the next activation, even when that stop does not wait.
 nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
     static let shared = VoiceMemoAudioSessionTransitions(
+        // macOS has no audio session; recording and playback need no activation there.
         activateRecording: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
+            #endif
         },
         activatePlayback: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
+            #endif
         },
         deactivate: {
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
         }
     )
 
@@ -233,7 +240,7 @@ final class VoiceMemoService {
             }
         } catch {
             pendingTakesUnreadable = true
-            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; tap Retry to try again."
+            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
             return
         }
         pendingTakesUnreadable = false
@@ -465,7 +472,7 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
-        if #available(iOS 17.0, *) {
+        if #available(iOS 17.0, macOS 14.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
             case .denied:
@@ -479,6 +486,7 @@ final class VoiceMemoService {
                 return false
             }
         } else {
+            #if os(iOS)
             return await withCheckedContinuation { continuation in
                 AVAudioSession.sharedInstance().requestRecordPermission { granted in
                     DispatchQueue.main.async {
@@ -487,6 +495,9 @@ final class VoiceMemoService {
                     }
                 }
             }
+            #else
+            return false
+            #endif
         }
     }
 
@@ -804,7 +815,7 @@ final class VoiceMemoService {
         do {
             try RecordingFiles.writeFinishedMarker(finishedAt, in: folder)
         } catch {
-            lastError = "Couldn't finish saving the recording. It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't finish saving the recording. It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             refreshPendingTakes()
             return
         }
@@ -843,7 +854,7 @@ final class VoiceMemoService {
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .unconfirmed:
                 guard let audio = take.audio else { continue }
@@ -854,12 +865,12 @@ final class VoiceMemoService {
                         try RecordingFiles.writeFinishedMarker(finishedAt, in: take.folder)
                         publish(PendingTake(id: take.id, projectId: take.projectId, folder: take.folder, audio: audio, state: .finished(finishedAt)))
                     } catch {
-                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                     }
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .failed:
                 break
@@ -888,7 +899,7 @@ final class VoiceMemoService {
         } catch {
             // Before or after the move, the take keeps its marker and waits; a retry
             // resolves it by id.
-            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             return
         }
         forget(take)

@@ -145,6 +145,15 @@ struct AppAppearancePalette {
     /// Shadow tint: the ink on the light appearances; black on Graphite, where a cream shadow would read as a glow.
     let shadowInk: Color
 
+    /// Toggle tint: the switch track on iOS; the Mac's checkboxes keep the action colour.
+    var toggleTint: Color {
+        #if os(macOS)
+        action
+        #else
+        switchTrack
+        #endif
+    }
+
     fileprivate static let ink = AppAppearancePalette(
         canvas: Color(hex: 0xFCFCF8),
         surface: Color(hex: 0xFCFCF8),

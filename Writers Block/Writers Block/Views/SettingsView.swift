@@ -7,9 +7,11 @@ struct SettingsView: View {
     @EnvironmentObject private var ggufDownloadManager: GGUFDownloadManager
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appAppearanceStyle) private var appearance
+    @Environment(\.appAppearanceStyle) var appearance
+    #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #endif
 
     @State private var editingKeys: [String: String] = [:]
     /// Keys as last read from or written to the Keychain. API keys are the
@@ -17,12 +19,21 @@ struct SettingsView: View {
     @State private var storedKeys: [String: String] = [:]
     @State private var confirmingUnsavedKeys = false
     @State private var showKey = false
-    @State private var savedConfirmation = false
-    @State private var saveError: String?
-    @State private var activeHelp: FeatureHelp?
+    @State var savedConfirmation = false
+    @State var saveError: String?
+    @State var activeHelp: FeatureHelp?
     @State private var selectedTab: SettingsTab = .general
+    #if os(macOS)
+    /// The Settings window opens on the tab it last showed, as Mac apps do.
+    @AppStorage("macSettingsTab") var macSettingsTab = "general"
+    @FocusState private var apiKeyFieldFocused: Bool
+    @Environment(\.openSettings) var openSettingsWindow
+    #endif
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
         NavigationStack {
             VStack(spacing: 0) {
                 SettingsTabPicker(selection: $selectedTab)
@@ -79,7 +90,7 @@ struct SettingsView: View {
                 // iPadOS draws toolbar buttons on a shared glass capsule, which
                 // failed the contrast audit on hardware. Without it, Done is the
                 // action colour on the canvas toolbar, the pair used across the app.
-                if #available(iOS 26.0, *) {
+                if #available(iOS 26.0, macOS 26.0, *) {
                     ToolbarItem(placement: .cancellationAction) { doneButton }
                         .sharedBackgroundVisibility(.hidden)
                 } else {
@@ -118,8 +129,10 @@ struct SettingsView: View {
                 FirstRunRestoreSheet(offer: offer)
             }
         }
+        #endif
     }
 
+    #if !os(macOS)
     private var doneButton: some View {
         Button {
             if hasUnsavedKeys {
@@ -141,6 +154,7 @@ struct SettingsView: View {
     private var topBarTypeSize: DynamicTypeSize {
         horizontalSizeClass == .compact && dynamicTypeSize.isAccessibilitySize ? .large : dynamicTypeSize
     }
+    #endif
 
     @ViewBuilder
     private var settingsContent: some View {
@@ -166,7 +180,7 @@ struct SettingsView: View {
         }
     }
 
-    private var providerSection: some View {
+    var providerSection: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("AI Provider", systemImage: "sparkles")
 
@@ -181,12 +195,13 @@ struct SettingsView: View {
                 title: \.displayName
             )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .indigo.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     @ViewBuilder
-    private var providerSpecificSection: some View {
+    var providerSpecificSection: some View {
         if viewModel.selectedProvider == .local {
             SettingsLocalModelSection()
                 .transition(.opacity)
@@ -212,6 +227,15 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .textFieldStyle(.plain)
+                #if os(macOS)
+                // Mac preferences apply as they change: a key saves when the
+                // field is committed with Return or loses focus.
+                .focused($apiKeyFieldFocused)
+                .onSubmit { saveKeysIfChanged() }
+                .onChange(of: apiKeyFieldFocused) { _, focused in
+                    if !focused { saveKeysIfChanged() }
+                }
+                #endif
 
                 Button {
                     showKey.toggle()
@@ -226,7 +250,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, RhymeAITokens.Spacing.sm)
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             Text(viewModel.selectedProvider.keyHint)
                 .font(.caption)
@@ -244,7 +268,7 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .selectedContext) }
                 )
             )
-            .tint(.indigo)
+            .tint(consentTint)
             .accessibilityIdentifier("cloudAISelectedContextConsent")
 
             Toggle(
@@ -254,14 +278,14 @@ struct SettingsView: View {
                     set: { viewModel.setCloudAISharingConsent($0, scope: .wholeSong) }
                 )
             )
-            .tint(.indigo)
+            .tint(consentTint)
             .accessibilityIdentifier("cloudAIWholeSongConsent")
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .purple.opacity(0.08), fallbackOpacity: 0.06)
     }
 
-    private var modelSection: some View {
+    var modelSection: some View {
         VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
             SettingsSectionTitle("Model", systemImage: "cpu")
 
@@ -277,7 +301,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, RhymeAITokens.Spacing.sm)
             .frame(minHeight: RhymeAITokens.Touch.minimum)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .white.opacity(0.04), interactive: true, fallbackOpacity: 0.06)
 
             // Cloud model ids are what the provider's docs call the model; the
             // on-device placeholder id ("local-model") means nothing to a writer.
@@ -290,7 +314,7 @@ struct SettingsView: View {
             }
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .blue.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var apiKeyBinding: Binding<String> {
@@ -306,11 +330,11 @@ struct SettingsView: View {
         }
     }
 
-    private var hasUnsavedKeys: Bool {
+    var hasUnsavedKeys: Bool {
         editingKeys != storedKeys
     }
 
-    private func loadSettingsState() {
+    func loadSettingsState() {
         // The sheet reappears after a help sheet closes; a key being typed
         // must survive that.
         if !hasUnsavedKeys {
@@ -323,19 +347,42 @@ struct SettingsView: View {
         ggufDownloadManager.refreshInstalledModels()
     }
 
+    /// The Save path, run only when a typed key differs from the Keychain's.
+    func saveKeysIfChanged() {
+        if hasUnsavedKeys { saveAll() }
+    }
+
+    /// iOS keeps system indigo on the consent switches for Graphite contrast; the
+    /// Mac's checkboxes take the action colour, as its other Settings checkboxes do.
+    private var consentTint: Color {
+        #if os(macOS)
+        appearance.palette.action
+        #else
+        .indigo
+        #endif
+    }
+
+    /// The keys to write, in provider order: only keys the writer changed. An
+    /// untouched key that read as empty (a Keychain read failure) must not be
+    /// saved as a removal.
+    static func changedKeys(editing: [String: String], stored: [String: String]) -> [(AIProvider, String)] {
+        AIProvider.allCases.compactMap { provider in
+            guard let key = editing[provider.rawValue], key != stored[provider.rawValue] else { return nil }
+            return (provider, key)
+        }
+    }
+
     @discardableResult
-    private func saveAll() -> Bool {
+    func saveAll() -> Bool {
         savedConfirmation = false
         saveError = nil
-        for provider in AIProvider.allCases {
-            if let key = editingKeys[provider.rawValue] {
-                guard viewModel.saveApiKey(provider: provider, key: key) else {
-                    let action = key.isEmpty ? "remove" : "save"
-                    saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
-                    return false
-                }
-                storedKeys[provider.rawValue] = key
+        for (provider, key) in Self.changedKeys(editing: editingKeys, stored: storedKeys) {
+            guard viewModel.saveApiKey(provider: provider, key: key) else {
+                let action = key.isEmpty ? "remove" : "save"
+                saveError = "Couldn't \(action) the \(provider.displayName) API key in the Keychain. Try again after unlocking the device."
+                return false
             }
+            storedKeys[provider.rawValue] = key
         }
         savedConfirmation = true
         Task {

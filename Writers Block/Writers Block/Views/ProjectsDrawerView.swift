@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+// The iPhone and iPad songs drawer; the Mac window has its own sidebar.
+#if !os(macOS)
 private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
 enum ProjectsDrawerPresentation {
@@ -155,15 +157,7 @@ struct ProjectsDrawerView: View {
     }
 
     private var filteredProjects: [SongProject] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return projects }
-
-        return projects.filter { project in
-            let title = project.title.isEmpty ? "Untitled Song" : project.title
-            return title.localizedCaseInsensitiveContains(query)
-                || project.lyrics.localizedCaseInsensitiveContains(query)
-                || project.theme.localizedCaseInsensitiveContains(query)
-        }
+        SongProject.matching(projects, searchText: searchText)
     }
 
     private var filteredRecordingFolders: [RecordingFolder] {
@@ -588,7 +582,7 @@ struct ProjectsDrawerView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -843,10 +837,20 @@ struct ProjectsDrawerView: View {
         return stem
     }
 
+    /// Song IDs are not unique once CloudKit syncs two copies of a song, so the
+    /// newest copy names the folder (ties: the smaller shown title), whatever
+    /// order the rows arrive in.
+    static func recordingFolderTitles(for projects: [SongProject]) -> [String: String] {
+        let entries = projects.map { ($0.id, (date: $0.updatedAt, title: $0.title.isEmpty ? "Untitled Song" : $0.title)) }
+        return Dictionary(entries) { a, b in
+            a.date != b.date ? (a.date > b.date ? a : b) : (a.title <= b.title ? a : b)
+        }.mapValues(\.title)
+    }
+
     private func reloadRecordings() {
         // Snapshot SwiftData-backed project titles on the main actor before
         // doing file-system work in a detached task.
-        let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
+        let titleMap = Self.recordingFolderTitles(for: projects)
         reloadGeneration += 1
         guard !viewModel.recordingListsSuspended else {
             recordingFolders = []
@@ -1044,11 +1048,7 @@ struct ProjectsDrawerView: View {
         case .success(let urls):
             guard let url = urls.first else { return }
             do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                if viewModel.importProject(exported) {
+                if try viewModel.importSongFile(at: url) {
                     dismissAfterNavigation()
                 }
             } catch {
@@ -1064,4 +1064,21 @@ struct ProjectsDrawerView: View {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
+}
+#endif
+
+extension SongProject {
+    /// The song search of the drawer and the Mac sidebar: title (or
+    /// "Untitled Song"), lyrics and theme, ignoring case.
+    static func matching(_ projects: [SongProject], searchText: String) -> [SongProject] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return projects }
+
+        return projects.filter { project in
+            let title = project.title.isEmpty ? "Untitled Song" : project.title
+            return title.localizedCaseInsensitiveContains(query)
+                || project.lyrics.localizedCaseInsensitiveContains(query)
+                || project.theme.localizedCaseInsensitiveContains(query)
+        }
+    }
 }

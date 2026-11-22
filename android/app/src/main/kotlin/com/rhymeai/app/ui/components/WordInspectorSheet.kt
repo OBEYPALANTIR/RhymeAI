@@ -7,9 +7,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -419,8 +423,17 @@ private fun ResultChip(
     onLongPress: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val interactionSource = remember { MutableInteractionSource() }
+    // Tap and long-press own the 48 dp slot; the pill and its ripple keep their drawn size, centred in it.
     Box(
         modifier = Modifier
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onTap,
+                onLongClick = onLongPress
+            )
+            .minimumInteractiveComponentSize()
             .background(
                 colorScheme.surfaceContainerHigh,
                 RoundedCornerShape(DesignTokens.Radius.pill)
@@ -430,10 +443,7 @@ private fun ResultChip(
                 colorScheme.primary.copy(alpha = 0.24f),
                 RoundedCornerShape(DesignTokens.Radius.pill)
             )
-            .combinedClickable(
-                onClick = onTap,
-                onLongClick = onLongPress
-            )
+            .indication(interactionSource, LocalIndication.current)
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Text(

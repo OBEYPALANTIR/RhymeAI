@@ -18,7 +18,13 @@ struct TrashBinView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if os(macOS)
+    /// The Mac window keeps the reading width of regular width.
+    private let isRegularWidth = true
+    #else
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    #endif
 
     var onDismiss: (() -> Void)? = nil
     /// The songs a Restore put back, so the drawer can confirm it.
@@ -178,7 +184,7 @@ struct TrashBinView: View {
 
             // Decorative on the compact layout only: on an iPad Pro 12.9 the
             // accessibility audit reads the hidden grid glyph as text ("88").
-            if horizontalSizeClass != .regular {
+            if !isRegularWidth {
                 Image(systemName: "square.grid.2x2")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(appearance.palette.secondaryInk)
@@ -191,9 +197,13 @@ struct TrashBinView: View {
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
+        #if os(macOS)
+        .liquidGlassSurface(cornerRadius: 0)
+        #else
         // A plain band with a bottom divider: the bordered surface drew a box
         // whose side edges ran down the screen edges.
         .background(appearance.palette.surface)
+        #endif
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -510,6 +520,34 @@ struct TrashBinView: View {
         // the palette's disabled ink keeps them readable until a row is selected.
         let enabled = activeSelectionCount > 0
         return layout {
+            #if os(macOS)
+            Button {
+                restoreSelected()
+            } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .disabled(!enabled)
+
+            Button(role: .destructive) {
+                confirmPermanentDelete = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+                    // The prominent style draws white on the action fill,
+                    // which is warm white on Graphite.
+                    .foregroundStyle(appearance.palette.onAction)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .disabled(!enabled)
+            #else
             Button {
                 restoreSelected()
             } label: {
@@ -534,19 +572,24 @@ struct TrashBinView: View {
             }
             .buttonStyle(.rhymePress)
             .disabled(!enabled)
+            #endif
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
+        #if os(macOS)
+        .liquidGlassSurface(cornerRadius: 0)
+        #else
         .background(appearance.palette.surface)
         .overlay(Divider(), alignment: .top)
+        #endif
     }
 
     /// On regular width the screen keeps the editor's 740pt column, centred.
     private var contentMaxWidth: CGFloat {
-        horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity
+        isRegularWidth ? RhymeAITokens.Layout.editorMaxWidth : .infinity
     }
 
     private func restoreSelected() {

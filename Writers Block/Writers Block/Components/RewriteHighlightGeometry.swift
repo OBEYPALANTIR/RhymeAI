@@ -1,4 +1,8 @@
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 enum RewriteHighlightGeometry {
     static func enclosingRects(
@@ -35,6 +39,7 @@ enum RewriteHighlightGeometry {
     }
 }
 
+#if canImport(UIKit)
 enum RewriteHighlightOverlayLayout {
     static func install(_ overlay: UIView, in textView: UITextView) {
         overlay.frame = textView.bounds
@@ -42,3 +47,4 @@ enum RewriteHighlightOverlayLayout {
         textView.addSubview(overlay)
     }
 }
+#endif

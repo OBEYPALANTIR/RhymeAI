@@ -37,7 +37,7 @@ final class OneLinerRecorder {
 
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
     @ObservationIgnored private var engine: AVAudioEngine?
-    @ObservationIgnored private var file: AVAudioFile?
+    @ObservationIgnored private var writer: OneLinerTakeWriter?
     @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
     @ObservationIgnored private var task: SFSpeechRecognitionTask?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
@@ -164,7 +164,7 @@ final class OneLinerRecorder {
             notice = Self.writeFailureNotice
             return false
         }
-        file = started.file
+        writer = started.writer
         request = started.request
         task = started.task
         self.engine = started.engine
@@ -183,7 +183,8 @@ final class OneLinerRecorder {
 
     /// Stops the take (or cancels a start); the file stays at `fileURL` and its length
     /// in `takeDuration`. Returns false when audio failed to write: the take is then
-    /// removed and `notice` says so. The Live Activity ends as stopped, unless
+    /// removed and `notice` says so. A tail that failed to write keeps the take, with
+    /// `tailFailureNotice` as the notice. The Live Activity ends as stopped, unless
     /// `endingActivity` is false because a save that reports the outcome follows.
     @discardableResult
     func stop(endingActivity: Bool = true) -> Bool {
@@ -192,9 +193,18 @@ final class OneLinerRecorder {
         if isRecording, let startedAt {
             takeDuration = Date().timeIntervalSince(startedAt)
         }
+        let tailWritten = tearDown(endingActivityAs: nil)
+        // Read after the teardown, which writes the take's tail.
         let failed = wasRecording && writeFailed.withLock { $0 }
-        tearDown(endingActivityAs: failed ? .discarded : (endingActivity ? .stopped : nil))
-        guard failed else { return true }
+        if failed {
+            liveActivity.end(.discarded)
+        } else if endingActivity {
+            liveActivity.end(.stopped)
+        }
+        guard failed else {
+            if wasRecording && !tailWritten { notice = Self.tailFailureNotice }
+            return true
+        }
         removeTakeFiles()
         takeDuration = 0
         notice = Self.writeFailureNotice
@@ -212,6 +222,7 @@ final class OneLinerRecorder {
     }
 
     static let writeFailureNotice = "Recording stopped because the audio couldn't be saved. The words so far are kept."
+    static let tailFailureNotice = "The take so far is kept, but its last moment couldn't be saved, so the end may be cut off."
 
     /// Stops or cancels, and removes the take's file. Its words still on the way are dropped.
     func discard() {
@@ -239,8 +250,10 @@ final class OneLinerRecorder {
         if isRecording { liveActivity.update(transcript: text, levels: levels) }
     }
 
-    /// `endingActivityAs` nil leaves the Live Activity for `endActivity`.
-    private func tearDown(endingActivityAs phase: OneLinerLiveActivity.Phase?) {
+    /// `endingActivityAs` nil leaves the Live Activity for `endActivity`. False when
+    /// the take's tail failed to write.
+    @discardableResult
+    private func tearDown(endingActivityAs phase: OneLinerLiveActivity.Phase?) -> Bool {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -248,8 +261,12 @@ final class OneLinerRecorder {
         request = nil
         task?.finish()
         task = nil
-        // Releasing the file finalizes the .m4a.
-        file = nil
+        // The tap has stopped: what a resampler still holds is written, then
+        // releasing the file finalizes the .m4a. A tail that fails to write loses only
+        // the take's last moment, so the take is kept.
+        var tailWritten = true
+        do { try writer?.finish() } catch { tailWritten = false }
+        writer = nil
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         interruptionObserver = nil
         isStarting = false
@@ -263,6 +280,7 @@ final class OneLinerRecorder {
             sessionHeld = false
             sessionTransitions.deactivate()
         }
+        return tailWritten
     }
 
     private func removeTakeFiles() {
@@ -294,6 +312,7 @@ final class OneLinerRecorder {
 
     /// A call, Siri or another app took the microphone: the take ends where it was.
     private func observeInterruptions() {
+        #if os(iOS)
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
@@ -303,10 +322,12 @@ final class OneLinerRecorder {
             guard type == AVAudioSession.InterruptionType.began.rawValue else { return }
             MainActor.assumeIsolated {
                 guard let self, self.isRecording else { return }
-                self.stop()
+                // A failed stop's notice, or the tail warning, stays.
+                guard self.stop(), self.notice != Self.tailFailureNotice else { return }
                 self.notice = "Recording stopped by an interruption. The take so far is kept."
             }
         }
+        #endif
     }
 
     private func pushLevel(_ level: Float, forTake take: UInt64) {
@@ -319,7 +340,7 @@ final class OneLinerRecorder {
     /// What `startCapture` built off the main thread, handed back to the main actor once.
     private struct StartedCapture: @unchecked Sendable {
         let engine: AVAudioEngine
-        let file: AVAudioFile
+        let writer: OneLinerTakeWriter
         let request: SFSpeechAudioBufferRecognitionRequest?
         let task: SFSpeechRecognitionTask?
 
@@ -346,21 +367,10 @@ final class OneLinerRecorder {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return nil }
-        let file: AVAudioFile
+        let writer: OneLinerTakeWriter
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // AAC in MPEG-4, as voice memos are recorded.
-            file = try AVAudioFile(
-                forWriting: url,
-                settings: [
-                    AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: format.sampleRate,
-                    AVNumberOfChannelsKey: format.channelCount,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-                ],
-                commonFormat: format.commonFormat,
-                interleaved: format.isInterleaved
-            )
+            writer = try OneLinerTakeWriter(url: url, inputFormat: format)
         } catch {
             return nil
         }
@@ -378,7 +388,7 @@ final class OneLinerRecorder {
             }
         }
 
-        installTap(on: input, format: format, file: file, request: request, failed: failed, level: level, writeFailed: writeFailed)
+        installTap(on: input, format: format, writer: writer, request: request, failed: failed, level: level, writeFailed: writeFailed)
         engine.prepare()
         do {
             try engine.start()
@@ -388,14 +398,14 @@ final class OneLinerRecorder {
             task?.cancel()
             return nil
         }
-        return StartedCapture(engine: engine, file: file, request: request, task: task)
+        return StartedCapture(engine: engine, writer: writer, request: request, task: task)
     }
 
     // The tap runs on the audio render thread, so it is built outside the main actor.
     nonisolated private static func installTap(
         on input: AVAudioInputNode,
         format: AVAudioFormat,
-        file: AVAudioFile?,
+        writer: OneLinerTakeWriter,
         request: SFSpeechAudioBufferRecognitionRequest?,
         failed: OSAllocatedUnfairLock<Bool>,
         level: @escaping @Sendable (Float) -> Void,
@@ -403,15 +413,16 @@ final class OneLinerRecorder {
     ) {
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             guard !failed.withLock({ $0 }) else { return }
+            let written: AVAudioPCMBuffer
             do {
-                try file?.write(from: buffer)
+                written = try writer.write(buffer)
             } catch {
                 failed.withLock { $0 = true }
                 writeFailed()
                 return
             }
-            request?.append(buffer)
-            level(normalizedLevel(buffer))
+            request?.append(written)
+            level(normalizedLevel(written))
         }
     }
 
@@ -447,6 +458,126 @@ final class OneLinerRecorder {
                   recognizer.supportsOnDeviceRecognition else { return UncheckedSendable(value: nil) }
             return UncheckedSendable(value: recognizer)
         }.value.value
+    }
+}
+
+/// Writes a take's AAC .m4a from whatever the input delivers. AAC takes one or two
+/// channels at a standard rate, so a mono or stereo input at 44.1 or 48 kHz passes
+/// straight through, while a multichannel interface is summed to mono (a microphone
+/// on any of its inputs is heard, at its own level) and any other rate (96 kHz and
+/// the like) becomes 48 kHz.
+nonisolated final class OneLinerTakeWriter: @unchecked Sendable {
+    let file: AVAudioFile
+    /// What the file, the transcriber and the level meter receive.
+    let outputFormat: AVAudioFormat
+    /// Nil when the input (after any mixdown) already is `outputFormat`.
+    private let converter: AVAudioConverter?
+    /// Mono at the input's rate, for an input of more than two channels.
+    private let mixdownFormat: AVAudioFormat?
+
+    static func outputFormat(for input: AVAudioFormat) -> AVAudioFormat? {
+        let channels: AVAudioChannelCount = input.channelCount == 2 ? 2 : 1
+        let rate = input.sampleRate == 44_100 || input.sampleRate == 48_000 ? input.sampleRate : 48_000
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: channels, interleaved: false)
+    }
+
+    init(url: URL, inputFormat: AVAudioFormat) throws {
+        guard let output = Self.outputFormat(for: inputFormat) else { throw CocoaError(.featureUnsupported) }
+        outputFormat = output
+        // AAC in MPEG-4, as voice memos are recorded.
+        file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: output.sampleRate,
+                AVNumberOfChannelsKey: output.channelCount,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        // The converter will not fold many discrete channels into one by itself:
+        // they are summed here first, so it only changes the rate.
+        mixdownFormat = inputFormat.channelCount > 2
+            ? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate, channels: 1, interleaved: false)
+            : nil
+        let source = mixdownFormat ?? inputFormat
+        if source.commonFormat == output.commonFormat, source.sampleRate == output.sampleRate,
+           source.channelCount == output.channelCount, source.isInterleaved == output.isInterleaved {
+            converter = nil
+        } else {
+            guard let converter = AVAudioConverter(from: source, to: output) else { throw CocoaError(.featureUnsupported) }
+            self.converter = converter
+        }
+    }
+
+    /// Converts `buffer` if needed, appends it to the file and returns what was written.
+    func write(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        let output = try convert(mixDown(buffer))
+        if output.frameLength > 0 { try file.write(from: output) }
+        return output
+    }
+
+    /// Writes what a resampling converter still holds, the take's last few
+    /// milliseconds. Call once, after the last `write`.
+    func finish() throws {
+        guard let converter else { return }
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 4096) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        var conversionError: NSError?
+        while true {
+            output.frameLength = 0
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if status == .error { throw conversionError ?? CocoaError(.featureUnsupported) }
+            if output.frameLength > 0 { try file.write(from: output) }
+            guard status == .haveData, output.frameLength > 0 else { return }
+        }
+    }
+
+    /// Sums every channel of a multichannel buffer into one, clamped to full scale:
+    /// a single live input keeps its level, and several loud ones do not wrap.
+    private func mixDown(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        guard let mixdownFormat else { return buffer }
+        // The tap's format is the input node's output format, which AVAudioEngine gives as deinterleaved Float32; anything else throws into the tap's write-failed path.
+        guard !buffer.format.isInterleaved, let inputs = buffer.floatChannelData,
+              let mono = AVAudioPCMBuffer(pcmFormat: mixdownFormat, frameCapacity: max(buffer.frameLength, 1)),
+              let sum = mono.floatChannelData?[0] else { throw CocoaError(.featureUnsupported) }
+        mono.frameLength = buffer.frameLength
+        let frames = Int(buffer.frameLength)
+        for frame in 0..<frames { sum[frame] = 0 }
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let samples = inputs[channel]
+            for frame in 0..<frames { sum[frame] += samples[frame] }
+        }
+        for frame in 0..<frames { sum[frame] = min(1, max(-1, sum[frame])) }
+        return mono
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        guard let converter else { return buffer }
+        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        var supplied = false
+        var conversionError: NSError?
+        // `.noDataNow`, not `.endOfStream`: the converter keeps its state for the next buffer.
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if supplied {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        if status == .error { throw conversionError ?? CocoaError(.featureUnsupported) }
+        return output
     }
 }
 
