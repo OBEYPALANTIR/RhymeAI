@@ -1324,6 +1324,8 @@ final class BackupService {
         // while this run waited is not overwritten by the written name.
         var namesAtCandidate: [String: (String, Bool)] = [:]
         func candidate() throws -> SyncBlob {
+            // This candidate's local copy, before resolve takes a gathered time onto the rows.
+            observe(try makeSnapshot(modelContext: modelContext))
             namesAtCandidate = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.displayName, $0.displayNameChanged)) }) { first, _ in first }
             var resolved = try resolve(inputs(), with: modelContext)
             resolved.recordings = try resolved.recordings.filter(listable)
@@ -1407,6 +1409,8 @@ final class BackupService {
         // digest differs from it is reported as a conflict.
         let gathered = Dictionary(try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + verifiedInputs.map(fixingPrecedence))
             .recordings.map { ($0.id, $0) }) { first, _ in first }
+        // What is held here now, after every wait.
+        observe(try makeSnapshot(modelContext: modelContext))
         // A changed look still runs the pass with deleting off, so a veto clears stale proof.
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
                                                            gathered: gathered, observed: observed, deleting: unchanged, remote: remoteRecordings,
