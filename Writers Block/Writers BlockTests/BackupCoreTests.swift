@@ -2538,7 +2538,8 @@ struct BackupCoreTests {
     /// Files (oldest first) hold an empty library, the take at 300, the take at 100 and a
     /// tombstone for it at 200. In the second look the empty file is rewritten, between the
     /// listing and its download, to a byte-identical copy of the 300 manifest and becomes
-    /// the newest file: that content now ranks there, so the take and its audio stay.
+    /// the newest of those files (the main file, which the run writes, stays newest): that
+    /// content now ranks there, so the take and its audio stay.
     @MainActor
     @Test func knownContentRewrittenIntoTheNewestFileRanksThere() async throws {
         let harness = try await makeHarness()
@@ -2556,7 +2557,7 @@ struct BackupCoreTests {
         drive.beforeDownload = {
             guard drive.downloadAttempts.last == first.id else { return }
             reads += 1
-            if reads == 2 { drive.rewriteExtra(id: first.id, content: at300, modifiedTime: "zzz-newest") }
+            if reads == 2 { drive.rewriteExtra(id: first.id, content: at300, modifiedTime: "d-newest") }
         }
 
         try await harness.service.backupNow(modelContext: harness.context)
