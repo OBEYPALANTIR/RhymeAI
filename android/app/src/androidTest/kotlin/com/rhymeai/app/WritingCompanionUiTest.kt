@@ -29,9 +29,15 @@ class WritingCompanionUiTest {
     // Restored in stop() even when an assertion fails part way.
     private val originalProvider = runBlocking { repo.selectedProviderFlow.first() }
     private val originalModelId = runBlocking { repo.modelIdFlow.first() }
-    private val songIds = mutableListOf<String>()
+    /** Songs, active or in Trash, that existed before the test; teardown removes only the others. */
+    private var songIdsBefore = emptySet<String>()
+
+    private fun storedSongIds(): Set<String> = runBlocking {
+        repo.projectsFlow.first().map { it.id }.toSet() + repo.trashedProjectsFlow.first().map { it.project.id }
+    }
 
     @Before fun start() {
+        songIdsBefore = storedSongIds()
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario!!.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] }
         waitUntil { vm.appearanceLoaded }
@@ -40,25 +46,33 @@ class WritingCompanionUiTest {
     }
 
     @After fun stop() {
-        if (::vm.isInitialized) {
-            onMain { vm.showSongNotebook = false; vm.dismissSettings() }
-            songIds.forEach { id ->
-                if (vm.projects.any { it.id == id }) {
-                    settle { !vm.savingBeforeNavigation }
-                    onMain { vm.moveProjectToTrash(id) }
-                    settle { vm.trashedProjects.any { it.project.id == id } && !vm.savingBeforeNavigation }
-                }
-                if (vm.trashedProjects.any { it.project.id == id }) {
-                    onMain { vm.permanentlyDeleteTrashedProject(id) }
-                    settle { runBlocking { id !in repo.workspacesFlow.first() } }
+        // A failure here is reported after the provider and model are restored; JUnit keeps the test's own failure too.
+        val problems = mutableListOf<String>()
+        try {
+            if (::vm.isInitialized) {
+                onMain { vm.showSongNotebook = false; vm.dismissSettings() }
+                // Leaving the editor saves the open draft now, so closing the activity creates no song later.
+                settle { !vm.savingBeforeNavigation }
+                onMain { vm.goToStartMenu() }
+                if (!settle { !vm.savingBeforeNavigation }) problems += "the open draft did not finish saving"
+            }
+            scenario?.close()
+            runBlocking {
+                (storedSongIds() - songIdsBefore).forEach { id ->
+                    val now = System.currentTimeMillis()
+                    repo.moveProjectToTrash(id, now)
+                    repo.permanentlyDeleteTrashedProject(id, now)
                 }
             }
+            val left = storedSongIds() - songIdsBefore
+            if (left.isNotEmpty()) problems += "songs this test created are still stored: $left"
+        } finally {
+            runBlocking {
+                repo.saveSelectedProvider(originalProvider)
+                repo.saveModelId(originalModelId)
+            }
         }
-        scenario?.close()
-        runBlocking {
-            repo.saveSelectedProvider(originalProvider)
-            repo.saveModelId(originalModelId)
-        }
+        if (problems.isNotEmpty()) fail("Teardown: ${problems.joinToString("; ")}")
     }
 
     @Test fun keepSelectionDoesNotEditAndVersionRestorePreservesCurrentDraft() {
@@ -137,9 +151,9 @@ class WritingCompanionUiTest {
             vm.rememberEditorPosition()
             vm.newProject()
         }
-        waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
-        val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Restored Selection QA" } }
-        songIds += saved.id
+        // Only a song this test created: a leftover from an earlier run has the same title.
+        waitUntil { runBlocking { repo.projectsFlow.first().any { it.id !in songIdsBefore && it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
+        val saved = runBlocking { repo.projectsFlow.first().first { it.id !in songIdsBefore && it.title == "Restored Selection QA" } }
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.openingSong && !vm.savingBeforeNavigation }
@@ -226,6 +240,39 @@ class WritingCompanionUiTest {
         }
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun applyingAISettingsFromSetUpModelKeepsSelectionAndLyrics() {
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("A quiet line"))
+            vm.saveProvider(AIProvider.LOCAL)
+            vm.unloadLocalModel()
+            vm.localModelError = null
+            vm.localModelLoading = false
+        }
+        waitUntil { vm.selectedProvider == AIProvider.LOCAL && !vm.localReady && !vm.localModelLoading }
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 7))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 7) }
+        onMain { vm.requestRewrite(RewriteAction.REPHRASE) }
+        composeRule.onNode(hasText("Set up model") and hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))).performClick()
+        composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+        // Apply stops in-flight AI work; it must not drop the selection the writer came to rewrite.
+        val choicesBefore = vm.modelChoiceRevision
+        composeRule.onNodeWithTag("applyAISettings").performScrollTo().performClick()
+        waitUntil { vm.modelChoiceRevision > choicesBefore }
+        composeRule.waitUntil(8_000) {
+            composeRule.onAllNodes(hasTestTag("applyAISettings") and isEnabled()).fetchSemanticsNodes().isNotEmpty()
+        }
+        androidx.test.espresso.Espresso.pressBack()
+        waitUntil { !vm.showSettingsDialog }
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        onMain {
+            assertEquals("A quiet line", vm.lyrics)
+            assertEquals(TextRange(0, 7), vm.pendingRewriteRange)
+        }
+    }
+
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {
         val lyrics = "🎵 first\n" + (1..80).joinToString("\n") { "lyric line $it" }
         onMain {
@@ -235,9 +282,8 @@ class WritingCompanionUiTest {
             vm.rememberEditorPosition(140f)
             vm.newProject()
         }
-        waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Position QA" && it.lyrics == lyrics } } }
-        val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Position QA" } }
-        songIds += saved.id
+        waitUntil { runBlocking { repo.projectsFlow.first().any { it.id !in songIdsBefore && it.title == "Position QA" && it.lyrics == lyrics } } }
+        val saved = runBlocking { repo.projectsFlow.first().first { it.id !in songIdsBefore && it.title == "Position QA" } }
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.savingBeforeNavigation }
