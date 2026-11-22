@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import org.junit.Assume.assumeTrue
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -17,11 +16,10 @@ import kotlin.test.assertTrue
 
 /** Pins manifest v4 to shared/fixtures/sync-manifest-v4.json, which iOS reads too. */
 class BackupManifestTest {
+    /** Fails, never skips, when a fixture is missing: a skipped drift check would leave CI green. */
     private fun repoFile(path: String): File =
-        sequenceOf("../../$path", "../$path", path).map(::File).first(File::isFile)
-
-    private fun repoFileOrNull(path: String): File? =
         sequenceOf("../../$path", "../$path", path).map(::File).firstOrNull(File::isFile)
+            ?: error("Fixture $path not found from ${File("").absolutePath}")
 
     private val fixture by lazy {
         Json.parseToJsonElement(repoFile("shared/fixtures/sync-manifest-v4.json").readText()).jsonObject
@@ -137,10 +135,9 @@ class BackupManifestTest {
 
     @Test
     fun iosFixtureCopyMatchesTheSharedFixture() {
-        val iosCopy = repoFileOrNull("Writers Block/Writers BlockTests/sync-manifest-v4.json")
-        assumeTrue("iOS copy of sync-manifest-v4.json is not in this checkout yet; drift check skipped.", iosCopy != null)
+        val iosCopy = repoFile("Writers Block/Writers BlockTests/sync-manifest-v4.json")
         assertTrue(
-            repoFile("shared/fixtures/sync-manifest-v4.json").readBytes().contentEquals(iosCopy!!.readBytes()),
+            repoFile("shared/fixtures/sync-manifest-v4.json").readBytes().contentEquals(iosCopy.readBytes()),
             "iOS fixture copy differs from shared/fixtures/sync-manifest-v4.json"
         )
     }

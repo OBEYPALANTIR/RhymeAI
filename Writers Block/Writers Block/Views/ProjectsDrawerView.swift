@@ -837,10 +837,20 @@ struct ProjectsDrawerView: View {
         return stem
     }
 
+    /// Song IDs are not unique once CloudKit syncs two copies of a song, so the
+    /// newest copy names the folder (ties: the smaller shown title), whatever
+    /// order the rows arrive in.
+    static func recordingFolderTitles(for projects: [SongProject]) -> [String: String] {
+        let entries = projects.map { ($0.id, (date: $0.updatedAt, title: $0.title.isEmpty ? "Untitled Song" : $0.title)) }
+        return Dictionary(entries) { a, b in
+            a.date != b.date ? (a.date > b.date ? a : b) : (a.title <= b.title ? a : b)
+        }.mapValues(\.title)
+    }
+
     private func reloadRecordings() {
         // Snapshot SwiftData-backed project titles on the main actor before
         // doing file-system work in a detached task.
-        let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
+        let titleMap = Self.recordingFolderTitles(for: projects)
         reloadGeneration += 1
         guard !viewModel.recordingListsSuspended else {
             recordingFolders = []
