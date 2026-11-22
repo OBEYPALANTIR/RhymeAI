@@ -631,6 +631,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             throw cancelled
         } catch (_: com.rhymeai.app.data.repository.OneLinerHasNoWordsException) {
             "Transcribe or type the words first."
+        } catch (_: SameIdActiveCopiesException) {
+            "Two songs share this song's identity; the line was not sent."
         } catch (_: Exception) {
             "Couldn't send this line. Try again."
         }
@@ -2820,7 +2822,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         is CorruptLibraryException -> corruptLibraryMessage(error)
         is MissingActiveProjectException -> "The song is no longer active. No changes were made."
         is SameIdTrashCopiesException -> "Trash holds more than one copy of this song, so none was ${if (action == "restore the song") "restored" else "deleted"}. Stored songs were left untouched."
-        is SameIdActiveCopiesException -> "More than one of your songs has this song's identity, so nothing was restored. Stored songs were left untouched."
+        is SameIdActiveCopiesException -> if (action == "move the song to Trash") "More than one song shares this identity, so nothing was moved to Trash."
+            else "More than one of your songs has this song's identity, so nothing was restored. Stored songs were left untouched."
         is TrashCopyOutranksActiveException -> "This song's Trash copy would replace the song already in your songs, so nothing was restored. Stored songs were left untouched."
         else -> "Could not $action. Stored songs were left untouched. Try again."
     }
