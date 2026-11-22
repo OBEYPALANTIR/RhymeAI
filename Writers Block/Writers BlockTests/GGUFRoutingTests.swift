@@ -700,9 +700,27 @@ struct GGUFDownloadIntegrityTests {
         try Data([1, 2]).write(to: resume)
         try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
         #expect(try Data(contentsOf: destination) == valid)
-        #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         #expect(!FileManager.default.fileExists(atPath: resume.path))
+    }
+
+    /// Its own test so a host that cannot read the backup flag back skips only this check.
+    @Test func installedDownloadIsExcludedFromBackup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let valid = Data([0x47, 0x47, 0x55, 0x46, 1, 2, 3, 4])
+        let option = GGUFDownloadOption(
+            id: "fixture", title: "Fixture", subtitle: "", size: "8 B",
+            fileName: "fixture.gguf", expectedBytes: Int64(valid.count),
+            sha256: SHA256.hash(data: valid).map { String(format: "%02x", $0) }.joined(),
+            url: URL(string: "https://example.com/fixture.gguf")!, isRecommended: false
+        )
+        let staging = directory.appendingPathComponent("fixture.gguf.download")
+        let destination = directory.appendingPathComponent(option.fileName)
+        try valid.write(to: staging)
+        try GGUFDownloadManager.installDownload(from: staging, in: directory, option: option)
+        #expect(try destination.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
     }
 
     @Test func gatedInstallPublishesThroughTheRunner() async throws {
