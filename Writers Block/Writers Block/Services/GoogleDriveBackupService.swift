@@ -1279,6 +1279,18 @@ final class BackupService {
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = try await unpreservedOversizedCount(remote: remoteRecordings)
 
+        // Every recording entry seen in this run, by id, as read: the audio delete must be
+        // covered for each of them whatever the input order (a missing time is a repair).
+        var observed: [String: [SyncRecording]] = [:]
+        func observe(_ blob: SyncBlob) {
+            for var entry in blob.recordings {
+                if entry.uploadedAt.epochMilliseconds <= 0 { entry.precedenceRepaired = true }
+                observed[entry.id, default: []].append(entry)
+            }
+        }
+        // Taken before any candidate stores a winning time on the rows.
+        observe(try makeSnapshot(modelContext: modelContext))
+        if let legacy { observe(legacy.blob) }
         // Every manifest content read in this run, in the order read, rejected looks and
         // read-backs included; append-only, so content seen once is never dropped (A14).
         // Known content first seen in another file adds nothing; a file changing back to
@@ -1287,6 +1299,7 @@ final class BackupService {
         var known = Set<String>()
         var held: [String: String] = [:]
         func record(_ file: DriveAppDataFile, _ blob: SyncBlob) {
+            observe(blob)
             let sha = blob.manifestSha256
             let isNew = known.insert(sha).inserted
             let changed = held[file.id].map { $0 != sha } ?? false
@@ -1370,17 +1383,27 @@ final class BackupService {
         guard verified, let target else { throw BackupError.backupConflict }
         // The inputs the verified candidate was built from (the last look found nothing new).
         let verifiedInputs = inputs()
+        // One more look: audio is deleted only while Drive still holds the look the candidate
+        // was built from, with the verified write in place. Its reads count as observations.
+        let others = look.filter { $0.file.id != target.id }
+        var unchanged = false
+        do {
+            let after = try await stableLook(accessToken: accessToken) { _, blob in observe(blob) }
+            let afterOthers = after.filter { $0.file.id != target.id }
+            unchanged = after.contains { $0.file.id == target.id && $0.blob.manifestSha256 == merged.manifestSha256 }
+                && afterOthers.count == others.count
+                && zip(afterOthers, others).allSatisfy { $0.file == $1.file && $0.blob.manifestSha256 == $1.blob.manifestSha256 }
+        } catch BackupError.backupConflict {}
         try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
         // Duplicate manifests are kept and gathered on every run, never deleted: another device
         // may write one after our listing, and Drive has no conditional delete to protect that write.
 
         report.notUploadedConflicts = uploadConflicts.sorted()
         report.localDigestConflicts = localConflicts.sorted()
-        // Precedence times of every recording this run gathered, before resolution.
-        let gatheredRecordings = try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + verifiedInputs.map(fixingPrecedence)).recordings
-        let gatheredById = Dictionary(gatheredRecordings.map { ($0.id, $0) }) { first, _ in first }
+        // A changed look still runs the pass with deleting off, so a veto clears stale proof.
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
-                                                           gathered: gatheredById, remote: remoteRecordings, accessToken: accessToken, report: &report)
+                                                           observed: observed, deleting: unchanged, remote: remoteRecordings,
+                                                           accessToken: accessToken, report: &report)
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
@@ -1758,8 +1781,12 @@ final class BackupService {
     /// a known id with other bytes or length (returned, to be reported). A covered
     /// entry is kept here until its objects are gone, so a retry after a failed
     /// removal still has its proof.
+    /// Every entry this run observed for the id with the object's digest and length must
+    /// be covered: one that is not vetoes the delete, is reported like a repaired time, and
+    /// clears the id's proof. With no observation of the id, the proof alone decides.
+    /// `deleting` false (Drive changed after the write) removes nothing and adds no proof.
     private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], keeping kept: Set<String>,
-                                                          gathered: [String: SyncRecording], remote: RemoteFiles,
+                                                          observed: [String: [SyncRecording]], deleting: Bool, remote: RemoteFiles,
                                                           accessToken: String, report: inout BackupReport) async throws {
         let live = Set(recordings.map(\.driveName) + kept.map(RecordingBackupManifest.driveName(recordingId:)))
         // Proof an earlier build kept by Drive id and version cannot show content; the
@@ -1777,23 +1804,53 @@ final class BackupService {
         }
         var conflicting: [String] = []
         for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) {
-            guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"],
-                  let known = gathered[id] ?? proven[id] else { continue }
-            guard known.sha256 == sha, String(known.bytes) == bytes else {
-                conflicting.append(file.name)
-                continue
+            guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"] else { continue }
+            func matches(_ entry: SyncRecording) -> Bool { entry.sha256 == sha && String(entry.bytes) == bytes }
+            func covered(_ entry: SyncRecording) -> Bool {
+                deletions.contains { $0.covers(projectId: entry.projectId, recordingId: id, sha256: sha, at: entry.uploadedAt, repaired: entry.precedenceRepaired) }
             }
-            guard !live.contains(file.name),
-                  deletions.contains(where: { $0.covers(projectId: known.projectId, recordingId: id, sha256: sha, at: known.uploadedAt, repaired: known.precedenceRepaired) }) else { continue }
+            let known: SyncRecording
+            if let seen = observed[id], !seen.isEmpty {
+                let matching = seen.filter(matches)
+                guard !matching.isEmpty else {
+                    conflicting.append(file.name)
+                    continue
+                }
+                guard !live.contains(file.name) else { continue }
+                let uncovered = matching.filter { !covered($0) }
+                if let keeper = uncovered.first {
+                    // An entry no deletion covers keeps the audio, and proof it contradicts goes.
+                    if let proof = proven[id], matches(proof) {
+                        proven[id] = nil
+                        provenCovered = proven
+                    }
+                    if uncovered.count < matching.count, !report.deferredRepairedCleanup.contains(keeper.fileName) {
+                        report.deferredRepairedCleanup.append(keeper.fileName)
+                    }
+                    continue
+                }
+                known = matching.first(where: \.precedenceRepaired) ?? matching.max { $0.uploadedAt < $1.uploadedAt }!
+            } else {
+                guard let proof = proven[id] else { continue }
+                guard matches(proof) else {
+                    conflicting.append(file.name)
+                    continue
+                }
+                guard !live.contains(file.name), covered(proof) else { continue }
+                known = proof
+            }
             // A41: a recording that loses only because its time is a repair is kept on
             // Drive and reported; its bytes are not deleted on that judgement (T1.35).
             // Its proof is kept too, so later runs keep reporting it while the object stays.
             if known.precedenceRepaired {
                 if !report.deferredRepairedCleanup.contains(known.fileName) { report.deferredRepairedCleanup.append(known.fileName) }
-                proven[id] = known
-                provenCovered = proven
+                if deleting {
+                    proven[id] = known
+                    provenCovered = proven
+                }
                 continue
             }
+            guard deleting else { continue }
             proven[id] = known
             provenCovered = proven
             try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
