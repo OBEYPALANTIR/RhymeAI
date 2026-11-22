@@ -332,6 +332,38 @@ class PersistenceInstrumentedTest {
     }
 
     @Test
+    fun aNewerCommitDuringAFailedWritesRereadLeavesNoFailure() {
+        val original = SongProject("held-reread", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val reread = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("words kept")
+                DraftSaveTestHooks.failNext.set(true)
+                DraftSaveTestHooks.beforeReread = reread
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { DraftSaveTestHooks.beforeReread == null }
+            onMain { viewModel.triggerAutoSave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+            reread.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            assertEquals(SaveStatus.SAVED, viewModel.saveStatus)
+            assertEquals(null, viewModel.persistenceError)
+            assertEquals("words kept", runBlocking { repo.projectsFlow.first().single() }.lyrics)
+        } finally {
+            DraftSaveTestHooks.beforeReread = null
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test
     fun aRereadFailureAfterAFailedSaveStillMarksTheDraft() {
         val original = SongProject("reread-fails", "Original", "old lyric", "old theme", 100L)
         runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }

@@ -180,6 +180,8 @@ internal object DraftSaveTestHooks {
     val failNext = java.util.concurrent.atomic.AtomicBoolean(false)
     /** Fails the next reread after a failed draft save. */
     val failNextReread = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Holds the next reread after a failed draft save. */
+    @Volatile var beforeReread: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Holds the next draft write before it runs, so a test can order it against another save. */
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
@@ -2790,8 +2792,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (missing) SaveFailureRules.WriteFailure.MISSING_ROW else SaveFailureRules.WriteFailure.WRITE_ERROR,
             wordsEdited = !unedited
         )
-        val superseded = attempt < committedAttempt
         try {
+            DraftSaveTestHooks.beforeReread?.let { DraftSaveTestHooks.beforeReread = null; it.await() }
             if (DraftSaveTestHooks.failNextReread.compareAndSet(true, false)) throw java.io.IOException("injected reread failure")
             val stored = repo.projectsFlow.first()
             projects = if (!missing && currentProjectId == project.id &&
@@ -2814,7 +2816,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistenceError = when (error) {
             is MissingActiveProjectException -> "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
             is CorruptLibraryException -> corruptLibraryMessage(error)
-            else -> if (superseded) persistenceError else "Your draft could not be saved. It is still open. Try again."
+            // Read after the reread: a newer commit of the open words may have landed meanwhile.
+            else -> if (attempt < committedAttempt) persistenceError else "Your draft could not be saved. It is still open. Try again."
         }
     }
 
