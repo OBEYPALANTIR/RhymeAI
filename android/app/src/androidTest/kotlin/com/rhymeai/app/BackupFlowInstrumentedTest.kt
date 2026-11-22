@@ -222,7 +222,8 @@ class BackupFlowInstrumentedTest {
         // The save queues its own automatic backup; once it is queued, "Back up now" runs it, so none is left behind.
         waitUntil({ "the save's automatic backup was never queued" }) { onMain { vm.autoBackupPending } }
         instrumentation.runOnMainSync { vm.backUpNow() }
-        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { onMain { vm.backupStatus is BackupStatus.Connected } }
+        assertFalse("no automatic backup left queued after Back up now", onMain { vm.autoBackupPending })
     }
 
     @After fun restore() {
