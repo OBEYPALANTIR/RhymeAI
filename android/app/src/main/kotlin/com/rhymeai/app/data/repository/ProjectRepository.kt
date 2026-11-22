@@ -51,6 +51,9 @@ internal class CorruptLibraryException(
 internal class MissingActiveProjectException(id: String) :
     IllegalStateException("Song $id is no longer active")
 
+internal class SameIdTrashCopiesException(id: String) :
+    IllegalStateException("Trash holds more than one song with id $id")
+
 /** A coherent local membership and deletion view captured before Drive network work. */
 /**
  * A41: a song (active or in Trash) whose repaired time lost to a tombstone in a merge.
@@ -514,19 +517,26 @@ class ProjectRepository internal constructor(
         id: String,
         now: Long = System.currentTimeMillis(),
         adopt: suspend (Set<String>) -> Unit = {}
-    ): List<TrashedSongProject>? {
+    ): TrashPurge? {
         adopt(setOf(id))
         return permanentlyDeleteAdopted(id, now)
     }
 
-    private suspend fun permanentlyDeleteAdopted(id: String, now: Long): List<TrashedSongProject>? = projectSaveMutex.withLock {
-        var committed: List<TrashedSongProject>? = null
+    private suspend fun permanentlyDeleteAdopted(id: String, now: Long): TrashPurge? = projectSaveMutex.withLock {
+        var committed: TrashPurge? = null
         dataStore.edit { prefs ->
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val workspaces = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
-            if (trash.none { it.project.id == id }) return@edit
+            if (trash.none { it.project.id == id }) return@edit // (0) unchanged
+            if (trash.count { it.project.id == id } > 1) throw SameIdTrashCopiesException(id) // (a) nothing written
             val nextTrash = trash.filterNot { it.project.id == id }
-            val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
+            if (projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]").any { it.id == id }) {
+                // (b) The id is active: only this Trash copy goes; the song's notebook, recordings and tombstones stay.
+                prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
+                committed = TrashPurge(nextTrash, emptyList())
+                return@edit
+            }
+            val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]") // (c) as on main
             prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[WORKSPACES_KEY] = json.encodeToString(workspaces - id)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
@@ -534,7 +544,7 @@ class ProjectRepository internal constructor(
             prefs[SYNC_DELETIONS_KEY] = json.encodeToString(
                 SyncMerger.mergeDeletions(deletions + songTombstones(prefs, listOf(id), now))
             )
-            committed = nextTrash
+            committed = TrashPurge(nextTrash, listOf(id))
         }
         committed
     }
