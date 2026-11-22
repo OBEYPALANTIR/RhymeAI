@@ -32,24 +32,11 @@ jobs:
           persist-credentials: false
       - name: Toolchain
         run: xcodebuild -version
-      - name: Diagnose backup exclusion (temporary)
-        run: |
-          d="$HOME/Library/Application Support/diag-exclude"; mkdir -p "$d"; f="$RUNNER_TEMP/diag-exclude-file"; echo x > "$f"
-          cat > "$RUNNER_TEMP/diag.swift" <<'EOF'
-          import Foundation
-          for p in CommandLine.arguments.dropFirst() {
-              var u = URL(fileURLWithPath: p); var v = URLResourceValues(); v.isExcludedFromBackup = true
-              do { try u.setResourceValues(v) } catch { print("set threw:", error) }
-              u.removeAllCachedResourceValues()
-              print(p, "read back:", (try? u.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup) as Any)
-          }
-          EOF
-          swift "$RUNNER_TEMP/diag.swift" "$d" "$f"
-          xattr -l "$d" "$f" || true
-          tmutil isexcluded "$d" "$f" || true
-          sw_vers; diskutil info / | grep -E "File System|Personality|Volume Name" || true
       # Ad-hoc signed with no entitlements file: the app's iCloud and app
       # group entitlements need a provisioning profile the runner does not have.
+      # Skipped: the two GGUFDownloadIntegrityTests that read isExcludedFromBackup.
+      # In the sandboxed test host that read goes over XPC to backupd's sandbox
+      # service, which hosted runners reject ("Connection invalid").
       - name: Unit tests
         run: |
           xcodebuild test \
