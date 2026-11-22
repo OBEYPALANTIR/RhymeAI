@@ -2444,6 +2444,86 @@ struct BackupCoreTests {
         #expect(Set(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id)) == Set(["local", "incoming"]))
     }
 
+    // MARK: Two song rows here with one id give a clear error, not a crash
+
+    /// Two rows with one id, which SwiftData does not refuse (uniqueness is the app's).
+    @MainActor
+    private static func seedSameIdPair(_ harness: BackupHarness, trashed: Bool) throws {
+        let first = Date(timeIntervalSince1970: 1_700_000_000), second = Date(timeIntervalSince1970: 1_700_000_100)
+        if trashed {
+            harness.context.insert(TrashedSongProject(id: "pair", title: "First", lyrics: "one", theme: "", updatedAt: first, deletedAt: first))
+            harness.context.insert(TrashedSongProject(id: "pair", title: "Second", lyrics: "two", theme: "", updatedAt: second, deletedAt: second))
+        } else {
+            harness.context.insert(SongProject(id: "pair", title: "First", lyrics: "one", updatedAt: first))
+            harness.context.insert(SongProject(id: "pair", title: "Second", lyrics: "two", updatedAt: second))
+        }
+        try harness.context.save()
+        let count = try trashed ? harness.context.fetchCount(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == "pair" }))
+                                : harness.context.fetchCount(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == "pair" }))
+        #expect(count == 2)
+    }
+
+    private static func incomingArchive() throws -> Data {
+        try SyncBlob(projects: [
+            SyncSongProject(id: "incoming", title: "Incoming", lyrics: "x", theme: "", updatedAt: Date(timeIntervalSince1970: 1_700_000_050))
+        ]).encodedManifest()
+    }
+
+    @MainActor
+    @Test func importRefusesTwoActiveSongsSharingAnId() async throws {
+        let harness = try await makeHarness()
+        try Self.seedSameIdPair(harness, trashed: false)
+
+        await #expect(throws: BackupError.sameIdSongs("pair")) {
+            try await harness.service.importArchive(try Self.incomingArchive(), modelContext: harness.context)
+        }
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.id) == ["pair", "pair"])
+        #expect(try harness.context.fetchCount(FetchDescriptor<SyncDeletionRecord>()) == 0)
+        #expect(try harness.context.fetchCount(FetchDescriptor<SyncRecordingDeletion>()) == 0)
+    }
+
+    @MainActor
+    @Test func importRefusesTwoTrashedSongsSharingAnId() async throws {
+        let harness = try await makeHarness()
+        try Self.seedSameIdPair(harness, trashed: true)
+
+        await #expect(throws: BackupError.sameIdSongs("pair")) {
+            try await harness.service.importArchive(try Self.incomingArchive(), modelContext: harness.context)
+        }
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id) == ["pair", "pair"])
+        #expect(try harness.context.fetchCount(FetchDescriptor<SyncDeletionRecord>()) == 0)
+        #expect(try harness.context.fetchCount(FetchDescriptor<SyncRecordingDeletion>()) == 0)
+    }
+
+    /// One active and one Trash row with one id never trapped; the merge still picks one.
+    /// The expected result is what main gives for this seed.
+    @MainActor
+    @Test func importStillMergesAnActiveAndATrashedSongSharingAnId() async throws {
+        let harness = try await makeHarness()
+        harness.context.insert(SongProject(id: "same", title: "Active", lyrics: "active words", updatedAt: Date(timeIntervalSince1970: 1_700_002_000)))
+        harness.context.insert(TrashedSongProject(id: "same", title: "Trashed", lyrics: "trashed words", theme: "",
+                                                  updatedAt: Date(timeIntervalSince1970: 1_700_000_000), deletedAt: Date(timeIntervalSince1970: 1_700_001_000)))
+        try harness.context.save()
+
+        try await harness.service.importArchive(try Self.incomingArchive(), modelContext: harness.context)
+
+        // The active row was edited after the Trash row was deleted, so it wins.
+        let active = try harness.context.fetch(FetchDescriptor<SongProject>()).sorted { $0.id < $1.id }
+        #expect(active.map(\.id) == ["incoming", "same"])
+        #expect(active.last?.lyrics == "active words")
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+    }
+
+    @MainActor
+    @Test func restoreWithSameIdSongsReturnsTheErrorAndRecordsIt() async throws {
+        let harness = try await makeHarness()
+        try Self.seedSameIdPair(harness, trashed: false)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try Self.incomingArchive())
+
+        await #expect(throws: BackupError.sameIdSongs("pair")) { try await harness.service.restoreNow(modelContext: harness.context) }
+        #expect(harness.service.backgroundBackupFailureDescription == "Two songs on this device share the id pair; the backup was not merged.")
+    }
+
     @MainActor
     @Test func aRetainedOlderTombstoneDoesNotExemptALegacySongFromVerification() async throws {
         let harness = try await makeHarness()
@@ -3165,6 +3245,81 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func editorImportWithSameIdSongsKeepsRecordingPrecedenceAndPublishesItUnchanged() async throws {
+        let harness = try await makeHarness()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        let sleep = HeldBackupSleep(viewModel)
+        viewModel.modelContext = harness.context
+        let open = SongProject(id: "open-song", title: "Open", lyrics: "open words", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        harness.context.insert(open)
+        try Self.seedSameIdPair(harness, trashed: false)
+        // The same take, same id and audio: here with a repaired time, in the archive with its recorded one,
+        // which `resolve` would put on the row (A37).
+        let audio = Data([5, 5])
+        let repaired = SyncRecording(id: UUID().uuidString.lowercased(), projectId: "open-song", fileName: "take.m4a", bytes: 2,
+                                     sha256: RecordingBackupManifest.sha256Hex(audio), uploadedAt: Date(timeIntervalSince1970: 9_000), precedenceRepaired: true)
+        try harness.service.library.commitRestored(audio, entry: repaired, origin: .restored, context: harness.context)
+        try harness.context.save()
+        var recorded = repaired
+        recorded.uploadedAt = Date(timeIntervalSince1970: 1_000)
+        recorded.precedenceRepaired = false
+        let archive = try SyncBlob(projects: [SyncSongProject(id: "open-song", title: "Open", lyrics: "open words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))],
+                                   recordings: [recorded]).encodedManifest()
+        viewModel.loadProject(open)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.importBackupFile(archive)
+
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "Import failed: Two songs on this device share the id pair; the backup was not merged.. Your open edits remain in the local library.")
+        // Pending in the editor's context, and durable in a fresh one.
+        let held = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first { $0.id == repaired.id })
+        #expect(held.uploadedAt == Date(timeIntervalSince1970: 9_000) && held.precedenceRepaired)
+        let stored = try #require(try ModelContext(harness.container).fetch(FetchDescriptor<Recording>()).first { $0.id == repaired.id })
+        #expect(stored.uploadedAt == Date(timeIntervalSince1970: 9_000) && stored.precedenceRepaired)
+
+        // The backup the import scheduled: a plain backup, which never applies.
+        let holding = await sleep.waitUntilHolding()
+        #expect(holding)
+        await sleep.release { harness.drive.content(named: SyncBlob.driveFileName) != nil && !viewModel.cloudBackupIsWorking }
+        let manifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        let entry = try #require(manifest.recordings.first { $0.id == repaired.id })
+        #expect(entry.uploadedAt == Date(timeIntervalSince1970: 9_000) && entry.precedenceRepaired)
+        #expect(manifest.projects.filter { $0.id == "pair" }.count == 1)
+        #expect(!viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "")
+    }
+
+    @MainActor
+    @Test func editorRestoreWithSameIdSongsReportsTheError() async throws {
+        let harness = try await makeHarness()
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
+        let sleep = HeldBackupSleep(viewModel)
+        viewModel.modelContext = harness.context
+        let open = SongProject(id: "open-song", title: "Open", lyrics: "open words", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        harness.context.insert(open)
+        try Self.seedSameIdPair(harness, trashed: false)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try Self.incomingArchive())
+        viewModel.loadProject(open)
+        viewModel.refreshCloudBackupState()
+
+        await viewModel.restoreBackupNow()
+
+        let description = "Two songs on this device share the id pair; the backup was not merged."
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "Restore failed: \(description). Your open edits remain in the local library.")
+        #expect(harness.service.backgroundBackupFailureDescription == description)
+
+        // The backup `finishAutomaticBackupRun` scheduled after the failure: a plain backup, which never applies.
+        let holding = await sleep.waitUntilHolding()
+        #expect(holding)
+        await sleep.release { harness.service.backgroundBackupFailureDescription == nil && !viewModel.cloudBackupIsWorking }
+        #expect(harness.service.backgroundBackupFailureDescription == nil)
+        #expect(!viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "")
+    }
+
+    @MainActor
     private func makeHarness() async throws -> BackupHarness {
         try await makeHarness(oauthProvider: FakeOAuthProvider())
     }
@@ -3271,6 +3426,33 @@ private struct BackupHarness {
         )
         drive.seed(name: LegacySyncBlob.driveFileName, content: try SyncRepairContractChecks.rawEnvelope(SyncJSON.encoder.encode(legacy), magic: "RAI3"))
         drive.seed(name: entry.driveName, content: try SyncRepairContractChecks.rawEnvelope(audio, magic: "RAI1"))
+    }
+}
+
+/// Holds the editor's automatic-backup delay until the test releases it.
+@MainActor
+private final class HeldBackupSleep {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(_ viewModel: EditorViewModel) {
+        viewModel.automaticBackupSleep = { [weak self] _ in
+            guard let self else { return }
+            await withCheckedContinuation { self.waiting.append($0) }
+        }
+    }
+
+    /// True once a scheduled backup waits on its delay (bounded at about 10 s).
+    func waitUntilHolding() async -> Bool {
+        for _ in 0..<1_000 where waiting.isEmpty { try? await Task.sleep(for: .milliseconds(10)) }
+        return !waiting.isEmpty
+    }
+
+    /// Ends every held delay, then waits (bounded at about 10 s) until `done` holds.
+    func release(until done: () -> Bool) async {
+        let woken = waiting
+        waiting = []
+        woken.forEach { $0.resume() }
+        for _ in 0..<1_000 where !done() { try? await Task.sleep(for: .milliseconds(10)) }
     }
 }
 

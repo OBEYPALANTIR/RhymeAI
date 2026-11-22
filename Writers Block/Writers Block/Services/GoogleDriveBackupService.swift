@@ -36,6 +36,8 @@ enum BackupError: Error, Equatable {
     case insufficientStorage(needed: Int64)
     /// An earlier backup that lists a song or a recording id twice.
     case damagedRevision
+    /// Two song rows here (active, or both in the Trash) share an id.
+    case sameIdSongs(String)
 }
 
 extension BackupError: LocalizedError {
@@ -85,6 +87,8 @@ extension BackupError: LocalizedError {
             return "A file in the Google Drive backup is no longer there."
         case .damagedRevision:
             return "This earlier backup is damaged and cannot be recovered."
+        case .sameIdSongs(let id):
+            return "Two songs on this device share the id \(id); the backup was not merged."
         case .insufficientStorage(let needed):
             return "Not enough free space on this device to recover that backup: it needs about \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)). Free up space and try again."
         }
@@ -2101,6 +2105,12 @@ final class BackupService {
         // After the network waits: the recordings' last check must still hold, and the
         // tombstones and move record read now, before anything changes (finding 7).
         try library.requireChecked(modelContext)
+        // Two rows with one id (SwiftData does not refuse them) stop the merge before it
+        // writes anything. Nothing below adds or removes a song row before these are used.
+        let activeById = try Dictionary(modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) },
+                                        uniquingKeysWith: { first, _ in throw BackupError.sameIdSongs(first.id) })
+        let trashById = try Dictionary(modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) },
+                                       uniquingKeysWith: { first, _ in throw BackupError.sameIdSongs(first.id) })
         // Times are fixed once (A32); resolution and preservation see the same values.
         let inputs = raw.map(fixingPrecedence)
         let blob = try resolve(inputs, with: modelContext)
@@ -2108,8 +2118,6 @@ final class BackupService {
         // A41: every repaired song this apply removes (held here or in an input) is
         // kept and read back first; a failure stops the run before anything is deleted.
         try preserveRepairedSongLosers(from: [try makeSnapshot(modelContext: modelContext)] + inputs, merged: blob, report: &report)
-        let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
-        let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
         // A kept tombstone of a song edited after it does not remove the song.
