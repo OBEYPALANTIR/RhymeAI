@@ -671,10 +671,12 @@ class BackupFlowInstrumentedTest {
             )
         }
         try {
-            runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = 200L) else it }) }
-            waitUntil({ "view model ${vm.projects}" }) { vm.projects.any { it.id == openSong.id && it.lyrics == newerWords } }
-            assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
-            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            // The import starts at once, whether or not this view model has seen the other window's save yet.
+            instrumentation.runOnMainSync {
+                runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = 200L) else it }) }
+                assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
             waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
             waitUntil({ "held ${vm.editorHeld} editor ${vm.lyrics}" }) { !vm.editorHeld && vm.lyrics == newerWords }
             val songs = runBlocking { repo.projectsFlow.first() }
@@ -682,6 +684,37 @@ class BackupFlowInstrumentedTest {
             assertEquals(setOf(openSong.id, "unrelated"), songs.map { it.id }.toSet())
         } finally {
             zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    /** Typed away and back to the loaded words is still an edit: the hold saves it and a replacing restore keeps it. */
+    @Test fun wordsTypedBackToTheLoadedValueAreStillSavedAndKept() {
+        assertHeldEditIsKept { vm ->
+            runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = "another window's words", updatedAt = 150L) else it }) }
+            vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("typed away")
+            vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(openSong.lyrics)
+        }.let { copy -> assertEquals(openSong.lyrics, copy.lyrics) }
+    }
+
+    /** A theme-only edit is an edit too. */
+    @Test fun aThemeOnlyEditUnderARestoreIsKept() {
+        assertHeldEditIsKept { vm -> vm.theme = "a new theme" }.let { copy -> assertEquals(openSong.lyrics to "a new theme", copy.lyrics to copy.theme) }
+    }
+
+    /** Runs [edit] on the open editor, then a restore whose newer row replaces the song; returns the kept copy the editor shows. */
+    private fun assertHeldEditIsKept(edit: (MainViewModel) -> Unit): SongProject {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+        val vm = openSongInEditor()
+        try {
+            instrumentation.runOnMainSync { edit(vm); vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            val copy = runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id }
+            assertEquals(copy.id, vm.currentProjectId)
+            return copy
+        } finally {
             resetOpenSong()
         }
     }

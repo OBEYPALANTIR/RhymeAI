@@ -380,9 +380,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Every path into the editor (typing, paste, song load, version restore, import) drops line breaks.
     var title: String
         get() = titleState
-        set(value) { titleState = sanitizedTitle(value) }
-    var lyricsFieldValue by mutableStateOf(TextFieldValue(""))
-    var theme by mutableStateOf("")
+        set(value) { val next = sanitizedTitle(value); if (next != titleState) editRevision++; titleState = next }
+    private var lyricsFieldState by mutableStateOf(TextFieldValue(""))
+    var lyricsFieldValue: TextFieldValue
+        get() = lyricsFieldState
+        set(value) { if (value.text != lyricsFieldState.text) editRevision++; lyricsFieldState = value }
+    private var themeState by mutableStateOf("")
+    var theme: String
+        get() = themeState
+        set(value) { if (value != themeState) editRevision++; themeState = value }
+
+    // Edits to the editor's words since this view model last loaded the song or saved them: a hold saves only these.
+    private var editRevision = 0L
+    private var savedRevision = 0L
+    private val editorDirty: Boolean get() = editRevision != savedRevision || saveFailed
+    private fun markEditorSaved(revision: Long = editRevision) { savedRevision = maxOf(savedRevision, revision) }
 
     val lyrics: String get() = lyricsFieldValue.text
     val cursorPosition: Int
@@ -783,18 +795,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // replaces them keeps them as a new song, also when the app dies in between.
             val songId = currentProjectId
             val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingProjectCreationIds }
-            // Words this editor showed untouched while another window changed the song are no edit: nothing is written over that.
-            val untouched = staleEditorWords == (songId to Triple(title, lyrics, theme))
-            val edited = stored != null && !untouched && createUntitledProjectSnapshot().let {
-                stored.title != it.title || stored.lyrics != it.lyrics || stored.theme != it.theme
-            }
+            // Only words edited here since the song was loaded or saved are written: a buffer another window's save
+            // left behind is no edit, writes nothing and reloads after the operation.
+            val dirty = editorDirty
+            val edited = dirty && stored != null
             // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
             // before the app died. The reload takes it from here, never from the shared selection another window moves.
             val keptId = if (edited) java.util.UUID.randomUUID().toString()
                 else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
-            val flush = try { if (untouched) null else startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
+            val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
             if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
@@ -819,8 +830,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private var flushingHeldDraft = false
-    private var staleEditorWords: Pair<String?, Triple<String, String, String>>? = null
-    private fun editorShows(row: SongProject) = row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme
     private var opensInFlight = 0
     private var draftWritesInFlight = 0
 
@@ -891,11 +900,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
+        val savedAt = editRevision
         savingBeforeNavigation = true
         val attempt = ++saveAttempts
         return viewModelScope.async {
             try {
                 persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, preserveAs)
+                markEditorSaved(savedAt)
                 if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
                     if (missingId != null) reportRecoveredDraft()
                     onSaved()
@@ -1843,6 +1854,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     title = savedTitle
                     lyricsFieldValue = TextFieldValue(savedLyrics)
                     theme = savedTheme
+                    markEditorSaved()
                     restoreEditorPosition()
                 }
                 useWholeSongContext = toggles.useWholeSongContext
@@ -1864,11 +1876,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 try {
                     repo.projectsFlow.collect { stored ->
-                        // The open song changed elsewhere (another window) while this editor was untouched: its words are not an edit.
-                        val openId = currentProjectId
-                        val before = projects.firstOrNull { it.id == openId }
-                        val after = stored.firstOrNull { it.id == openId }
-                        if (before != null && after != null && editorShows(before) && !editorShows(after)) staleEditorWords = openId to Triple(title, lyrics, theme)
                         val pending = projects.filter { it.id in pendingProjectCreationIds &&
                             stored.none { saved -> saved.id == it.id } }
                         projects = pending + stored
@@ -3073,6 +3080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTitle = title
             val currentLyrics = lyrics
             val currentTheme = theme
+            val revisionAtTrigger = editRevision
             val projectIdAtTrigger = currentProjectId
             val holdsSong = projects.any { it.id == projectIdAtTrigger }
 
@@ -3121,6 +3129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 rememberEditorPosition()
                 persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt)
+                markEditorSaved(revisionAtTrigger)
                 if (missingId != null) reportRecoveredDraft()
                 DraftSaveTestHooks.afterAutosaveCommit?.let { DraftSaveTestHooks.afterAutosaveCommit = null; it.await() }
                 delay(SAVE_STATUS_VISIBLE_MILLIS)
@@ -3231,7 +3240,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
+    /** The editor holds a newly loaded document: it starts with no edits of its own. */
     private fun resetLyricsHistory() {
+        markEditorSaved()
         cancelEditorAIWork()
         suggestionInsertion = null
         lyricsHistory.reset()
