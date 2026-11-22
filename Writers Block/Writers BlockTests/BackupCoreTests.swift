@@ -2323,7 +2323,7 @@ struct BackupCoreTests {
 
     /// The older file, listed first, is renamed by another device between this run's
     /// listing and its download, so the copy read is the newest: the next look ranks
-    /// it so, and its name is the one written.
+    /// it so, its name is the one written, and it is the file written.
     @MainActor
     @Test func aRenameWrittenBetweenListingAndDownloadIsTheNameWritten() async throws {
         let harness = try await makeHarness()
@@ -2344,8 +2344,12 @@ struct BackupCoreTests {
         }
 
         try await harness.service.backupNow(modelContext: harness.context)
-        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
-        #expect(wrote && written.recordings.map(\.fileName) == ["renamed.m4a"])
+        // The fake stamps an updated file "update-"; contents(named:) lists the kept duplicate first.
+        let listed = try await drive.listFiles(prefix: SyncBlob.driveFileName, accessToken: "t")
+        let writtenFile = try #require(listed.first { $0.id == older.id })
+        let written = try SyncBlob.decodeManifest(try #require(drive.contents(named: SyncBlob.driveFileName).first))
+        #expect(wrote && writtenFile.modifiedTime?.hasPrefix("update-") == true)
+        #expect(written.recordings.map(\.fileName) == ["renamed.m4a"])
     }
 
     /// A take one file records at 300 and a newer file lists with no time, beside a
