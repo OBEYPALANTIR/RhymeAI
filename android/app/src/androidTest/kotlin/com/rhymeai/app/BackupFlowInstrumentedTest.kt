@@ -23,6 +23,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.datastore.preferences.core.edit
 import com.rhymeai.app.data.repository.dataStore
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
@@ -795,6 +796,8 @@ class BackupFlowInstrumentedTest {
             line = editDuringOneLinerSend(vm) { it.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue("typed words")) }
             assertEquals("typed words", vm.lyrics)
         } finally {
+            // The typing queued an autosave that would otherwise write "typed words" into the next test's open song.
+            runBlocking { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() }
             line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
             resetOpenSong()
         }
