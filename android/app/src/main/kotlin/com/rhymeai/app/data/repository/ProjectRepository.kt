@@ -57,6 +57,9 @@ internal class SameIdTrashCopiesException(id: String) :
 internal class SameIdActiveCopiesException(id: String) :
     IllegalStateException("More than one active song has id $id")
 
+internal class TrashCopyOutranksActiveException(id: String) :
+    IllegalStateException("The Trash copy of $id would win over the active song at the next merge")
+
 /** A coherent local membership and deletion view captured before Drive network work. */
 /**
  * A41: a song (active or in Trash) whose repaired time lost to a tombstone in a merge.
@@ -132,6 +135,8 @@ class ProjectRepository internal constructor(
         )
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
+        /** The song whose editor words a held flush just wrote: the next sync commit that replaces it keeps them. */
+        private val PRESERVED_SONG_ID_KEY = stringPreferencesKey("preserved_song_id")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
@@ -304,7 +309,8 @@ class ProjectRepository internal constructor(
         createIfMissing: Boolean,
         title: String,
         lyrics: String,
-        theme: String
+        theme: String,
+        preserve: Boolean = false
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         dataStore.edit { prefs ->
@@ -345,9 +351,15 @@ class ProjectRepository internal constructor(
             prefs[CURRENT_TITLE_KEY] = title
             prefs[CURRENT_LYRICS_KEY] = lyrics
             prefs[CURRENT_THEME_KEY] = theme
+            if (preserve && project != null) prefs[PRESERVED_SONG_ID_KEY] = project.id
             committed = next
         }
         checkNotNull(committed)
+    }
+
+    /** The operation a held flush preceded ended without a sync commit: nothing more to preserve. */
+    suspend fun clearPreservedSong() = projectSaveMutex.withLock {
+        dataStore.edit { it.remove(PRESERVED_SONG_ID_KEY) }
     }
 
     suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {
@@ -448,6 +460,10 @@ class ProjectRepository internal constructor(
                 // The active song keeps its id, words, recordings and notebook, and outranks the Trash copy
                 // at the next merge; the Trash copy's other words come back as a new song.
                 val kept = held.copy(updatedAt = maxOf(held.updatedAt, entry.deletedAt + 1), precedenceRepaired = false)
+                // A Trash time nothing can beat (the latest possible; Trash wins ties) would undo this at the next merge.
+                if (!SyncMerger.supersedes(kept.updatedAt, false, entry.deletedAt, entry.deletedAtRepaired)) {
+                    throw TrashCopyOutranksActiveException(id)
+                }
                 listOfNotNull(copy?.copy(id = java.util.UUID.randomUUID().toString(), updatedAt = now, precedenceRepaired = false)) +
                     active.map { if (it.id == id) kept else it }
             }
@@ -825,10 +841,8 @@ class ProjectRepository internal constructor(
      * songs, trash and tombstones are merged with [merged] again (newest `updatedAt`
      * per id, tombstones by timestamp), so an edit saved after [base] was read is
      * kept. IDs removed after the base read stay removed; new local IDs stay.
-     * [keepIfReplaced] holds the open song's just-saved words under a new id: if this edit replaces or
-     * removes the selected song's words and they were these, the copy is added and selected in the same edit.
      */
-    internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase, keepIfReplaced: SongProject? = null): SyncBlob =
+    internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase): SyncBlob =
         projectSaveMutex.withLock {
             lateinit var committed: SyncBlob
             var keptHere = emptyList<RecoveredSong>()
@@ -860,22 +874,36 @@ class ProjectRepository internal constructor(
                 // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
                 // in the same edit, not erased; one that lost with a real time is a genuine deletion.
                 keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
-                // The editor's saved state follows a selected song this edit changed or removed, so a relaunch
-                // before the editor reloads shows what is stored; an unchanged song keeps its saved editor words.
+                // Words this edit would replace or remove are kept as new songs in it: the editor words saved apart
+                // from the selected song (an older install; startup shows them), else the words a held flush just
+                // wrote (marked in that flush, so a crash before this edit keeps them too). The editor's saved state
+                // follows a selected song this edit changed or removed; an unchanged song keeps its saved editor words.
                 fun SongProject.sameWords(other: SongProject) = title == other.title && lyrics == other.lyrics && theme == other.theme
-                var copy: SongProject? = null
-                prefs[CURRENT_PROJECT_ID_KEY]?.let { selectedId ->
-                    val before = current.projects.firstOrNull { it.id == selectedId } ?: return@let
-                    val after = nextProjects.firstOrNull { it.id == selectedId }
-                    if (after != null && after.sameWords(before)) return@let
-                    copy = keepIfReplaced?.takeIf { it.sameWords(before) && nextProjects.none { p -> p.id == it.id } }
-                    val shown = copy ?: after
+                fun replaced(id: String?) = current.projects.firstOrNull { it.id == id }
+                    ?.takeUnless { before -> nextProjects.firstOrNull { it.id == before.id }?.sameWords(before) == true }
+                fun keptCopy(words: SongProject) = words.copy(id = java.util.UUID.randomUUID().toString(), updatedAt = System.currentTimeMillis(), precedenceRepaired = false)
+                val selectedId = prefs[CURRENT_PROJECT_ID_KEY]
+                val preservedId = prefs[PRESERVED_SONG_ID_KEY]
+                prefs.remove(PRESERVED_SONG_ID_KEY)
+                val editorWords = listOf(CURRENT_TITLE_KEY, CURRENT_LYRICS_KEY, CURRENT_THEME_KEY).map { prefs[it] ?: "" }
+                val selectedBefore = replaced(selectedId)
+                val selectedCopy = selectedBefore?.let { before ->
+                    val editor = SongProject(id = before.id, title = editorWords[0].ifEmpty { "Untitled Song" }, lyrics = editorWords[1], theme = editorWords[2])
+                    when {
+                        editorWords.any { it.isNotEmpty() } && !editor.sameWords(before) -> keptCopy(editor)
+                        preservedId == selectedId -> keptCopy(before)
+                        else -> null
+                    }
+                }
+                val otherCopy = replaced(preservedId)?.takeIf { it.id != selectedId }?.let(::keptCopy)
+                if (selectedBefore != null) {
+                    val shown = selectedCopy ?: nextProjects.firstOrNull { it.id == selectedId }
                     if (shown == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = shown.id
                     prefs[CURRENT_TITLE_KEY] = shown?.title ?: ""
                     prefs[CURRENT_LYRICS_KEY] = shown?.lyrics ?: ""
                     prefs[CURRENT_THEME_KEY] = shown?.theme ?: ""
                 }
-                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(copy) + nextProjects)
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(selectedCopy, otherCopy) + nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =

@@ -678,6 +678,16 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    private val refusedNotice =
+        "Your open draft could not be saved, so your songs were not restored. Some recordings may have been downloaded already; restore again to finish."
+
+    /** A new view-model over the stored state, as after a relaunch; it shows [lyrics] for the open song. */
+    private fun relaunchedViewModel(lyrics: String): MainViewModel {
+        val vm = MainViewModel(context.applicationContext as android.app.Application)
+        waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == lyrics }
+        return vm
+    }
+
     private fun putDriveSongs(blob: SyncBlob) = drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(blob, 0L, "other-device"))
 
     @Test fun aDraftThatCannotBeSavedStopsTheRestoreAndStaysInTheEditor() {
@@ -689,7 +699,7 @@ class BackupFlowInstrumentedTest {
                 DraftSaveTestHooks.failNext.set(true)
                 vm.restoreFromBackup()
             }
-            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice == "Your open draft could not be saved, so nothing was restored." }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice == refusedNotice }
             instrumentation.waitForIdleSync()
             assertEquals("nothing restored or overwritten", openSong.lyrics, storedOpenSong().lyrics)
             assertEquals("unsaved edit", vm.lyrics)
@@ -730,7 +740,11 @@ class BackupFlowInstrumentedTest {
         putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
         val vm = openSongInEditor()
         val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        fun alternates() = runBlocking { repo.workspacesFlow.first() }[openSong.id]?.alternates.orEmpty()
         try {
+            instrumentation.runOnMainSync { vm.keepAlternate("seeded line") }
+            waitUntil({ "alternates ${alternates()}" }) { alternates().any { it.text == "seeded line" } }
+            val seeded = alternates().single { it.text == "seeded line" }.id
             // Paused in the hold's own draft write, right before the commit.
             DraftSaveTestHooks.beforeWrite = resume
             instrumentation.runOnMainSync { vm.restoreFromBackup() }
@@ -744,6 +758,7 @@ class BackupFlowInstrumentedTest {
                 vm.triggerAutoSave(retry = true)
                 vm.saveDraftVersion()
                 vm.keepAlternate("kept line")
+                vm.removeAlternate(seeded)
                 vm.rememberEditorPosition(40f)
             }
             SystemClock.sleep(500)
@@ -980,6 +995,116 @@ class BackupFlowInstrumentedTest {
             SongOpenTestHooks.beforeSwap = null
             swap.complete(Unit)
             drive.beforeDownload = null
+            resetOpenSong()
+        }
+    }
+
+    /** The app died after the hold's draft save stored the edited words (no notebook version written) and before the commit. */
+    @Test fun aRetryAfterTheAppDiedBetweenTheDraftSaveAndTheCommitKeepsTheSavedWordsAsANewSong() {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        openSongInEditor()
+        val saved = "saved before the crash"
+        // What the hold's draft save wrote: the words, the editor state and the mark, in one write.
+        runBlocking { repo.saveActiveState(openSong.copy(lyrics = saved), false, openSong.title, saved, openSong.theme, preserve = true) }
+        val vm = relaunchedViewModel(saved)
+        try {
+            instrumentation.runOnMainSync { vm.showStartMenu = false; vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            val copy = runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id }
+            assertEquals(saved, copy.lyrics)
+            assertEquals(copy.id to saved, vm.currentProjectId to vm.lyrics)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    /** An older install saved editor words apart from the song; startup shows them. A restore from the start menu keeps them. */
+    @Test fun aRestoreFromTheStartMenuKeepsEditorWordsSavedApartFromTheSongAsANewSong() {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        openSongInEditor()
+        runBlocking { repo.saveEditorState(openSong.title, "legacy draft words", openSong.theme) }
+        val vm = relaunchedViewModel("legacy draft words")
+        try {
+            assertTrue(vm.showStartMenu)
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            assertEquals("legacy draft words", runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id }.lyrics)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aNewSongStartedWhenTheRestoreCommitsFinishesFirst() {
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        val vm = openSongInEditor()
+        val selectionSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val downloaded = java.util.concurrent.atomic.AtomicBoolean(false)
+        drive.beforeDownload = { downloaded.set(true) }
+        try {
+            NewSongTestHooks.beforeSelectionSave = selectionSave
+            instrumentation.runOnMainSync { vm.newProject() }
+            waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == null && vm.lyrics.isEmpty() }
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil { downloaded.get() }
+            SystemClock.sleep(700)
+            // The restore reached its commit but waits: New Song has not stored its selection yet.
+            assertFalse(vm.editorHeld)
+            assertEquals(openSong.lyrics, storedOpenSong().lyrics)
+            selectionSave.complete(Unit)
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            assertEquals(null to "", vm.currentProjectId to vm.lyrics)
+            assertEquals(null, runBlocking { repo.currentProjectIdFlow.first() })
+        } finally {
+            NewSongTestHooks.beforeSelectionSave = null
+            selectionSave.complete(Unit)
+            drive.beforeDownload = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aRestoreRefusedAfterItsRecordingArrivedEndsWithOneTakeAfterTheRetry() {
+        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.RECORD_AUDIO)
+        val audio = TestRecordings.recordFinalizedM4a(context, java.io.File(context.cacheDir, "drive-take.m4a")).readBytes()
+        val take = com.rhymeai.app.data.sync.RecordingManifestEntry(
+            openSong.id, "take.m4a", sizeBytes = audio.size.toLong(), modifiedAt = 0L,
+            sha256 = BackupManifest.sha256Hex(audio), uploadedAt = 1_000L, id = "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c"
+        )
+        drive.put(BackupManifest.recordingDriveName(take.id), audio)
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L)), recordings = listOf(take)))
+        val vm = openSongInEditor()
+        val memoDir = com.rhymeai.app.data.recording.RecordingFiles.memoDirectory(context.filesDir, openSong.id)
+        fun takes() = runBlocking { repo.recordingRecords() }.filter { it.projectId == openSong.id && it.trashedAt == null && it.path != null }
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("unsaved edit")
+                DraftSaveTestHooks.failNext.set(true)
+                vm.restoreFromBackup()
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice == refusedNotice }
+            assertEquals("the take arrived before the refusal", 1, takes().size)
+            assertEquals(openSong.lyrics, storedOpenSong().lyrics)
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "notice ${vm.backupNotice} held ${vm.editorHeld}" }) {
+                vm.backupNotice != null && vm.backupNotice != refusedNotice && !vm.editorHeld
+            }
+            instrumentation.waitForIdleSync()
+            // The edit saved by the retry is newer than the Drive copy, so it stays.
+            assertEquals("unsaved edit", storedOpenSong().lyrics)
+            val kept = takes()
+            assertEquals("$kept", 1, kept.size)
+            val file = com.rhymeai.app.data.recording.RecordingFiles.containedRecordingFile(context.filesDir, kept.single().path!!)
+            assertTrue("the take plays the Drive bytes", audio.contentEquals(file?.readBytes()))
+            assertEquals(1, memoDir.listFiles().orEmpty().count { it.isFile && it.extension == "m4a" })
+        } finally {
+            DraftSaveTestHooks.failNext.set(false)
+            memoDir.deleteRecursively()
+            runCatching { runBlocking { repo.updateRecordingRecords { records -> records.filterNot { it.projectId == openSong.id } } } }
             resetOpenSong()
         }
     }
