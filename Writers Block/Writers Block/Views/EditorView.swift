@@ -1188,6 +1188,9 @@ struct RewriteAccessoryBar: View {
                         onSetUpModel: {
                             viewModel.dismissRewrite()
                             dismissKeyboard()
+                            #if os(macOS)
+                            UserDefaults.standard.set("ai", forKey: "macSettingsTab")
+                            #endif
                             viewModel.showSettingsSheet = true
                         }
                     )
