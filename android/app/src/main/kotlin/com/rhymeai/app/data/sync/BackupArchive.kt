@@ -197,7 +197,12 @@ object BackupArchive {
     }
 
     /** Merges imported songs, trash and tombstones; adds recordings this device lacks and never replaces one. */
-    internal suspend fun import(contents: Contents, repository: ProjectRepository, filesDir: File): ImportSummary {
+    internal suspend fun import(
+        contents: Contents,
+        repository: ProjectRepository,
+        filesDir: File,
+        keepIfReplaced: com.rhymeai.app.data.model.SongProject? = null
+    ): ImportSummary {
         // Finish or roll back an interrupted restore before reading what is on disk.
         RecordingFileStore.recoverInterruptedRestores(filesDir)
         val setAsideBefore = repository.recoveredSongs().size
@@ -232,7 +237,7 @@ object BackupArchive {
         RecordingTransitions.reconcile(repository, filesDir)
         // A41: every losing repaired version is kept (and read back) before the apply removes any.
         repository.setAsideRepairedLosers(gathered, merged, heldHere = null)
-        repository.applySyncResult(gathered, base)
+        repository.applySyncResult(gathered, base, keepIfReplaced)
         quarantineDeletedRecordings(repository, filesDir)
         return ImportSummary(
             songs = contents.manifest.projects.size,

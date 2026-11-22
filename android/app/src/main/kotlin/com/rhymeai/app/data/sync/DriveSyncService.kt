@@ -1123,7 +1123,7 @@ class DriveSyncService(
     /** [aroundCommit] wraps only the local commit (no network or download runs inside it); it may refuse by throwing. */
     suspend fun restore(
         repository: ProjectRepository,
-        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
+        aroundCommit: (suspend (commit: suspend (keepIfReplaced: SongProject?) -> Unit) -> Unit)? = null
     ): SyncResult = run(repository, Mode.RESTORE, null, aroundCommit)
 
     /**
@@ -1381,7 +1381,7 @@ class DriveSyncService(
         repository: ProjectRepository,
         mode: Mode,
         typedPassphrase: CharArray?,
-        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
+        aroundCommit: (suspend (commit: suspend (keepIfReplaced: SongProject?) -> Unit) -> Unit)? = null
     ): SyncResult =
         withContext(Dispatchers.IO) {
             guarded({ it }) {
@@ -1503,7 +1503,7 @@ class DriveSyncService(
         extraRemote: SyncBlob?,
         requireRemote: Boolean,
         unlistable: Set<String> = emptySet(),
-        aroundCommit: (suspend (commit: suspend () -> Unit) -> Unit)? = null
+        aroundCommit: (suspend (commit: suspend (keepIfReplaced: SongProject?) -> Unit) -> Unit)? = null
     ): PushOutcome? {
         // Every input seen by an earlier attempt (its local, remote and any conflicting
         // read-back) is carried forward unresolved, so nothing seen once is dropped.
@@ -1676,11 +1676,11 @@ class DriveSyncService(
                 // The unresolved inputs go to the transactional apply, which resolves them
                 // once more together with what this device holds at commit time.
                 // The apply needs the last reconciliation to still hold (it throws otherwise).
-                val commit: suspend () -> Unit = {
+                val commit: suspend (SongProject?) -> Unit = { keep ->
                     RecordingTransitions.reconcile(repository, filesDir)
-                    committed = repository.applySyncResult(gathered, base)
+                    committed = repository.applySyncResult(gathered, base, keep)
                 }
-                if (aroundCommit != null) aroundCommit(commit) else commit()
+                if (aroundCommit != null) aroundCommit(commit) else commit(null)
                 quarantineDeletedRecordings(repository, filesDir)
                 // What is actually here now, not what the manifest lists.
                 val committedIds = committed.recordings.mapTo(HashSet()) { it.id }

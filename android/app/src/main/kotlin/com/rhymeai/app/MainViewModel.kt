@@ -769,18 +769,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Runs [operation], which may replace stored songs, after the open draft is saved, with the editor
      * held until it shows what storage then holds. False, with nothing run, when the draft could not be saved.
      */
-    private suspend fun holdEditorFor(operation: suspend () -> Unit): Boolean {
+    private suspend fun holdEditorFor(operation: suspend (keepIfReplaced: SongProject?) -> Unit): Boolean {
         // A draft save, song open or draft-version restore already running finishes first; nothing captured before is replayed.
         while (restoringDraft || savingBeforeNavigation || editorHeld || opensInFlight > 0 || draftWritesInFlight > 0) delay(20)
         editorHeld = true
         try {
             autoSaveJob?.cancelAndJoin()
             positionSaveJob?.cancelAndJoin()
-            // Words the flush is about to write over the stored song: kept as a new song if the operation replaces them.
-            val openId = currentProjectId
-            val stored = projects.firstOrNull { it.id == openId }?.takeIf { it.id !in pendingProjectCreationIds }
-            val flushedEdits = stored != null &&
-                (stored.title != title.ifEmpty { "Untitled Song" } || stored.lyrics != lyrics || stored.theme != theme)
+            // Edits the flush is about to write over the stored song: the commit keeps them as a new song, in its
+            // own edit, if it replaces them.
+            val stored = projects.firstOrNull { it.id == currentProjectId }?.takeIf { it.id !in pendingProjectCreationIds }
+            val keep = createUntitledProjectSnapshot().takeIf {
+                stored != null && (stored.title != it.title || stored.lyrics != it.lyrics || stored.theme != it.theme)
+            }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
             val flush = try { startDraftFlush {} } finally { flushingHeldDraft = false }
@@ -789,10 +790,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             positionSaveJob?.cancel()
             restoringDraft = true
             // Also after a failed or cancelled operation: whatever it committed is what the editor shows.
-            try { operation() } finally {
-                withContext(NonCancellable) {
-                    if (!(flushedEdits && openId != null && keepFlushedEditsIfReplaced(openId))) showStoredOpenSong()
-                }
+            try { operation(keep) } finally {
+                withContext(NonCancellable) { if (keep == null || !showKeptCopy(keep)) showStoredOpenSong() }
             }
             return true
         } finally {
@@ -806,25 +805,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var opensInFlight = 0
     private var draftWritesInFlight = 0
 
-    /**
-     * The edits the hold just saved under [id] were replaced or removed by the operation: they stay in the
-     * editor and are saved as a new song. False, with nothing done, when the stored song still holds them.
-     */
-    private suspend fun keepFlushedEditsIfReplaced(id: String): Boolean {
+    /** The commit kept the editor's edits as [copy]: the editor, which still shows them, now edits that song. */
+    private suspend fun showKeptCopy(copy: SongProject): Boolean {
         val stored = try { repo.projectsFlow.first() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return false }
-        val row = stored.firstOrNull { it.id == id }
-        if (currentProjectId != id || (row != null && row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme)) return false
-        val copy = createUntitledProjectSnapshot()
-        pendingProjectCreationIds.add(copy.id)
-        projects = listOf(copy) + stored
+        if (stored.none { it.id == copy.id }) return false
+        projects = projects.filter { it.id in pendingProjectCreationIds && stored.none { s -> s.id == it.id } } + stored
         currentProjectId = copy.id
         persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
-        val attempt = ++saveAttempts
-        try {
-            persistActiveProjectSnapshot(copy, title, lyrics, theme, attempt)
-        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-            reconcileFailedProjectSave(copy, error, attempt)
-        }
         return true
     }
 
@@ -1296,7 +1283,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = backupMutex.withLock {
                 driveSyncService.restore(repo) { commit ->
                     withContext(Dispatchers.Main.immediate) {
-                        refused = !holdEditorFor { withContext(Dispatchers.IO) { commit() } }
+                        refused = !holdEditorFor { keep -> withContext(Dispatchers.IO) { commit(keep) } }
                     }
                     if (refused) throw IllegalStateException("The open draft could not be saved")
                 }
@@ -1627,7 +1614,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 var imported: BackupArchive.ImportSummary? = null
                 val ran = backupMutex.withLock {
-                    holdEditorFor { imported = withContext(Dispatchers.IO) { BackupArchive.import(contents, repo, app.filesDir) } }
+                    holdEditorFor { keep -> imported = withContext(Dispatchers.IO) { BackupArchive.import(contents, repo, app.filesDir, keep) } }
                 }
                 if (!ran) throw java.io.IOException("your open draft could not be saved")
                 val summary = checkNotNull(imported)
@@ -2826,6 +2813,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
+            opensInFlight++ // a hold waits for it
             viewModelScope.launch {
                 showProjectsDialog = false
                 val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
@@ -2857,7 +2845,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         reconcileFailedProjectSave(project, error, attempt)
                     }
                 }
-            }
+            }.invokeOnCompletion { opensInFlight-- }
         }
     }
 
@@ -2978,6 +2966,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openingSong = false
         flushCurrentDraft {
             if (request != openRequest) return@flushCurrentDraft
+            opensInFlight++ // a hold waits for it
             viewModelScope.launch {
                 showTemplatesDialog = false
                 val owned = try { settleBeforeOpen(request) } finally { if (openRequest == request) openingSong = false }
@@ -2995,7 +2984,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 triggerAutoSave()
 
                 onReady()
-            }
+            }.invokeOnCompletion { opensInFlight-- }
         }
     }
 

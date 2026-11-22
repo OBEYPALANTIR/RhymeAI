@@ -825,8 +825,10 @@ class ProjectRepository internal constructor(
      * songs, trash and tombstones are merged with [merged] again (newest `updatedAt`
      * per id, tombstones by timestamp), so an edit saved after [base] was read is
      * kept. IDs removed after the base read stay removed; new local IDs stay.
+     * [keepIfReplaced] holds the open song's just-saved words under a new id: if this edit replaces or
+     * removes the selected song's words and they were these, the copy is added and selected in the same edit.
      */
-    internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase): SyncBlob =
+    internal suspend fun applySyncResult(merged: SyncBlob, base: LocalSyncBase, keepIfReplaced: SongProject? = null): SyncBlob =
         projectSaveMutex.withLock {
             lateinit var committed: SyncBlob
             var keptHere = emptyList<RecoveredSong>()
@@ -858,27 +860,26 @@ class ProjectRepository internal constructor(
                 // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
                 // in the same edit, not erased; one that lost with a real time is a genuine deletion.
                 keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
-                prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextProjects)
+                // The editor's saved state follows a selected song this edit changed or removed, so a relaunch
+                // before the editor reloads shows what is stored; an unchanged song keeps its saved editor words.
+                fun SongProject.sameWords(other: SongProject) = title == other.title && lyrics == other.lyrics && theme == other.theme
+                var copy: SongProject? = null
+                prefs[CURRENT_PROJECT_ID_KEY]?.let { selectedId ->
+                    val before = current.projects.firstOrNull { it.id == selectedId } ?: return@let
+                    val after = nextProjects.firstOrNull { it.id == selectedId }
+                    if (after != null && after.sameWords(before)) return@let
+                    copy = keepIfReplaced?.takeIf { it.sameWords(before) && nextProjects.none { p -> p.id == it.id } }
+                    val shown = copy ?: after
+                    if (shown == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = shown.id
+                    prefs[CURRENT_TITLE_KEY] = shown?.title ?: ""
+                    prefs[CURRENT_LYRICS_KEY] = shown?.lyrics ?: ""
+                    prefs[CURRENT_THEME_KEY] = shown?.theme ?: ""
+                }
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(copy) + nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - writtenIds
-                // The editor's saved state follows a selected song this edit changed or removed, so a relaunch
-                // before the editor reloads shows what is stored; an unchanged song keeps its saved editor words.
-                prefs[CURRENT_PROJECT_ID_KEY]?.let { selectedId ->
-                    val before = current.projects.firstOrNull { it.id == selectedId } ?: return@let
-                    val after = nextProjects.firstOrNull { it.id == selectedId }
-                    if (after == null) {
-                        prefs.remove(CURRENT_PROJECT_ID_KEY)
-                        prefs[CURRENT_TITLE_KEY] = ""
-                        prefs[CURRENT_LYRICS_KEY] = ""
-                        prefs[CURRENT_THEME_KEY] = ""
-                    } else if (before.title != after.title ||before.lyrics != after.lyrics || before.theme != after.theme) {
-                        prefs[CURRENT_TITLE_KEY] = after.title
-                        prefs[CURRENT_LYRICS_KEY] = after.lyrics
-                        prefs[CURRENT_THEME_KEY] = after.theme
-                    }
-                }
                 committed = resolved
             }
             // A41: the songs kept aside in that edit are read back before the run goes on.

@@ -667,7 +667,7 @@ class BackupFlowInstrumentedTest {
             val songs = runBlocking { repo.projectsFlow.first() }
             assertTrue("$songs", songs.any { it.id != openSong.id && it.lyrics == newerWords })
             assertEquals(openSong.lyrics, storedOpenSong().lyrics)
-            assertEquals(notebook.checkpointAt, runBlocking { repo.workspacesFlow.first() }[openSong.id]?.checkpointAt)
+            assertEquals("the active song keeps its notebook and versions", notebook, runBlocking { repo.workspacesFlow.first() }[openSong.id])
             assertEquals("This song was already in your songs, so its Trash copy was restored as a new song.", vm.persistenceError)
             instrumentation.runOnMainSync { vm.flushCurrentDraft() }
             waitUntil { !vm.savingBeforeNavigation }
@@ -853,6 +853,61 @@ class BackupFlowInstrumentedTest {
         } finally {
             drive.beforeDownload = null
             resume.complete(Unit)
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aStalledImportFileNeverHoldsTheEditor() {
+        val vm = openSongInEditor()
+        val fifo = java.io.File(context.cacheDir, "stalled-import")
+        fifo.delete()
+        android.system.Os.mkfifo(fifo.path, 0x180) // 0600
+        val bytes = java.io.ByteArrayOutputStream().also {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))), emptyList(), 0L, "test"
+            )
+        }.toByteArray()
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(fifo)) }
+            SystemClock.sleep(500)
+            instrumentation.runOnMainSync { vm.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue("typed while the file stalls")) }
+            assertFalse(vm.editorHeld)
+            assertEquals("typed while the file stalls", vm.lyrics)
+            fifo.outputStream().use { it.write(bytes) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true && !vm.editorHeld }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            // Saved before the commit and newer than the file's words, so they stay.
+            assertEquals("typed while the file stalls" to "typed while the file stalls", storedOpenSong().lyrics to vm.lyrics)
+        } finally {
+            fifo.delete()
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aOneLinerWriteInFlightWhenTheRestoreCommitsIsDrainedFirst() {
+        // Dated ahead, so Drive's words win over the line written first.
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+        val vm = openSongInEditor()
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        val held = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val downloaded = java.util.concurrent.atomic.AtomicBoolean(false)
+        drive.beforeDownload = { downloaded.set(true) }
+        try {
+            DraftSaveTestHooks.beforeWrite = held
+            instrumentation.runOnMainSync { vm.sendOneLinerToSong(line, storedOpenSong()) {} }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null }
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil { downloaded.get() }
+            SystemClock.sleep(700)
+            assertEquals("the commit waits for the line's write", openSong.lyrics, storedOpenSong().lyrics)
+            held.complete(Unit)
+            assertNextSaveKeepsNewerWords(vm)
+        } finally {
+            DraftSaveTestHooks.beforeWrite = null
+            held.complete(Unit)
+            drive.beforeDownload = null
+            runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
             resetOpenSong()
         }
     }

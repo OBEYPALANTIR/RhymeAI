@@ -1426,6 +1426,23 @@ class ProjectRepositoryTest {
         assertEquals(Triple("", "", ""), repository.editorStateFlow().first())
     }
 
+    @Test
+    fun aSyncCommitThatReplacesJustSavedEditsKeepsThemAsANewSelectedSongInTheSameEdit() = withRepository { _, repository ->
+        val open = SongProject(id = "open", title = "Open", lyrics = "edited words", updatedAt = 100L)
+        repository.saveActiveState(open, true, open.title, open.lyrics, open.theme)
+        val keep = open.copy(id = "kept-copy")
+        // Unchanged by the commit: no copy.
+        repository.applySyncResult(SyncBlob(projects = listOf(SongProject(id = "else", title = "Else", updatedAt = 5L))), repository.snapshotLocalSyncBase(), keep)
+        assertTrue(repository.projectsFlow.first().none { it.id == keep.id })
+        // Replaced by the commit: the copy lands and is selected in that same edit, so a relaunch shows it.
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), repository.snapshotLocalSyncBase(), keep)
+        val songs = repository.projectsFlow.first()
+        assertEquals("newer words", songs.single { it.id == "open" }.lyrics)
+        assertEquals("edited words", songs.single { it.id == keep.id }.lyrics)
+        assertEquals(keep.id, repository.currentProjectIdFlow.first())
+        assertEquals(Triple("Open", "edited words", ""), repository.editorStateFlow().first())
+    }
+
     private fun testKeyStore(): SecureKeyStore = object : SecureKeyStore {
         override fun getKey(provider: String) = ""
         override fun setKey(provider: String, key: String) = Unit
