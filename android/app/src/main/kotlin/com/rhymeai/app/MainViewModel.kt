@@ -227,6 +227,8 @@ internal object BackupTestHooks {
     @Volatile var authorizer: DriveAuthorizer? = null
     /** Runs in a hold after its draft save, before the operation (a test interleaves another window, or stops there). */
     @Volatile var beforeHeldOperation: (suspend () -> Unit)? = null
+    /** Holds the next one-liner send to a song behind the start menu before its write (a test runs a restore meanwhile). */
+    @Volatile var beforeMenuSend: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -395,6 +397,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var savedRevision = 0L
     // Changes to the words alone: a one-liner callback must not load over words changed meanwhile, even back to equal.
     private var lyricsRevision = 0L
+    // A load of the song's stored words is not the writer's edit: a pending one-liner callback still loads after it.
+    private fun loadWords(text: String) {
+        val revision = lyricsRevision
+        lyricsFieldValue = TextFieldValue(text)
+        lyricsRevision = revision
+    }
     private val editorDirty: Boolean get() = editRevision != savedRevision || saveFailed
     private fun markEditorSaved(revision: Long = editRevision) { savedRevision = maxOf(savedRevision, revision) }
 
@@ -605,6 +613,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } else {
                 val wordsRevisionAtSend = lyricsRevision
+                BackupTestHooks.beforeMenuSend?.let { BackupTestHooks.beforeMenuSend = null; it.await() }
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
                     ?: return "That song is no longer in your library."
                 // The song is the editor's (behind the start menu): its words follow the stored song, unless they changed
@@ -612,7 +621,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Only the words are loaded here, so a title or theme edit stays unsaved too: the editor is not marked saved.
                 if (currentProjectId == project.id && lyricsRevision == wordsRevisionAtSend) {
                     songs.firstOrNull { it.id == project.id }?.let {
-                        lyricsFieldValue = TextFieldValue(it.lyrics)
+                        loadWords(it.lyrics)
                         resetLyricsHistory()
                     }
                 }
@@ -873,7 +882,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (currentProjectId != id) return
             dismissRewrite()
             title = selected.title
-            lyricsFieldValue = TextFieldValue(selected.lyrics)
+            loadWords(selected.lyrics)
             theme = selected.theme
             completeDraftTransition()
             restoreEditorPosition()
@@ -2604,7 +2613,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (request != openRequest) return@launch
                     dismissRewrite()
                     title = project.title
-                    lyricsFieldValue = TextFieldValue(project.lyrics)
+                    loadWords(project.lyrics)
                     theme = project.theme
                     currentProjectId = project.id
                     completeDraftTransition()

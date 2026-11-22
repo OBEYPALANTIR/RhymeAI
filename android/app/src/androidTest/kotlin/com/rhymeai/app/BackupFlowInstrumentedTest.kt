@@ -806,6 +806,122 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** Two one-liners sent at once: the first callback's load is not an edit, so the second still loads and a background save keeps both. */
+    @Test fun twoOneLinersSentAtOnceBothSurviveTheBackgroundSave() {
+        val vm = openSongInEditor()
+        val first = runBlocking { vm.oneLinersStore.add("first sent line") }
+        val second = runBlocking { vm.oneLinersStore.add("second sent line") }
+        val firstSent = kotlinx.coroutines.CompletableDeferred<String>()
+        val secondSent = kotlinx.coroutines.CompletableDeferred<String>()
+        val song = storedOpenSong()
+        try {
+            instrumentation.runOnMainSync {
+                vm.showStartMenu = true
+                // Both sends read the words' revision before either write returns.
+                vm.sendOneLinerToSong(first, song) { firstSent.complete(it) }
+                vm.sendOneLinerToSong(second, song) { secondSent.complete(it) }
+                // The song is opened before the callbacks run.
+                vm.showStartMenu = false
+            }
+            runBlocking { kotlinx.coroutines.withTimeout(10_000) { firstSent.await(); secondSent.await() } }
+            instrumentation.waitForIdleSync()
+            // Going to the background saves the open song.
+            instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            val stored = storedOpenSong().lyrics
+            assertTrue("stored $stored editor ${vm.lyrics}",
+                listOf(stored, vm.lyrics).all { it.contains("first sent line") && it.contains("second sent line") })
+        } finally {
+            try {
+                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+            } finally {
+                runBlocking { listOf(first, second).forEach { vm.oneLinersStore.permanentlyDelete(it.id) } }
+                resetOpenSong()
+            }
+        }
+    }
+
+    /** Opening the song is a load, not an edit: a send started behind the start menu still loads the song with its line. */
+    @Test fun anOpenOfTheSameSongDoesNotMakeAPendingSendSkipItsLoad() {
+        val vm = openSongInEditor()
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        val sent = kotlinx.coroutines.CompletableDeferred<String>()
+        try {
+            // Another window saved W2, so the open loads words the editor does not show yet. Off the main thread, as above.
+            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
+            val song = storedOpenSong()
+            instrumentation.runOnMainSync {
+                vm.showStartMenu = true
+                // The open takes the song store's lock at once and reads W2; the send records the words' revision and
+                // appends only after the open has read, so the open's load lands between the send's start and its callback.
+                vm.loadProject(song)
+                vm.sendOneLinerToSong(line, song) { sent.complete(it) }
+            }
+            runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
+            waitUntil({ "menu ${vm.showStartMenu} opening ${vm.openingSong}" }) { !vm.showStartMenu && !vm.openingSong }
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            val stored = storedOpenSong().lyrics
+            assertTrue("stored $stored editor ${vm.lyrics}",
+                listOf(stored, vm.lyrics).all { it.contains(newerWords) && it.contains("a sent line") })
+        } finally {
+            try {
+                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+            } finally {
+                runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
+                resetOpenSong()
+            }
+        }
+    }
+
+    /** A restore's reload of the open song is a load: a send started before it still loads W2 and its line, and a save keeps both. */
+    @Test fun aSendPendingAcrossARestoreKeepsTheRestoredWordsAndTheLine() {
+        // Dated ahead, so Drive's words win over the stored W1.
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+        val vm = openSongInEditor()
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        val sent = kotlinx.coroutines.CompletableDeferred<String>()
+        val held = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val song = storedOpenSong()
+        try {
+            BackupTestHooks.beforeMenuSend = held
+            instrumentation.runOnMainSync {
+                vm.showStartMenu = true
+                // Records the words' revision, then waits before its write.
+                vm.sendOneLinerToSong(line, song) { sent.complete(it) }
+            }
+            waitUntil { BackupTestHooks.beforeMenuSend == null }
+            instrumentation.runOnMainSync { vm.loadProject(song) }
+            waitUntil({ "menu ${vm.showStartMenu} opening ${vm.openingSong}" }) { !vm.showStartMenu && !vm.openingSong }
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld} editor ${vm.lyrics}" }) {
+                vm.backupStatus is BackupStatus.Connected && !vm.editorHeld && vm.lyrics == newerWords
+            }
+            held.complete(Unit)
+            runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
+            instrumentation.waitForIdleSync()
+            // Going to the background saves the open song.
+            instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            val stored = storedOpenSong().lyrics
+            assertTrue("stored $stored editor ${vm.lyrics}",
+                listOf(stored, vm.lyrics).all { it.contains(newerWords) && it.contains("a sent line") })
+        } finally {
+            BackupTestHooks.beforeMenuSend = null
+            held.complete(Unit)
+            try {
+                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+            } finally {
+                runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
+                resetOpenSong()
+            }
+        }
+    }
+
     /** Words typed away and back to a saved draft W2 while a one-liner is sent are not replaced by W1 and the line. */
     @Test fun aDraftTypedAwayAndBackWhileAOneLinerIsSentIsSavedByAnImport() {
         val vm = openSongInEditor(draft = newerWords)
