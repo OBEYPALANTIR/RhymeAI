@@ -158,6 +158,10 @@ internal object SongOpenTestHooks {
 private const val NO_LOCAL_MODEL_SELECTION = ""
 internal const val REWRITE_NEEDS_MODEL = "Choose a local model in Settings to rewrite."
 
+/** An exception with no usable message shows [fallback], never an empty error line. */
+internal fun failureMessage(error: Throwable, fallback: String): String =
+    error.message?.takeIf { it.isNotBlank() } ?: fallback
+
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -761,7 +765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _selectedProvider
         set(value) {
             if (_selectedProvider == value) return
-            cancelEditorAIWork()
+            cancelEditorAIWork(keepRewriteTarget = true)
             _selectedProvider = value
         }
     private var _selectedModel by mutableStateOf(AIModel.LOCAL_MODEL)
@@ -769,7 +773,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _selectedModel
         set(value) {
             if (_selectedModel == value) return
-            cancelEditorAIWork()
+            cancelEditorAIWork(keepRewriteTarget = true)
             _selectedModel = value
         }
     var showSettingsDialog by mutableStateOf(false)
@@ -904,12 +908,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingCloudAIContext = null
     }
 
-    private fun cancelEditorAIWork() {
+    /**
+     * Stops in-flight AI work and closes the rewrite review. With [keepRewriteTarget], the writer's selection
+     * survives, as on iOS, where cancelling AI work never clears it. Only cancels that leave the lyrics and the
+     * song as they are pass it (model and provider changes, Apply, going to the background); every path that
+     * changes the text or the song clears the range itself, so a kept range is always on the current lyrics.
+     */
+    private fun cancelEditorAIWork(keepRewriteTarget: Boolean = false) {
+        val rewriteTarget = pendingRewriteRange.takeIf { keepRewriteTarget }
         cancelCloudAISharing()
         cancelSuggestions()
         suggestions = emptyList()
         errorMessage = null
         dismissRewrite()
+        if (rewriteTarget != null && rewriteTarget.min < rewriteTarget.max && rewriteTarget.max <= lyrics.length) {
+            pendingRewriteRange = rewriteTarget
+        }
         synonymsRevision++
         inspectorSynonymsJob?.cancel()
         inspectorSynonymsJob = null
@@ -1850,7 +1864,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) errorMessage = e.message ?: "Failed to get suggestions"
+                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) errorMessage = failureMessage(e, "Failed to get suggestions")
             } finally {
                 if (revision == suggestionsRevision) isLoading = false
             }
@@ -1987,7 +2001,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewriteError = e.message ?: "Rewrite failed"
+                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewriteError = failureMessage(e, "Rewrite failed")
             } finally {
                 if (revision == rewriteRevision) rewriteLoading = false
             }
@@ -2852,7 +2866,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val nextValue = newValue.withValidRanges()
         // Focus leaving for a modal that uses the selection collapses the cursor onto one of its ends; keep the range
         // through that. A selection restored on song open never set the range, so the field's own selection stands in.
-        val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners)) {
+        val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners, settingsOpensAiSetup)) {
             // Collapsed or blank selections get no range, as in the expanded-selection branch below.
             pendingRewriteRange ?: lyricsFieldValue.selection.takeUnless {
                 val text = lyricsFieldValue.text
@@ -2995,14 +3009,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         keys: Map<AIProvider, String>
     ): Result<Unit> {
         modelChoiceRevision++
-        cancelEditorAIWork()
+        cancelEditorAIWork(keepRewriteTarget = true)
         return try {
             withContext(Dispatchers.IO) {
                 keys.forEach { (keyProvider, key) -> repo.saveApiKey(keyProvider.name, key) }
                 repo.saveSelectedProvider(provider.name)
                 repo.saveModelId(model.id)
             }
-            cancelEditorAIWork()
+            cancelEditorAIWork(keepRewriteTarget = true)
             selectedProvider = provider
             selectedModel = model
             apiKeyPresence = apiKeyPresence + keys
@@ -3367,7 +3381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelValidationGeneration++
         localModelValidationJob?.cancel()
         localModelValidationJob = null
-        cancelEditorAIWork()
+        cancelEditorAIWork(keepRewriteTarget = true)
         localModelLoaded = false
         localModelLoading = true
         localModelError = null
@@ -3486,7 +3500,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onBackground() {
-        cancelEditorAIWork()
+        cancelEditorAIWork(keepRewriteTarget = true)
     }
 }
 
