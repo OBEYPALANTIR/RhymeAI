@@ -4,8 +4,14 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.text.TextPaint
 import com.rhymeai.app.data.model.SongProject
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import java.io.ByteArrayOutputStream
+import java.time.OffsetDateTime
+import java.time.format.DateTimeParseException
 
 object LyricsExporter {
     /** Every field, defaults too, like ProjectRepository's store: an `updatedAt` equal to its
@@ -31,8 +37,20 @@ object LyricsExporter {
         return json.encodeToString(SongProject.serializer(), project).toByteArray(Charsets.UTF_8)
     }
 
-    /** Reads a project JSON file for import; the counterpart of [buildJson], like iOS `decodeJsonExport`. */
-    fun parseJson(text: String): SongProject = json.decodeFromString(SongProject.serializer(), text)
+    /** Reads a project JSON file for import; the counterpart of [buildJson], like iOS `decodeJsonExport`.
+     *  Also reads iOS's export, whose `updatedAt` is an ISO-8601 string rather than epoch millis.
+     *  An unreadable date throws, so the importer reports the file instead of guessing a time. */
+    fun parseJson(text: String): SongProject {
+        val obj = json.parseToJsonElement(text).jsonObject
+        val date = obj["updatedAt"] as? JsonPrimitive
+        if (date == null || !date.isString) return json.decodeFromJsonElement(SongProject.serializer(), obj)
+        val millis = try {
+            OffsetDateTime.parse(date.content).toInstant().toEpochMilli()
+        } catch (e: DateTimeParseException) {
+            throw SerializationException("updatedAt is not an ISO-8601 date: ${date.content}")
+        }
+        return json.decodeFromJsonElement(SongProject.serializer(), JsonObject(obj + ("updatedAt" to JsonPrimitive(millis))))
+    }
 
     fun buildLrc(project: SongProject): ByteArray {
         val title = project.title.ifBlank { "Untitled" }

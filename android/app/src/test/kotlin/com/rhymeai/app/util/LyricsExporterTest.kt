@@ -2,11 +2,13 @@ package com.rhymeai.app.util
 
 import com.rhymeai.app.data.model.SongProject
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class LyricsExporterTest {
 
@@ -89,6 +91,55 @@ class LyricsExporterTest {
         val fields = SongProject.serializer().descriptor.elementNames.toSet()
 
         assertEquals(fields, keys)
+    }
+
+    @Test
+    fun jsonImportReadsAndroidsOwnExportUnchanged() {
+        val project = SongProject(id = "song-1", title = "Signal", lyrics = "a\nb", theme = "t", updatedAt = 1_780_374_654_123L)
+
+        assertEquals(project, LyricsExporter.parseJson(LyricsExporter.buildJson(project).decodeToString()))
+    }
+
+    @Test
+    fun jsonImportReadsTheFileIosExports() {
+        // Shape iOS writes: SongProjectExport's five fields ("Writers Block/Writers Block/Models/ExportFormat.swift:52-58"),
+        // encoded with .prettyPrinted, .sortedKeys and dateEncodingStrategy .iso8601
+        // ("Writers Block/Writers Block/Services/LyricsExporter.swift:5-10"). Date is iOS LyricsExporterTests' 1_780_374_654.
+        val ios = """
+            {
+              "id" : "8D3E4C1A-2B5F-4E6A-9C7D-1F0E2A3B4C5D",
+              "lyrics" : "line one\nline two",
+              "theme" : "clear signal",
+              "title" : "Signal",
+              "updatedAt" : "2026-06-02T04:30:54Z"
+            }
+        """.trimIndent()
+
+        assertEquals(
+            SongProject(
+                id = "8D3E4C1A-2B5F-4E6A-9C7D-1F0E2A3B4C5D",
+                title = "Signal",
+                lyrics = "line one\nline two",
+                theme = "clear signal",
+                updatedAt = 1_780_374_654_000L
+            ),
+            LyricsExporter.parseJson(ios)
+        )
+    }
+
+    @Test
+    fun jsonImportKeepsFractionalSecondsOfAnIsoDate() {
+        // The current iOS encoder writes whole seconds; this covers other ISO-8601 writers.
+        val text = """{"id":"s","title":"t","lyrics":"","theme":"","updatedAt":"2026-06-02T04:30:54.123Z"}"""
+
+        assertEquals(1_780_374_654_123L, LyricsExporter.parseJson(text).updatedAt)
+    }
+
+    @Test
+    fun jsonImportRejectsAnUnreadableDateInsteadOfGuessingOne() {
+        val text = """{"id":"s","title":"t","lyrics":"","theme":"","updatedAt":"next Tuesday"}"""
+
+        assertFailsWith<SerializationException> { LyricsExporter.parseJson(text) }
     }
 
     // wrapLine tests use one unit of width per character so maxWidth doubles
