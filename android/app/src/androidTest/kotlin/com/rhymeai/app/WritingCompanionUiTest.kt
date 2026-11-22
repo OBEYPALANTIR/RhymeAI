@@ -39,6 +39,14 @@ class WritingCompanionUiTest {
     }
 
     private fun isNewSong(id: String) = songIdsBefore?.contains(id) == false
+    /** A title no other song can have, so a fixture lookup can only match the song this run saved. */
+    private fun runTitle(base: String) = "$base ${java.util.UUID.randomUUID()}"
+    /** Waits for the song this test saved and records it as owned; the wait and the lookup use one predicate. */
+    private fun awaitSavedFixture(title: String, lyrics: String): SongProject {
+        fun find() = runBlocking { repo.projectsFlow.first().firstOrNull { isNewSong(it.id) && it.title == title && it.lyrics == lyrics } }
+        waitUntil { find() != null }
+        return find()!!.also { createdSongIds += it.id }
+    }
 
     @Before fun start() {
         songIdsBefore = storedSongIds()
@@ -157,16 +165,14 @@ class WritingCompanionUiTest {
 
     @Test fun reopenedSongKeepsItsRestoredSelectionWhenFocusLeaves() {
         val lyrics = "first lyric\nsecond lyric"
+        val title = runTitle("Restored Selection QA")
         onMain {
-            vm.onTitleChanged("Restored Selection QA")
+            vm.onTitleChanged(title)
             vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(0, 11)))
             vm.rememberEditorPosition()
             vm.newProject()
         }
-        // Only a song this test created: a leftover from an earlier run has the same title.
-        waitUntil { runBlocking { repo.projectsFlow.first().any { isNewSong(it.id) && it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
-        val saved = runBlocking { repo.projectsFlow.first().first { isNewSong(it.id) && it.title == "Restored Selection QA" } }
-        createdSongIds += saved.id
+        val saved = awaitSavedFixture(title, lyrics)
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.openingSong && !vm.savingBeforeNavigation }
@@ -338,16 +344,15 @@ class WritingCompanionUiTest {
 
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {
         val lyrics = "🎵 first\n" + (1..80).joinToString("\n") { "lyric line $it" }
+        val title = runTitle("Position QA")
         onMain {
-            vm.onTitleChanged("Position QA")
+            vm.onTitleChanged(title)
             vm.onLyricsChanged(TextFieldValue(lyrics, TextRange(2, 8)))
             vm.keepAlternate("an alternate")
             vm.rememberEditorPosition(140f)
             vm.newProject()
         }
-        waitUntil { runBlocking { repo.projectsFlow.first().any { isNewSong(it.id) && it.title == "Position QA" && it.lyrics == lyrics } } }
-        val saved = runBlocking { repo.projectsFlow.first().first { isNewSong(it.id) && it.title == "Position QA" } }
-        createdSongIds += saved.id
+        val saved = awaitSavedFixture(title, lyrics)
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.savingBeforeNavigation }
