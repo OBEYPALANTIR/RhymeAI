@@ -510,13 +510,18 @@ final class EditorViewModel: ObservableObject {
     private func bindEditor(to project: SongProject) {
         if currentProjectId != project.id { currentProjectId = project.id }
         if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
+        loadedProjectWords = OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
     }
+    /// The bound row's words when it was bound, to tell edits apart once that row is gone.
+    private var loadedProjectWords: OpenDraft?
 
-    /// The stored row the open song's words belong to: the bound one, else (none bound, or a
-    /// restore replaced it) the first with the song's id. With unique ids, the one row.
-    private func storedProject(id: String, in context: ModelContext) throws -> SongProject? {
+    /// The stored row the open song's words belong to: the bound one; else the first with the
+    /// song's id when none is bound, or when `adoptingAnother` (a restore reconcile, which reads
+    /// that row's words before claiming it). With unique ids and the row in place, the one row.
+    private func storedProject(id: String, in context: ModelContext, adoptingAnother: Bool = true) throws -> SongProject? {
         let rows = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
-        return rows.first { $0.persistentModelID == loadedProjectRow } ?? rows.first
+        if let bound = rows.first(where: { $0.persistentModelID == loadedProjectRow }) { return bound }
+        return loadedProjectRow == nil || adoptingAnother ? rows.first : nil
     }
     @Published var saveStatus: SaveStatus = .idle
 
@@ -2438,7 +2443,11 @@ final class EditorViewModel: ObservableObject {
         let saved: SongProject
         do {
             if let id = currentProjectId {
-                guard let project = try storedProject(id: id, in: context) else {
+                // A save never writes over another row that took the open one's song id.
+                guard let project = try storedProject(id: id, in: context, adoptingAnother: false) else {
+                    // The open row is gone and its words are unedited: nothing of the writer's to keep.
+                    if loadedProjectRow != nil, openDraft == loadedProjectWords,
+                       try storedProject(id: id, in: context) != nil { return true }
                     saveStatus = .idle
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
@@ -3736,6 +3745,7 @@ final class EditorViewModel: ObservableObject {
                     stored.0.updatedAt = Date()
                     stored.0.precedenceRepaired = false
                     try saveModelContext(context)
+                    bindEditor(to: stored.0)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }

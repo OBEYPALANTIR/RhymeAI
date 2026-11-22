@@ -48,9 +48,8 @@ struct MacSongSidebar: View {
         // Delete on the selected row: the right-click Move to Trash. A song the
         // search hides is never selected, so never deleted, even when it is the open one.
         .onDeleteCommand {
-            guard case .song(let row) = selection.wrappedValue,
-                  let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
-            viewModel.moveProjectToTrash(project)
+            guard case .song(let row) = selection.wrappedValue else { return }
+            Self.delete(row, in: visibleSongs, viewModel: viewModel)
         }
         .scrollContentBackground(.hidden)
         .background(appearance.palette.surfaceHigh)
@@ -134,6 +133,13 @@ struct MacSongSidebar: View {
 
     private var openRow: SongProject? {
         viewModel.showWelcome ? nil : Self.openRow(loaded: viewModel.loadedProjectRow, in: visibleSongs)
+    }
+
+    /// Delete: the selected row's Move to Trash, when the row is shown. False when nothing moved.
+    @discardableResult
+    static func delete(_ selected: PersistentIdentifier?, in songs: [SongProject], viewModel: EditorViewModel) -> Bool {
+        guard let selected, let project = songs.first(where: { $0.persistentModelID == selected }) else { return false }
+        return viewModel.moveProjectToTrash(project)
     }
 
     /// The shown row whose words the editor holds; none when the search hides it or no row is

@@ -250,6 +250,62 @@ struct MacSongSidebarTests {
     }
 
     @Test
+    func openingASongRestoredFromTrashUnderTheOpenSongsIdShowsAndExportsItsOwnWords() throws {
+        // Given: a song open, and a Trash entry under the same song id
+        let (viewModel, container) = try MacWorkspaceLibraryTests.library()
+        let a = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        container.mainContext.insert(a)
+        container.mainContext.insert(TrashedSongProject(project: SongProject(id: "s", title: "Paper Moon", lyrics: "tide", theme: "")))
+        try container.mainContext.save()
+        let workspace = MacWorkspaceModel()
+        #expect(workspace.openSong(a, in: viewModel))
+
+        // When: the Mac Trash pane restores it, then the context menu opens the restored song
+        let entry = try #require(try container.mainContext.fetch(FetchDescriptor<TrashedSongProject>()).first)
+        let restored = try #require(viewModel.restoreTrashedProject(entry))
+        #expect(workspace.openSong(restored, in: viewModel))
+
+        // Then: the restored song keeps its words, and the editor holds and exports them
+        #expect(restored.title == "Paper Moon" && restored.lyrics == "tide", "\(restored.title): \(restored.lyrics)")
+        #expect(viewModel.loadedProjectRow == restored.persistentModelID)
+        let exported = try #require(String(data: LyricsExporter.data(for: viewModel.snapshotForExport(), format: .txt), encoding: .utf8))
+        #expect(exported.contains("Paper Moon") && exported.contains("tide") && !exported.contains("ropes"), "\(exported)")
+    }
+
+    @Test
+    func editsToACopyThatDisappearedStayOpenAndNeverLandOnTheOtherCopy() throws {
+        // Given: copy A open, and copy B under the same song id
+        let (viewModel, a, b, container) = try Self.copies()
+        // When: copy A is removed (by sync), the writer edits, then opens copy B
+        container.mainContext.delete(a)
+        try container.mainContext.save()
+        viewModel.lyrics = "ropes, edited"
+        #expect(!MacWorkspaceModel().openSong(b, in: viewModel), "the edits have nowhere of their own to go")
+
+        // Then: the edits stay open in the editor, and copy B keeps its own words
+        #expect(viewModel.lyrics == "ropes, edited")
+        #expect(viewModel.errorMessage == "This song is no longer in the library. Your edits remain open.")
+        #expect(b.title == "Paper Moon" && b.lyrics == "tide", "\(b.title): \(b.lyrics)")
+    }
+
+    @Test
+    func deleteMovesTheSelectedShownSongToTrash() throws {
+        // The positive control for the filtered Delete in SidebarSelectionFocusTests.
+        let (viewModel, container) = try MacWorkspaceLibraryTests.library()
+        let song = SongProject(id: "d", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        let shown = try container.mainContext.fetch(FetchDescriptor<SongProject>())
+
+        let selected = MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: shown)?.persistentModelID
+        #expect(MacSongSidebar.delete(selected, in: shown, viewModel: viewModel))
+
+        #expect(try container.mainContext.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        #expect(try container.mainContext.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id) == ["d"])
+    }
+
+    @Test
     func theCopyLoadedElsewhereIsHighlightedAndTheOtherOpens() throws {
         let (viewModel, a, b, container) = try Self.copies()
         _ = container
@@ -884,11 +940,20 @@ extension OneLinerRouterSuites {
             try Self.search("Paper", in: view)
             #expect(outline.numberOfRows == rows - 1, "the search hides the open song's row")
 
-            // Then: no song row is selected, so Delete, which trashes the selected song, has none.
-            // (Delete itself cannot be sent here: this window is not key, so the list's delete
-            // command is not dispatched; at 9d0ba50a Backspace trashed nothing with the copy selected.)
+            // Then: no song row is selected
             #expect(outline.selectedRowIndexes.isEmpty, "selected rows: \(Array(outline.selectedRowIndexes)) of \(outline.numberOfRows)")
-            #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: [b]) == nil, "the row Delete resolves")
+
+            // When: Delete runs on the sidebar's selection. (Its key command needs a key window,
+            // which this one is not, so the test calls the action the command calls.)
+            let shown = SongProject.matching(try container.mainContext.fetch(FetchDescriptor<SongProject>()), searchText: "Paper")
+            let selected = MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: shown)?.persistentModelID
+            #expect(!MacSongSidebar.delete(selected, in: shown, viewModel: viewModel))
+
+            // Then: both copies keep their words and nothing went to Trash
+            #expect(a.title == "Harbour Lights" && a.lyrics == "ropes", "\(a.title): \(a.lyrics)")
+            #expect(b.title == "Paper Moon" && b.lyrics == "tide", "\(b.title): \(b.lyrics)")
+            #expect(try container.mainContext.fetch(FetchDescriptor<SongProject>()).filter { $0.id == id }.count == 2)
+            #expect(try container.mainContext.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
 
             // And: with the search cleared the open song's row is selected again (the older, last row)
             try Self.search("", in: view)
