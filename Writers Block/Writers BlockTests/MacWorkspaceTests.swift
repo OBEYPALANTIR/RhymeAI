@@ -688,9 +688,9 @@ extension OneLinerRouterSuites {
             window.isReleasedWhenClosed = false
             window.contentView = view
             defer { window.close() }
-            window.orderFront(nil)
             // The page's floor follows the sidebar inset it reads back, one pass later.
-            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            view.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             view.layoutSubtreeIfNeeded()
             func splits(_ v: NSView) -> [NSSplitView] { ((v as? NSSplitView).map { [$0] } ?? []) + v.subviews.flatMap(splits) }
             // The outer split view holds the sidebar and the detail column; the detail's own
