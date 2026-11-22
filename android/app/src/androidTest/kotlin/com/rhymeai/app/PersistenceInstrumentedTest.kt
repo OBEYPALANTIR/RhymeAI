@@ -11,6 +11,8 @@ import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIModel
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -179,6 +181,280 @@ class PersistenceInstrumentedTest {
         assertEquals("edited after remote trash", runBlocking { repo.editorStateFlow().first().second })
         assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
         assertTrue(viewModel.persistenceError.orEmpty().contains("saved as a new song"))
+    }
+
+    @Test
+    fun remoteTrashDuringSaveKeepsFailureAndRetrySavesDraftUnderNewIdentity() {
+        val original = SongProject("remote-race", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            viewModel.lyricsFieldValue = TextFieldValue("edited during the race")
+            // Trashed elsewhere before the view model hears of it: the save finds its row gone.
+            runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+            viewModel.flushCurrentDraft()
+        }
+        waitUntil { viewModel.saveStatus == SaveStatus.FAILED && !viewModel.savingBeforeNavigation }
+        assertEquals(null, viewModel.currentProjectId)
+        assertTrue(viewModel.persistenceError.orEmpty().contains("no deleted song was restored"))
+
+        onMain {
+            viewModel.persistenceError = null
+            viewModel.retrySave()
+            assertEquals(SaveStatus.SAVING, viewModel.saveStatus)
+        }
+        waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+        val replacement = runBlocking { repo.projectsFlow.first().single() }
+        assertNotEquals(original.id, replacement.id)
+        assertEquals("edited during the race", replacement.lyrics)
+        assertEquals(replacement.id, viewModel.currentProjectId)
+        assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+    }
+
+    @Test
+    fun remoteTrashDuringSaveOfUneditedSongLeavesNoFailure() {
+        val original = SongProject("remote-race-unedited", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        onMain {
+            viewModel.showStartMenu = false
+            runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+            viewModel.flushCurrentDraft()
+        }
+        waitUntil { viewModel.currentProjectId == null && !viewModel.savingBeforeNavigation }
+        SystemClock.sleep(300)
+        assertEquals(SaveStatus.IDLE, viewModel.saveStatus)
+        assertTrue(runBlocking { repo.projectsFlow.first() }.isEmpty())
+    }
+
+    @Test
+    fun retryOfAFailedEraseStoresTheEmptySong() {
+        val original = SongProject("erase-retry", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.title = ""
+                viewModel.lyricsFieldValue = TextFieldValue("")
+                viewModel.theme = ""
+                DraftSaveTestHooks.failNext.set(true)
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { viewModel.saveStatus == SaveStatus.FAILED && !viewModel.savingBeforeNavigation }
+
+            // An ordinary autosave never stores the erase, and the failure stays.
+            onMain { viewModel.triggerAutoSave() }
+            SystemClock.sleep(1_000)
+            instrumentation.waitForIdleSync()
+            assertEquals(original.lyrics, runBlocking { repo.projectsFlow.first().single() }.lyrics)
+            assertEquals(SaveStatus.FAILED, viewModel.saveStatus)
+
+            onMain { viewModel.retrySave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+            val stored = runBlocking { repo.projectsFlow.first().single() }
+            assertEquals(original.id, stored.id)
+            assertEquals(Triple("Untitled Song", "", ""), Triple(stored.title, stored.lyrics, stored.theme))
+        } finally {
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test
+    fun aFailureDuringTheSavedBeatKeepsTheRetry() {
+        val original = SongProject("saved-beat", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val beat = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("autosaved words")
+                DraftSaveTestHooks.afterAutosaveCommit = beat
+                viewModel.triggerAutoSave()
+            }
+            // The autosave has committed and is held before its beat ends in SAVED.
+            waitUntil { DraftSaveTestHooks.afterAutosaveCommit == null }
+            assertEquals(SaveStatus.SAVING, viewModel.saveStatus)
+            DraftSaveTestHooks.failNext.set(true)
+            val recording = runCatching { runBlocking(Dispatchers.Main) { viewModel.ensureProjectForRecording() } }
+            assertTrue(recording.isFailure)
+            assertEquals(SaveStatus.FAILED, viewModel.saveStatus)
+
+            beat.complete(Unit)
+            SystemClock.sleep(1_000)
+            instrumentation.waitForIdleSync()
+            assertEquals(SaveStatus.FAILED, viewModel.saveStatus)
+        } finally {
+            DraftSaveTestHooks.afterAutosaveCommit = null
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test
+    fun anOlderWriteFailingAfterANewerCommitLeavesNoFailure() {
+        val original = SongProject("older-write", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val olderWrite = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("words kept")
+                DraftSaveTestHooks.beforeWrite = olderWrite
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null }
+            onMain { viewModel.triggerAutoSave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+            DraftSaveTestHooks.failNext.set(true)
+            olderWrite.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(SaveStatus.SAVED, viewModel.saveStatus)
+            assertEquals(null, viewModel.persistenceError)
+            assertEquals("words kept", runBlocking { repo.projectsFlow.first().single() }.lyrics)
+        } finally {
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test
+    fun aNewerCommitDuringAFailedWritesRereadLeavesNoFailure() {
+        val original = SongProject("held-reread", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val reread = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("words kept")
+                DraftSaveTestHooks.failNext.set(true)
+                DraftSaveTestHooks.beforeReread = reread
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { DraftSaveTestHooks.beforeReread == null }
+            onMain { viewModel.triggerAutoSave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+            reread.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            assertEquals(SaveStatus.SAVED, viewModel.saveStatus)
+            assertEquals(null, viewModel.persistenceError)
+            assertEquals("words kept", runBlocking { repo.projectsFlow.first().single() }.lyrics)
+        } finally {
+            DraftSaveTestHooks.beforeReread = null
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
+    @Test
+    fun wordsTypedWhileAMissingSongsRereadIsHeldAreSavedAsANewSong() {
+        val original = SongProject("held-missing", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val reread = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                // Trashed elsewhere before the view model hears of it; the flush of the unedited song finds its row gone.
+                runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+                DraftSaveTestHooks.beforeReread = reread
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { DraftSaveTestHooks.beforeReread == null }
+            onMain {
+                viewModel.lyricsFieldValue = TextFieldValue("typed during the reread")
+                viewModel.triggerAutoSave()
+            }
+            reread.complete(Unit)
+
+            waitUntil {
+                runBlocking { repo.projectsFlow.first() }.any { it.id != original.id && it.lyrics == "typed during the reread" }
+            }
+            assertEquals(original.id, runBlocking { repo.trashedProjectsFlow.first().single().project.id })
+            assertNotEquals(original.id, viewModel.currentProjectId)
+        } finally {
+            DraftSaveTestHooks.beforeReread = null
+        }
+    }
+
+    @Test
+    fun anOlderWriteFindingTheRowGoneAfterANewerCommitKeepsTheDraftAttached() {
+        val original = SongProject("older-missing", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        val olderWrite = CompletableDeferred<Unit>()
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("words kept")
+                DraftSaveTestHooks.beforeWrite = olderWrite
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null }
+            onMain { viewModel.triggerAutoSave() }
+            waitUntil { viewModel.saveStatus == SaveStatus.SAVED }
+
+            // The row goes after the newer commit, so the held older write finds it missing.
+            runBlocking { repo.moveProjectToTrash(original.id, System.currentTimeMillis()) }
+            olderWrite.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            assertEquals(original.id, viewModel.currentProjectId)
+            assertEquals(null, viewModel.persistenceError)
+            assertEquals(SaveStatus.SAVED, viewModel.saveStatus)
+            assertEquals("words kept", runBlocking { repo.trashedProjectsFlow.first().single().project.lyrics })
+        } finally {
+            DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
+    @Test
+    fun aRereadFailureAfterAFailedSaveStillMarksTheDraft() {
+        val original = SongProject("reread-fails", "Original", "old lyric", "old theme", 100L)
+        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        val viewModel = MainViewModel(app)
+        waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
+
+        try {
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("unsaved words")
+                DraftSaveTestHooks.failNext.set(true)
+                DraftSaveTestHooks.failNextReread.set(true)
+                viewModel.flushCurrentDraft()
+            }
+            waitUntil { !viewModel.savingBeforeNavigation }
+            assertTrue("the reread ran and failed", !DraftSaveTestHooks.failNextReread.get())
+            assertEquals(SaveStatus.FAILED, viewModel.saveStatus)
+            assertTrue(viewModel.persistenceError.orEmpty().contains("could not be saved"))
+        } finally {
+            DraftSaveTestHooks.failNext.set(false)
+            DraftSaveTestHooks.failNextReread.set(false)
+        }
     }
 
 
