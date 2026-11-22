@@ -2545,7 +2545,7 @@ struct BackupCoreTests {
     /// the newest of those files (the main file, which the run writes, stays newest): that
     /// content now ranks there, so the take and its audio stay.
     @MainActor
-    @Test func knownContentRewrittenIntoTheNewestFileRanksThere() async throws {
+    @Test func knownContentRewrittenIntoANewerFileRanksThere() async throws {
         let harness = try await makeHarness()
         let drive = harness.drive
         let audio = Data("take".utf8)
@@ -2727,6 +2727,38 @@ struct BackupCoreTests {
         let relaunched = try await harness.reopened()
         try await relaunched.service.backupNow(modelContext: relaunched.context)
         #expect(drive.content(named: take.driveName) == audio, "the veto cleared the older proof: nothing authorizes the delete")
+    }
+
+    /// The main file lists the take at 100 and this device holds its tombstone at 200, so
+    /// the run writes it deleted. While the written file is read back, an older kept file
+    /// is rewritten to list the take at 300: the look after the write sees it, so the
+    /// audio stays and the kept take is reported.
+    @MainActor
+    @Test func aListingWrittenDuringTheReadBackKeepsTheAudio() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        let take = Self.take("t", of: "s", audio)
+        harness.context.insert(SyncRecordingDeletion(projectId: "s", recordingId: "t", fileName: take.fileName, deletedAt: 200))
+        try harness.context.save()
+        let seeded = try Self.listing(take, at: 100, by: "x")
+        drive.seed(name: SyncBlob.driveFileName, content: seeded)
+        let older = drive.seedDuplicateManifest(try SyncBlob(projects: [Self.song("s")], savedByClientId: "y").encodedManifest(), modifiedTime: "c-1")
+        drive.seedRecording(take, content: audio)
+        let main = try #require(try await drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
+        let later = try Self.listing(take, at: 300, by: "y")
+        var wrote = false
+        drive.beforeDownload = {
+            // The main file holds the written manifest only once the run has written it.
+            guard !wrote, drive.downloadAttempts.last == main.id, drive.content(named: SyncBlob.driveFileName) != seeded else { return }
+            wrote = true
+            drive.rewriteExtra(id: older.id, content: later, modifiedTime: "c-2")
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        #expect(wrote)
+        #expect(drive.content(named: take.driveName) == audio, "a listing seen after the write keeps the audio")
+        #expect(harness.service.lastReport?.deferredRepairedCleanup.contains(take.fileName) == true, "the kept take is reported")
     }
 
     /// The first-run probe counts the backup resolved across every manifest file:
