@@ -1137,7 +1137,8 @@ class DriveSyncService(
             // An interrupted recovery: its stopped publications are settled first, then its unreferenced stages go.
             RecordingTransitions.removeRecoveryStages(repository, filesDir)
             val old = SyncMerger.resolve(SyncMerger.gather(downloadKeptRevision(token, revision)))
-            RecoveryResult.Recovered(importAsNewSongs(token, revision, old, repository, readRemote(token, null).blob))
+            // A32: the current backup is read as sync reads it, missing times repaired, so a copy or tombstone wins here as it does there.
+            RecoveryResult.Recovered(importAsNewSongs(token, revision, old, repository, readRemote(token, repository).blob))
         }
 
     private suspend fun importAsNewSongs(
