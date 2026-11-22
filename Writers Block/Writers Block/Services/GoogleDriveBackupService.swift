@@ -1381,10 +1381,12 @@ final class BackupService {
             record(written, readBack)
         }
         guard verified, let target else { throw BackupError.backupConflict }
+        try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
         // The inputs the verified candidate was built from (the last look found nothing new).
         let verifiedInputs = inputs()
         // One more look: audio is deleted only while Drive still holds the look the candidate
         // was built from, with the verified write in place. Its reads count as observations.
+        // A look that fails (other than a stop) counts as changed; what it read still counts.
         let others = look.filter { $0.file.id != target.id }
         var unchanged = false
         do {
@@ -1393,8 +1395,9 @@ final class BackupService {
             unchanged = after.contains { $0.file.id == target.id && $0.blob.manifestSha256 == merged.manifestSha256 }
                 && afterOthers.count == others.count
                 && zip(afterOthers, others).allSatisfy { $0.file == $1.file && $0.blob.manifestSha256 == $1.blob.manifestSha256 }
-        } catch BackupError.backupConflict {}
-        try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {}
         // Duplicate manifests are kept and gathered on every run, never deleted: another device
         // may write one after our listing, and Drive has no conditional delete to protect that write.
 
