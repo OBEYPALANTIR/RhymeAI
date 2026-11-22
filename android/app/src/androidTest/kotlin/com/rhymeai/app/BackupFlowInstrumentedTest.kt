@@ -799,6 +799,29 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** Words typed away and back to a saved draft W2 while a one-liner is sent are not replaced by W1 and the line. */
+    @Test fun aDraftTypedAwayAndBackWhileAOneLinerIsSentIsSavedByAnImport() {
+        val vm = openSongInEditor(draft = newerWords)
+        val zip = unrelatedArchive()
+        var line: com.rhymeai.app.data.model.OneLiner? = null
+        try {
+            line = editDuringOneLinerSend(vm) {
+                it.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue("typed away"))
+                it.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue(newerWords))
+            }
+            assertEquals(newerWords, vm.lyrics)
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil { !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords to newerWords, storedOpenSong().lyrics to vm.lyrics)
+        } finally {
+            zip.delete()
+            line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
+            resetOpenSong()
+        }
+    }
+
     /** A template equal to the last document is still a new document: a hold during its debounce saves it under its own id. */
     @Test fun aTemplateEqualToTheLastDocumentIsSavedAsItsOwnSongByAnImport() {
         val vm = openSongInEditor()

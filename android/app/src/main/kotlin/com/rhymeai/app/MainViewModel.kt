@@ -384,7 +384,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lyricsFieldState by mutableStateOf(TextFieldValue(""))
     var lyricsFieldValue: TextFieldValue
         get() = lyricsFieldState
-        set(value) { if (value.text != lyricsFieldState.text) editRevision++; lyricsFieldState = value }
+        set(value) { if (value.text != lyricsFieldState.text) { editRevision++; lyricsRevision++ }; lyricsFieldState = value }
     private var themeState by mutableStateOf("")
     var theme: String
         get() = themeState
@@ -393,6 +393,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Edits to the editor's words since this view model last loaded the song or saved them: a hold saves only these.
     private var editRevision = 0L
     private var savedRevision = 0L
+    // Changes to the words alone: a one-liner callback must not load over words changed meanwhile, even back to equal.
+    private var lyricsRevision = 0L
     private val editorDirty: Boolean get() = editRevision != savedRevision || saveFailed
     private fun markEditorSaved(revision: Long = editRevision) { savedRevision = maxOf(savedRevision, revision) }
 
@@ -602,13 +604,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (!saved) triggerAutoSave()
                 }
             } else {
-                val wordsAtSend = lyrics
+                val wordsRevisionAtSend = lyricsRevision
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
                     ?: return "That song is no longer in your library."
-                // The song is the editor's (behind the start menu): its words follow the stored song, unless they were
-                // typed over meanwhile. Typed words stay unsaved and their next save wins over the appended line, as before.
+                // The song is the editor's (behind the start menu): its words follow the stored song, unless they changed
+                // meanwhile. Changed words stay unsaved and their next save wins over the appended line, as before.
                 // Only the words are loaded here, so a title or theme edit stays unsaved too: the editor is not marked saved.
-                if (currentProjectId == project.id && lyrics == wordsAtSend) {
+                if (currentProjectId == project.id && lyricsRevision == wordsRevisionAtSend) {
                     songs.firstOrNull { it.id == project.id }?.let {
                         lyricsFieldValue = TextFieldValue(it.lyrics)
                         resetLyricsHistory()
