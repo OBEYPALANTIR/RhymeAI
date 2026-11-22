@@ -10,6 +10,9 @@ struct MacSongSidebar: View {
     @Environment(\.appAppearanceStyle) private var appearance
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
     @State private var searchText = ""
+    /// A row click does not move the keyboard into the list, and the open replaces the
+    /// editor view that held it, so the selection hands it to the list.
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         List(selection: selection) {
@@ -40,6 +43,7 @@ struct MacSongSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .focused($listFocused)
         // Delete on the selected row: the right-click Move to Trash. A song the
         // search hides is never selected, so never deleted, even when it is the open one.
         .onDeleteCommand {
@@ -104,6 +108,7 @@ struct MacSongSidebar: View {
                     workspace.detail = .editor
                     guard let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
                     workspace.openSong(project, in: viewModel, bySidebarSelection: true)
+                    listFocused = true
                 case .oneLiners:
                     workspace.detail = .oneLiners
                 case .trash:

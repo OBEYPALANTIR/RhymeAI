@@ -460,7 +460,9 @@ struct LyricsOpenFocusTests {
         try await Task.sleep(for: .milliseconds(200))
         window.contentView?.layoutSubtreeIfNeeded()
 
-        // Then: its lyrics do not take the keyboard
+        // Then: its lyrics do not take the keyboard. This harness's List is a stand-in that
+        // the open never focuses, so the keyboard ends on the window here; that it lands in
+        // the list is asserted through the real sidebar in SidebarSelectionFocusTests.
         #expect(window.firstResponder !== second)
     }
 
@@ -707,7 +709,8 @@ extension OneLinerRouterSuites {
         /// are shown (with the floor on the page itself the sidebar counted twice: 960 for One
         /// Liners in the real window, 728 here). This vouches for that relation only: the harness
         /// lays out a 144pt sidebar where the app shows 260, so what the real window comes to
-        /// (expected 700, and 1060 for a song with the Assistant) is checked by dragging it.
+        /// (expected 700, and 1060 for a song with the Assistant) is still to be checked by
+        /// dragging it.
         @Test
         func everyPageKeepsAReadingWidthAtTheWindowsMinimum() throws {
             let (container, song) = try Self.appLibrary()
@@ -729,6 +732,77 @@ extension OneLinerRouterSuites {
 
         /// Written out rather than read from MacWorkspaceView, so changing the floor fails here.
         private static let pageFloor: CGFloat = 440
+    }
+
+    /// A song the sidebar's selection opens leaves the keyboard in the list, whatever held
+    /// it before, so Delete and the arrows act on the list. The real sidebar in the real
+    /// workspace, selected through its outline view as a row click selects. (A click on the
+    /// row that is already selected changes no selection and is not covered here.)
+    @MainActor
+    struct SidebarSelectionFocusTests {
+        enum Start: String, CaseIterable { case windowAfterTrash, lyrics, title, backFromTrashToTheOpenSong }
+
+        private static func settle(_ view: NSView, _ seconds: Double = 0.5) {
+            let end = Date().addingTimeInterval(seconds)
+            while Date() < end { view.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        }
+
+        private static func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+            ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
+        }
+
+        @Test(arguments: Start.allCases)
+        func aSongSelectedInTheSidebarTakesTheKeyboardIntoTheList(_ start: Start) throws {
+            let schema = try #require(ModelContainerBootstrap.shared.container?.schema)
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let a = SongProject(id: "a", title: "Alpha", lyrics: "harbour lights", theme: "")
+            let b = SongProject(id: "b", title: "Beta", lyrics: "paper moon", theme: "")
+            a.updatedAt = Date(timeIntervalSince1970: 1_000)
+            b.updatedAt = Date(timeIntervalSince1970: 2_000)
+            container.mainContext.insert(a)
+            container.mainContext.insert(b)
+            try container.mainContext.save()
+            let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+            viewModel.modelContext = container.mainContext
+            let workspace = MacWorkspaceModel()
+            workspace.windowOpen = true
+            let view = NSHostingView(rootView: MacWorkspaceView()
+                .environmentObject(viewModel)
+                .environmentObject(workspace)
+                .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .localOnlyFallback, usesCloudBackedStore: false))
+                .environmentObject(GGUFDownloadManager.shared)
+                .modelContainer(container))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780), styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            defer { window.close() }
+
+            // Given: Alpha opened by a command, then the keyboard where this case puts it
+            workspace.openSong(a, in: viewModel)
+            Self.settle(view)
+            let outline = try #require(Self.views(NSOutlineView.self, in: view).first)
+            switch start {
+            case .lyrics:
+                #expect(window.firstResponder is LyricsNSTextView)
+            case .title:
+                let title = try #require(Self.views(NSTextField.self, in: view).first { $0.isEditable && !($0 is NSSearchField) })
+                #expect(window.makeFirstResponder(title))
+            case .windowAfterTrash, .backFromTrashToTheOpenSong:
+                workspace.detail = .trash
+                Self.settle(view)
+                #expect(window.firstResponder === window, "the focused lyrics left with the editor")
+            }
+            #expect(window.firstResponder !== outline)
+
+            // When: the sidebar selects a song (songs are the last rows, newest first)
+            let opening = start == .backFromTrashToTheOpenSong ? a : b
+            outline.selectRowIndexes([outline.numberOfRows - (opening === a ? 1 : 2)], byExtendingSelection: false)
+            Self.settle(view)
+
+            // Then
+            #expect(viewModel.loadedProjectRow == opening.persistentModelID && workspace.detail == .editor)
+            #expect(window.firstResponder === outline, "\(start): \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+        }
     }
 }
 #endif
