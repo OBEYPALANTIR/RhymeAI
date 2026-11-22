@@ -2646,7 +2646,50 @@ class BackupServiceTest {
         // A device that syncs the same backup keeps the take too.
         val (observer, observerSide) = secondDevice("observer")
         assertIs<SyncResult.Success>(observerSide.second.backUp(observer))
-        assertTrue(remote().recordings.any { it.id == take.id })
+        assertEquals(300L, remote().recordings.single { it.id == take.id }.uploadedAt)
+        assertTrue(remote().deletions.none { it.recordingId == take.id })
+    }
+
+    /**
+     * An earlier version lists "x" active at a repaired time and in Trash with no time. Sync repairs the
+     * missing time too, and of two repairs the smaller wins, so "x" is active there and is recovered.
+     */
+    @Test
+    fun anEarlierVersionsMissingTimesAreRepairedBeforeItIsResolved() = runBlocking<Unit> {
+        val x = song("x").copy(precedenceRepaired = true)
+        putRemote(SyncBlob(projects = listOf(x), trashed = listOf(TrashedSongProject(x, deletedAt = 0L))))
+        putRemote(SyncBlob(projects = listOf(song("keep"))))
+
+        assertEquals(1, recoverOldest(service, repository).songsAdded)
+        assertEquals("lyrics of x", repository.songsByTitle().getValue("x").lyrics)
+    }
+
+    /** What the earlier version's own deletions of unknown date suspend stays out, counted as suspended. */
+    @Test
+    fun anEarlierVersionsOwnUnknownDateDeletionsKeepWhatTheyNameOut() = runBlocking<Unit> {
+        val suspendedTake = entry("t", "a.m4a", "take a".toByteArray())
+        val kept = entry("t", "b.m4a", "take b".toByteArray())
+        putRaw(suspendedTake, "take a".toByteArray())
+        putRaw(kept, "take b".toByteArray())
+        // Another writer's manifest whose tombstones have no time (this app never writes one).
+        val text = String(BackupManifest.encode(SyncBlob(
+            projects = listOf(song("s"), song("t")),
+            recordings = listOf(suspendedTake, kept),
+            deletions = listOf(SyncDeletion("s", deletedAt = 1L), SyncDeletion("t", "a.m4a", 1L, recordingId = suspendedTake.id))
+        ), 1_000L, "other-device"))
+        val body = JsonObject(Json.parseToJsonElement(text).jsonObject - BackupManifest.HASH_KEY).let { b ->
+            JsonObject(b + ("deletions" to kotlinx.serialization.json.JsonArray(b.getValue("deletions").jsonArray.map { JsonObject(it.jsonObject - "deletedAt") })))
+        }
+        val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray())
+        putRemote(SyncBlob(projects = listOf(song("keep"))))
+
+        val summary = recoverOldest(service, repository)
+        assertEquals(1, summary.songsAdded)
+        assertEquals(1, summary.recordingsAdded)
+        assertEquals(2, summary.unknownDateDeletions)
+        assertEquals(setOf("t"), repository.songsByTitle().keys)
+        assertEquals(listOf("b.m4a"), repository.recordingRecords().map { it.displayName })
     }
 
     /**

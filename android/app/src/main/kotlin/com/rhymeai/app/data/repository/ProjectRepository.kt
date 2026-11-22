@@ -606,9 +606,12 @@ class ProjectRepository internal constructor(
      * A32: every song, trashed song and recording among [inputs] whose precedence time is
      * missing (zero) gets the time this device first saw it, by identity, persisted here
      * before any comparison or naming and reused on every later merge; it then travels
-     * in the manifest. Returns the inputs with those times filled in.
+     * in the manifest. Returns the inputs with those times filled in. With [remember] false (a
+     * read of something not live, such as an earlier backup version) the same times are given,
+     * known ones reused and the rest [now], but nothing is stored.
      */
-    suspend fun establishPrecedence(inputs: List<SyncBlob>, now: Long): List<SyncBlob> {
+    suspend fun establishPrecedence(inputs: List<SyncBlob>, now: Long, remember: Boolean = true): List<SyncBlob> {
+        if (!remember) return normalizePrecedence(dataStore.data.first().toMutablePreferences(), inputs, now)
         var established = inputs
         projectSaveMutex.withLock {
             dataStore.edit { prefs -> established = normalizePrecedence(prefs, inputs, now) }
