@@ -2991,12 +2991,13 @@ struct BackupCoreTests {
     }
 
     /// The proof invariant: a failed delete left proof at 100 for take X. The next run reads
-    /// evidence against it in a kept file (X at 300, or X with no time) and ends one of several
+    /// evidence against it in a kept file (X at 300, X with no time, or X at 100 under another
+    /// song the tombstone does not name) and ends one of several
     /// ways: completing with another take of the same id as the gathered winner, a failed or a
     /// stopped look after the write, or a failed first look before any write. However it ends,
     /// a relaunch that sees no listing keeps X's audio.
     @MainActor
-    @Test(arguments: ["at 300", "repaired"], ["conflicting winner", "failed look after the write", "stopped look after the write", "failed look before the write"])
+    @Test(arguments: ["at 300", "repaired", "at 100 under another song"], ["conflicting winner", "failed look after the write", "stopped look after the write", "failed look before the write"])
     func evidenceAgainstProofOutlivesEveryExit(evidence: String, exit: String) async throws {
         let harness = try await makeHarness()
         let drive = harness.drive
@@ -3010,7 +3011,9 @@ struct BackupCoreTests {
         await #expect(throws: BackupError.self) { try await harness.service.backupNow(modelContext: harness.context) }
 
         let empty = try SyncBlob(projects: [Self.song("s")], savedByClientId: "y").encodedManifest()
-        let against = try Self.listing(take, at: evidence == "at 300" ? 300 : 0, by: "y")
+        let against = evidence == "at 100 under another song"
+            ? try Self.listing(Self.take("t", of: "s2", audio), at: 100, by: "y")
+            : try Self.listing(take, at: evidence == "at 300" ? 300 : 0, by: "y")
         let main = try #require(try await drive.findFile(named: SyncBlob.driveFileName, accessToken: ""))
         let writes = drive.uploads(named: SyncBlob.driveFileName)
         var kept: [DriveAppDataFile] = []
