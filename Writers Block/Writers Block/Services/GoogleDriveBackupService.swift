@@ -838,6 +838,9 @@ struct BackupRevision: Hashable, Sendable {
     var modifiedAt: Date?
     var bytes: Int64?
     var keptForever: Bool
+
+    /// A row's identity, stable when the revision becomes kept forever.
+    var key: [String] { [fileId, id] }
 }
 
 /// What to do with an older encrypted backup (`rhymeai-projects.json`) at sync time.
@@ -1274,16 +1277,34 @@ final class BackupService {
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = try await unpreservedOversizedCount(remote: remoteRecordings)
 
-        // Every remote-side input seen in this run, unresolved, in the order seen:
+        // Every remote-side input seen in this run, unresolved, oldest file first:
         // each candidate gathers them all with the current local snapshot and
         // resolves once (A18). Content seen once is never dropped (A14).
         var inputs: [SyncBlob] = legacy.map { [$0.blob] } ?? []
         var seen = Set<String>()
+        // Each content ranks at the newest (modifiedTime, file id) seen holding it, and the
+        // inputs stay in that order so the newest file's entries win the merge: a file
+        // rewritten between its listing and its download is ranked again by the next look.
+        var rank: [String: [String]] = [:]
+        /// Adds a manifest read from `file`; true when it is new or moved the order.
+        func take(_ blob: SyncBlob, from file: DriveAppDataFile) -> Bool {
+            let sha = blob.manifestSha256
+            let isNew = seen.insert(sha).inserted
+            if isNew { inputs.append(blob) }
+            let key = [file.modifiedTime ?? "", file.id]
+            if let held = rank[sha], !held.lexicographicallyPrecedes(key) { return isNew }
+            rank[sha] = key
+            let before = inputs.map(\.manifestSha256)
+            inputs = inputs.enumerated().sorted { a, b in
+                let (x, y) = (rank[a.element.manifestSha256] ?? [], rank[b.element.manifestSha256] ?? [])
+                return x == y ? a.offset < b.offset : x.lexicographicallyPrecedes(y)
+            }.map(\.element)
+            return isNew || inputs.map(\.manifestSha256) != before
+        }
         var manifests = try await manifestFiles(accessToken: accessToken)
         if restore, manifests.isEmpty, legacy == nil { throw BackupError.noRemoteBackup }
         for file in manifests {
-            let blob = try await downloadManifest(file, accessToken: accessToken)
-            if seen.insert(blob.manifestSha256).inserted { inputs.append(blob) }
+            _ = take(try await downloadManifest(file, accessToken: accessToken), from: file)
         }
         let legacyAudioIds = Set(legacy?.audio.keys.map { $0 } ?? [])
         let legacyOnlyIds = Set(legacy?.allRecordings.map(\.id) ?? []).subtracting(legacyAudioIds)
@@ -1308,11 +1329,7 @@ final class BackupService {
             var changed = false
             for file in try await manifestFiles(accessToken: accessToken) {
                 if !manifests.contains(where: { $0.id == file.id }) { manifests.append(file) }
-                let blob = try await downloadManifest(file, accessToken: accessToken)
-                if seen.insert(blob.manifestSha256).inserted {
-                    inputs.append(blob)
-                    changed = true
-                }
+                if take(try await downloadManifest(file, accessToken: accessToken), from: file) { changed = true }
             }
             return changed
         }
@@ -1358,7 +1375,7 @@ final class BackupService {
                 break
             }
             // Another device wrote in between: its manifest joins the inputs.
-            if seen.insert(readBack.manifestSha256).inserted { inputs.append(readBack) }
+            _ = take(readBack, from: written)
         }
         guard verified, let target else { throw BackupError.backupConflict }
         try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
@@ -1579,7 +1596,8 @@ final class BackupService {
         let files = try await manifestFiles(accessToken: accessToken)
         guard !files.isEmpty else { return nil }
         var blobs: [SyncBlob] = []
-        for file in files { blobs.append(try await downloadManifest(file, accessToken: accessToken)) }
+        // The precedence repair sync applies (A32/A37), so a missing time decides as it does there.
+        for file in files { blobs.append(fixingPrecedence(try await downloadManifest(file, accessToken: accessToken), remember: false)) }
         return try SyncMerger.resolve(try SyncMerger.gather(blobs))
     }
 
@@ -1961,7 +1979,11 @@ final class BackupService {
 
     /// A32: an entry without a precedence time (zero or missing) gets the time this
     /// device first saw it, kept here and written to the manifest, never changed.
-    private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob {
+    /// A read-only look passes `remember: false`: it uses the same times this run but
+    /// leaves recording a first sighting to a backup.
+    private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob { fixingPrecedence(blob, remember: true) }
+
+    private func fixingPrecedence(_ blob: SyncBlob, remember: Bool) -> SyncBlob {
         var seen = firstSeenTimes()
         let now = Date().epochMilliseconds
         func time(_ key: String) -> Date {
@@ -1999,7 +2021,7 @@ final class BackupService {
             trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
             return trash
         }
-        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        if remember { defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey) }
         return fixed
     }
 

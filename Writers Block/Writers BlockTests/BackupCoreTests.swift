@@ -1988,7 +1988,7 @@ struct BackupCoreTests {
 
         let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
         let revisions = try await device.service.probeRevisions()
-        #expect(revisions.count == 3 && revisions.first?.fileId == newest.id && Set(revisions).count == 3)
+        #expect(revisions.count == 3 && revisions.first?.fileId == newest.id && Set(revisions.map(\.key)).count == 3)
         let sameId = revisions.filter { $0.id == pinned.id }
         #expect(Set(sameId.map(\.fileId)) == [manifest.id, newest.id])
         let kept = try #require(sameId.first { $0.fileId == manifest.id })
@@ -2319,6 +2319,56 @@ struct BackupCoreTests {
         try await harness.service.backupNow(modelContext: harness.context)
         let written = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
         #expect(written.recordings.map(\.fileName) == ["renamed.m4a"])
+    }
+
+    /// The older file, listed first, is renamed by another device between this run's
+    /// listing and its download, so the copy read is the newest: the next look ranks
+    /// it so, and its name is the one written.
+    @MainActor
+    @Test func aRenameWrittenBetweenListingAndDownloadIsTheNameWritten() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        var take = Self.take("t", of: "s", audio)
+        take.fileName = "original.m4a"
+        drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "x").encodedManifest())
+        let older = drive.seedDuplicateManifest(try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest())
+        take.fileName = "renamed.m4a"
+        let renamed = try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest()
+        drive.seedRecording(take, content: audio)
+        var wrote = false
+        drive.beforeDownload = {
+            guard !wrote, drive.downloadAttempts.last == older.id else { return }
+            wrote = true
+            drive.rewriteExtra(id: older.id, content: renamed, modifiedTime: "zzz-renamed")
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(wrote && written.recordings.map(\.fileName) == ["renamed.m4a"])
+    }
+
+    /// A take one file records at 300 and a newer file lists with no time, beside a
+    /// tombstone at 200: sync repairs the missing time, so the recorded one stands and
+    /// the take is kept. The first-run summary counts it the same way.
+    @MainActor
+    @Test func theSummaryRepairsAMissingTakeTimeAsSyncDoes() async throws {
+        let harness = try await makeHarness()
+        let audio = Data("take".utf8)
+        var take = Self.take("t", of: "s", audio)
+        take.uploadedAt = Date(millisecondsSince1970: 300)
+        harness.drive.seedDuplicateManifest(try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest())
+        take.uploadedAt = Date(millisecondsSince1970: 0)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [Self.song("s")], recordings: [take],
+            deletions: [SyncDeletion(projectId: "s", recordingId: "t", fileName: take.fileName, deletedAt: 200)], savedByClientId: "x").encodedManifest())
+        harness.drive.seedRecording(take, content: audio)
+
+        let summary = try #require(try await harness.service.remoteBackupSummary())
+        try await harness.service.backupNow(modelContext: harness.context)
+        let written = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(written.recordings.map(\.id) == ["t"], "sync keeps the take")
+        #expect(summary.recordings == written.recordings.count)
     }
 
     /// The first-run probe counts the backup resolved across every manifest file:
