@@ -3,7 +3,8 @@ import AppKit
 
 /// TEMPORARY diagnostic, to be removed before the PR leaves draft. Appends a line to
 /// Library/Caches/focus-trace.log in the app's container for each left mouse up and key
-/// down in the main window, and whenever that window's minimum size changes. Passive: the
+/// down in the main window, and whenever that window's minimum size or its first
+/// responder's class changes (checked on each window update). Passive: the
 /// event monitor hands every event on unchanged. A key is recorded only as delete, arrow
 /// or other; never characters, text, titles or lyrics.
 @MainActor
@@ -11,6 +12,7 @@ enum FocusTrace {
     private static var monitor: Any?
     private static var observer: NSObjectProtocol?
     private static var lastMinSize: NSSize?
+    private static var lastResponder: String?
     static let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("focus-trace.log")
 
@@ -27,8 +29,13 @@ enum FocusTrace {
         }
         observer = NotificationCenter.default.addObserver(forName: NSWindow.didUpdateNotification, object: nil, queue: .main) { note in
             MainActor.assumeIsolated {
-                guard let window = note.object as? NSWindow, window === NSApp.mainWindow,
-                      window.contentMinSize != lastMinSize else { return }
+                guard let window = note.object as? NSWindow, window === NSApp.mainWindow else { return }
+                let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                if responder != lastResponder {
+                    write("responder \(lastResponder ?? "nil") -> \(responder)")
+                    lastResponder = responder
+                }
+                guard window.contentMinSize != lastMinSize else { return }
                 lastMinSize = window.contentMinSize
                 write("minSize " + describe(window))
             }
