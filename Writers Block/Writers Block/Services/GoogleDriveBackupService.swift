@@ -1288,6 +1288,10 @@ final class BackupService {
                 observed[entry.id, default: []].append(entry)
             }
         }
+        // Whatever way the run ends, proof its observations contradict does not outlive it:
+        // judged by the verified write's deletions once there are some, conservatively before.
+        var proofDeletions: [SyncDeletion]?
+        defer { reconcileProof(observed: observed, deletions: proofDeletions) }
         // Taken before any candidate stores a winning time on the rows.
         observe(try makeSnapshot(modelContext: modelContext))
         if let legacy { observe(legacy.blob) }
@@ -1383,13 +1387,14 @@ final class BackupService {
             record(written, readBack)
         }
         guard verified, let target else { throw BackupError.backupConflict }
+        proofDeletions = merged.deletions
         try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
         // The inputs the verified candidate was built from (the last look found nothing new).
         let verifiedInputs = inputs()
         // One more look: audio is deleted only while Drive still holds the look the candidate
         // was built from, with the verified write in place. Its reads count as observations.
-        // A look that fails or is stopped counts as changed; what it read still counts, and a
-        // stop is rethrown after the pass below has saved the proof those reads contradict.
+        // A look that fails counts as changed; what it read still counts. A stop is rethrown at
+        // once: the deferred reconcile handles the proof those reads contradict.
         let others = look.filter { $0.file.id != target.id }
         var unchanged = false
         var stopped = false
@@ -1402,6 +1407,7 @@ final class BackupService {
         } catch is CancellationError {
             stopped = true
         } catch {}
+        if stopped { throw CancellationError() }
         // Duplicate manifests are kept and gathered on every run, never deleted: another device
         // may write one after our listing, and Drive has no conditional delete to protect that write.
 
@@ -1413,11 +1419,11 @@ final class BackupService {
             .recordings.map { ($0.id, $0) }) { first, _ in first }
         // What is held here now, after every wait.
         observe(try makeSnapshot(modelContext: modelContext))
-        // A changed look still runs the pass with deleting off, so a veto clears stale proof.
+        // The pass reads the proof, so it is reconciled with everything observed first.
+        reconcileProof(observed: observed, deletions: merged.deletions)
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
                                                            gathered: gathered, observed: observed, deleting: unchanged, remote: remoteRecordings,
                                                            accessToken: accessToken, report: &report)
-        if stopped { throw CancellationError() }
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
@@ -1796,12 +1802,12 @@ final class BackupService {
     /// entry is kept here until its objects are gone, so a retry after a failed
     /// removal still has its proof.
     /// Every entry this run observed for the id with the object's digest and length must
-    /// be covered: one that is not vetoes the delete and clears the id's proof, even when the
-    /// object is reported as a conflict; the veto is reported only when a repaired time is what
-    /// keeps the object. With no observation of the id, the proof alone decides.
-    /// `deleting` false (Drive changed after the write) removes nothing and adds no proof but a
-    /// repaired one. Every object is decided and the proof saved before the first delete, so a
-    /// failed delete cannot leave proof a veto contradicted.
+    /// be covered: one that is not vetoes the delete; the veto is reported only when a repaired
+    /// time is what keeps the object. With no observation of the id, the proof alone decides.
+    /// Proof this run's observations contradict was already cleared or replaced by
+    /// `reconcileProof`; this pass only adds proof for what it deletes (and a repaired one, for
+    /// reporting). `deleting` false (Drive changed after the write) removes nothing. Every
+    /// object is decided and the proof saved before the first delete.
     private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], keeping kept: Set<String>,
                                                           gathered: [String: SyncRecording], observed: [String: [SyncRecording]],
                                                           deleting: Bool, remote: RemoteFiles,
@@ -1828,11 +1834,6 @@ final class BackupService {
             func covered(_ entry: SyncRecording) -> Bool {
                 deletions.contains { $0.covers(projectId: entry.projectId, recordingId: id, sha256: sha, at: entry.uploadedAt, repaired: entry.precedenceRepaired) }
             }
-            // An entry of this content no deletion covers contradicts its proof, whatever is
-            // decided below (a conflict included): the proof goes first.
-            if let proof = proven[id], matches(proof), observed[id]?.contains(where: { matches($0) && !covered($0) }) == true {
-                proven[id] = nil
-            }
             if let winner = gathered[id], !matches(winner) {
                 conflicting.append(file.name)
                 continue
@@ -1847,8 +1848,8 @@ final class BackupService {
                 guard !live.contains(file.name) else { continue }
                 let uncovered = matching.filter { !covered($0) }
                 if !uncovered.isEmpty {
-                    // An entry no deletion covers keeps the audio (its proof went above). It is
-                    // reported only when a repaired time is what keeps it.
+                    // An entry no deletion covers keeps the audio (reconcileProof cleared its
+                    // proof). It is reported only when a repaired time is what keeps it.
                     if uncovered.count < matching.count, let keeper = uncovered.first(where: \.precedenceRepaired),
                        !report.deferredRepairedCleanup.contains(keeper.fileName) {
                         report.deferredRepairedCleanup.append(keeper.fileName)
@@ -1867,8 +1868,8 @@ final class BackupService {
             }
             // A41: a recording that loses only because its time is a repair is kept on
             // Drive and reported; its bytes are not deleted on that judgement (T1.35).
-            // Its proof is kept too, so later runs keep reporting it while the object stays
-            // (and it protects: it replaces a real-time proof, deleting on or off).
+            // Its repaired proof is stored too, so later runs keep reporting it while the
+            // object stays (reconcileProof already put it in place of any real-time proof).
             if known.precedenceRepaired {
                 if !report.deferredRepairedCleanup.contains(known.fileName) { report.deferredRepairedCleanup.append(known.fileName) }
                 proven[id] = known
@@ -1911,6 +1912,32 @@ final class BackupService {
             return decoded
         }
         set { if let newValue { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.provenCoveredKey) } }
+    }
+
+    /// Brings the saved delete proof in line with what a run observed. Per id, an observed
+    /// entry with the proof's digest and length that no deletion covers clears it; otherwise
+    /// such an entry with a repaired time replaces it. With no deletions (a run that ends
+    /// before its verified write), such an entry at another recorded time clears it, which can
+    /// only keep audio. It never throws, so every exit of a run can apply it.
+    private func reconcileProof(observed: [String: [SyncRecording]], deletions: [SyncDeletion]?) {
+        guard var proven = provenCovered, !proven.isEmpty else { return }
+        for (id, proof) in proven {
+            let same = observed[id, default: []].filter { $0.sha256 == proof.sha256 && $0.bytes == proof.bytes }
+            func contradicts(_ entry: SyncRecording) -> Bool {
+                guard let deletions else {
+                    return !entry.precedenceRepaired && entry.uploadedAt.epochMilliseconds != proof.uploadedAt.epochMilliseconds
+                }
+                return !deletions.contains {
+                    $0.covers(projectId: entry.projectId, recordingId: id, sha256: entry.sha256, at: entry.uploadedAt, repaired: entry.precedenceRepaired)
+                }
+            }
+            if same.contains(where: contradicts) {
+                proven[id] = nil
+            } else if let repaired = same.first(where: \.precedenceRepaired) {
+                proven[id] = repaired
+            }
+        }
+        provenCovered = proven
     }
 
     // MARK: Export and import
