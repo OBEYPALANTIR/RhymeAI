@@ -1061,8 +1061,8 @@ extension OneLinerRouterSuites {
             }
             // The page's floor follows the sidebar inset it reads back a pass or more later, which
             // a fixed wait can miss on a busy machine: pump the run loop until the requested columns
-            // are in effect and the floor holds on two passes in a row, for up to 2 s. On timeout
-            // the last pass goes back as it is, so the caller's expectation reports it.
+            // are in effect and the floor holds on two passes in a row, for up to 2 s. A timeout
+            // fails here, with both samples in the message.
             func holds(_ m: (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, columns: String)) -> Bool {
                 (m.sidebar > 0) == (sidebar != .detailOnly) && (m.assistant > 0) == assistant
                     && abs(m.window - m.sidebar - m.assistant - Self.pageFloor) <= 1
@@ -1077,6 +1077,7 @@ extension OneLinerRouterSuites {
                 last = try measure()
             }
             let settle = "after \(ContinuousClock.now - start): first min \(first.window) [\(first.columns)], last min \(last.window) [\(last.columns)]"
+            #expect(heldBefore && holds(last), "\(detail) \(sidebar) assistant=\(assistant) never settled \(settle)")
             return (last.window, last.sidebar, last.assistant, workspace.songOpen(in: viewModel), settle)
         }
 
