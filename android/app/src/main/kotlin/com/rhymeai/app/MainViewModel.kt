@@ -1380,6 +1380,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     notExported = notListed.size
                     // A32: an export carries established precedence times, never an unknown one.
                     val established = repo.establishPrecedence(listOf(base.blob.copy(recordings = snapshot.map { it.entry })), System.currentTimeMillis()).single()
+                    established.projects.groupingBy { it.id }.eachCount().entries.firstOrNull { it.value > 1 }?.let {
+                        error("Two songs on this device share the id ${it.key}, so nothing was exported.")
+                    }
                     val byId = established.recordings.associateBy { it.id }
                     val files = snapshot.map { it.copy(entry = byId.getValue(it.entry.id)) }
                     val allowed = recordingsAllowedForUpload(files.map { it.entry }, base.blob.deletions, emptyList())
