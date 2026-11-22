@@ -107,8 +107,10 @@ struct MacSongSidebar: View {
                 case .song(let row):
                     workspace.detail = .editor
                     guard let project = visibleSongs.first(where: { $0.persistentModelID == row }) else { return }
-                    workspace.openSong(project, in: viewModel, bySidebarSelection: true)
-                    listFocused = true
+                    // A refused open keeps the old song, which Delete would then trash.
+                    if workspace.openSong(project, in: viewModel, bySidebarSelection: true) {
+                        listFocused = true
+                    }
                 case .oneLiners:
                     workspace.detail = .oneLiners
                 case .trash:

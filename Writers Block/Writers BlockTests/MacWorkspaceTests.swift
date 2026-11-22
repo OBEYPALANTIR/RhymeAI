@@ -737,10 +737,11 @@ extension OneLinerRouterSuites {
     /// A song the sidebar's selection opens leaves the keyboard in the list, whatever held
     /// it before, so Delete and the arrows act on the list. The real sidebar in the real
     /// workspace, selected through its outline view as a row click selects. (A click on the
-    /// row that is already selected changes no selection and is not covered here.)
+    /// row that is already selected changes no selection and is not covered here.) An open
+    /// the outgoing song's unsaved edit refuses leaves the keyboard where it was.
     @MainActor
     struct SidebarSelectionFocusTests {
-        enum Start: String, CaseIterable { case windowAfterTrash, lyrics, title, backFromTrashToTheOpenSong }
+        enum Start: String, CaseIterable { case windowAfterTrash, lyrics, title, backFromTrashToTheOpenSong, refusedOpen }
 
         private static func settle(_ view: NSView, _ seconds: Double = 0.5) {
             let end = Date().addingTimeInterval(seconds)
@@ -784,9 +785,17 @@ extension OneLinerRouterSuites {
             switch start {
             case .lyrics:
                 #expect(window.firstResponder is LyricsNSTextView)
+            case .refusedOpen:
+                #expect(window.firstResponder is LyricsNSTextView)
+                // An edit with no library to save it to: opening another song is refused.
+                viewModel.modelContext = nil
+                viewModel.lyrics = "harbour lights and tide"
             case .title:
-                let title = try #require(Self.views(NSTextField.self, in: view).first { $0.isEditable && !($0 is NSSearchField) })
+                // Its accessibility identifier, songTitleEditor, is not on the AppKit field, so
+                // the title is found by its own prompt, which the theme field does not share.
+                let title = try #require(Self.views(NSTextField.self, in: view).first { $0.placeholderString == "Song Title..." })
                 #expect(window.makeFirstResponder(title))
+                #expect((window.firstResponder as? NSTextView)?.delegate === title, "the title's field editor has the keyboard")
             case .windowAfterTrash, .backFromTrashToTheOpenSong:
                 workspace.detail = .trash
                 Self.settle(view)
@@ -800,8 +809,14 @@ extension OneLinerRouterSuites {
             Self.settle(view)
 
             // Then
-            #expect(viewModel.loadedProjectRow == opening.persistentModelID && workspace.detail == .editor)
-            #expect(window.firstResponder === outline, "\(start): \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+            let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+            if start == .refusedOpen {
+                #expect(viewModel.loadedProjectRow == a.persistentModelID, "the refused open keeps Alpha")
+                #expect(window.firstResponder !== outline, "Delete would trash Alpha: \(responder)")
+            } else {
+                #expect(viewModel.loadedProjectRow == opening.persistentModelID && workspace.detail == .editor)
+                #expect(window.firstResponder === outline, "\(start): \(responder)")
+            }
         }
     }
 }
