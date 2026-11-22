@@ -2371,6 +2371,95 @@ struct BackupCoreTests {
         #expect(summary.recordings == written.recordings.count)
     }
 
+    /// One file holds a song in Trash (repaired deletion at 200), the other holds it
+    /// active; neither has an edit time, and the clock moves from 100 to 300 between the
+    /// two files. The song gets one repaired time (100) in both, as sync gives it, so the
+    /// active copy wins and the summary counts it.
+    @MainActor
+    @Test func aSongMissingATimeInTwoFilesGetsOneRepairedTimeInTheSummary() async throws {
+        let harness = try await makeHarness()
+        let missing = Date(millisecondsSince1970: 0)
+        let trashedAt = Date(millisecondsSince1970: 200)
+        harness.drive.seedDuplicateManifest(try SyncBlob(trashed: [SyncTrashedSongProject(
+            id: "s", title: "S", lyrics: "", theme: "", updatedAt: missing, deletedAt: trashedAt,
+            deleteAfter: trashedAt.addingTimeInterval(trashRetentionInterval), trashedAtRepaired: true)], savedByClientId: "y").encodedManifest())
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(
+            projects: [SyncSongProject(id: "s", title: "S", lyrics: "", theme: "", updatedAt: missing)], savedByClientId: "x").encodedManifest())
+        var clock: [Int64] = [100, 300]
+        harness.service.now = { Date(millisecondsSince1970: clock.count > 1 ? clock.removeFirst() : clock[0]) }
+
+        let summary = try #require(try await harness.service.remoteBackupSummary())
+        #expect(summary.songs == 1)
+    }
+
+    /// Another device rewrites a kept duplicate X -> Y -> X while this run looks, and its
+    /// modifiedTime does not move: the file holds X, so X's name is the one written.
+    @MainActor
+    @Test func aFileRewrittenBackToItsEarlierContentIsTheContentWritten() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        var take = Self.take("t", of: "s", audio)
+        drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(projects: [Self.song("s")], savedByClientId: "x").encodedManifest())
+        take.fileName = "x.m4a"
+        let x = try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest()
+        take.fileName = "y.m4a"
+        let y = try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest()
+        let file = drive.seedDuplicateManifest(x)
+        drive.seedRecording(take, content: audio)
+        var reads = 0
+        drive.beforeDownload = {
+            guard drive.downloadAttempts.last == file.id else { return }
+            reads += 1
+            if reads == 2 { drive.rewriteExtra(id: file.id, content: y, modifiedTime: "dup") }
+            if reads == 3 { drive.rewriteExtra(id: file.id, content: x, modifiedTime: "dup") }
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(reads >= 3 && written.recordings.map(\.fileName) == ["x.m4a"])
+    }
+
+    /// A recovered take's tombstone (200) is in one kept file; two others record the take
+    /// at 300, and one of them is rewritten to 100 between recovery's listing and its
+    /// download. That file is now the newest, so the tombstone stands and the take is not
+    /// reattached; read in the listed order, the 300 copy would discard the tombstone.
+    @MainActor
+    @Test func recoveryReadsAgainWhenAFileIsRewrittenBetweenListingAndDownload() async throws {
+        let drive = FakeDriveClient()
+        let audios = ["t1": Data("first".utf8), "t2": Data("second".utf8)]
+        let takes = ["t1", "t2"].map { Self.take($0, of: "s", audios[$0]!) }
+        let manifest = try await Self.seedRevisions(drive, earlier: SyncBlob(projects: [Self.song("s")], recordings: takes, savedByClientId: "a"),
+                                                    current: SyncBlob(savedByClientId: "a"), audio: ["t1": audios["t1"]!])
+        let device = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        let revision = try #require(try await device.service.probeRevisions().last)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        let song = BackupService.recoveredId(fileId: manifest.id, revisionId: revision.id, "s")
+        var take = takes[1]
+        take.id = BackupService.recoveredId(fileId: manifest.id, revisionId: revision.id, "t2")
+        take.projectId = song
+        func blob(at time: Int64) throws -> Data {
+            take.uploadedAt = Date(millisecondsSince1970: time)
+            return try SyncBlob(projects: [Self.song(song)], recordings: [take], savedByClientId: "b").encodedManifest()
+        }
+        let rewritten = drive.seedDuplicateManifest(try blob(at: 300), modifiedTime: "m0")
+        drive.seedDuplicateManifest(try blob(at: 300), modifiedTime: "m1")
+        drive.seedDuplicateManifest(try SyncBlob(deletions: [SyncDeletion(projectId: song, recordingId: take.id, fileName: take.fileName, deletedAt: 200)],
+                                                 savedByClientId: "c").encodedManifest())
+        let older = try blob(at: 100)
+        var wrote = false
+        drive.beforeDownload = {
+            guard !wrote, drive.downloadAttempts.last == rewritten.id else { return }
+            wrote = true
+            drive.rewriteExtra(id: rewritten.id, content: older, modifiedTime: "zzz-rewritten")
+        }
+
+        drive.seedRecording(takes[1], content: audios["t2"]!)
+        try await device.service.recoverRevision(revision, modelContext: device.context)
+        let report = try #require(device.service.lastReport)
+        #expect(wrote && report.recordingsDeletedSince == 1 && report.recoveredRecordings == 0)
+    }
+
     /// The first-run probe counts the backup resolved across every manifest file:
     /// an empty first file does not hide another's songs, and a stale one does not
     /// report songs another file deleted.

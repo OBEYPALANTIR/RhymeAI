@@ -918,6 +918,8 @@ final class BackupService {
     var freeSpace: () -> Int64? = {
         try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
     }
+    /// The time a missing precedence time is repaired to (tests substitute a clock).
+    var now: () -> Date = Date.init
     /// Where recovery downloads takes before they enter the library; swept as each recovery starts.
     var recoveryDownloadsRoot = FileManager.default.temporaryDirectory.appendingPathComponent("writersblock-recovery", isDirectory: true)
 
@@ -1286,12 +1288,21 @@ final class BackupService {
         // inputs stay in that order so the newest file's entries win the merge: a file
         // rewritten between its listing and its download is ranked again by the next look.
         var rank: [String: [String]] = [:]
+        // What each file held when last read, and when: a file's current content outranks what
+        // it held before though its modifiedTime did not move. The count only grows, and only
+        // when a file's content changes, so the rank stays monotonic.
+        var current: [String: (sha: String, read: Int)] = [:]
+        var changes = 0
         /// Adds a manifest read from `file`; true when it is new or moved the order.
         func take(_ blob: SyncBlob, from file: DriveAppDataFile) -> Bool {
             let sha = blob.manifestSha256
             let isNew = seen.insert(sha).inserted
             if isNew { inputs.append(blob) }
-            let key = [file.modifiedTime ?? "", file.id]
+            if current[file.id]?.sha != sha {
+                changes += 1
+                current[file.id] = (sha, changes)
+            }
+            let key = [file.modifiedTime ?? "", file.id, String(format: "%020d", current[file.id]!.read)]
             if let held = rank[sha], !held.lexicographicallyPrecedes(key) { return isNew }
             rank[sha] = key
             let before = inputs.map(\.manifestSha256)
@@ -1592,13 +1603,22 @@ final class BackupService {
 
     /// Every manifest file gathered and resolved once, recordings included, without
     /// this device's library; nil when there is none.
+    /// A file rewritten between the listing and its download would keep its old place in
+    /// the order, so the files are listed again after the downloads and read again until
+    /// a listing holds; one that never holds is a conflict, never a stale order.
     private func resolvedRemoteManifests(accessToken: String) async throws -> SyncBlob? {
-        let files = try await manifestFiles(accessToken: accessToken)
-        guard !files.isEmpty else { return nil }
-        var blobs: [SyncBlob] = []
-        // The precedence repair sync applies (A32/A37), so a missing time decides as it does there.
-        for file in files { blobs.append(fixingPrecedence(try await downloadManifest(file, accessToken: accessToken), remember: false)) }
-        return try SyncMerger.resolve(try SyncMerger.gather(blobs))
+        var files = try await manifestFiles(accessToken: accessToken)
+        for _ in 0..<Self.manifestWriteAttempts {
+            guard !files.isEmpty else { return nil }
+            // The precedence repair sync applies (A32/A37), so a missing time decides as it does there.
+            var seen = firstSeenTimes()
+            var blobs: [SyncBlob] = []
+            for file in files { blobs.append(fixingPrecedence(try await downloadManifest(file, accessToken: accessToken), sharing: &seen)) }
+            let again = try await manifestFiles(accessToken: accessToken)
+            if again == files { return try SyncMerger.resolve(try SyncMerger.gather(blobs)) }
+            files = again
+        }
+        throw BackupError.backupConflict
     }
 
     private func downloadManifest(_ file: DriveAppDataFile, accessToken: String) async throws -> SyncBlob {
@@ -1979,13 +1999,18 @@ final class BackupService {
 
     /// A32: an entry without a precedence time (zero or missing) gets the time this
     /// device first saw it, kept here and written to the manifest, never changed.
-    /// A read-only look passes `remember: false`: it uses the same times this run but
-    /// leaves recording a first sighting to a backup.
-    private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob { fixingPrecedence(blob, remember: true) }
-
-    private func fixingPrecedence(_ blob: SyncBlob, remember: Bool) -> SyncBlob {
+    private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob {
         var seen = firstSeenTimes()
-        let now = Date().epochMilliseconds
+        let fixed = fixingPrecedence(blob, sharing: &seen)
+        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        return fixed
+    }
+
+    /// The repair with first-seen times kept in `seen`: a read-only look shares one
+    /// dictionary across its files, so an identity missing a time in two files gets one
+    /// time as sync gives it, and saves nothing (recording a first sighting is a backup's).
+    private func fixingPrecedence(_ blob: SyncBlob, sharing seen: inout [String: Int64]) -> SyncBlob {
+        let now = self.now().epochMilliseconds
         func time(_ key: String) -> Date {
             if seen[key] == nil { seen[key] = now }
             return Date(millisecondsSince1970: seen[key]!)
@@ -2021,7 +2046,6 @@ final class BackupService {
             trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
             return trash
         }
-        if remember { defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey) }
         return fixed
     }
 
