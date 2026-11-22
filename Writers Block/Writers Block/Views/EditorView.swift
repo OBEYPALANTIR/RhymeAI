@@ -834,6 +834,15 @@ struct EditorView: View {
             .foregroundStyle(appearance.palette.secondaryInk)
     }
 
+    private func focusLabel(@ViewBuilder _ text: () -> some View) -> some View {
+        text()
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(appearance.palette.secondaryInk)
+            .lineLimit(1)
+            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+            .fixedSize()
+    }
+
     private func topBarTrailing(focusIcon: Bool = false) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.xxs) {
             Button {
@@ -845,21 +854,18 @@ struct EditorView: View {
                     if usesCompactControlChrome || focusIcon {
                         focusModeIcon
                     } else {
-                        // The words when they fit the bar, else the icon. The
-                        // hidden label reserves the wider title so the bar does
-                        // not shift; the visible one sits against the trailing
-                        // icons so the three read as one group.
+                        // The words when they fit the bar, else the icon. Where
+                        // there is room, the hidden label reserves the wider
+                        // title so the bar does not shift; the visible one sits
+                        // against the trailing icons so the three read as one group.
                         ViewThatFits(in: .horizontal) {
-                            ZStack(alignment: .trailing) {
-                                Text("Exit Focus").hidden()
-                                Text(isFocusMode ? "Exit Focus" : "Focus")
+                            focusLabel {
+                                ZStack(alignment: .trailing) {
+                                    Text("Exit Focus").hidden()
+                                    Text(isFocusMode ? "Exit Focus" : "Focus")
+                                }
                             }
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(appearance.palette.secondaryInk)
-                            .lineLimit(1)
-                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                            .fixedSize()
-
+                            focusLabel { Text(isFocusMode ? "Exit Focus" : "Focus") }
                             focusModeIcon
                         }
                     }
