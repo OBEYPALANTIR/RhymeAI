@@ -367,9 +367,15 @@ class ProjectRepository internal constructor(
     /** The id a sync commit gives [songId]'s kept copy, while a held flush's mark for it is stored. */
     suspend fun preservedCopyId(songId: String): String? = preservedSongs(dataStore.data.first())[songId]
 
-    /** The operation a held flush preceded ended: nothing more to preserve for [songId]; other songs' marks stay. */
-    suspend fun clearPreservedSong(songId: String) = projectSaveMutex.withLock {
-        dataStore.edit { prefs -> prefs.setPreservedSongs(preservedSongs(prefs) - songId) }
+    /**
+     * The operation that marked [songId] with [copyId] ended: its mark goes. A mark another operation wrote since
+     * (another window on the same song) carries another copy id and stays, as do other songs' marks.
+     */
+    suspend fun clearPreservedSong(songId: String, copyId: String) = projectSaveMutex.withLock {
+        dataStore.edit { prefs ->
+            val marks = preservedSongs(prefs)
+            if (marks[songId] == copyId) prefs.setPreservedSongs(marks - songId)
+        }
     }
 
     suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {

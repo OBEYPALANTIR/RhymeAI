@@ -1464,9 +1464,26 @@ class ProjectRepositoryTest {
         assertEquals(setOf("open", "else"), repository.projectsFlow.first().map { it.id }.toSet())
         assertEquals("kept-1", repository.preservedCopyId("open"))
         // Cleared when its operation ended without replacing the song: a later replacement makes no copy.
-        repository.clearPreservedSong("open")
+        repository.clearPreservedSong("open", "kept-1")
         repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), repository.snapshotLocalSyncBase())
         assertEquals(setOf("open", "else"), repository.projectsFlow.first().map { it.id }.toSet())
+    }
+
+    @Test
+    fun anOperationEndingOnTheSameSongClearsOnlyItsOwnMarkSoAnotherWindowsEditsAreKept() = withRepository { _, repository ->
+        val a = SongProject(id = "a", title = "A", lyrics = "w1", updatedAt = 100L)
+        repository.saveActiveState(a, true, a.title, a.lyrics, a.theme)
+        // Window 1 starts a clean restore of A: it writes no mark. Window 2 flushes W2 and marks A with its own copy id.
+        repository.saveActiveState(a.copy(lyrics = "w2"), false, "A", "w2", "", preserveAs = "kept-2")
+        // Window 1's merge leaves W2 in place; its cleanup cannot clear window 2's mark (another copy id, or none).
+        repository.applySyncResult(SyncBlob(projects = listOf(SongProject(id = "else", title = "Else", updatedAt = 5L))), repository.snapshotLocalSyncBase())
+        repository.clearPreservedSong("a", "kept-1")
+        assertEquals("kept-2", repository.preservedCopyId("a"))
+        // Window 2's commit brings a newer W3: W2 is kept as its own song.
+        repository.applySyncResult(SyncBlob(projects = listOf(a.copy(lyrics = "w3", updatedAt = System.currentTimeMillis() + 60_000L))), repository.snapshotLocalSyncBase())
+        val songs = repository.projectsFlow.first()
+        assertEquals("w3", songs.single { it.id == "a" }.lyrics)
+        assertEquals("w2", songs.single { it.id == "kept-2" }.lyrics)
     }
 
     @Test
@@ -1485,7 +1502,7 @@ class ProjectRepositoryTest {
         assertEquals("kept-a", repository.preservedCopyId("a"))
         // Another hold on B that ends without a commit clears only B's mark.
         repository.saveActiveState(b.copy(lyrics = "b newer edits"), false, "B", "b newer edits", "", preserveAs = "kept-b2")
-        repository.clearPreservedSong("b")
+        repository.clearPreservedSong("b", "kept-b2")
         assertEquals("kept-a", repository.preservedCopyId("a"))
         // A's commit then keeps A's edits under A's own id.
         repository.applySyncResult(SyncBlob(projects = listOf(a.copy(lyrics = "a newer", updatedAt = System.currentTimeMillis() + 60_000L))), repository.snapshotLocalSyncBase())

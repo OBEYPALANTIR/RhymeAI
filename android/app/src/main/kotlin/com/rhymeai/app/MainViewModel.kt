@@ -803,8 +803,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 operation()
             } finally {
                 withContext(NonCancellable) {
-                    // Not committed (or already consumed by the commit): nothing more to preserve for this song.
-                    if (songId != null) try { repo.clearPreservedSong(songId) } catch (_: Exception) {}
+                    // Only the mark this operation wrote goes; one it read (written before the app died) stays until a commit uses it.
+                    if (songId != null && edited && keptId != null) try { repo.clearPreservedSong(songId, keptId) } catch (_: Exception) {}
                     showStoredOpenSong(keptId)
                 }
             }
