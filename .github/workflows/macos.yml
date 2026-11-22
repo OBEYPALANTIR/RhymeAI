@@ -34,9 +34,10 @@ jobs:
         run: xcodebuild -version
       # Ad-hoc signed with no entitlements file: the app's iCloud and app
       # group entitlements need a provisioning profile the runner does not have.
-      # Skipped: the two GGUFDownloadIntegrityTests that read isExcludedFromBackup.
-      # In the sandboxed test host that read goes over XPC to backupd's sandbox
-      # service, which hosted runners reject ("Connection invalid").
+      # Skipped: the two GGUFDownloadIntegrityTests that only read back the
+      # isExcludedFromBackup flag. In the sandboxed test host that read goes over
+      # XPC to backupd's sandbox service, which hosted runners reject
+      # ("Connection invalid"). The iOS workflow still runs both.
       - name: Unit tests
         run: |
           xcodebuild test \
@@ -50,7 +51,7 @@ jobs:
             DEVELOPMENT_TEAM= \
             CODE_SIGN_ENTITLEMENTS= \
             "-skip-testing:Writers BlockTests/GGUFDownloadIntegrityTests/modelDirectoryIsExcludedFromBackup()" \
-            "-skip-testing:Writers BlockTests/GGUFDownloadIntegrityTests/invalidStagingIsDiscardedAndFreshDownloadCanBeInstalled()"
+            "-skip-testing:Writers BlockTests/GGUFDownloadIntegrityTests/installedDownloadIsExcludedFromBackup()"
       - name: Upload result bundle
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
