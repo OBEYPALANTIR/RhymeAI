@@ -579,7 +579,7 @@ class BackupFlowInstrumentedTest {
     private val newerWords = "newer words W2"
 
     /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
-    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList()): MainViewModel {
+    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList(), draft: String? = null): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
         repo = ProjectRepository(context)
         runBlocking {
@@ -591,6 +591,8 @@ class BackupFlowInstrumentedTest {
             // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
             repo.saveTrashedProjects(trash)
             if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
+            // An interrupted save's draft: the editor's saved words differ from the song's row.
+            if (draft != null) repo.saveEditorState(openSong.title, draft, openSong.theme)
         }
         BackupTestHooks.driveClient = drive
         BackupTestHooks.authorizer = object : DriveAuthorizer {
@@ -598,7 +600,7 @@ class BackupFlowInstrumentedTest {
         }
         prefs().edit().clear().putBoolean("drive_connected", true).commit()
         val vm = MainViewModel(context.applicationContext as android.app.Application)
-        waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == openSong.lyrics }
+        waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == (draft ?: openSong.lyrics) }
         instrumentation.runOnMainSync { vm.showStartMenu = false }
         return vm
     }
@@ -739,6 +741,101 @@ class BackupFlowInstrumentedTest {
         } finally {
             zip.delete()
             runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
+            resetOpenSong()
+        }
+    }
+
+    /** Sends a one-liner to the open song from behind the start menu and runs [edit] while the send is suspended. */
+    private fun editDuringOneLinerSend(vm: MainViewModel, edit: (MainViewModel) -> Unit): com.rhymeai.app.data.model.OneLiner {
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        val sent = kotlinx.coroutines.CompletableDeferred<String>()
+        instrumentation.runOnMainSync {
+            vm.showStartMenu = true
+            vm.sendOneLinerToSong(line, storedOpenSong()) { sent.complete(it) }
+            // The send is suspended in its write: the song is opened and edited before its callback runs.
+            vm.showStartMenu = false
+            edit(vm)
+        }
+        runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
+        instrumentation.waitForIdleSync()
+        return line
+    }
+
+    /** A title edited while a one-liner's send was suspended is not marked saved by its callback: an import keeps it. */
+    @Test fun aTitleEditedWhileAOneLinerIsSentIsSavedByAnImport() {
+        val vm = openSongInEditor()
+        val zip = unrelatedArchive()
+        var line: com.rhymeai.app.data.model.OneLiner? = null
+        try {
+            line = editDuringOneLinerSend(vm) { it.onTitleChanged("edited title") }
+            instrumentation.runOnMainSync {
+                assertEquals("precondition: the title's autosave has not written yet", openSong.title, storedOpenSong().title)
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil { !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals("edited title" to "edited title", storedOpenSong().title to vm.title)
+        } finally {
+            zip.delete()
+            line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
+            resetOpenSong()
+        }
+    }
+
+    /** Words typed while a one-liner's send was suspended are not replaced by the song its callback read. */
+    @Test fun wordsTypedWhileAOneLinerIsSentAreNotReplacedByItsCallback() {
+        val vm = openSongInEditor()
+        var line: com.rhymeai.app.data.model.OneLiner? = null
+        try {
+            line = editDuringOneLinerSend(vm) { it.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue("typed words")) }
+            assertEquals("typed words", vm.lyrics)
+        } finally {
+            line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
+            resetOpenSong()
+        }
+    }
+
+    /** A template equal to the last document is still a new document: a hold during its debounce saves it under its own id. */
+    @Test fun aTemplateEqualToTheLastDocumentIsSavedAsItsOwnSongByAnImport() {
+        val vm = openSongInEditor()
+        val zip = unrelatedArchive()
+        fun templates() = runBlocking { repo.projectsFlow.first() }.filter { it.lyrics == "template words" }
+        try {
+            instrumentation.runOnMainSync { vm.applyTemplate("Verse", "", "template words") }
+            waitUntil({ "templates ${templates()} id ${vm.currentProjectId}" }) { templates().size == 1 && vm.currentProjectId == templates().single().id }
+            val first = templates().single().id
+            instrumentation.runOnMainSync { vm.applyTemplate("Verse", "", "template words") }
+            waitUntil({ "id ${vm.currentProjectId}" }) { vm.currentProjectId == null && vm.lyrics == "template words" }
+            instrumentation.runOnMainSync {
+                assertEquals("precondition: the second template's autosave has not written yet", 1, templates().size)
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil { !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            val second = templates().map { it.id }.single { it != first }
+            assertEquals(second, vm.currentProjectId)
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    /** An interrupted save's draft over an untouched row: an unrelated import writes nothing and the draft stays. */
+    @Test fun aSavedDraftOverAnUntouchedRowStaysAfterAnUnrelatedImport() {
+        val vm = openSongInEditor(draft = newerWords)
+        val zip = unrelatedArchive()
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil { !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, vm.lyrics)
+            assertEquals(newerWords, runBlocking { repo.editorStateFlow().first() }.second)
+            assertEquals(openSong, storedOpenSong())
+        } finally {
+            zip.delete()
             resetOpenSong()
         }
     }

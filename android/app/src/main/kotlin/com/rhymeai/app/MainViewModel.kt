@@ -602,13 +602,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (!saved) triggerAutoSave()
                 }
             } else {
+                val revisionAtSend = editRevision
+                val wordsAtSend = lyrics
                 val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
                     ?: return "That song is no longer in your library."
-                // The song is the editor's (behind the start menu): its buffer follows the stored song.
-                if (currentProjectId == project.id) songs.firstOrNull { it.id == project.id }?.let {
-                    lyricsFieldValue = TextFieldValue(it.lyrics)
-                    resetLyricsHistory()
-                    markEditorSaved()
+                // The song is the editor's (behind the start menu): its buffer follows the stored song, unless it was
+                // edited meanwhile. Those edits stay unsaved and their next save wins over the appended line, as before.
+                // Only part of the song is loaded here, so the editor is not marked saved.
+                if (currentProjectId == project.id && editRevision == revisionAtSend && lyrics == wordsAtSend) {
+                    songs.firstOrNull { it.id == project.id }?.let {
+                        lyricsFieldValue = TextFieldValue(it.lyrics)
+                        resetLyricsHistory()
+                    }
                 }
             }
             "Sent to “${project.title.ifEmpty { "Untitled Song" }}”"
@@ -823,7 +828,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(NonCancellable) {
                     // Only the mark this operation wrote goes; one it read (written before the app died) stays until a commit uses it.
                     if (songId != null && edited && keptId != null) try { repo.clearPreservedSong(songId, keptId) } catch (_: Exception) {}
-                    showStoredOpenSong(keptId)
+                    showStoredOpenSong(keptId, untouchedRow = stored.takeIf { !dirty })
                 }
             }
             return true
@@ -840,9 +845,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * The editor shows the open song as stored (its selection written with it), or clears when the song is gone.
-     * When the commit kept this operation's edits as [keptId], the editor moves to that copy.
+     * When the commit kept this operation's edits as [keptId], the editor moves to that copy. [untouchedRow] is the
+     * song's row before an operation that wrote nothing for this editor.
      */
-    private suspend fun showStoredOpenSong(keptId: String? = null) {
+    private suspend fun showStoredOpenSong(keptId: String? = null, untouchedRow: SongProject? = null) {
         var id = currentProjectId ?: return
         try {
             val stored = repo.projectsFlow.first()
@@ -860,6 +866,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
             if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
+            // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen and stored.
+            if (row == untouchedRow && repo.editorStateFlow().first() == Triple(title, lyrics, theme)) return
             val selected = repo.selectProject(id)
             if (currentProjectId != id) return
             dismissRewrite()
@@ -3025,6 +3033,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 restoreEditorPosition()
                 showStartMenu = false
                 resetLyricsHistory()
+                editRevision++ // a new document, even when its fields equal the last one's
                 openRevision++
                 triggerAutoSave()
 
