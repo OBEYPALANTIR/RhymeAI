@@ -1127,7 +1127,8 @@ class DriveSyncService(
      * recordings, under recovered ids (new ids derived from the revision and the old id). A song
      * this device or the current backup holds (active or in Trash) is left out and counted as
      * already here, so no tombstone, Trash entry or other device's edit of the old id touches
-     * what is added, and nothing existing changes. A run stopped part-way is finished by the next
+     * what is added, and nothing existing changes (missing times here and in the current backup get
+     * their first-seen times, as sync gives them). A run stopped part-way is finished by the next
      * recovery of the same revision: it finds its songs by their recovered ids and attaches the
      * takes still missing. Drive is only read, except that the chosen revision is kept forever
      * (Drive's condition for reading it). The next backup uploads the new songs as new entries.
@@ -1136,8 +1137,10 @@ class DriveSyncService(
         authorized({ RecoveryResult.Failed(it) }) { token ->
             // An interrupted recovery: its stopped publications are settled first, then its unreferenced stages go.
             RecordingTransitions.removeRecoveryStages(repository, filesDir)
-            val old = SyncMerger.resolve(SyncMerger.gather(downloadKeptRevision(token, revision)))
-            RecoveryResult.Recovered(importAsNewSongs(token, revision, old, repository, readRemote(token, null).blob))
+            // A32: the old version's missing times are repaired as sync would, in memory: it is not live, so no first sighting is kept.
+            val old = SyncMerger.resolve(SyncMerger.gather(repository.establishPrecedence(listOf(downloadKeptRevision(token, revision)), now(), remember = false).single()))
+            // A32: the current backup is read as sync reads it, missing times repaired, so a copy or tombstone wins here as it does there.
+            RecoveryResult.Recovered(importAsNewSongs(token, revision, old, repository, readRemote(token, repository).blob))
         }
 
     private suspend fun importAsNewSongs(
@@ -1161,6 +1164,8 @@ class DriveSyncService(
         val deletedRecordingIds = known.mapNotNullTo(HashSet()) { it.recordingId }
         val suspendedSongIds = unknownDate.filter { it.isSongTombstone }.mapTo(HashSet()) { it.projectId }
         val suspendedRecordingIds = unknownDate.mapNotNullTo(HashSet()) { it.recordingId }
+        // The old version's own deletions of unknown date suspend what they name there: kept out the same way.
+        val oldTombstones = SyncMerger.Tombstones(old.deletions)
         var suspended = 0
         fun recoveredId(oldId: String) = recoveredId(revision, oldId)
         val at = now()
@@ -1180,7 +1185,7 @@ class DriveSyncService(
                     deletedSongs++
                     if (newId in activeHere || newId in trashedHere) deletedStillHere++
                 }
-                newId in suspendedSongIds -> suspended++
+                newId in suspendedSongIds || oldTombstones.songs[song.id]?.timeKnown == false -> suspended++
                 newId in activeHere -> {
                     alreadyHere++
                     recovering[song.id] = newId
@@ -1203,7 +1208,7 @@ class DriveSyncService(
                 deletedTakes++
                 return@mapNotNull null
             }
-            if (id in suspendedRecordingIds) {
+            if (id in suspendedRecordingIds || oldTombstones.suspends(entry)) {
                 suspended++
                 return@mapNotNull null
             }
