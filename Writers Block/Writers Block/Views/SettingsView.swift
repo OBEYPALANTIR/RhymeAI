@@ -97,7 +97,7 @@ struct SettingsView: View {
                     ToolbarItem(placement: .cancellationAction) { doneButton }
                 }
                 // The system bar title ignores Dynamic Type; this one follows it
-                // under the editor top bar's clamp.
+                // up to the bar's cap.
                 ToolbarItem(placement: .principal) {
                     Text("Settings")
                         .font(.headline)
@@ -149,12 +149,17 @@ struct SettingsView: View {
         }
     }
 
-    /// The editor top bar's rule: an iPhone at accessibility sizes keeps the
-    /// bar at the default size so its controls fit one row.
     private var topBarTypeSize: DynamicTypeSize {
-        horizontalSizeClass == .compact && dynamicTypeSize.isAccessibilitySize ? .large : dynamicTypeSize
+        Self.barTypeSize(for: dynamicTypeSize, isCompact: horizontalSizeClass == .compact)
     }
     #endif
+
+    /// The title and Done grow with the user's text size, capped at XXX Large
+    /// on a compact width so they still fit the bar; never smaller as the
+    /// size grows.
+    static func barTypeSize(for size: DynamicTypeSize, isCompact: Bool) -> DynamicTypeSize {
+        isCompact ? min(size, .xxxLarge) : size
+    }
 
     @ViewBuilder
     private var settingsContent: some View {

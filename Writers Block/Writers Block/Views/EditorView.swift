@@ -148,9 +148,6 @@ struct EditorView: View {
     /// because SwiftUI does not learn that the lyrics text view took the focus:
     /// a stale value never matches the next open's re-created title field.
     @FocusState private var titleFocusedOpen: EditorViewModel.EditorOpen?
-    /// Bumped when the title loses focus so a long title rests on its first
-    /// two lines rather than the end the caret scrolled to.
-    @State private var titleRestID = 0
     /// The New Song open whose title focus has already been granted, so a
     /// re-created editor does not raise the keyboard again.
     @State private var focusedNewSongOpen: EditorViewModel.EditorOpen?
@@ -713,12 +710,8 @@ struct EditorView: View {
             lyricsEditorIsFocused: $lyricsEditorIsFocused,
             scrollPosition: $writingScrollPosition,
             focusedNewSongOpen: $focusedNewSongOpen,
-            titleFocusedOpen: $titleFocusedOpen,
-            titleRestID: titleRestID
+            titleFocusedOpen: $titleFocusedOpen
         )
-        .onChange(of: titleFocusedOpen) { _, focused in
-            if focused == nil { titleRestID += 1 }
-        }
     }
 
     /// Regular width shares the assistant panel's 34pt section inset.
@@ -852,18 +845,23 @@ struct EditorView: View {
                     if usesCompactControlChrome || focusIcon {
                         focusModeIcon
                     } else {
-                        // The hidden label reserves the wider title so the
-                        // bar does not shift; the visible one sits against
-                        // the trailing icons so the three read as one group.
-                        ZStack(alignment: .trailing) {
-                            Text("Exit Focus").hidden()
-                            Text(isFocusMode ? "Exit Focus" : "Focus")
+                        // The words when they fit the bar, else the icon. The
+                        // hidden label reserves the wider title so the bar does
+                        // not shift; the visible one sits against the trailing
+                        // icons so the three read as one group.
+                        ViewThatFits(in: .horizontal) {
+                            ZStack(alignment: .trailing) {
+                                Text("Exit Focus").hidden()
+                                Text(isFocusMode ? "Exit Focus" : "Focus")
+                            }
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(appearance.palette.secondaryInk)
+                            .lineLimit(1)
+                            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+                            .fixedSize()
+
+                            focusModeIcon
                         }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
-                        .lineLimit(1)
-                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                        .fixedSize()
                     }
                 }
                 .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
@@ -966,55 +964,22 @@ struct EditorWritingColumn: View {
     /// even when the previous song's lyrics had it.
     var listKeepsFocusOnOpen = false
     @State private var restoringScroll = false
-    #if !os(macOS)
-    /// The editor bumps this when the title loses focus; see `EditorView.titleRestID`.
-    var titleRestID = 0
-    #endif
-
-    #if os(macOS)
-    private var titleField: some View {
-        TextField("Song Title...", text: $viewModel.title)
-            .font(.system(.largeTitle, design: .serif, weight: .bold))
-            .textFieldStyle(.plain)
-            .padding(.horizontal, sidePadding)
-            .padding(.top, RhymeAITokens.Spacing.md)
-            .padding(.bottom, RhymeAITokens.Spacing.xxs)
-            .accessibilityIdentifier("songTitleEditor")
-            .focused(titleFocusedOpen, equals: viewModel.editorOpen)
-            .onChange(of: viewModel.title) {
-                viewModel.triggerAutoSave()
-            }
-    }
-    #else
-    private var titleField: some View {
-        // A long title wraps to a second line instead of scrolling out
-        // of sight; Return still ends editing rather than adding a line.
-        TextField("Song Title...", text: $viewModel.title, axis: .vertical)
-            .font(.system(.largeTitle, design: .serif, weight: .bold))
-            .lineLimit(1...2)
-            .textFieldStyle(.plain)
-            .submitLabel(.done)
-            .padding(.horizontal, sidePadding)
-            .padding(.top, RhymeAITokens.Spacing.md)
-            .padding(.bottom, RhymeAITokens.Spacing.xxs)
-            .accessibilityIdentifier("songTitleEditor")
-            .focused(titleFocusedOpen, equals: viewModel.editorOpen)
-            .id(titleRestID)
-            .onChange(of: viewModel.title) {
-                if viewModel.title.contains(where: \.isNewline) {
-                    viewModel.title.removeAll(where: \.isNewline)
-                    titleFocusedOpen.wrappedValue = nil
-                    return
-                }
-                viewModel.triggerAutoSave()
-            }
-    }
-    #endif
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                titleField
+                // Title Field
+                TextField("Song Title...", text: $viewModel.title)
+                    .font(.system(.largeTitle, design: .serif, weight: .bold))
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, RhymeAITokens.Spacing.md)
+                    .padding(.bottom, RhymeAITokens.Spacing.xxs)
+                    .accessibilityIdentifier("songTitleEditor")
+                    .focused(titleFocusedOpen, equals: viewModel.editorOpen)
+                    .onChange(of: viewModel.title) {
+                        viewModel.triggerAutoSave()
+                    }
 
                 editorStats
 

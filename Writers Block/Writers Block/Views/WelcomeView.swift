@@ -93,11 +93,14 @@ struct WelcomeView: View {
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
                 .scrollIndicators(.hidden)
-                // Content stops at the safe area, so the status bar keeps the
-                // canvas behind it instead of cards scrolling under the clock.
-                .clipped()
                 .accessibilityIdentifier("welcomeScroll")
             }
+            // The viewport is clipped at the top safe area, so cards never scroll
+            // under the status bar, and runs past the bottom one to the screen's
+            // edge; the spacer above lets the last card scroll clear of the
+            // home indicator.
+            .clipped()
+            .ignoresSafeArea(.container, edges: .bottom)
         }
     }
 
