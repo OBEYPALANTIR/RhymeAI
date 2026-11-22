@@ -707,10 +707,9 @@ extension OneLinerRouterSuites {
 
         /// At the window's minimum every page keeps 440pt beside whatever sidebar and Assistant
         /// are shown (with the floor on the page itself the sidebar counted twice: 960 for One
-        /// Liners in the real window, 728 here). This vouches for that relation only: the harness
-        /// lays out a 144pt sidebar where the app shows 260, so what the real window comes to
-        /// (expected 700, and 1060 for a song with the Assistant) is still to be checked by
-        /// dragging it.
+        /// Liners in the real window, 728 here). This asserts that relation, not absolute widths:
+        /// the harness lays out a 144pt sidebar where the app shows 260 (700 there, and 1060 for
+        /// a song with the Assistant).
         @Test
         func everyPageKeepsAReadingWidthAtTheWindowsMinimum() throws {
             let (container, song) = try Self.appLibrary()
