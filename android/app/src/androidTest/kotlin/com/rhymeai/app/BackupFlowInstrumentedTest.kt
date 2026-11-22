@@ -826,7 +826,47 @@ class BackupFlowInstrumentedTest {
             assertEquals("edited before restore", copy.lyrics)
             assertEquals(copy.id to "edited before restore", vm.currentProjectId to vm.lyrics)
             assertEquals("This song was replaced from a backup, so your latest edits were saved as a new song.", vm.persistenceError)
+            assertKeptCopySurvivesTheNextSave(vm, copy.id)
         } finally {
+            resetOpenSong()
+        }
+    }
+
+    /** The next save writes the kept copy in place: no third song, no second notice. */
+    private fun assertKeptCopySurvivesTheNextSave(vm: MainViewModel, copyId: String) {
+        val notice = vm.persistenceError
+        instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+        waitUntil { !vm.savingBeforeNavigation }
+        instrumentation.waitForIdleSync()
+        val songs = runBlocking { repo.projectsFlow.first() }
+        assertEquals("$songs", 2, songs.size)
+        assertEquals(newerWords, storedOpenSong().lyrics)
+        assertEquals("edited before restore", songs.single { it.id == copyId }.lyrics)
+        assertEquals(copyId to notice, vm.currentProjectId to vm.persistenceError)
+    }
+
+    @Test fun editsSavedJustBeforeAnImportReplacesTheSongAreKeptAsANewSong() {
+        val vm = openSongInEditor()
+        val zip = java.io.File(context.cacheDir, "replacing.zip")
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))),
+                emptyList(), 0L, "test"
+            )
+        }
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("edited before restore")
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true && !vm.editorHeld }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            val copy = runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id }
+            assertEquals(copy.id to "edited before restore", vm.currentProjectId to vm.lyrics)
+            assertKeptCopySurvivesTheNextSave(vm, copy.id)
+        } finally {
+            zip.delete()
             resetOpenSong()
         }
     }
