@@ -1082,10 +1082,13 @@ class ProjectRepositoryTest {
         }
         repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed"), deletedAt = 10L)))
         val before = dataStore.data.first()
+        val activeBefore = repository.projectsFlow.first()
 
         val result = repository.permanentlyDeleteTrashedProject("same", now = 5_000L)
 
         assertEquals(ProjectRepository.TrashPurge(emptyList(), emptyList()), result)
+        assertEquals(emptyList(), repository.trashedProjectsFlow.first(), "Trash read back from the store")
+        assertEquals(activeBefore, repository.projectsFlow.first(), "active list read back from the store")
         val after = dataStore.data.first()
         assertEquals(before[notebookKey], after[notebookKey])
         assertEquals(before[pendingKey], after[pendingKey])
