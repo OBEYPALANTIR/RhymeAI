@@ -445,6 +445,26 @@ struct LyricsOpenFocusTests {
     }
 
     @Test
+    func aSongTheSidebarSelectionOpensDoesNotTakeTheFocusTheLyricsHad() async throws {
+        // Given: a song opened by a command, its lyrics focused (a row click in the app
+        // left them so)
+        let a = try song("a", "harbour lights"), b = try song("b", "paper moon")
+        let window = makeWindow()
+        workspace.openSong(a, in: viewModel)
+        let first = try await editor(for: a.lyrics, in: window)
+        #expect(window.firstResponder === first)
+
+        // When: the sidebar's row selection opens another song
+        #expect(workspace.openSong(b, in: viewModel, bySidebarSelection: true))
+        let second = try await editor(for: b.lyrics, in: window, excluding: first)
+        try await Task.sleep(for: .milliseconds(200))
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        // Then: its lyrics do not take the keyboard
+        #expect(window.firstResponder !== second)
+    }
+
+    @Test
     func theSidebarSelectedSongBackFromTrashFocusesTheLyrics() async throws {
         // Given: the sidebar's row selection opened a song, with the list focused
         let a = try song("a", "harbour lights")

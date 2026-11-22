@@ -952,7 +952,8 @@ struct EditorWritingColumn: View {
     /// because SwiftUI does not learn that the lyrics text view took the focus:
     /// a stale value never matches the next open's re-created title field.
     var titleFocusedOpen: FocusState<EditorViewModel.EditorOpen?>.Binding
-    /// The Mac sidebar's row selection opened this song: the focus stays in the list.
+    /// The Mac sidebar's row selection opened this song: the focus stays in the list,
+    /// even when the previous song's lyrics had it.
     var listKeepsFocusOnOpen = false
     @State private var restoringScroll = false
 
@@ -1089,7 +1090,7 @@ struct EditorWritingColumn: View {
             rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
             syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
             isEditable: !viewModel.hasActiveRewrite,
-            resumesEditingOnCreate: lyricsEditorIsFocused || (!listKeepsFocusOnOpen && Self.lyricsTakeFocusOnOpen(viewModel.editorOpen))
+            resumesEditingOnCreate: !listKeepsFocusOnOpen && (lyricsEditorIsFocused || Self.lyricsTakeFocusOnOpen(viewModel.editorOpen))
         )
         .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
         .padding(.horizontal, sidePadding)
