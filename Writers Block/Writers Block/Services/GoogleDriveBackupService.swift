@@ -1403,9 +1403,13 @@ final class BackupService {
 
         report.notUploadedConflicts = uploadConflicts.sorted()
         report.localDigestConflicts = localConflicts.sorted()
+        // The winner this run gathered for each recording, before resolution: an object whose
+        // digest differs from it is reported as a conflict.
+        let gathered = Dictionary(try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + verifiedInputs.map(fixingPrecedence))
+            .recordings.map { ($0.id, $0) }) { first, _ in first }
         // A changed look still runs the pass with deleting off, so a veto clears stale proof.
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
-                                                           observed: observed, deleting: unchanged, remote: remoteRecordings,
+                                                           gathered: gathered, observed: observed, deleting: unchanged, remote: remoteRecordings,
                                                            accessToken: accessToken, report: &report)
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
@@ -1787,9 +1791,12 @@ final class BackupService {
     /// Every entry this run observed for the id with the object's digest and length must
     /// be covered: one that is not vetoes the delete, is reported like a repaired time, and
     /// clears the id's proof. With no observation of the id, the proof alone decides.
-    /// `deleting` false (Drive changed after the write) removes nothing and adds no proof.
+    /// `deleting` false (Drive changed after the write) removes nothing and adds no proof but a
+    /// repaired one. Every object is decided and the proof saved before the first delete, so a
+    /// failed delete cannot leave proof a veto contradicted.
     private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], keeping kept: Set<String>,
-                                                          observed: [String: [SyncRecording]], deleting: Bool, remote: RemoteFiles,
+                                                          gathered: [String: SyncRecording], observed: [String: [SyncRecording]],
+                                                          deleting: Bool, remote: RemoteFiles,
                                                           accessToken: String, report: inout BackupReport) async throws {
         let live = Set(recordings.map(\.driveName) + kept.map(RecordingBackupManifest.driveName(recordingId:)))
         // Proof an earlier build kept by Drive id and version cannot show content; the
@@ -1806,11 +1813,16 @@ final class BackupService {
             return
         }
         var conflicting: [String] = []
+        var doomed: [DriveAppDataFile] = []
         for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) {
             guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"] else { continue }
             func matches(_ entry: SyncRecording) -> Bool { entry.sha256 == sha && String(entry.bytes) == bytes }
             func covered(_ entry: SyncRecording) -> Bool {
                 deletions.contains { $0.covers(projectId: entry.projectId, recordingId: id, sha256: sha, at: entry.uploadedAt, repaired: entry.precedenceRepaired) }
+            }
+            if let winner = gathered[id], !matches(winner) {
+                conflicting.append(file.name)
+                continue
             }
             let known: SyncRecording
             if let seen = observed[id], !seen.isEmpty {
@@ -1823,10 +1835,7 @@ final class BackupService {
                 let uncovered = matching.filter { !covered($0) }
                 if let keeper = uncovered.first {
                     // An entry no deletion covers keeps the audio, and proof it contradicts goes.
-                    if let proof = proven[id], matches(proof) {
-                        proven[id] = nil
-                        provenCovered = proven
-                    }
+                    if let proof = proven[id], matches(proof) { proven[id] = nil }
                     if uncovered.count < matching.count, !report.deferredRepairedCleanup.contains(keeper.fileName) {
                         report.deferredRepairedCleanup.append(keeper.fileName)
                     }
@@ -1844,23 +1853,21 @@ final class BackupService {
             }
             // A41: a recording that loses only because its time is a repair is kept on
             // Drive and reported; its bytes are not deleted on that judgement (T1.35).
-            // Its proof is kept too, so later runs keep reporting it while the object stays.
+            // Its proof is kept too, so later runs keep reporting it while the object stays
+            // (and it protects: it replaces a real-time proof, deleting on or off).
             if known.precedenceRepaired {
                 if !report.deferredRepairedCleanup.contains(known.fileName) { report.deferredRepairedCleanup.append(known.fileName) }
-                if deleting {
-                    proven[id] = known
-                    provenCovered = proven
-                }
+                proven[id] = known
                 continue
             }
             guard deleting else { continue }
             proven[id] = known
-            provenCovered = proven
-            try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
+            doomed.append(file)
         }
-        // Proof is dropped once no object of that id is left.
+        // Proof is dropped once no object of that id is left, and saved before any delete.
         let remaining = Set(remote.values.joined().compactMap { $0.appProperties?["id"] })
         provenCovered = proven.filter { remaining.contains($0.key) && !live.contains(RecordingBackupManifest.driveName(recordingId: $0.key)) }
+        for file in doomed { try await driveClient.deleteFile(id: file.id, accessToken: accessToken) }
         report.conflictingDriveObjects = conflicting.sorted()
     }
 
