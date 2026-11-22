@@ -36,6 +36,19 @@ struct PersistenceTests {
         #expect(viewModel.theme == imported.theme)
         #expect(viewModel.cursorPosition == imported.lyrics.count)
         #expect(viewModel.saveStatus == .saved)
+        // The editor holds the saved row itself, not just its song id.
+        #expect(viewModel.loadedProjectRow == imported.persistentModelID)
+    }
+
+    @MainActor
+    @Test func aFirstRecordingsNewSongIsTheStoredRowTheEditorHolds() throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+
+        let id = try #require(viewModel.ensureProjectForRecording())
+
+        let created = try #require(try Self.fetchProjects(harness.context).first { $0.id == id })
+        #expect(viewModel.loadedProjectRow == created.persistentModelID)
     }
 
     @MainActor

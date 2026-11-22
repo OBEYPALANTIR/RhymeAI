@@ -35,7 +35,8 @@ struct MacSongSidebar: View {
                     Text(searchText.isEmpty ? "No songs yet" : "No matching songs")
                         .foregroundStyle(appearance.palette.secondaryInk)
                 }
-                ForEach(songs) { project in
+                // Keyed by the stored row: two rows can share a song id.
+                ForEach(songs, id: \.persistentModelID) { project in
                     MacSongRow(project: project)
                         .tag(SidebarItem.song(project.persistentModelID))
                         .contextMenu { rowMenu(project) }
@@ -132,14 +133,13 @@ struct MacSongSidebar: View {
     private var visibleSongs: [SongProject] { SongProject.matching(projects, searchText: searchText) }
 
     private var openRow: SongProject? {
-        viewModel.showWelcome ? nil : Self.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: visibleSongs)
+        viewModel.showWelcome ? nil : Self.openRow(loaded: viewModel.loadedProjectRow, in: visibleSongs)
     }
 
-    /// The shown row the editor was loaded from; none when the search hides it. Only a
-    /// song not loaded from a row (a new song after its first save) falls back to its id.
-    static func openRow(loaded: PersistentIdentifier?, openID: String?, in songs: [SongProject]) -> SongProject? {
-        if let loaded { return songs.first { $0.persistentModelID == loaded } }
-        return openID.flatMap { id in songs.first { $0.id == id } }
+    /// The shown row whose words the editor holds; none when the search hides it or no row is
+    /// known. Never another row with the same song id, which Delete would then trash.
+    static func openRow(loaded: PersistentIdentifier?, in songs: [SongProject]) -> SongProject? {
+        loaded.flatMap { loaded in songs.first { $0.persistentModelID == loaded } }
     }
 
     private func newSong() {

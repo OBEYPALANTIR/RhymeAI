@@ -500,9 +500,24 @@ final class EditorViewModel: ObservableObject {
         // Every other way the editor's song changes leaves it not loaded from a known row.
         didSet { loadedProjectRow = nil }
     }
-    /// The stored row `loadProject` loaded the editor from, so two rows sharing one
-    /// song id (a restore on two devices, then sync) are told apart. Read by the Mac sidebar.
+    /// The stored row whose words the editor holds (loaded, created or last saved to), so two
+    /// rows sharing one song id (a restore on two devices, then sync) are told apart.
+    /// Read by the Mac sidebar.
     @Published private(set) var loadedProjectRow: PersistentIdentifier?
+
+    /// The editor now holds this stored row's words.
+    /// Assigns only what changed, so a save that keeps the same row publishes nothing.
+    private func bindEditor(to project: SongProject) {
+        if currentProjectId != project.id { currentProjectId = project.id }
+        if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
+    }
+
+    /// The stored row the open song's words belong to: the bound one, else (none bound, or a
+    /// restore replaced it) the first with the song's id. With unique ids, the one row.
+    private func storedProject(id: String, in context: ModelContext) throws -> SongProject? {
+        let rows = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+        return rows.first { $0.persistentModelID == loadedProjectRow } ?? rows.first
+    }
     @Published var saveStatus: SaveStatus = .idle
 
     /// One song opened or started in the editor. `newProject` and `loadProject`
@@ -1707,8 +1722,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = 0
-        currentProjectId = project.id
-        loadedProjectRow = project.persistentModelID
+        bindEditor(to: project)
         editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
@@ -2232,7 +2246,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         suggestions = []
         errorMessage = nil
         saveStatus = .saved
@@ -2274,7 +2288,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         resetCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -2335,7 +2349,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't create a song for this recording."
             return nil
         }
-        currentProjectId = project.id
+        bindEditor(to: project)
         showWelcome = false
         return project.id
     }
@@ -2421,10 +2435,10 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         var createdProjectID: String?
+        let saved: SongProject
         do {
             if let id = currentProjectId {
-                let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-                guard let project = try context.fetch(descriptor).first else {
+                guard let project = try storedProject(id: id, in: context) else {
                     saveStatus = .idle
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
@@ -2436,14 +2450,17 @@ final class EditorViewModel: ObservableObject {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
+                saved = project
             } else {
                 let project = makeUntitledSongProject()
                 try copyRecordings(of: pendingRecordingRecovery, to: project.id)
                 context.insert(project)
                 createdProjectID = project.id
+                saved = project
             }
             try saveModelContext(context)
-            if let createdProjectID { currentProjectId = createdProjectID }
+            // After the save, so a new row's identity is its stored one.
+            bindEditor(to: saved)
             if createdProjectID != nil {
                 discardSnapshot(pendingRecordingRecovery)
                 pendingRecordingRecovery = nil
@@ -3286,8 +3303,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func storedDraft(id: String, in context: ModelContext) throws -> (SongProject, OpenDraft)? {
-        let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-        guard let project = try context.fetch(descriptor).first else { return nil }
+        guard let project = try storedProject(id: id, in: context) else { return nil }
         return (project, OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme))
     }
 
@@ -3706,6 +3722,8 @@ final class EditorViewModel: ObservableObject {
                 throw CocoaError(.fileReadUnknown)
             }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            // Every branch below leaves the editor with this row's words, or a new row's.
+            if let stored { bindEditor(to: stored.0) }
             if edited {
                 if stored?.1 == draft {
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
@@ -3734,7 +3752,7 @@ final class EditorViewModel: ObservableObject {
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()
-                currentProjectId = recovered.id
+                bindEditor(to: recovered)
                 saveStatus = .saved
                 showWelcome = false
                 return true

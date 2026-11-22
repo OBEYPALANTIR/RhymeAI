@@ -149,7 +149,7 @@ struct MacSongSidebarTests {
         let (viewModel, _, b, container) = try Self.copies()
         _ = container
 
-        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: [b]) == nil)
+        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: [b]) == nil)
         #expect(MacWorkspaceModel().openSong(b, in: viewModel))
         #expect(viewModel.loadedProjectRow == b.persistentModelID)
     }
@@ -169,15 +169,94 @@ struct MacSongSidebarTests {
         #expect(viewModel.loadedProjectRow == b.persistentModelID)
     }
 
+    /// A restore that brings in a change to the second copy. Stands in for Drive.
+    @MainActor
+    private final class RestoringBackup: CloudBackupServicing {
+        let isConfigured = true
+        let isConnected = true
+        private(set) var restores = 0
+        private let change: () -> Void
+        init(_ change: @escaping () -> Void) { self.change = change }
+        func backupNow(modelContext: ModelContext) async throws {}
+        func backupInBackgroundIfPossible(modelContext: ModelContext) async {}
+        func restoreNow(modelContext: ModelContext) async throws {
+            restores += 1
+            change()
+            try modelContext.save()
+        }
+    }
+
+    @Test
+    func aRestoreKeepsTheEditorOnTheCopyItHoldsThroughOpenExportAndTheNextSave() async throws {
+        // Given: two stored copies under one song id, the second open from the context menu
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let a = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        let b = SongProject(id: "s", title: "Paper Moon", lyrics: "tide", theme: "")
+        container.mainContext.insert(a)
+        try container.mainContext.save()
+        container.mainContext.insert(b)
+        try container.mainContext.save()
+        let restore = RestoringBackup { b.lyrics = "tide and a restored line" }
+        let viewModel = EditorViewModel(backupService: restore, companionStore: WritingCompanionStore(inMemory: true))
+        viewModel.modelContext = container.mainContext
+        let workspace = MacWorkspaceModel()
+        #expect(workspace.openSong(b, in: viewModel))
+        #expect(viewModel.canRunCloudBackup)
+
+        // When: a restore reconciles the open song, then the context menu opens that copy
+        await viewModel.restoreBackupNow()
+        #expect(restore.restores == 1)
+        #expect(workspace.openSong(b, in: viewModel))
+
+        // Then: the editor holds that copy's restored words, and exports them
+        #expect(viewModel.loadedProjectRow == b.persistentModelID)
+        let exported = try #require(String(data: LyricsExporter.data(for: viewModel.snapshotForExport(), format: .txt), encoding: .utf8))
+        #expect(exported.contains("Paper Moon") && exported.contains("tide and a restored line"), "\(exported)")
+        #expect(!exported.contains("Harbour Lights") && !exported.contains("ropes"), "\(exported)")
+
+        // And: an edit is written to that copy as the other one opens, leaving the other as it was
+        viewModel.lyrics = "tide and a restored line, edited"
+        #expect(workspace.openSong(a, in: viewModel))
+        #expect(viewModel.loadedProjectRow == a.persistentModelID)
+        #expect(a.title == "Harbour Lights" && a.lyrics == "ropes", "\(a.title): \(a.lyrics)")
+        #expect(b.title == "Paper Moon" && b.lyrics == "tide and a restored line, edited", "\(b.title): \(b.lyrics)")
+    }
+
+    @Test
+    func aRestoreThatRemovesTheOpenCopyShowsTheRemainingOneBeforeTheEditorClaimsIt() async throws {
+        // Given: two stored copies under one song id, the second open and unedited
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let a = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        let b = SongProject(id: "s", title: "Paper Moon", lyrics: "tide", theme: "")
+        container.mainContext.insert(a)
+        try container.mainContext.save()
+        container.mainContext.insert(b)
+        try container.mainContext.save()
+        let restore = RestoringBackup { container.mainContext.delete(b) }
+        let viewModel = EditorViewModel(backupService: restore, companionStore: WritingCompanionStore(inMemory: true))
+        viewModel.modelContext = container.mainContext
+        #expect(MacWorkspaceModel().openSong(b, in: viewModel))
+
+        // When: a restore removes that copy
+        await viewModel.restoreBackupNow()
+        #expect(restore.restores == 1)
+
+        // Then: the editor shows the remaining copy's own words, unchanged, before it is the open row
+        #expect(viewModel.loadedProjectRow == a.persistentModelID)
+        #expect(viewModel.title == "Harbour Lights" && viewModel.lyrics == "ropes", "\(viewModel.title): \(viewModel.lyrics)")
+        #expect(a.title == "Harbour Lights" && a.lyrics == "ropes", "\(a.title): \(a.lyrics)")
+    }
+
     @Test
     func theCopyLoadedElsewhereIsHighlightedAndTheOtherOpens() throws {
         let (viewModel, a, b, container) = try Self.copies()
         _ = container
         viewModel.loadProject(b)
 
-        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, openID: viewModel.currentProjectId, in: [a, b]) === b)
+        #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: [a, b]) === b)
         #expect(MacWorkspaceModel().openSong(a, in: viewModel))
-        // The row, not its words: the outgoing save writes to the first row with the id (main's save path, a follow-up).
         #expect(viewModel.loadedProjectRow == a.persistentModelID)
     }
 }
@@ -751,6 +830,72 @@ extension OneLinerRouterSuites {
             ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
         }
 
+        private static func host(_ viewModel: EditorViewModel, _ workspace: MacWorkspaceModel, _ container: ModelContainer) -> (NSView, NSWindow) {
+            let view = NSHostingView(rootView: MacWorkspaceView()
+                .environmentObject(viewModel)
+                .environmentObject(workspace)
+                .environmentObject(AppPersistenceState(persistenceDegraded: false, cloudSyncStatus: .localOnlyFallback, usesCloudBackedStore: false))
+                .environmentObject(GGUFDownloadManager.shared)
+                .modelContainer(container))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780), styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            return (view, window)
+        }
+
+        /// Types into the sidebar's search field as the writer does.
+        private static func search(_ text: String, in view: NSView) throws {
+            let field = try #require(views(NSSearchField.self, in: view).first)
+            field.stringValue = text
+            field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+            settle(view)
+        }
+
+        @Test
+        func aNewSongsSavedCopyIsTheOneSelectedSoASiblingUnderItsIdIsNeverDeleted() throws {
+            let schema = try #require(ModelContainerBootstrap.shared.container?.schema)
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+            viewModel.modelContext = container.mainContext
+            let workspace = MacWorkspaceModel()
+            workspace.windowOpen = true
+            let (view, window) = Self.host(viewModel, workspace, container)
+            defer { window.close() }
+
+            // Given: a song made with New Song and saved for the first time
+            workspace.detail = .editor
+            viewModel.newProject()
+            viewModel.title = "Harbour Lights"
+            viewModel.lyrics = "ropes"
+            viewModel.triggerAutoSave()
+            #expect(viewModel.savePendingEdit())
+            let id = try #require(viewModel.currentProjectId)
+            let a = try #require(try container.mainContext.fetch(FetchDescriptor<SongProject>()).first)
+            // and a second copy under its id (a restore on another device, then sync), newer
+            let b = SongProject(id: id, title: "Paper Moon", lyrics: "tide", theme: "")
+            b.updatedAt = a.updatedAt.addingTimeInterval(60)
+            container.mainContext.insert(b)
+            try container.mainContext.save()
+            Self.settle(view)
+            let outline = try #require(Self.views(NSOutlineView.self, in: view).first)
+
+            // When: the search shows only the second copy while the first stays open
+            let rows = outline.numberOfRows
+            try Self.search("Paper", in: view)
+            #expect(outline.numberOfRows == rows - 1, "the search hides the open song's row")
+
+            // Then: no song row is selected, so Delete, which trashes the selected song, has none.
+            // (Delete itself cannot be sent here: this window is not key, so the list's delete
+            // command is not dispatched; at 9d0ba50a Backspace trashed nothing with the copy selected.)
+            #expect(outline.selectedRowIndexes.isEmpty, "selected rows: \(Array(outline.selectedRowIndexes)) of \(outline.numberOfRows)")
+            #expect(MacSongSidebar.openRow(loaded: viewModel.loadedProjectRow, in: [b]) == nil, "the row Delete resolves")
+
+            // And: with the search cleared the open song's row is selected again (the older, last row)
+            try Self.search("", in: view)
+            #expect(Array(outline.selectedRowIndexes) == [outline.numberOfRows - 1], "selected rows: \(Array(outline.selectedRowIndexes)) of \(outline.numberOfRows)")
+            #expect(viewModel.loadedProjectRow == a.persistentModelID)
+        }
+
         @Test(arguments: Start.allCases)
         func aSongSelectedInTheSidebarTakesTheKeyboardIntoTheList(_ start: Start) throws {
             let schema = try #require(ModelContainerBootstrap.shared.container?.schema)
@@ -802,6 +947,7 @@ extension OneLinerRouterSuites {
             }
             #expect(window.firstResponder !== outline)
             let before = window.firstResponder
+            if start == .refusedOpen { #expect(before is LyricsNSTextView) }
 
             // When: the sidebar selects a song (songs are the last rows, newest first)
             let opening = start == .backFromTrashToTheOpenSong ? a : b
