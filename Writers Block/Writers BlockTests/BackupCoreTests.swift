@@ -3328,7 +3328,6 @@ struct BackupCoreTests {
     func editorRestoreFailureStatusEndsTheReasonWithOneFullStop(seed: String, expected: String) async throws {
         let harness = try await makeHarness()
         let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore(), backupService: harness.service)
-        let sleep = HeldBackupSleep(viewModel)
         viewModel.modelContext = harness.context
         let open = SongProject(id: "open-song", title: "Open", lyrics: "open words", updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
         harness.context.insert(open)
@@ -3350,10 +3349,9 @@ struct BackupCoreTests {
         #expect(viewModel.cloudBackupLastResultIsError)
         #expect(viewModel.cloudBackupStatusText == expected)
 
-        // Let the backup scheduled after the failure finish so nothing is left waiting.
-        let holding = await sleep.waitUntilHolding()
-        #expect(holding)
-        await sleep.release { !viewModel.cloudBackupIsWorking }
+        // Cancel the backup scheduled after the failure, still in its delay, so none runs after the test.
+        await viewModel.disconnectGoogleDrive()
+        #expect(viewModel.cloudBackupStatusText == "Disconnected from Google Drive.")
     }
 
     @MainActor
