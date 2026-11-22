@@ -17,13 +17,17 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
+import androidx.compose.ui.graphics.Color
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalHighTextContrastEnabled
 import com.rhymeai.app.ui.theme.appWritingSurface
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -164,8 +168,17 @@ fun SongRecordingsDialog(
             Spacer(Modifier.height(DesignTokens.Spacing.sm))
             OutlinedTextField(
                 value = search, onValueChange = { search = it },
-                label = { Text("Search recordings") }, singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                placeholder = { Text("Search recordings") }, singleLine = true,
+                // The placeholder names the empty field; once typed text hides it, the description keeps the field named.
+                modifier = Modifier.fillMaxWidth().semantics { if (search.isNotEmpty()) contentDescription = "Search recordings" },
+                shape = RoundedCornerShape(DesignTokens.Radius.lg),
+                // A raised search field, as in the songs drawer: borderless at rest, outlined when focused.
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) MaterialTheme.colorScheme.outlineVariant else Color.Transparent,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                )
             )
             if (waitingTakes.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(

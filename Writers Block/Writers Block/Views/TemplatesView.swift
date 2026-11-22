@@ -38,7 +38,7 @@ struct TemplatesView: View {
                             }
                             .padding(RhymeAITokens.Spacing.lg)
                             .frame(minHeight: RhymeAITokens.Touch.minimum)
-                            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+                            .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
                         }
                         .buttonStyle(.rhymePress)
                     }
