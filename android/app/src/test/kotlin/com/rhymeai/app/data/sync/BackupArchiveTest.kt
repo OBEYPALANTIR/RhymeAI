@@ -265,13 +265,15 @@ class BackupArchiveTest {
         assertEquals(1, summary.skippedLargeRecordings)
     }
 
-    private fun repoFileOrNull(path: String): File? =
+    /** Fails, never skips, when a fixture is missing: a skipped drift check would leave CI green. */
+    private fun repoFile(path: String): File =
         sequenceOf("../../$path", "../$path", path).map(::File).firstOrNull(File::isFile)
+            ?: error("Fixture $path not found from ${File("").absolutePath}")
 
     @Test
     fun archiveNamesMatchTheSharedFixture() {
         val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
-            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+            repoFile("shared/fixtures/archive-names-v1.json").readText()
         ).jsonObject
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
         fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
@@ -291,7 +293,7 @@ class BackupArchiveTest {
     @Test
     fun archiveNameFixtureCasesRoundTripThroughARealArchive() {
         val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
-            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+            repoFile("shared/fixtures/archive-names-v1.json").readText()
         ).jsonObject
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
         fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
@@ -316,9 +318,8 @@ class BackupArchiveTest {
 
     @Test
     fun theIosCopyOfTheArchiveNamesFixtureMatches() {
-        val iosCopy = repoFileOrNull("Writers Block/Writers BlockTests/archive-names-v1.json")
-        org.junit.Assume.assumeTrue("iOS copy of archive-names-v1.json is not in this checkout yet; drift check skipped.", iosCopy != null)
-        assertContentEquals(requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readBytes(), iosCopy!!.readBytes())
+        val iosCopy = repoFile("Writers Block/Writers BlockTests/archive-names-v1.json")
+        assertContentEquals(repoFile("shared/fixtures/archive-names-v1.json").readBytes(), iosCopy.readBytes())
     }
     @Test
     fun importKeepsAndReportsAnArchiveSongWhoseRepairedTimeLosesToATombstoneHere() = runBlocking<Unit> {

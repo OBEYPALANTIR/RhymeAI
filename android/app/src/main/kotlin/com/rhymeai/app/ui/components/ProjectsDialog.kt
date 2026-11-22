@@ -121,6 +121,7 @@ import com.rhymeai.app.data.model.TrashedOneLiner
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
@@ -138,7 +139,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 
 private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
 private val DrawerDismissMillis: Int get() = DesignTokens.Motion.dismissMillis
@@ -171,7 +171,6 @@ fun ProjectsDrawer(
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     val drawerTransition = remember { MutableTransitionState(false).apply { targetState = true } }
@@ -239,7 +238,7 @@ fun ProjectsDrawer(
                     context.contentResolver.openInputStream(uri)?.use(::readProjectText)
                         ?: throw Exception("Cannot read file")
                 }
-                val project = importJson.decodeFromString(SongProject.serializer(), text)
+                val project = LyricsExporter.parseJson(text)
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
