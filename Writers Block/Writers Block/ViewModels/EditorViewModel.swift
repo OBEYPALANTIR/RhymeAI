@@ -461,7 +461,12 @@ final class EditorViewModel: ObservableObject {
     var showInspector: Bool { inspectorWord != nil }
 
     var singleWordSelection: (word: String, range: NSRange)? {
-        let range = selectedRange
+        Self.singleWord(in: lyrics, range: selectedRange)
+    }
+
+    /// The text in `range` when it is one word: two or more letters or
+    /// apostrophes. The Word Inspector looks up only such a range.
+    static func singleWord(in lyrics: String, range: NSRange) -> (word: String, range: NSRange)? {
         guard range.length > 0 else { return nil }
         let ns = lyrics as NSString
         guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
@@ -491,7 +496,33 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Project Management
 
-    @Published var currentProjectId: String?
+    @Published var currentProjectId: String? {
+        // Every other way the editor's song changes leaves it not loaded from a known row.
+        didSet { loadedProjectRow = nil }
+    }
+    /// The stored row whose words the editor holds (loaded, created or last saved to), so two
+    /// rows sharing one song id (a restore on two devices, then sync) are told apart.
+    /// Read by the Mac sidebar.
+    @Published private(set) var loadedProjectRow: PersistentIdentifier?
+
+    /// The editor now holds this stored row's words.
+    /// Assigns only what changed, so a save that keeps the same row publishes nothing.
+    private func bindEditor(to project: SongProject) {
+        if currentProjectId != project.id { currentProjectId = project.id }
+        if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
+        loadedProjectWords = OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+    }
+    /// The bound row's words when it was bound, to tell edits apart once that row is gone.
+    private var loadedProjectWords: OpenDraft?
+
+    /// The stored row the open song's words belong to: the bound one; else the first with the
+    /// song's id when none is bound, or when `adoptingAnother` (a restore reconcile, which reads
+    /// that row's words before claiming it). With unique ids and the row in place, the one row.
+    private func storedProject(id: String, in context: ModelContext, adoptingAnother: Bool = true) throws -> SongProject? {
+        let rows = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+        if let bound = rows.first(where: { $0.persistentModelID == loadedProjectRow }) { return bound }
+        return loadedProjectRow == nil || adoptingAnother ? rows.first : nil
+    }
     @Published var saveStatus: SaveStatus = .idle
 
     /// One song opened or started in the editor. `newProject` and `loadProject`
@@ -559,6 +590,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var recordingListsSuspended = false
     /// The launch check of the recordings, awaited by tests.
     private(set) var recordingsLaunchTask: Task<Void, Never>?
+    /// Launch checks of the recordings still running (a context set twice starts
+    /// two): expiry asked for meanwhile is left to them, which run it once one succeeds.
+    private var recordingsLaunchChecksRunning = 0
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -606,14 +640,24 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
+                recordingsLaunchChecksRunning += 1
+                // Each check acts only on the context it started with: one replaced
+                // meanwhile leaves deletions and expiry to the check of its successor.
+                let checkedContext = modelContext
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
                     // anything a row or the staging journal claims stays (T1.7).
-                    if let library = self.recordingLibrary, let context = self.modelContext {
-                        await library.withGate { library.clearStaging(context: context) }
+                    if let library = self.recordingLibrary, let context = checkedContext, self.modelContext === context {
+                        await library.withGate {
+                            // Again once the gate is held: a context set while this waited claims staging this one cannot see.
+                            if self.modelContext === context { library.clearStaging(context: context) }
+                        }
                     }
-                    guard await self.reconcileRecordings() else { return }
+                    var checked = false
+                    if self.modelContext === checkedContext { checked = await self.reconcileRecordings() }
+                    self.recordingsLaunchChecksRunning -= 1
+                    guard checked, self.modelContext === checkedContext else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
                     await self.voiceMemoService.retryPendingTakes()
@@ -643,6 +687,8 @@ final class EditorViewModel: ObservableObject {
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
+    /// The song that was open when `autoSaveTask` was scheduled.
+    private var autoSaveProjectId: String?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
 
@@ -1681,7 +1727,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = 0
-        currentProjectId = project.id
+        bindEditor(to: project)
         editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
@@ -1705,9 +1751,9 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
+        // The flush cancels the open song's pending autosave; trashing another song leaves it running.
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
-        autoSaveTask?.cancel()
 
         let trashedProject = TrashedSongProject(project: project)
         removeExistingTrashEntries(id: project.id, in: context)
@@ -1788,6 +1834,10 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return }
         // One liners hold no song recordings, so they expire before the recordings check.
         try? OneLinersStore(context: context).purgeExpired()
+        // Housekeeping asked for before the launch check ran (scene activation, the
+        // Trash timer) is left to that check, which expires once it succeeds; it is
+        // not reported as a refused deletion the user never asked for.
+        guard recordingsLaunchChecksRunning == 0 else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -2201,7 +2251,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         suggestions = []
         errorMessage = nil
         saveStatus = .saved
@@ -2243,7 +2293,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         resetCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -2252,6 +2302,8 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation()
+        // A different song is on screen, as after loadProject.
+        editorOpen = EditorOpen(isNewSong: false)
         return true
     }
 
@@ -2274,11 +2326,12 @@ final class EditorViewModel: ObservableObject {
         showTemplatesSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation(isUnsaved: true)
+        editorOpen = EditorOpen(isNewSong: false)
         triggerAutoSave()
     }
 
     func goToStartMenu() {
-        guard flushCurrentDraft(checkpoint: true) else { return }
+        guard flushCurrentDraft(checkpoint: true) || openRowVanishedUnedited() else { return }
         showWelcome = true
     }
 
@@ -2301,7 +2354,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't create a song for this recording."
             return nil
         }
-        currentProjectId = project.id
+        bindEditor(to: project)
         showWelcome = false
         return project.id
     }
@@ -2318,9 +2371,13 @@ final class EditorViewModel: ObservableObject {
             return
         }
         let projectIdAtTrigger = currentProjectId
+        autoSaveProjectId = projectIdAtTrigger
         autoSaveTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            // A cancelled task leaves every state alone, even one cancelled before it first ran.
+            guard let self, !Task.isCancelled else { return }
+            // Finished: no autosave is pending. A replaced or stopped task was cancelled and leaves it.
+            defer { if !Task.isCancelled { autoSaveTask = nil } }
+            guard !emptiedDraftNeedsNoSave else {
                 saveStatus = .idle
                 return
             }
@@ -2328,17 +2385,58 @@ final class EditorViewModel: ObservableObject {
 
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-
-            // The editor switched projects (or cleared) during the debounce —
-            // saving now would write into the wrong project or create an empty one.
-            guard currentProjectId == projectIdAtTrigger,
-                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
-                saveStatus = .idle
-                return
-            }
-
-            _ = persistCurrentDraft(checkpoint: false)
+            runAutoSave(projectIdAtTrigger: projectIdAtTrigger)
         }
+    }
+
+    /// The autosave once its wait is over; Mac close and quit run it early.
+    /// False when the write was refused.
+    @discardableResult
+    private func runAutoSave(projectIdAtTrigger: String?) -> Bool {
+        // The editor switched projects (or cleared) during the debounce —
+        // saving now would write into the wrong project or create an empty one.
+        guard currentProjectId == projectIdAtTrigger, !emptiedDraftNeedsNoSave else {
+            saveStatus = .idle
+            return true
+        }
+        return persistCurrentDraft(checkpoint: false)
+    }
+
+    /// An emptied editor has nothing to save, unless it holds a stored song whose row a lookup
+    /// does not find: erasing that song is a refused edit, which Close and Quit must see.
+    private var emptiedDraftNeedsNoSave: Bool {
+        guard title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
+        guard let id = currentProjectId, let context = modelContext else { return true }
+        return (try? storedProject(id: id, in: context, adoptingAnother: false)) != nil
+    }
+
+    /// Leaving the editor (Open, New, import, template, Start Menu) without writing: its bound
+    /// row is confirmed gone and it holds that row's words unchanged, so there is nothing to keep.
+    /// A failed lookup proves nothing. Saves also read it, only to report such a refusal as idle.
+    private func openRowVanishedUnedited() -> Bool {
+        guard activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
+              let words = loadedProjectWords, let context = modelContext,
+              let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
+              !rows.contains(where: { $0.persistentModelID == row }) else { return false }
+        let title = words.title.isEmpty ? Self.untitledProjectTitle : words.title
+        return OpenDraft(title: title, lyrics: words.lyrics, theme: words.theme) == openDraft
+    }
+
+    /// A backup or restore holds the library; saves wait for it to finish and the
+    /// open song's edits go to its recovery copy meanwhile.
+    var cloudOperationHoldsEditor: Bool { activeCloudEditorOperation != nil }
+
+    /// Closing the Mac window and quitting: the waiting autosave fires now. With none
+    /// waiting nothing is written, and a failed last save is reported, not retried.
+    /// False when the open song's edits are not saved.
+    func savePendingEdit() -> Bool {
+        if let task = autoSaveTask, !task.isCancelled {
+            task.cancel()
+            autoSaveTask = nil
+            runAutoSave(projectIdAtTrigger: autoSaveProjectId)
+        }
+        // A refused edit is .failed; a vanished row with nothing edited is not.
+        return saveStatus != .failed
     }
 
     @discardableResult
@@ -2359,11 +2457,17 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         var createdProjectID: String?
+        let saved: SongProject
         do {
             if let id = currentProjectId {
-                let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-                guard let project = try context.fetch(descriptor).first else {
-                    saveStatus = .idle
+                // A save never writes over another row that took the open one's song id.
+                guard let project = try storedProject(id: id, in: context, adoptingAnother: false) else {
+                    // The open row is gone: nothing is saved. Unedited, nothing has failed either.
+                    if openRowVanishedUnedited() {
+                        saveStatus = .idle
+                        return false
+                    }
+                    saveStatus = .failed
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
                 }
@@ -2374,14 +2478,17 @@ final class EditorViewModel: ObservableObject {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
+                saved = project
             } else {
                 let project = makeUntitledSongProject()
                 try copyRecordings(of: pendingRecordingRecovery, to: project.id)
                 context.insert(project)
                 createdProjectID = project.id
+                saved = project
             }
             try saveModelContext(context)
-            if let createdProjectID { currentProjectId = createdProjectID }
+            // After the save, so a new row's identity is its stored one.
+            bindEditor(to: saved)
             if createdProjectID != nil {
                 discardSnapshot(pendingRecordingRecovery)
                 pendingRecordingRecovery = nil
@@ -3021,6 +3128,14 @@ final class EditorViewModel: ObservableObject {
         scheduleAutomaticBackup()
     }
 
+    /// A backup file the file picker could not read or the save panel could not
+    /// write, shown in the backup status line. Cancelling the panel is not one.
+    func reportBackupFileFailure(_ message: String, _ error: Error) {
+        guard (error as? CocoaError)?.code != .userCancelled else { return }
+        cloudBackupLastResultIsError = true
+        cloudBackupStatusText = message
+    }
+
     /// The "Export all songs" zip, after saving the open song.
     func exportAllSongs() -> (fileName: String, data: Data)? {
         guard let backupService, let context = modelContext, !cloudBackupIsWorking, flushCurrentDraft() else {
@@ -3216,8 +3331,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func storedDraft(id: String, in context: ModelContext) throws -> (SongProject, OpenDraft)? {
-        let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-        guard let project = try context.fetch(descriptor).first else { return nil }
+        guard let project = try storedProject(id: id, in: context) else { return nil }
         return (project, OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme))
     }
 
@@ -3267,7 +3381,9 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func preserveOutgoingDraftBeforeNavigation(checkpoint: Bool = false) -> Bool {
-        guard let operation = activeCloudEditorOperation else { return flushCurrentDraft(checkpoint: checkpoint) }
+        guard let operation = activeCloudEditorOperation else {
+            return flushCurrentDraft(checkpoint: checkpoint) || openRowVanishedUnedited()
+        }
         autoSaveTask?.cancel()
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
@@ -3630,24 +3746,31 @@ final class EditorViewModel: ObservableObject {
         autoSaveTask?.cancel()
         let draft = openDraft
         let edited = operation.currentHadPendingEdit || draft != operation.currentBaseline
+        // The row the editor held, before the lookup can fall back to another under its song id.
+        let boundRow = loadedProjectRow
 
         do {
             guard operation.recordingProjectId == currentProjectId else {
                 throw CocoaError(.fileReadUnknown)
             }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            // Edits go into the row they were made on; if that one is gone they are recovered separately.
+            let originalKept = boundRow != nil && stored?.0.persistentModelID == boundRow
+            // Every branch below leaves the editor with this row's words, or a new row's.
+            if let stored { bindEditor(to: stored.0) }
             if edited {
-                if stored?.1 == draft {
+                if originalKept, stored?.1 == draft {
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
                     return operation.savedSeparateOutgoingDraft
                 }
-                if let stored, stored.1 == operation.currentBaseline {
+                if originalKept, let stored, stored.1 == operation.currentBaseline {
                     stored.0.title = draft.title
                     stored.0.lyrics = draft.lyrics
                     stored.0.theme = draft.theme
                     stored.0.updatedAt = Date()
                     stored.0.precedenceRepaired = false
                     try saveModelContext(context)
+                    bindEditor(to: stored.0)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
@@ -3664,7 +3787,7 @@ final class EditorViewModel: ObservableObject {
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()
-                currentProjectId = recovered.id
+                bindEditor(to: recovered)
                 saveStatus = .saved
                 showWelcome = false
                 return true

@@ -1,3 +1,5 @@
+// UIKit editor tests; the macOS editor has none yet.
+#if canImport(UIKit)
 import Testing
 import UIKit
 @testable import Writers_Block
@@ -14,3 +16,4 @@ struct LyricsDynamicTypeTests {
         #expect(accessibilityFont.pointSize > standardFont.pointSize)
     }
 }
+#endif

@@ -8,6 +8,28 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// Settings row metrics: the iOS sheet's touch sizes, or the Mac's standard
+/// preference rows (13pt text, tight rows, controls at their own height).
+enum SettingsMetrics {
+    #if os(macOS)
+    static let rowFont: Font = .body
+    // 28pt controls + 4pt = a 32pt row pitch.
+    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.xxs
+    static let buttonLabelMinHeight: CGFloat? = nil
+    // The Mac shell's small radii: cards like a grouped Form, fields like text fields.
+    static let groupRadius: CGFloat = RhymeAITokens.Radius.sm
+    static let fieldRadius: CGFloat = RhymeAITokens.Radius.xs
+    static let chipRadius: CGFloat = RhymeAITokens.Radius.xs
+    #else
+    static let rowFont: Font = .subheadline
+    static let rowSpacing: CGFloat = RhymeAITokens.Spacing.md
+    static let buttonLabelMinHeight: CGFloat? = RhymeAITokens.Touch.minimum
+    static let groupRadius: CGFloat = RhymeAITokens.Radius.xl
+    static let fieldRadius: CGFloat = RhymeAITokens.Radius.lg
+    static let chipRadius: CGFloat = RhymeAITokens.Radius.md
+    #endif
+}
+
 struct SettingsTabPicker: View {
     @Binding var selection: SettingsTab
 
@@ -35,6 +57,24 @@ struct RhymeSegmentedControl<Option: Hashable>: View {
     let title: (Option) -> String
 
     var body: some View {
+        #if os(macOS)
+        // The Mac's own segmented control, at the standard size.
+        Picker(label, selection: $selection) {
+            ForEach(options, id: \.self) { option in
+                Text(title(option)).tag(option)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityIdentifier(accessibilityIdentifier)
+        #else
+        iOSBody
+        #endif
+    }
+
+    @ViewBuilder
+    private var iOSBody: some View {
         // More than two options cannot share a row at accessibility sizes
         // without truncating ("Gemi…", "Ope…", "Clau…"), so they stack.
         let stacked = dynamicTypeSize.isAccessibilitySize && options.count > 2
@@ -129,7 +169,7 @@ struct SettingsSaveBar: View {
             .font(.headline)
             .foregroundStyle(appearance.palette.onAction)
             .frame(maxWidth: .infinity, minHeight: RhymeAITokens.Touch.minimum)
-            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+            .appearanceActionSurface(cornerRadius: SettingsMetrics.fieldRadius)
             .opacity(saved || hasChanges ? 1 : 0.45)
         }
         .buttonStyle(.rhymePress)
@@ -140,6 +180,12 @@ struct SettingsSaveBar: View {
 }
 
 struct SettingsLocalModelSection: View {
+    #if os(macOS)
+    private static let onDeviceGlyph = "desktopcomputer"
+    #else
+    private static let onDeviceGlyph = "iphone.gen3.radiowaves.left.and.right"
+    #endif
+
     @EnvironmentObject private var viewModel: EditorViewModel
     @State private var customModelImporterPresented = false
     @State private var customImportError: String?
@@ -231,7 +277,7 @@ struct SettingsLocalModelSection: View {
                     }
                 } label: {
                     Label(model.displayName, systemImage: ggufDownloadManager.selectedModelFileName == model.fileName ? "checkmark.circle.fill" : "externaldrive")
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                 }
                 .accessibilityIdentifier("customGGUF.\(model.id)")
             }
@@ -239,7 +285,7 @@ struct SettingsLocalModelSection: View {
                 customModelImporterPresented = true
             } label: {
                 Label("Import GGUF Model", systemImage: "square.and.arrow.down")
-                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                     .contentShape(Rectangle())
             }
             .accessibilityIdentifier("importCustomGGUFModel")
@@ -267,7 +313,7 @@ struct SettingsLocalModelSection: View {
 
     private var localStatusRow: some View {
         HStack(alignment: .top, spacing: RhymeAITokens.Spacing.md) {
-            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+            Image(systemName: Self.onDeviceGlyph)
                 .font(.title2)
                 .foregroundStyle(appearance.palette.action)
                 .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
@@ -286,7 +332,7 @@ struct SettingsLocalModelSection: View {
             Spacer(minLength: 0)
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private var enginePickerRow: some View {
@@ -308,7 +354,7 @@ struct SettingsLocalModelSection: View {
             )
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .teal.opacity(0.08), fallbackOpacity: 0.06)
     }
 
     private func gemmaDownloadRow(_ option: GGUFDownloadOption) -> some View {
@@ -368,7 +414,7 @@ struct SettingsLocalModelSection: View {
                         .fixedSize()
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
                         .padding(.vertical, 7)
-                        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
+                        .liquidGlassSurface(cornerRadius: SettingsMetrics.chipRadius, tint: .white.opacity(0.05), fallbackOpacity: 0.07)
                 }
 
                 if isDownloading {
@@ -381,7 +427,7 @@ struct SettingsLocalModelSection: View {
             // Room for the overlaid Delete control (44pt tall over the 16pt padding).
             .padding(.bottom, isOnDisk ? RhymeAITokens.Touch.minimum - RhymeAITokens.Spacing.md : 0)
             .padding(RhymeAITokens.Spacing.md)
-            .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
+            .liquidGlassSurface(cornerRadius: SettingsMetrics.fieldRadius, tint: .teal.opacity(0.08), interactive: !isSelected, fallbackOpacity: 0.05)
         }
         .buttonStyle(.rhymePress)
         .disabled(ggufDownloadManager.isRestoringDownloads || ggufDownloadManager.isPausing ||
@@ -399,7 +445,7 @@ struct SettingsLocalModelSection: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(appearance.palette.error)
                         .padding(.horizontal, RhymeAITokens.Spacing.sm)
-                        .frame(minHeight: RhymeAITokens.Touch.minimum)
+                        .frame(minHeight: SettingsMetrics.buttonLabelMinHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.rhymePress)
@@ -428,7 +474,7 @@ struct SettingsEditorSection: View {
     @AppStorage(DominantHand.storageKey) private var dominantHandRawValue = DominantHand.right.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.md) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.rowSpacing) {
             SettingsSectionTitle("Editor", systemImage: "textformat")
 
             settingsToggleRow("Whole Song Context", help: .wholeSongContext, isOn: binding(viewModel.useWholeSongContext, setter: viewModel.saveUseWholeSongContext))
@@ -438,10 +484,12 @@ struct SettingsEditorSection: View {
             settingsToggleRow("Color Rhymes", help: .colorRhymes, isOn: binding(viewModel.isRhymeHighlightEnabled, setter: viewModel.saveIsRhymeHighlightEnabled))
             settingsToggleRow("Beat Grid", help: .beatGrid, isOn: binding(viewModel.isBeatGridEnabled, setter: viewModel.saveIsBeatGridEnabled))
 
+            #if !os(macOS)
             // Puts UnBlock + mic and the One Liners Record + Type on this side.
+            // The Mac has no floating clusters, so the setting is iOS-only.
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xs) {
                 Text("Dominant hand")
-                    .font(.subheadline)
+                    .font(SettingsMetrics.rowFont)
                 RhymeSegmentedControl(
                     options: DominantHand.allCases,
                     selection: Binding(
@@ -453,9 +501,10 @@ struct SettingsEditorSection: View {
                     title: \.displayName
                 )
             }
+            #endif
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .indigo.opacity(0.06), fallbackOpacity: 0.06)
         .accessibilityIdentifier("editorSettingsSection")
     }
 
@@ -467,7 +516,7 @@ struct SettingsEditorSection: View {
         HStack {
             HStack(spacing: RhymeAITokens.Spacing.xs) {
                 Text(text)
-                    .font(.subheadline)
+                    .font(SettingsMetrics.rowFont)
                 Button {
                     activeHelp = help
                 } label: {
@@ -545,7 +594,7 @@ struct SettingsCloudBackupSection: View {
             .clipped()
         }
         .padding(RhymeAITokens.Spacing.md)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.xl, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
+        .liquidGlassSurface(cornerRadius: SettingsMetrics.groupRadius, tint: .cyan.opacity(0.08), fallbackOpacity: 0.06)
         .alert("Migrate older encrypted backup", isPresented: $migratePromptShown) {
             SecureField("Backup passphrase", text: $migratePassphrase)
                 .accessibilityIdentifier("migratePassphrase")
@@ -574,10 +623,16 @@ struct SettingsCloudBackupSection: View {
             EarlierBackupsSheet()
         }
         .fileImporter(isPresented: $importerShown, allowedContentTypes: [.zip, .json], allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else { return }
+            let data: Data
+            do {
+                guard let url = try result.get().first else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                data = try Data(contentsOf: url)
+            } catch {
+                viewModel.reportBackupFileFailure("Import failed: couldn't read the chosen file.", error)
+                return
+            }
             Task { await viewModel.importBackupFile(data) }
         }
         .fileExporter(
@@ -585,13 +640,23 @@ struct SettingsCloudBackupSection: View {
             document: pendingExport?.document,
             contentType: .zip,
             defaultFilename: pendingExport?.fileName
-        ) { _ in
+        ) { result in
             pendingExport = nil
+            if case .failure(let error) = result {
+                viewModel.reportBackupFileFailure("Export failed: the file couldn't be saved.", error)
+            }
         }
     }
 
+    // The Mac keeps its 32pt preference-row pitch; iOS keeps 12pt between touch rows.
+    #if os(macOS)
+    private static let backupRowSpacing = SettingsMetrics.rowSpacing
+    #else
+    private static let backupRowSpacing = RhymeAITokens.Spacing.sm
+    #endif
+
     private var backupControls: some View {
-        VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Self.backupRowSpacing) {
             if case .failed = viewModel.backupStatus {
                 row("Retry", systemImage: "arrow.clockwise", id: "backupRetry", enabled: viewModel.canRunCloudBackup) {
                     Task { await viewModel.backUpNow() }
@@ -813,6 +878,12 @@ struct SettingsCloudBackupSection: View {
         }
     }
 
+    #if canImport(UIKit)
+    private static let iCloudSettingsURLString = UIApplication.openSettingsURLString
+    #else
+    private static let iCloudSettingsURLString = "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane"
+    #endif
+
     @ViewBuilder
     private var cloudSyncStatusRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: RhymeAITokens.Spacing.xs) {
@@ -822,7 +893,7 @@ struct SettingsCloudBackupSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("iCloudSyncStatus")
             if persistenceState.cloudSyncStatus == .noAccount,
-               let settings = URL(string: UIApplication.openSettingsURLString) {
+               let settings = URL(string: Self.iCloudSettingsURLString) {
                 Button("Open Settings") { openURL(settings) }
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("iCloudOpenSettings")

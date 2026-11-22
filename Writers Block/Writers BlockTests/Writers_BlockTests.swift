@@ -353,6 +353,30 @@ struct Writers_BlockTests {
         #expect(viewModel.errorMessage == "Existing editor error")
     }
 
+    @MainActor
+    @Test func settingsSavesOnlyTheKeysTheWriterChanged() {
+        // Gemini read as "" (a Keychain read failure) and was left alone; OpenAI was edited.
+        let stored = ["GEMINI": "", "OPENAI": "old", "CLAUDE": "kept"]
+        let editing = ["GEMINI": "", "OPENAI": "new", "CLAUDE": "kept"]
+
+        let changed = SettingsView.changedKeys(editing: editing, stored: stored)
+
+        #expect(changed.map(\.0) == [.openai])
+        #expect(changed.map(\.1) == ["new"])
+    }
+
+    @MainActor
+    @Test func backupFileFailuresShowInTheStatusLineUnlessCancelled() {
+        let viewModel = EditorViewModel()
+
+        viewModel.reportBackupFileFailure("Import failed: couldn't read the chosen file.", CocoaError(.userCancelled))
+        #expect(!viewModel.cloudBackupLastResultIsError)
+
+        viewModel.reportBackupFileFailure("Import failed: couldn't read the chosen file.", CocoaError(.fileReadNoPermission))
+        #expect(viewModel.cloudBackupLastResultIsError)
+        #expect(viewModel.cloudBackupStatusText == "Import failed: couldn't read the chosen file.")
+    }
+
     @Test func suggestionPromptShapesImmediateAndWholeSongContext() {
         let service = AIService()
         let immediatePrompt = service.buildPrompt(
