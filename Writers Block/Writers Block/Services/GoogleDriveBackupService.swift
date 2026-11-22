@@ -88,7 +88,7 @@ extension BackupError: LocalizedError {
         case .damagedRevision:
             return "This earlier backup is damaged and cannot be recovered."
         case .sameIdSongs(let id):
-            return "Two songs on this device share the id \(id); the backup was not merged."
+            return "Two songs on this device share the ID \(id). The merge into this device's song library was stopped."
         case .insufficientStorage(let needed):
             return "Not enough free space on this device to recover that backup: it needs about \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)). Free up space and try again."
         }

@@ -2521,7 +2521,7 @@ struct BackupCoreTests {
         harness.drive.seed(name: SyncBlob.driveFileName, content: try Self.incomingArchive())
 
         await #expect(throws: BackupError.sameIdSongs("pair")) { try await harness.service.restoreNow(modelContext: harness.context) }
-        #expect(harness.service.backgroundBackupFailureDescription == "Two songs on this device share the id pair; the backup was not merged.")
+        #expect(harness.service.backgroundBackupFailureDescription == "Two songs on this device share the ID pair. The merge into this device's song library was stopped.")
     }
 
     @MainActor
@@ -3271,7 +3271,7 @@ struct BackupCoreTests {
         await viewModel.importBackupFile(archive)
 
         #expect(viewModel.cloudBackupLastResultIsError)
-        #expect(viewModel.cloudBackupStatusText == "Import failed: Two songs on this device share the id pair; the backup was not merged.. Your open edits remain in the local library.")
+        #expect(viewModel.cloudBackupStatusText == "Import failed: Two songs on this device share the ID pair. The merge into this device's song library was stopped.. Your open edits remain in the local library.")
         // Pending in the editor's context, and durable in a fresh one.
         let held = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first { $0.id == repaired.id })
         #expect(held.uploadedAt == Date(timeIntervalSince1970: 9_000) && held.precedenceRepaired)
@@ -3305,7 +3305,7 @@ struct BackupCoreTests {
 
         await viewModel.restoreBackupNow()
 
-        let description = "Two songs on this device share the id pair; the backup was not merged."
+        let description = "Two songs on this device share the ID pair. The merge into this device's song library was stopped."
         #expect(viewModel.cloudBackupLastResultIsError)
         #expect(viewModel.cloudBackupStatusText == "Restore failed: \(description). Your open edits remain in the local library.")
         #expect(harness.service.backgroundBackupFailureDescription == description)
