@@ -16,13 +16,16 @@ struct MacWorkspaceView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
 
-    /// The narrowest the detail pane gets, so hiding the sidebar cannot squeeze a page
-    /// to nothing (One Liners alone went to 147pt). 440 is just under 447 (667 - 220), the
-    /// most the pane could have had at the window's 667pt minimum with the sidebar shown,
-    /// so that minimum is expected, not measured, to stay. Above 512 a song with the
-    /// sidebar and the Assistant no longer fits the default 1160pt window (as measured in
-    /// MacDetailSizeTests, whose harness gives the sidebar 288pt).
+    /// The narrowest a detail page gets, so a narrow window cannot squeeze it to nothing
+    /// (One Liners alone went to 147pt). Dragged in the real window with 440 on the page
+    /// itself: every page 440 and a song with the Assistant 800 with the sidebar hidden,
+    /// but 960 for One Liners and 1320 for a song with the Assistant with the 260pt
+    /// sidebar shown.
     static let detailMinWidth: CGFloat = 440
+    /// The detail column lies under the floating sidebar and insets its page by the
+    /// sidebar's width, and the split view adds the sidebar's width to that column's
+    /// minimum again, so the page's own floor leaves the inset out.
+    @State private var detailLeadingInset: CGFloat?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $workspace.sidebarVisibility) {
@@ -31,7 +34,8 @@ struct MacWorkspaceView: View {
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             detailPane
-                .frame(minWidth: Self.detailMinWidth, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: detailLeadingInset.map { max(0, Self.detailMinWidth - $0) }, maxWidth: .infinity, maxHeight: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading } action: { detailLeadingInset = $0 }
                 .background(appearance.palette.canvas)
                 .inspector(isPresented: assistantPresented) {
                     // No close button in the panel: the toolbar and View menu show and hide it.
