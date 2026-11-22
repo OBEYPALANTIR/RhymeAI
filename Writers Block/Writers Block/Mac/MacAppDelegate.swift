@@ -5,6 +5,13 @@ import AppKit
 /// lost silently: the writer chooses to try again, keep the app open, or quit.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     weak var viewModel: EditorViewModel?
+
+    #if DEBUG
+    // TEMPORARY: the focus and window-size trace, removed before the PR leaves draft.
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) { FocusTrace.start() }
+    #endif
+
     /// Quit was allowed: the window's close save stays quiet from here on.
     @MainActor static private(set) var isTerminating = false
 
