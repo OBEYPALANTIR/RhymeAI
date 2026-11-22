@@ -575,6 +575,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val savedTitle = title
                 val savedLyrics = lyrics
                 val savedTheme = theme
+                val savedAt = editRevision
                 var saved = false
                 suspend fun putBack() = withContext(kotlinx.coroutines.NonCancellable) {
                     // Only this insertion is undone, and only while it is the latest edit.
@@ -589,6 +590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
                         savedTitle, savedLyrics, savedTheme, ++saveAttempts
                     )
+                    markEditorSaved(savedAt)
                     saved = true
                 } catch (cancelled: CancellationException) {
                     putBack()
@@ -606,6 +608,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentProjectId == project.id) songs.firstOrNull { it.id == project.id }?.let {
                     lyricsFieldValue = TextFieldValue(it.lyrics)
                     resetLyricsHistory()
+                    markEditorSaved()
                 }
             }
             "Sent to “${project.title.ifEmpty { "Untitled Song" }}”"
@@ -637,10 +640,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun saveWorkspaceForActiveIdentity(id: String, workspace: SongWorkspace) {
         if (id in pendingProjectCreationIds) {
             val project = projects.firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
+            val savedAt = editRevision
             persistActiveProjectSnapshot(
                 project.copy(title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme),
                 title, lyrics, theme, ++saveAttempts
             )
+            markEditorSaved(savedAt)
         }
         repo.saveWorkspace(id, workspace)
     }
@@ -864,6 +869,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             completeDraftTransition()
             restoreEditorPosition()
             resetLyricsHistory()
+            markEditorSaved()
             openRevision++
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -2529,6 +2535,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     suggestions = emptyList()
                     showStartMenu = false
                     resetLyricsHistory()
+                    markEditorSaved() // an empty new song: nothing to save
                     openingSong = false
                     openRevision++
                     newSongOpenRevision = openRevision
@@ -2596,6 +2603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     suggestions = emptyList()
                     showStartMenu = false
                     resetLyricsHistory()
+                    markEditorSaved()
                     // Cleared in the same frame the new song lands, so the fade-in starts from there.
                     openingSong = false
                     openRevision++
@@ -2838,6 +2846,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         completeDraftTransition()
         saveStatus = SaveStatus.IDLE
         resetLyricsHistory()
+        markEditorSaved() // the song is gone: nothing to save
     }
 
     fun importProject(imported: SongProject, onReady: () -> Unit = {}) {
@@ -2870,9 +2879,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 resetLyricsHistory()
                 openRevision++
                 val attempt = ++saveAttempts
+                val savedAt = editRevision
                 viewModelScope.launch {
                     try {
                         persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme, attempt)
+                        markEditorSaved(savedAt)
                         onReady()
                     } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                         reconcileFailedProjectSave(project, error, attempt)
@@ -3037,10 +3048,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
+        val savedAt = editRevision
         val attempt = ++saveAttempts
         viewModelScope.launch {
             try {
                 persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt)
+                markEditorSaved(savedAt)
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                 reconcileFailedProjectSave(project, error, attempt)
             }
@@ -3061,8 +3074,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updatedAt = System.currentTimeMillis()
         )
         val attempt = ++saveAttempts
+        val savedAt = editRevision
         try {
             persistActiveProjectSnapshot(project, title, lyrics, theme, attempt)
+            markEditorSaved(savedAt)
         } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
             // The caller reports the recording; the open words are still unsaved.
             markFailedSave(project.id, attempt, SaveFailureRules.WriteFailure.WRITE_ERROR)
@@ -3240,9 +3255,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerAutoSave()
     }
 
-    /** The editor holds a newly loaded document: it starts with no edits of its own. */
     private fun resetLyricsHistory() {
-        markEditorSaved()
         cancelEditorAIWork()
         suggestionInsertion = null
         lyricsHistory.reset()

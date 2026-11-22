@@ -688,6 +688,61 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    private fun unrelatedArchive(): java.io.File = java.io.File(context.cacheDir, "unrelated-archive.zip").also { zip ->
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(SongProject("unrelated", "Unrelated", "other words", "", 100L))), emptyList(), 0L, "test"
+            )
+        }
+    }
+
+    /** A template is an edit until a save of it completes: a hold during its autosave's debounce saves it. */
+    @Test fun aTemplateAppliedJustBeforeAnImportIsSavedNotDropped() {
+        val vm = openSongInEditor()
+        val zip = unrelatedArchive()
+        try {
+            instrumentation.runOnMainSync { vm.applyTemplate("Verse", "", "template words") }
+            waitUntil({ "editor ${vm.lyrics}" }) { vm.lyrics == "template words" }
+            instrumentation.runOnMainSync {
+                assertTrue("precondition: the template's autosave has not written yet",
+                    runBlocking { repo.projectsFlow.first() }.none { it.lyrics == "template words" })
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil { !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            val template = runBlocking { repo.projectsFlow.first() }.single { it.lyrics == "template words" }
+            assertEquals(template.id to "template words", vm.currentProjectId to vm.lyrics)
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    /** A one-liner's own save leaves the editor clean: a later import never writes those words over another window's. */
+    @Test fun aSavedOneLinerIsNotWrittenAgainOverAnotherWindowsWordsByAnImport() {
+        val vm = openSongInEditor()
+        val zip = unrelatedArchive()
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        val sent = kotlinx.coroutines.CompletableDeferred<String>()
+        try {
+            instrumentation.runOnMainSync { vm.sendOneLinerToSong(line, storedOpenSong()) { sent.complete(it) } }
+            runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
+            assertTrue(storedOpenSong().lyrics.contains("a sent line"))
+            instrumentation.runOnMainSync {
+                runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()) else it }) }
+                vm.importBackup(android.net.Uri.fromFile(zip))
+            }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
+            waitUntil({ "held ${vm.editorHeld} editor ${vm.lyrics}" }) { !vm.editorHeld && vm.lyrics == newerWords }
+            assertEquals(newerWords, storedOpenSong().lyrics)
+        } finally {
+            zip.delete()
+            runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
+            resetOpenSong()
+        }
+    }
+
     /** Typed away and back to the loaded words is still an edit: the hold saves it and a replacing restore keeps it. */
     @Test fun wordsTypedBackToTheLoadedValueAreStillSavedAndKept() {
         assertHeldEditIsKept { vm ->
