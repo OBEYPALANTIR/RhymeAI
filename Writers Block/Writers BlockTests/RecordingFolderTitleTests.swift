@@ -1,3 +1,5 @@
+// The iOS recordings drawer's folder titles; ProjectsDrawerView is not in the Mac app.
+#if !os(macOS)
 import Foundation
 import SwiftData
 import Testing
@@ -50,3 +52,4 @@ struct RecordingFolderTitleTests {
         _ = container
     }
 }
+#endif

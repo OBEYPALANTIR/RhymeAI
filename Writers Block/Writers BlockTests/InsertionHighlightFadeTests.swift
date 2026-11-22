@@ -1,3 +1,5 @@
+// UIKit editor tests; the macOS editor has none yet.
+#if canImport(UIKit)
 import CoreGraphics
 import SwiftUI
 import Testing
@@ -124,3 +126,4 @@ struct InsertionHighlightFadeTests {
         #expect(view.rects.isEmpty)
     }
 }
+#endif

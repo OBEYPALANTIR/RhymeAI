@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Writers_Block
 
@@ -121,11 +123,16 @@ final class LocalGenerationRuntimeTests: XCTestCase {
 
         await AIService.unloadGGUFRunner()
         XCTAssertFalse(AIService.ggufRunner.isLoaded)
+        #if canImport(UIKit)
+        let (osVersion, device) = (UIDevice.current.systemVersion, UIDevice.current.model)
+        #else
+        let (osVersion, device) = (ProcessInfo.processInfo.operatingSystemVersionString, "Mac")
+        #endif
         let report: [String: Any] = [
             "sourceSha": sourceSHA,
             "modelSha256": descriptor.sha256,
-            "osVersion": UIDevice.current.systemVersion,
-            "device": UIDevice.current.model,
+            "osVersion": osVersion,
+            "device": device,
             "engine": GGUFModelService.engineVersion,
             "runs": records
         ]

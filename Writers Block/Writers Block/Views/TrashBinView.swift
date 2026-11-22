@@ -18,7 +18,13 @@ struct TrashBinView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) private var appearance
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if os(macOS)
+    /// The Mac window keeps the reading width of regular width.
+    private let isRegularWidth = true
+    #else
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    #endif
 
     var onDismiss: (() -> Void)? = nil
     /// The songs a Restore put back, so the drawer can confirm it.
@@ -178,7 +184,7 @@ struct TrashBinView: View {
 
             // Decorative on the compact layout only: on an iPad Pro 12.9 the
             // accessibility audit reads the hidden grid glyph as text ("88").
-            if horizontalSizeClass != .regular {
+            if !isRegularWidth {
                 Image(systemName: "square.grid.2x2")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(appearance.palette.secondaryInk)
@@ -542,7 +548,7 @@ struct TrashBinView: View {
 
     /// On regular width the screen keeps the editor's 740pt column, centred.
     private var contentMaxWidth: CGFloat {
-        horizontalSizeClass == .regular ? RhymeAITokens.Layout.editorMaxWidth : .infinity
+        isRegularWidth ? RhymeAITokens.Layout.editorMaxWidth : .infinity
     }
 
     private func restoreSelected() {

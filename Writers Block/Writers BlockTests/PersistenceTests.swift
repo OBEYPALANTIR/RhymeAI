@@ -36,6 +36,19 @@ struct PersistenceTests {
         #expect(viewModel.theme == imported.theme)
         #expect(viewModel.cursorPosition == imported.lyrics.count)
         #expect(viewModel.saveStatus == .saved)
+        // The editor holds the saved row itself, not just its song id.
+        #expect(viewModel.loadedProjectRow == imported.persistentModelID)
+    }
+
+    @MainActor
+    @Test func aFirstRecordingsNewSongIsTheStoredRowTheEditorHolds() throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+
+        let id = try #require(viewModel.ensureProjectForRecording())
+
+        let created = try #require(try Self.fetchProjects(harness.context).first { $0.id == id })
+        #expect(viewModel.loadedProjectRow == created.persistentModelID)
     }
 
     @MainActor
@@ -655,5 +668,131 @@ struct PersistenceTests {
             backgroundCalls += 1
             if backgroundCalls == 1 { duringBackground?() }
         }
+    }
+}
+
+/// Closing the Mac window and quitting run a pending autosave now; with none pending
+/// nothing is written, so a change that reached the library meanwhile is never overwritten.
+@MainActor
+struct PendingEditSaveTests {
+    private static func library() throws -> (EditorViewModel, ModelContainer) {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let viewModel = EditorViewModel()
+        viewModel.modelContext = container.mainContext
+        return (viewModel, container)
+    }
+
+    private static func openSong() throws -> (EditorViewModel, SongProject, ModelContainer) {
+        let (viewModel, container) = try library()
+        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        return (viewModel, song, container)
+    }
+
+    private static func songs(_ container: ModelContainer) throws -> [SongProject] {
+        try container.mainContext.fetch(FetchDescriptor<SongProject>())
+    }
+
+    @Test func aNewerStoredSongIsNotOverwrittenOnceTheAutosaveHasRun() async throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+        await viewModel.waitForPendingAutoSaveForTesting()
+        #expect(song.lyrics == "ropes and tide")
+        let synced = Date(timeIntervalSince1970: 5_000_000_000)
+        song.lyrics = "ropes, tide and a synced line"
+        song.updatedAt = synced
+        try container.mainContext.save()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(song.lyrics == "ropes, tide and a synced line")
+        #expect(song.updatedAt == synced)
+    }
+
+    @Test func aPendingEditIsWrittenNow() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(song.lyrics == "ropes and tide")
+    }
+
+    @Test func aNewSongGivenOnlyATitleIsCreated() throws {
+        let (viewModel, container) = try Self.library()
+        viewModel.newProject()
+        viewModel.title = "Paper Moon"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(try Self.songs(container).map(\.title) == ["Paper Moon"])
+    }
+
+    @Test func wordsTypedAfterTrashingTheOpenSongAreSaved() throws {
+        let (viewModel, _, container) = try Self.openSong()
+        #expect(viewModel.moveProjectToTrash(try #require(Self.songs(container).first)))
+        viewModel.lyrics = "a fresh start"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(try Self.songs(container).map(\.lyrics) == ["a fresh start"])
+    }
+
+    @Test func aSaveThatCannotWriteReturnsFalse() throws {
+        let (viewModel, _, container) = try Self.openSong()
+        _ = container
+        viewModel.modelContext = nil
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+
+        #expect(!viewModel.savePendingEdit())
+        #expect(!viewModel.savePendingEdit(), "a failed save is still reported")
+    }
+
+    @Test func theLoadedRowIsKnownUntilANewSong() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        #expect(viewModel.loadedProjectRow == song.persistentModelID)
+
+        viewModel.newProject()
+
+        #expect(viewModel.loadedProjectRow == nil)
+    }
+
+    @Test func anAutosaveScheduledForTheSongBeforeIsNotWrittenIntoTheOpenOne() throws {
+        let (viewModel, _, container) = try Self.openSong()
+        let other = SongProject(id: "b", title: "Paper Moon", lyrics: "old line", theme: "night")
+        container.mainContext.insert(other)
+        try container.mainContext.save()
+        // Loading sets the theme while the first song is still current, which schedules an autosave for it.
+        viewModel.loadProject(other)
+        other.lyrics = "a synced line"
+        try container.mainContext.save()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(other.lyrics == "a synced line")
+    }
+
+    @Test func aFailedSaveWithNothingWaitingIsReportedNotWritten() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.modelContext = nil
+        #expect(!viewModel.flushCurrentDraft())
+        viewModel.modelContext = container.mainContext
+        song.lyrics = "ropes and a synced line"
+        try container.mainContext.save()
+
+        #expect(!viewModel.savePendingEdit())
+
+        #expect(song.lyrics == "ropes and a synced line")
     }
 }

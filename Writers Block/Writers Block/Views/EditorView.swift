@@ -1,6 +1,10 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
 func compactEditorStatsText(wordCount: Int, syllableCount: Int) -> String {
@@ -92,6 +96,23 @@ enum EditorViewConstants {
     }
 }
 
+#if !os(macOS)
+/// A menu bar action run by the focused editor window. Equal per editor, so
+/// the closure is not re-published on every update.
+struct EditorMenuAction: Equatable {
+    let editorID: UUID
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.editorID == rhs.editorID }
+}
+
+extension FocusedValues {
+    /// The menu bar's Song › UnBlock for the focused editor window.
+    @Entry var unblockAction: EditorMenuAction?
+}
+
+#endif
+
 /// The tablet assistant's two places: the writer's show/hide choice for the
 /// inline column, and the bottom panel used below the side-column width.
 struct TabletAssistantVisibility: Equatable {
@@ -104,6 +125,8 @@ struct TabletAssistantVisibility: Equatable {
     }
 }
 
+// The iPhone and iPad editor. The Mac window is `MacWorkspaceView`.
+#if !os(macOS)
 struct EditorView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     @Environment(\.modelContext) private var modelContext
@@ -118,14 +141,7 @@ struct EditorView: View {
     @State private var assistantSheetDragOffset: CGFloat = EditorViewConstants.AssistantSheet.restingOffset
     @State private var assistantSheetIsDismissing = false
     @State private var assistantSheetLifecycleTask: Task<Void, Never>?
-    @State private var recordingSong: RecordingSong?
-    private struct RecordingSong: Identifiable {
-        let id: String
-        let title: String
-    }
-
-    @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
-    @State private var fileExporterPresented: Bool = false
+    @State private var recordingSong: SongRecordingTarget?
     @State private var projectDrawerOpen: Bool = false
     @State private var lyricsEditorIsFocused = false
     /// The song open whose title field holds focus. Keyed by the open token
@@ -145,6 +161,7 @@ struct EditorView: View {
     @Environment(\.layoutDirection) private var layoutDirection
     @State private var inlineAssistantVisible = true
     @State private var isFocusMode = false
+    @State private var menuActionID = UUID()
     /// Starts unbounded so a full-screen iPad never flashes the single column.
     @State private var windowWidth: CGFloat = .infinity
 
@@ -159,6 +176,7 @@ struct EditorView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { windowWidth = $0 }
+        .focusedSceneValue(\.unblockAction, EditorMenuAction(editorID: menuActionID, perform: showAssistantAndGetSuggestions))
         .onChange(of: usesSideColumns, initial: true) { _, sideColumns in
             guard sideColumns else { return }
             // The sheet belongs to the single-column width. Drop a pending
@@ -188,18 +206,6 @@ struct EditorView: View {
             if viewModel.showAssistantSheet {
                 assistantSheetDragOffset = EditorViewConstants.AssistantSheet.restingOffset
             }
-        }
-        .task(id: viewModel.insertionFeedbackID) {
-            guard viewModel.insertionFeedbackID != nil else { return }
-            try? await Task.sleep(for: .seconds(EditorViewConstants.InsertionHighlight.holdDuration))
-            guard !Task.isCancelled else { return }
-            // The mark fades on the settle tier like ink drying; Reduce Motion clears it in one frame.
-            withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
-                viewModel.clearInsertionHighlight()
-            }
-            try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 28 : 6))
-            guard !Task.isCancelled else { return }
-            viewModel.clearInsertionFeedback()
         }
         .onChange(of: viewModel.voiceMemoService.isRecording) { _, isRecording in
             let chrome = EditorViewConstants.UnBlockChrome.self
@@ -233,111 +239,15 @@ struct EditorView: View {
                 }
             }
         }
-        .alert(item: $viewModel.cloudAISharingRequest) { request in
-            Alert(
-                title: Text("Share with \(request.provider.displayName)?"),
-                message: Text("Before continuing, review the sharing details. \(viewModel.cloudAISharingDisclosure) You can revoke permission in Settings."),
-                primaryButton: .default(Text("Allow and Continue")) {
-                    viewModel.approveCloudAISharing(request)
-                },
-                secondaryButton: .cancel {
-                    viewModel.cancelCloudAISharing()
-                }
-            )
-        }
-        .sheet(
-            isPresented: $viewModel.showExportSheet,
-            onDismiss: {
-                if pendingExport != nil { fileExporterPresented = true }
-            }
-        ) {
-            ExportSheet(
-                onPick: { format in
-                    let project = viewModel.snapshotForExport()
-                    do {
-                        let data = try LyricsExporter.data(for: project, format: format)
-                        pendingExport = (format, ExportDocument(data: data))
-                    } catch {
-                        viewModel.errorMessage = "Export failed: \(error.localizedDescription)"
-                        pendingExport = nil
-                    }
-                    viewModel.showExportSheet = false
-                },
-                onDismiss: { viewModel.showExportSheet = false }
-            )
-        }
-        .sheet(isPresented: $viewModel.showNotebook) {
-            SongNotebookView()
-        }
-        .sheet(item: $recordingSong) { song in
-            SongRecordingsView(projectId: song.id, projectTitle: song.title)
-        }
-        .fileExporter(
-            isPresented: $fileExporterPresented,
-            document: pendingExport?.doc,
-            contentType: pendingExport?.format.contentType ?? .data,
-            defaultFilename: pendingExport.map { suggestedFilename(format: $0.format) }
-        ) { result in
-            if case .failure(let error) = result {
-                viewModel.errorMessage = "Export failed: \(error.localizedDescription)"
-            }
-            pendingExport = nil
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { viewModel.showInspector },
-                set: { newValue in if !newValue { viewModel.dismissInspector() } }
-            ),
-            onDismiss: { viewModel.inspectorDidDismiss() }
-        ) {
-            if let word = viewModel.inspectorWord {
-                if #available(iOS 16.0, *) {
-                    WordInspectorSheetView(
-                        word: word,
-                        prosody: viewModel.inspectorProsody,
-                        matches: viewModel.inspectorMatches,
-                        synonyms: viewModel.inspectorSynonyms,
-                        synonymsLoading: viewModel.inspectorSynonymsLoading,
-                        synonymsError: viewModel.inspectorSynonymsError,
-                        synonymsRecovery: viewModel.inspectorSynonymsRecovery,
-                        onReplace: { viewModel.applyInspectorReplacement($0) },
-                        onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
-                        onOpenSettings: { viewModel.openSettingsFromInspector() },
-                        onDismiss: { viewModel.dismissInspector() }
-                    )
-                    // A medium detent pins the sheet to the bottom edge on iPad;
-                    // large alone presents it as a centred form sheet there.
-                    .presentationDetents(horizontalSizeClass == .regular ? [.large] : [.medium, .large])
-                    .presentationDragIndicator(.visible)
-                } else {
-                    WordInspectorSheetView(
-                        word: word,
-                        prosody: viewModel.inspectorProsody,
-                        matches: viewModel.inspectorMatches,
-                        synonyms: viewModel.inspectorSynonyms,
-                        synonymsLoading: viewModel.inspectorSynonymsLoading,
-                        synonymsError: viewModel.inspectorSynonymsError,
-                        synonymsRecovery: viewModel.inspectorSynonymsRecovery,
-                        onReplace: { viewModel.applyInspectorReplacement($0) },
-                        onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
-                        onOpenSettings: { viewModel.openSettingsFromInspector() },
-                        onDismiss: { viewModel.dismissInspector() }
-                    )
-                }
-            }
-        }
-    }
-
-    private func suggestedFilename(format: ExportFormat) -> String {
-        let raw = viewModel.title.isEmpty ? "Untitled" : viewModel.title
-        let safe = raw.replacingOccurrences(of: "[^A-Za-z0-9_\\- ]", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        let base = safe.isEmpty ? "Untitled" : safe
-        return base
+        .modifier(EditorSheetsModifier(recordingSong: $recordingSong))
     }
 
     private func dismissKeyboard() {
+        #if canImport(UIKit)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #else
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        #endif
     }
 
     // MARK: - iPad Layout (split view)
@@ -423,6 +333,7 @@ struct EditorView: View {
     /// compact layout and the regular layout below the side-column width.
     private func trackingAssistantSheet(_ content: some View) -> some View {
         content
+            #if canImport(UIKit)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
                 if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                     keyboardHeight = frame.height
@@ -433,6 +344,7 @@ struct EditorView: View {
                 keyboardIsVisible = false
                 keyboardHeight = EditorViewConstants.Keyboard.hiddenHeight
             }
+            #endif
             .onChange(of: viewModel.showAssistantSheet) { _, isPresented in
                 if isPresented {
                     assistantSheetLifecycleTask?.cancel()
@@ -715,6 +627,20 @@ struct EditorView: View {
         }
     }
 
+    /// Song › UnBlock: bring the assistant into view where this width puts it
+    /// (side column or bottom panel, leaving Focus), then ask for lines.
+    private func showAssistantAndGetSuggestions() {
+        if isFocusMode {
+            withRhymeAnimation(nil, reduceMotion: reduceMotion) { isFocusMode = false }
+        }
+        if usesSideColumns {
+            if !inlineAssistantVisible { presentAssistant() }
+        } else if !viewModel.showAssistantSheet {
+            presentAssistantSheet()
+        }
+        viewModel.getSuggestions()
+    }
+
     private func hideInlineAssistant() {
         withRhymeAnimation(RhymeAITokens.Motion.dismiss, reduceMotion: reduceMotion) {
             inlineAssistantVisible = false
@@ -764,159 +690,32 @@ struct EditorView: View {
 
     // MARK: - Shared Editor Content
 
-    @ViewBuilder
     private var rewriteAccessoryBar: some View {
-        Group {
-            if !assistantSheetIsActive {
-                if viewModel.insertionFeedbackID != nil {
-                    HStack(spacing: RhymeAITokens.Spacing.md) {
-                        Label("Line added", systemImage: "checkmark")
-                            .font(.subheadline)
-                            .accessibilityIdentifier("lineAddedFeedback")
-                        Spacer(minLength: RhymeAITokens.Spacing.xs)
-                        Button(action: viewModel.undoInsertedLine) {
-                            Text("Undo")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
-                        }
-                        .buttonStyle(.rhymePress)
-                        .accessibilityIdentifier("undoInsertedLineButton")
-                        if viewModel.voiceMemoService.isRecording {
-                            Button {
-                                viewModel.voiceMemoService.stopRecording()
-                            } label: {
-                                Label("Stop", systemImage: "stop.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
-                            }
-                            .buttonStyle(.rhymePress)
-                            .accessibilityLabel("Stop recording")
-                        }
-                    }
-                    .padding(.horizontal, RhymeAITokens.Spacing.md)
-                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
-                    .transition(.opacity)
-                } else if let action = viewModel.rewriteAction {
-                    InlineRewriteReviewBar(
-                        action: action,
-                        loading: viewModel.rewriteLoading,
-                        preview: viewModel.rewritePreview,
-                        error: viewModel.rewriteError,
-                        onApply: { viewModel.applyRewrite() },
-                        onCancel: { viewModel.dismissRewrite() },
-                        onRetry: { viewModel.retryRewrite() }
-                    )
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                } else if shouldShowRewriteChipBar {
-                    RewriteChipBar(
-                        onAction: { viewModel.requestRewrite($0) },
-                        onInspect: viewModel.singleWordSelection != nil
-                            ? { viewModel.openInspectorForSelection() }
-                            : nil
-                    )
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-        }
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: shouldShowRewriteChipBar)
-        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .preference(key: RewriteAccessoryHeightPreferenceKey.self, value: proxy.size.height)
-            }
-        }
-        .onPreferenceChange(RewriteAccessoryHeightPreferenceKey.self) { height in
-            rewriteAccessoryHeight = height
-        }
+        RewriteAccessoryBar(
+            isHidden: assistantSheetIsActive,
+            showsChipBar: shouldShowRewriteChipBar,
+            height: $rewriteAccessoryHeight
+        )
     }
 
     private var shouldShowRewriteChipBar: Bool {
-        !isFocusMode && (viewModel.selectedRange.length > 0 || forceRewriteChipBarForUITests)
-            && viewModel.rewriteAction == nil
-            && !viewModel.showInspector
-            && !assistantSheetIsActive
-    }
-
-    private var forceRewriteChipBarForUITests: Bool {
-        UITestFlags.isEnabled(UITestFlags.forceRewriteBar)
+        RewriteAccessoryBar.showsChipBar(
+            viewModel: viewModel,
+            isFocusMode: isFocusMode,
+            assistantSheetActive: assistantSheetIsActive
+        )
     }
 
     private var editorScrollView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
-                // Title Field
-                TextField("Song Title...", text: $viewModel.title)
-                    .font(.system(.largeTitle, design: .serif, weight: .bold))
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, editorSidePadding)
-                    .padding(.top, RhymeAITokens.Spacing.md)
-                    .padding(.bottom, RhymeAITokens.Spacing.xxs)
-                    .accessibilityIdentifier("songTitleEditor")
-                    .focused($titleFocusedOpen, equals: viewModel.editorOpen)
-                    .onChange(of: viewModel.title) {
-                        viewModel.triggerAutoSave()
-                    }
-
-
-                editorStats
-
-                lyricsEditorInput
-
-                Spacer(minLength: RhymeAITokens.Layout.editorBottomRest)
-            }
-            .frame(maxWidth: RhymeAITokens.Layout.editorMaxWidth)
-            .frame(maxWidth: .infinity)
-            // A song opening cross-fades the writing column in place: the old
-            // page leaves on the dismiss tier, the new one arrives on the state
-            // tier, opacity only. Reduce Motion keeps the one-frame swap.
-            .id(viewModel.editorOpen)
-            .transition(reduceMotion ? .identity : .asymmetric(
-                insertion: .opacity.animation(RhymeAITokens.Motion.state),
-                removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
-            ))
-            // Kept on the column: on the scroll view it also animates the content
-            // height, which clamps the restored scroll offset back to the top.
-            .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
-        }
-        // New Song: once the drawer or welcome has left, the caret is already
-        // in the title, so the first keystroke is the song's name.
-        .task(id: viewModel.editorOpen) {
-            let open = viewModel.editorOpen
-            guard open.isNewSong, focusedNewSongOpen != open else { return }
-            try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
-            // The field may still be arriving with the welcome-to-editor fade;
-            // ask again until the focus system reports it. A cancelled attempt
-            // (the layout branch replacing this view) stays retryable.
-            for _ in 0..<4 {
-                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
-                titleFocusedOpen = open
-                try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
-                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
-                if titleFocusedOpen == open {
-                    focusedNewSongOpen = open
-                    return
-                }
-            }
-        }
-        .scrollPosition($writingScrollPosition)
-        .onScrollGeometryChange(for: Double.self) { geometry in
-            Double(geometry.contentOffset.y + geometry.contentInsets.top)
-        } action: { _, y in
-            if !restoringScroll { viewModel.updateEditorScroll(y) }
-        }
-        .task(id: viewModel.positionRestoreID) {
-            restoringScroll = true
-            let target = viewModel.companion.position.scrollY
-            await Task.yield()
-            writingScrollPosition.scrollTo(y: target)
-            await Task.yield()
-            restoringScroll = false
-        }
-        .scrollDismissesKeyboard(.immediately)
-        .clipped()
-        .accessibilityIdentifier("lyricsScrollView")
-        .background(Color.clear)
+        EditorWritingColumn(
+            isFocusMode: isFocusMode,
+            sidePadding: editorSidePadding,
+            bottomOverlayHeight: selectionAvoidanceInset,
+            lyricsEditorIsFocused: $lyricsEditorIsFocused,
+            scrollPosition: $writingScrollPosition,
+            focusedNewSongOpen: $focusedNewSongOpen,
+            titleFocusedOpen: $titleFocusedOpen
+        )
     }
 
     /// Regular width shares the assistant panel's 34pt section inset.
@@ -924,79 +723,11 @@ struct EditorView: View {
         horizontalSizeClass == .regular ? RhymeAITokens.Rhythm.section : RhymeAITokens.Spacing.md
     }
 
-    private var editorStats: some View {
-        (
-            Text("\(viewModel.wordCount)w")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(Color(hex: appearance.editorWordCountHexValue))
-            + Text(" · ")
-                .font(.caption)
-                .foregroundColor(appearance.palette.secondaryInk)
-            + Text("\(viewModel.syllableCount)s")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(Color(hex: appearance.editorSyllableCountHexValue))
-        )
-        .padding(.horizontal, editorSidePadding)
-        .padding(.bottom, RhymeAITokens.Spacing.md)
-        .accessibilityIdentifier("editorStats")
-        .opacity(isFocusMode ? 0 : 1)
-        .accessibilityHidden(isFocusMode)
-    }
-
-    private var lyricsEditorInput: some View {
-        LyricsTextView(
-            text: Binding(
-                get: { viewModel.lyrics },
-                set: { viewModel.onLyricsChanged($0) }
-            ),
-            selection: viewModel.selectedRange,
-            displayText: viewModel.hasActiveRewrite ? viewModel.inlineRewriteText : nil,
-            rewriteHighlight: inlineRewriteHighlight,
-            insertionHighlight: viewModel.insertedLineRange,
-            onCursorChange: { pos in
-                if !viewModel.hasActiveRewrite {
-                    viewModel.cursorPosition = pos
-                }
-            },
-            onSelectionChange: { range in
-                if !viewModel.hasActiveRewrite {
-                    viewModel.selectedRange = range
-                }
-            },
-            onEditingChange: { isEditing in
-                lyricsEditorIsFocused = isEditing
-            },
-            bottomOverlayHeight: selectionAvoidanceInset,
-            rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
-            syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
-            isEditable: !viewModel.hasActiveRewrite,
-            resumesEditingOnCreate: lyricsEditorIsFocused
-        )
-        .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
-        .padding(.horizontal, editorSidePadding)
-        .onChange(of: viewModel.lyrics) {
-            viewModel.triggerAutoSave()
-        }
-    }
-
     private var selectionAvoidanceInset: CGFloat {
-        // Rewrite chip bar / active rewrite reserve their own bar height.
-        if shouldShowRewriteChipBar || viewModel.hasActiveRewrite || viewModel.insertionFeedbackID != nil {
-            return rewriteAccessoryHeight + RhymeAITokens.Spacing.md
-        }
-        return EditorViewConstants.EditorLayout.noSelectionAvoidanceInset
-    }
-
-    private var overlayActive: Bool {
-        !isFocusMode && (viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled)
-    }
-
-    private var inlineRewriteHighlight: LyricsRewriteHighlight? {
-        guard let range = viewModel.inlineRewriteRange else { return nil }
-        return LyricsRewriteHighlight(
-            range: range,
-            isLoading: viewModel.rewriteLoading,
-            isError: viewModel.rewriteError != nil
+        RewriteAccessoryBar.selectionAvoidanceInset(
+            viewModel: viewModel,
+            showsChipBar: shouldShowRewriteChipBar,
+            accessoryHeight: rewriteAccessoryHeight
         )
     }
 
@@ -1149,7 +880,7 @@ struct EditorView: View {
                         Button("Song Recordings", systemImage: "waveform") {
                             dismissKeyboard()
                             guard let id = viewModel.ensureProjectForRecording() else { return }
-                            recordingSong = RecordingSong(id: id, title: viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
+                            recordingSong = SongRecordingTarget(id: id, title: viewModel.title.isEmpty ? "Untitled Song" : viewModel.title)
                         }
                         .accessibilityIdentifier("songRecordings")
                         Button("Song Notebook", systemImage: "book.closed") {
@@ -1191,6 +922,429 @@ struct EditorView: View {
             }
             .frame(width: RhymeAITokens.Touch.minimum * 2 + RhymeAITokens.Spacing.xxs, height: RhymeAITokens.Touch.minimum)
         }
+    }
+}
+#endif
+
+/// The song whose recordings sheet is open.
+struct SongRecordingTarget: Identifiable {
+    let id: String
+    let title: String
+}
+
+// MARK: - Shared editor pieces (iOS editor and Mac workspace)
+
+/// The writing column: title, word/syllable counts and the lyric editor,
+/// capped at the reading width and centred.
+struct EditorWritingColumn: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAppearanceStyle) private var appearance
+    let isFocusMode: Bool
+    let sidePadding: CGFloat
+    let bottomOverlayHeight: CGFloat
+    @Binding var lyricsEditorIsFocused: Bool
+    @Binding var scrollPosition: ScrollPosition
+    /// The New Song open whose title focus has already been granted, so a
+    /// re-created editor does not raise the keyboard again.
+    @Binding var focusedNewSongOpen: EditorViewModel.EditorOpen?
+    /// The song open whose title field holds focus. Keyed by the open token
+    /// because SwiftUI does not learn that the lyrics text view took the focus:
+    /// a stale value never matches the next open's re-created title field.
+    var titleFocusedOpen: FocusState<EditorViewModel.EditorOpen?>.Binding
+    /// The Mac sidebar's row selection opened this song: the focus stays in the list,
+    /// even when the previous song's lyrics had it.
+    var listKeepsFocusOnOpen = false
+    @State private var restoringScroll = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: EditorViewConstants.EditorLayout.stackSpacing) {
+                // Title Field
+                TextField("Song Title...", text: $viewModel.title)
+                    .font(.system(.largeTitle, design: .serif, weight: .bold))
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, RhymeAITokens.Spacing.md)
+                    .padding(.bottom, RhymeAITokens.Spacing.xxs)
+                    .accessibilityIdentifier("songTitleEditor")
+                    .focused(titleFocusedOpen, equals: viewModel.editorOpen)
+                    .onChange(of: viewModel.title) {
+                        viewModel.triggerAutoSave()
+                    }
+
+                editorStats
+
+                lyricsEditorInput
+
+                Spacer(minLength: RhymeAITokens.Layout.editorBottomRest)
+            }
+            .frame(maxWidth: RhymeAITokens.Layout.editorMaxWidth)
+            .frame(maxWidth: .infinity)
+            // A song opening cross-fades the writing column in place: the old
+            // page leaves on the dismiss tier, the new one arrives on the state
+            // tier, opacity only. Reduce Motion keeps the one-frame swap.
+            .id(viewModel.editorOpen)
+            .transition(reduceMotion ? .identity : .asymmetric(
+                insertion: .opacity.animation(RhymeAITokens.Motion.state),
+                removal: .opacity.animation(RhymeAITokens.Motion.dismiss)
+            ))
+            // Kept on the column: on the scroll view it also animates the content
+            // height, which clamps the restored scroll offset back to the top.
+            .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.editorOpen)
+        }
+        // New Song: once the drawer or welcome has left, the caret is already
+        // in the title, so the first keystroke is the song's name.
+        .task(id: viewModel.editorOpen) {
+            let open = viewModel.editorOpen
+            guard open.isNewSong, focusedNewSongOpen != open else { return }
+            try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+            // The field may still be arriving with the welcome-to-editor fade;
+            // ask again until the focus system reports it. A cancelled attempt
+            // (the layout branch replacing this view) stays retryable.
+            for _ in 0..<4 {
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
+                titleFocusedOpen.wrappedValue = open
+                try? await Task.sleep(for: .seconds(RhymeAITokens.Motion.feedbackDuration))
+                guard !Task.isCancelled, viewModel.editorOpen == open else { return }
+                if titleFocusedOpen.wrappedValue == open {
+                    focusedNewSongOpen = open
+                    return
+                }
+            }
+        }
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: Double.self) { geometry in
+            Double(geometry.contentOffset.y + geometry.contentInsets.top)
+        } action: { _, y in
+            if !restoringScroll { viewModel.updateEditorScroll(y) }
+        }
+        .task(id: viewModel.positionRestoreID) {
+            restoringScroll = true
+            let target = viewModel.companion.position.scrollY
+            await Task.yield()
+            scrollPosition.scrollTo(y: target)
+            await Task.yield()
+            restoringScroll = false
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .clipped()
+        .accessibilityIdentifier("lyricsScrollView")
+        .background(Color.clear)
+    }
+
+    private var editorStats: some View {
+        (
+            Text("\(viewModel.wordCount)w")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(Color(hex: appearance.editorWordCountHexValue))
+            + Text(" · ")
+                .font(.caption)
+                .foregroundColor(appearance.palette.secondaryInk)
+            + Text("\(viewModel.syllableCount)s")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(Color(hex: appearance.editorSyllableCountHexValue))
+        )
+        .padding(.horizontal, sidePadding)
+        .padding(.bottom, RhymeAITokens.Spacing.md)
+        .accessibilityIdentifier("editorStats")
+        .opacity(isFocusMode ? 0 : 1)
+        .accessibilityHidden(isFocusMode)
+    }
+
+    /// On the Mac an existing song opens with the insertion point in the lyrics,
+    /// so the window does not pick the title as its first key view and select it.
+    /// A New Song keeps the title focus above; iOS never raises the keyboard here.
+    static func lyricsTakeFocusOnOpen(_ open: EditorViewModel.EditorOpen) -> Bool {
+        #if os(macOS)
+        return !open.isNewSong
+        #else
+        return false
+        #endif
+    }
+
+    private var lyricsEditorInput: some View {
+        LyricsTextView(
+            text: Binding(
+                get: { viewModel.lyrics },
+                set: { viewModel.onLyricsChanged($0) }
+            ),
+            selection: viewModel.selectedRange,
+            displayText: viewModel.hasActiveRewrite ? viewModel.inlineRewriteText : nil,
+            rewriteHighlight: inlineRewriteHighlight,
+            insertionHighlight: viewModel.insertedLineRange,
+            onCursorChange: { pos in
+                if !viewModel.hasActiveRewrite {
+                    viewModel.cursorPosition = pos
+                }
+            },
+            onSelectionChange: { range in
+                if !viewModel.hasActiveRewrite {
+                    viewModel.selectedRange = range
+                }
+            },
+            onEditingChange: { isEditing in
+                lyricsEditorIsFocused = isEditing
+            },
+            bottomOverlayHeight: bottomOverlayHeight,
+            rhymeHighlightEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isRhymeHighlightEnabled,
+            syllableColoringEnabled: overlayActive && !viewModel.hasActiveRewrite && viewModel.isSyllableColoringEnabled,
+            isEditable: !viewModel.hasActiveRewrite,
+            resumesEditingOnCreate: !listKeepsFocusOnOpen && (lyricsEditorIsFocused || Self.lyricsTakeFocusOnOpen(viewModel.editorOpen))
+        )
+        .frame(minHeight: EditorViewConstants.EditorLayout.lyricsMinimumHeight)
+        .padding(.horizontal, sidePadding)
+        .onChange(of: viewModel.lyrics) {
+            viewModel.triggerAutoSave()
+        }
+    }
+
+    private var overlayActive: Bool {
+        !isFocusMode && (viewModel.isRhymeHighlightEnabled || viewModel.isSyllableColoringEnabled)
+    }
+
+    private var inlineRewriteHighlight: LyricsRewriteHighlight? {
+        guard let range = viewModel.inlineRewriteRange else { return nil }
+        return LyricsRewriteHighlight(
+            range: range,
+            isLoading: viewModel.rewriteLoading,
+            isError: viewModel.rewriteError != nil
+        )
+    }
+}
+
+/// The bar under the writing column: "Line added" with Undo, the rewrite
+/// review, or the rewrite chips for a selection.
+struct RewriteAccessoryBar: View {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The assistant sheet covers the editor, so the bar steps aside.
+    let isHidden: Bool
+    let showsChipBar: Bool
+    @Binding var height: CGFloat
+
+    static func showsChipBar(viewModel: EditorViewModel, isFocusMode: Bool, assistantSheetActive: Bool) -> Bool {
+        !isFocusMode && (viewModel.selectedRange.length > 0 || UITestFlags.isEnabled(UITestFlags.forceRewriteBar))
+            && viewModel.rewriteAction == nil
+            && !viewModel.showInspector
+            && !assistantSheetActive
+    }
+
+    /// Room the lyric view keeps clear at its bottom so a selection is not
+    /// hidden behind the bar.
+    static func selectionAvoidanceInset(viewModel: EditorViewModel, showsChipBar: Bool, accessoryHeight: CGFloat) -> CGFloat {
+        // Rewrite chip bar / active rewrite reserve their own bar height.
+        if showsChipBar || viewModel.hasActiveRewrite || viewModel.insertionFeedbackID != nil {
+            return accessoryHeight + RhymeAITokens.Spacing.md
+        }
+        return EditorViewConstants.EditorLayout.noSelectionAvoidanceInset
+    }
+
+    var body: some View {
+        Group {
+            if !isHidden {
+                if viewModel.insertionFeedbackID != nil {
+                    HStack(spacing: RhymeAITokens.Spacing.md) {
+                        Label("Line added", systemImage: "checkmark")
+                            .font(.subheadline)
+                            .accessibilityIdentifier("lineAddedFeedback")
+                        Spacer(minLength: RhymeAITokens.Spacing.xs)
+                        Button(action: viewModel.undoInsertedLine) {
+                            Text("Undo")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                        }
+                        .buttonStyle(.rhymePress)
+                        .accessibilityIdentifier("undoInsertedLineButton")
+                        if viewModel.voiceMemoService.isRecording {
+                            Button {
+                                viewModel.voiceMemoService.stopRecording()
+                            } label: {
+                                Label("Stop", systemImage: "stop.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)
+                            }
+                            .buttonStyle(.rhymePress)
+                            .accessibilityLabel("Stop recording")
+                        }
+                    }
+                    .padding(.horizontal, RhymeAITokens.Spacing.md)
+                    .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.md)
+                    .transition(.opacity)
+                } else if let action = viewModel.rewriteAction {
+                    InlineRewriteReviewBar(
+                        action: action,
+                        loading: viewModel.rewriteLoading,
+                        preview: viewModel.rewritePreview,
+                        error: viewModel.rewriteError,
+                        onApply: { viewModel.applyRewrite() },
+                        onCancel: { viewModel.dismissRewrite() },
+                        onRetry: { viewModel.retryRewrite() }
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                } else if showsChipBar {
+                    RewriteChipBar(
+                        onAction: { viewModel.requestRewrite($0) },
+                        onInspect: viewModel.singleWordSelection != nil
+                            ? { viewModel.openInspectorForSelection() }
+                            : nil
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+        }
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: showsChipBar)
+        .rhymeAnimation(RhymeAITokens.Motion.state, value: viewModel.hasActiveRewrite)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: RewriteAccessoryHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        }
+        .onPreferenceChange(RewriteAccessoryHeightPreferenceKey.self) { newHeight in
+            height = newHeight
+        }
+    }
+}
+
+/// The editor's alerts, sheets and file export, and the insertion
+/// feedback timer, for whichever layout hosts the writing column.
+struct EditorSheetsModifier: ViewModifier {
+    @EnvironmentObject private var viewModel: EditorViewModel
+    #if os(macOS)
+    private let isRegularWidth = true
+    #else
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    #endif
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Binding var recordingSong: SongRecordingTarget?
+    @State private var pendingExport: (format: ExportFormat, doc: ExportDocument)?
+    @State private var fileExporterPresented: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: viewModel.insertionFeedbackID) {
+                guard viewModel.insertionFeedbackID != nil else { return }
+                try? await Task.sleep(for: .seconds(EditorViewConstants.InsertionHighlight.holdDuration))
+                guard !Task.isCancelled else { return }
+                // The mark fades on the settle tier like ink drying; Reduce Motion clears it in one frame.
+                withRhymeAnimation(RhymeAITokens.Motion.settle, reduceMotion: reduceMotion) {
+                    viewModel.clearInsertionHighlight()
+                }
+                try? await Task.sleep(for: .seconds(Self.isVoiceOverRunning ? 28 : 6))
+                guard !Task.isCancelled else { return }
+                viewModel.clearInsertionFeedback()
+            }
+            .alert(item: $viewModel.cloudAISharingRequest) { request in
+                Alert(
+                    title: Text("Share with \(request.provider.displayName)?"),
+                    message: Text("Before continuing, review the sharing details. \(viewModel.cloudAISharingDisclosure) You can revoke permission in Settings."),
+                    primaryButton: .default(Text("Allow and Continue")) {
+                        viewModel.approveCloudAISharing(request)
+                    },
+                    secondaryButton: .cancel {
+                        viewModel.cancelCloudAISharing()
+                    }
+                )
+            }
+            .sheet(
+                isPresented: $viewModel.showExportSheet,
+                onDismiss: {
+                    if pendingExport != nil { fileExporterPresented = true }
+                }
+            ) {
+                ExportSheet(
+                    onPick: { format in
+                        let project = viewModel.snapshotForExport()
+                        do {
+                            let data = try LyricsExporter.data(for: project, format: format)
+                            pendingExport = (format, ExportDocument(data: data))
+                        } catch {
+                            viewModel.errorMessage = "Export failed: \(error.localizedDescription)"
+                            pendingExport = nil
+                        }
+                        viewModel.showExportSheet = false
+                    },
+                    onDismiss: { viewModel.showExportSheet = false }
+                )
+            }
+            .sheet(isPresented: $viewModel.showNotebook) {
+                SongNotebookView()
+            }
+            .sheet(item: $recordingSong) { song in
+                SongRecordingsView(projectId: song.id, projectTitle: song.title)
+            }
+            .fileExporter(
+                isPresented: $fileExporterPresented,
+                document: pendingExport?.doc,
+                contentType: pendingExport?.format.contentType ?? .data,
+                defaultFilename: pendingExport.map { suggestedFilename(format: $0.format) }
+            ) { result in
+                if case .failure(let error) = result {
+                    viewModel.errorMessage = "Export failed: \(error.localizedDescription)"
+                }
+                pendingExport = nil
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { viewModel.showInspector },
+                    set: { newValue in if !newValue { viewModel.dismissInspector() } }
+                ),
+                onDismiss: { viewModel.inspectorDidDismiss() }
+            ) {
+                if let word = viewModel.inspectorWord {
+                    if #available(iOS 16.0, *) {
+                        WordInspectorSheetView(
+                            word: word,
+                            prosody: viewModel.inspectorProsody,
+                            matches: viewModel.inspectorMatches,
+                            synonyms: viewModel.inspectorSynonyms,
+                            synonymsLoading: viewModel.inspectorSynonymsLoading,
+                            synonymsError: viewModel.inspectorSynonymsError,
+                            synonymsRecovery: viewModel.inspectorSynonymsRecovery,
+                            onReplace: { viewModel.applyInspectorReplacement($0) },
+                            onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
+                            onOpenSettings: { viewModel.openSettingsFromInspector() },
+                            onDismiss: { viewModel.dismissInspector() }
+                        )
+                        // A medium detent pins the sheet to the bottom edge on iPad;
+                        // large alone presents it as a centred form sheet there.
+                        .presentationDetents(isRegularWidth ? [.large] : [.medium, .large])
+                        .presentationDragIndicator(.visible)
+                    } else {
+                        WordInspectorSheetView(
+                            word: word,
+                            prosody: viewModel.inspectorProsody,
+                            matches: viewModel.inspectorMatches,
+                            synonyms: viewModel.inspectorSynonyms,
+                            synonymsLoading: viewModel.inspectorSynonymsLoading,
+                            synonymsError: viewModel.inspectorSynonymsError,
+                            synonymsRecovery: viewModel.inspectorSynonymsRecovery,
+                            onReplace: { viewModel.applyInspectorReplacement($0) },
+                            onRetrySynonyms: { viewModel.retryInspectorSynonyms() },
+                            onOpenSettings: { viewModel.openSettingsFromInspector() },
+                            onDismiss: { viewModel.dismissInspector() }
+                        )
+                    }
+                }
+            }
+    }
+
+    private func suggestedFilename(format: ExportFormat) -> String {
+        let raw = viewModel.title.isEmpty ? "Untitled" : viewModel.title
+        let safe = raw.replacingOccurrences(of: "[^A-Za-z0-9_\\- ]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let base = safe.isEmpty ? "Untitled" : safe
+        return base
+    }
+
+    private static var isVoiceOverRunning: Bool {
+        #if canImport(UIKit)
+        UIAccessibility.isVoiceOverRunning
+        #else
+        NSWorkspace.shared.isVoiceOverEnabled
+        #endif
     }
 }
 
@@ -1344,8 +1498,10 @@ private struct ScribbleUnderline: View {
 }
 
 
+#if !os(macOS)
 #Preview {
     EditorView()
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
 }
+#endif
