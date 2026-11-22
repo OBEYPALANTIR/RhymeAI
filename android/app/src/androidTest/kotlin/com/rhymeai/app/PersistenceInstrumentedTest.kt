@@ -586,8 +586,11 @@ class PersistenceInstrumentedTest {
         val first = SongProject("shared-send", "Shared", "words A", "", 100L)
         runBlocking { repo.saveProjects(listOf(first, first.copy(lyrics = "words B"))) }
         val viewModel = MainViewModel(app)
-        val line = runBlocking { viewModel.oneLinersStore.add("a shared line") }
+        var seeded: com.rhymeai.app.data.model.OneLiner? = null
+        var deleted = false
         try {
+            val line = runBlocking { viewModel.oneLinersStore.add("a shared line") }
+            seeded = line
             waitUntil { viewModel.projects.count { it.id == first.id } == 2 }
             val sent = CompletableDeferred<String>()
             onMain { viewModel.sendOneLinerToSong(line, first) { sent.complete(it) } }
@@ -599,9 +602,15 @@ class PersistenceInstrumentedTest {
             try {
                 runBlocking { withTimeout(10_000) { viewModel.viewModelScope.coroutineContext[Job]!!.cancelAndJoin() } }
             } finally {
-                runBlocking { viewModel.oneLinersStore.permanentlyDelete(line.id) }
+                // Recorded, not asserted, here: a failed cleanup must not hide the test's own failure.
+                seeded?.let { line ->
+                    deleted = runCatching {
+                        runBlocking { viewModel.oneLinersStore.trash(line.id); viewModel.oneLinersStore.permanentlyDelete(line.id) }
+                    }.getOrDefault(false)
+                }
             }
         }
+        assertTrue("the seeded One Liner was not deleted", deleted)
     }
 
     private fun resetRepository() {
