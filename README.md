@@ -148,8 +148,7 @@ resets on success. Just before writing, the manifest is checked for writes by
 another device and merged if there were; every write is then downloaded again
 and its hash compared; on a mismatch the backup merges again, keeping everything
 earlier attempts saw (up to three times, then "Backup conflict, will retry"), and
-duplicate manifests are merged on every run and kept (iOS; Android still removes
-the extras after verification).
+duplicate manifests are merged on every run and kept, never removed.
 Restore merges both ways, uploads local-only items, then downloads recordings
 this device does not hold, applying everything in one transaction that resolves
 the incoming data with what is here at commit time: an edit saved meanwhile is
@@ -204,7 +203,7 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
 | V-7 | `BackupSchedulerTest` (all), `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Debounce, coalescing, backoff, leave-app interval and consent retry. |
 | V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings`, `archivesWithUnsafeOrForeignEntriesAreRejected` | Export → Import yields the same manifest and merges; unsafe archives are refused. |
-| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
+| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndKept`, `aDuplicateWrittenByAnotherDeviceAfterOurReadBackIsKeptAndItsWordsGathered` | Lost-update protection and duplicate-manifest reconciliation. |
 | V-10 | `RealDriveClientTest` | Drive listing follows every page and keeps `appProperties`; revoke posts the token. |
 | V-11 | `RecordingIdentityTest` (all); `RecordingImportInstrumentedTest.reimportingIdenticalAudioAfterDeletionIsANewRecordingAndOldTombstoneStays`, `metadataWriteFailuresFailImportRenameAndTrashRestoreWithoutMovingFiles` | Recording ids, staging, live/Trash name collisions, metadata-before-publication with failure injection, and next-launch reconciliation. |
 | V-12 | `BackupManifestTest.millisecondPrecisionSurvivesTheRoundTripSoAnOlderTombstoneCannotWin` | Millisecond precedence times survive the manifest. |
