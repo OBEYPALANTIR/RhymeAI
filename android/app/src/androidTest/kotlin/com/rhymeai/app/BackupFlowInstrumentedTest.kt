@@ -797,9 +797,12 @@ class BackupFlowInstrumentedTest {
         } finally {
             // The typing queued an autosave that would otherwise write "typed words" into the next test's open song.
             // Bounded: a join that never returns fails the test instead of hanging the run.
-            runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
-            line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
-            resetOpenSong()
+            try {
+                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+            } finally {
+                line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
+                resetOpenSong()
+            }
         }
     }
 
@@ -872,8 +875,9 @@ class BackupFlowInstrumentedTest {
 
     /** Typed away and back to the loaded words is still an edit: the hold saves it and a replacing restore keeps it. */
     @Test fun wordsTypedBackToTheLoadedValueAreStillSavedAndKept() {
-        assertHeldEditIsKept { vm ->
-            runBlocking { repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = "another window's words", updatedAt = 150L) else it }) }
+        assertHeldEditIsKept(otherWindowSave = {
+            repo.saveProjects(repo.projectsFlow.first().map { if (it.id == openSong.id) it.copy(lyrics = "another window's words", updatedAt = 150L) else it })
+        }) { vm ->
             vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("typed away")
             vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(openSong.lyrics)
         }.let { copy -> assertEquals(openSong.lyrics, copy.lyrics) }
@@ -884,11 +888,15 @@ class BackupFlowInstrumentedTest {
         assertHeldEditIsKept { vm -> vm.theme = "a new theme" }.let { copy -> assertEquals(openSong.lyrics to "a new theme", copy.lyrics to copy.theme) }
     }
 
-    /** Runs [edit] on the open editor, then a restore whose newer row replaces the song; returns the kept copy the editor shows. */
-    private fun assertHeldEditIsKept(edit: (MainViewModel) -> Unit): SongProject {
+    /**
+     * Runs [otherWindowSave] off the main thread (a store write blocking it can deadlock), then [edit] on the open editor
+     * and a restore whose newer row replaces the song; returns the kept copy the editor shows.
+     */
+    private fun assertHeldEditIsKept(otherWindowSave: suspend () -> Unit = {}, edit: (MainViewModel) -> Unit): SongProject {
         putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
         val vm = openSongInEditor()
         try {
+            runBlocking { otherWindowSave() }
             instrumentation.runOnMainSync { edit(vm); vm.restoreFromBackup() }
             waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
             instrumentation.waitForIdleSync()
