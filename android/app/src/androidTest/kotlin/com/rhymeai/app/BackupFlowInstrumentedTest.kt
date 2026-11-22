@@ -575,7 +575,7 @@ class BackupFlowInstrumentedTest {
     private val newerWords = "newer words W2"
 
     /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
-    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList()): MainViewModel {
+    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList()): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
         repo = ProjectRepository(context)
         runBlocking {
@@ -586,6 +586,7 @@ class BackupFlowInstrumentedTest {
             repo.saveActiveState(openSong, true, openSong.title, openSong.lyrics, openSong.theme)
             // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
             repo.saveTrashedProjects(trash)
+            if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
         }
         BackupTestHooks.driveClient = drive
         BackupTestHooks.authorizer = object : DriveAuthorizer {
@@ -744,6 +745,34 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    @Test fun aSongOpenedDuringTheRestoreOpensAfterIt() {
+        val other = SongProject("other-song", "Other Song", "other words", "", 150L)
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
+        val vm = openSongInEditor(otherSongs = listOf(other))
+        val paused = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        drive.beforeDownload = { if (vm.editorHeld) { paused.complete(Unit); resume.await() } }
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil { paused.isCompleted }
+            instrumentation.runOnMainSync {
+                vm.loadProject(other)
+                // Going to the background meanwhile saves; it must not drop the waiting open.
+                vm.flushCurrentDraft()
+            }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(openSong.id to openSong.lyrics, vm.currentProjectId to vm.lyrics)
+            resume.complete(Unit)
+            waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == other.id && vm.lyrics == other.lyrics }
+            assertEquals(newerWords, storedOpenSong().lyrics)
+        } finally {
+            drive.beforeDownload = null
+            resume.complete(Unit)
+            resetOpenSong()
+        }
+    }
+
     @Test fun unsavedWordsOverWhichTheSameSongIsRestoredFromTrashAreKeptAsANewSong() {
         val vm = openSongInEditor(trash = listOf(TrashedSongProject(openSong.copy(lyrics = newerWords, updatedAt = 200L), deletedAt = 300L)))
         try {
@@ -771,6 +800,7 @@ class BackupFlowInstrumentedTest {
             assertTrue("trashed", runBlocking { repo.trashedProjectsFlow.first() }.any { it.project.id == openSong.id })
             assertTrue("not active", runBlocking { repo.projectsFlow.first() }.none { it.id == openSong.id })
             assertEquals(Triple<String?, String, String>(null, "", ""), Triple(vm.currentProjectId, vm.title, vm.lyrics))
+            assertEquals(null, vm.persistenceError)
         } finally {
             resetOpenSong()
         }

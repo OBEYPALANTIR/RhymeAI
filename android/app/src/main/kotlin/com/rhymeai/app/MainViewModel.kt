@@ -747,7 +747,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistenceError = listOfNotNull(persistenceError, message).joinToString("\n")
     }
 
-    fun flushCurrentDraft(onSaved: () -> Unit = {}) {
+    fun flushCurrentDraft(onSaved: () -> Unit = justSave) {
+        // While the editor is held its words are already saved: a plain save (going to the background)
+        // never takes the slot of a navigation waiting for the hold to end.
+        if (editorHeld && onSaved === justSave && queuedNavigation != null) return
         // A navigation asked for while a draft is being saved, or while the editor is held, runs once
         // that is done (the latest one wins); it then saves whatever the editor holds by then, first.
         if (savingBeforeNavigation || editorHeld) { queuedNavigation = { flushCurrentDraft(onSaved) }; return }
@@ -759,6 +762,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var editorHeld by mutableStateOf(false)
         private set
     private val editorFrozen: Boolean get() = openingSong || editorHeld
+    private val justSave: () -> Unit = {}
 
     /**
      * Runs [operation], which may replace stored songs, after the open draft is saved, with the editor
@@ -773,6 +777,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             positionSaveJob?.cancelAndJoin()
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             if (startDraftFlush {}?.await() == false) return false
+            // The flush re-armed the delayed position save; it must not write while the operation runs.
+            positionSaveJob?.cancel()
             restoringDraft = true
             // Also after a failed or cancelled operation: whatever it committed is what the editor shows.
             try { operation() } finally { withContext(NonCancellable) { showStoredOpenSong() } }
