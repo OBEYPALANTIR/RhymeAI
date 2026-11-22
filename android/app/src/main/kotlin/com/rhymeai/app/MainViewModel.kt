@@ -158,6 +158,10 @@ internal object SongOpenTestHooks {
 private const val NO_LOCAL_MODEL_SELECTION = ""
 internal const val REWRITE_NEEDS_MODEL = "Choose a local model in Settings to rewrite."
 
+/** An exception with no usable message shows [fallback], never an empty error line. */
+internal fun failureMessage(error: Throwable, fallback: String): String =
+    error.message?.takeIf { it.isNotBlank() } ?: fallback
+
 internal object LocalModelTestHooks {
     @Volatile var beforeSavedModelValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     @Volatile var beforeUseValidation: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -1850,7 +1854,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) errorMessage = e.message ?: "Failed to get suggestions"
+                if (revision == suggestionsRevision && isCurrentAIContext(requestContext)) errorMessage = failureMessage(e, "Failed to get suggestions")
             } finally {
                 if (revision == suggestionsRevision) isLoading = false
             }
@@ -1987,7 +1991,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewriteError = e.message ?: "Rewrite failed"
+                if (revision == rewriteRevision && isCurrentAIContext(requestContext)) rewriteError = failureMessage(e, "Rewrite failed")
             } finally {
                 if (revision == rewriteRevision) rewriteLoading = false
             }
@@ -2852,7 +2856,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val nextValue = newValue.withValidRanges()
         // Focus leaving for a modal that uses the selection collapses the cursor onto one of its ends; keep the range
         // through that. A selection restored on song open never set the range, so the field's own selection stands in.
-        val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners)) {
+        val modalRange = if (modalKeepsRewriteSelection(showSongNotebook, showOneLiners, settingsOpensAiSetup)) {
             // Collapsed or blank selections get no range, as in the expanded-selection branch below.
             pendingRewriteRange ?: lyricsFieldValue.selection.takeUnless {
                 val text = lyricsFieldValue.text

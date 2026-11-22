@@ -26,6 +26,10 @@ class WritingCompanionUiTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val repo = ProjectRepository(app)
     private lateinit var vm: MainViewModel
+    // Restored in stop() even when an assertion fails part way.
+    private val originalProvider = runBlocking { repo.selectedProviderFlow.first() }
+    private val originalModelId = runBlocking { repo.modelIdFlow.first() }
+    private val songIds = mutableListOf<String>()
 
     @Before fun start() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -35,7 +39,27 @@ class WritingCompanionUiTest {
         composeRule.waitForIdle()
     }
 
-    @After fun stop() { scenario?.close() }
+    @After fun stop() {
+        if (::vm.isInitialized) {
+            onMain { vm.showSongNotebook = false; vm.dismissSettings() }
+            songIds.forEach { id ->
+                if (vm.projects.any { it.id == id }) {
+                    settle { !vm.savingBeforeNavigation }
+                    onMain { vm.moveProjectToTrash(id) }
+                    settle { vm.trashedProjects.any { it.project.id == id } && !vm.savingBeforeNavigation }
+                }
+                if (vm.trashedProjects.any { it.project.id == id }) {
+                    onMain { vm.permanentlyDeleteTrashedProject(id) }
+                    settle { runBlocking { id !in repo.workspacesFlow.first() } }
+                }
+            }
+        }
+        scenario?.close()
+        runBlocking {
+            repo.saveSelectedProvider(originalProvider)
+            repo.saveModelId(originalModelId)
+        }
+    }
 
     @Test fun keepSelectionDoesNotEditAndVersionRestorePreservesCurrentDraft() {
         onMain {
@@ -115,6 +139,7 @@ class WritingCompanionUiTest {
         }
         waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Restored Selection QA" && it.lyrics == lyrics } } }
         val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Restored Selection QA" } }
+        songIds += saved.id
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.openingSong && !vm.savingBeforeNavigation }
@@ -170,6 +195,37 @@ class WritingCompanionUiTest {
         onMain { assertTrue(vm.showSettingsDialog && vm.settingsOpensAiSetup) }
     }
 
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun setUpModelClosesTheRewriteBarAndKeepsSelectionAndLyrics() {
+        onMain {
+            vm.onLyricsChanged(TextFieldValue("A quiet line"))
+            vm.saveProvider(AIProvider.LOCAL)
+            vm.unloadLocalModel()
+            vm.localModelError = null
+            vm.localModelLoading = false
+        }
+        waitUntil { vm.selectedProvider == AIProvider.LOCAL && !vm.localReady && !vm.localModelLoading }
+        // Select in the focused field, as a touch does, so opening AI setup takes focus away from it.
+        val editor = composeRule.onNodeWithTag("lyricsEditor")
+        editor.performClick()
+        editor.performTextInputSelection(TextRange(0, 7))
+        waitUntil { vm.pendingRewriteRange == TextRange(0, 7) }
+        onMain { vm.requestRewrite(RewriteAction.REPHRASE) }
+        val bar = hasAnyAncestor(hasTestTag("inlineRewriteReviewBar"))
+        composeRule.onNode(hasText("Set up model") and bar).performClick()
+        composeRule.onNodeWithContentDescription("Close").assertIsDisplayed()
+        onMain { assertFalse(vm.hasActiveRewrite); assertTrue(vm.settingsOpensAiSetup) }
+        // Back out of AI setup without choosing a model.
+        androidx.test.espresso.Espresso.pressBack()
+        waitUntil { !vm.showSettingsDialog }
+        composeRule.onAllNodesWithTag("inlineRewriteReviewBar").assertCountEquals(0)
+        composeRule.onNodeWithTag("rewriteChipBar").assertIsDisplayed()
+        onMain {
+            assertEquals("A quiet line", vm.lyrics)
+            assertEquals(TextRange(0, 7), vm.pendingRewriteRange)
+        }
+    }
+
     @Test fun immediateSwitchPersistsLatestTextPositionAndMetadataThroughTrashRestore() {
         val lyrics = "🎵 first\n" + (1..80).joinToString("\n") { "lyric line $it" }
         onMain {
@@ -181,6 +237,7 @@ class WritingCompanionUiTest {
         }
         waitUntil { runBlocking { repo.projectsFlow.first().any { it.title == "Position QA" && it.lyrics == lyrics } } }
         val saved = runBlocking { repo.projectsFlow.first().first { it.title == "Position QA" } }
+        songIds += saved.id
         waitUntil { !vm.savingBeforeNavigation }
         onMain { vm.loadProject(saved) }
         waitUntil { vm.currentProjectId == saved.id && !vm.savingBeforeNavigation }
@@ -210,11 +267,15 @@ class WritingCompanionUiTest {
 
     private fun onMain(block: () -> Unit) { instrumentation.runOnMainSync(block); instrumentation.waitForIdleSync() }
     private fun waitUntil(condition: () -> Boolean) {
+        if (!settle(condition)) fail("Writing companion state did not settle; error: ${vm.persistenceError}")
+    }
+    /** Cleanup's wait: never fails, so it cannot hide the test's own failure. */
+    private fun settle(condition: () -> Boolean): Boolean {
         val until = SystemClock.uptimeMillis() + 8_000
         while (SystemClock.uptimeMillis() < until) {
-            if (condition()) return
+            if (condition()) return true
             SystemClock.sleep(50)
         }
-        fail("Writing companion state did not settle; error: ${vm.persistenceError}")
+        return false
     }
 }

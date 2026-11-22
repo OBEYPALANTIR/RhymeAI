@@ -14,10 +14,11 @@ class EditorScreenTest {
     }
 
     @Test
-    fun `song notebook and one liners keep the rewrite selection, other modals clear it`() {
-        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = true, oneLinersOpen = false))
-        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = true))
-        assertFalse(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = false))
+    fun `song notebook, one liners and AI setup from set up model keep the rewrite selection, other modals clear it`() {
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = true, oneLinersOpen = false, aiSetupOpen = false))
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = true, aiSetupOpen = false))
+        assertTrue(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = false, aiSetupOpen = true))
+        assertFalse(modalKeepsRewriteSelection(songNotebookOpen = false, oneLinersOpen = false, aiSetupOpen = false))
     }
 
     @Test

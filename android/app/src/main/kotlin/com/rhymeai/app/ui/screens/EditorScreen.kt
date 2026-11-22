@@ -255,11 +255,12 @@ internal fun historyControlsVisible(
 ): Boolean = editorActionsVisible && !isRecording
 
 /**
- * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics", and
- * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it.
+ * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics",
+ * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it,
+ * and AI setup opened by "Set up model" returns the writer to the selection they wanted to rewrite.
  */
-internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean): Boolean =
-    songNotebookOpen || oneLinersOpen
+internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean, aiSetupOpen: Boolean): Boolean =
+    songNotebookOpen || oneLinersOpen || aiSetupOpen
 
 /** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
 internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
@@ -645,7 +646,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners)) {
+            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners, viewModel.settingsOpensAiSetup)) {
                 viewModel.clearPendingRewriteSelection()
             }
             if (modalOpen) {
@@ -1675,7 +1676,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         onCancel = { viewModel.cancelRewriteReview() },
                         onRetry = { viewModel.retryRewrite() },
                         needsModelSetup = viewModel.rewriteNeedsModelSetup,
-                        onModelSetup = viewModel::openModelSetup,
+                        // As on iOS: close the no-model bar, keep the selection, then open AI setup.
+                        onModelSetup = {
+                            viewModel.cancelRewriteReview()
+                            viewModel.openModelSetup()
+                        },
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                     }
