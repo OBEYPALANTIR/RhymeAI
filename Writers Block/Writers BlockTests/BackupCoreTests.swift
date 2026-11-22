@@ -2420,6 +2420,38 @@ struct BackupCoreTests {
         #expect(reads >= 3 && written.recordings.map(\.fileName) == ["x.m4a"])
     }
 
+    /// Files C, B, A (oldest to newest) record a take at 100, 300 and 100, C and A with the
+    /// same manifest. Between two looks A is rewritten to hold only a tombstone for the take
+    /// at 200. That manifest now lives only in C, below B, so B's 300 wins and the tombstone
+    /// loses: the take is written and its audio stays on Drive.
+    @MainActor
+    @Test func contentAFileNoLongerHoldsRanksByTheFilesThatStillHoldIt() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        let audio = Data("take".utf8)
+        var take = Self.take("t", of: "s", audio)
+        take.uploadedAt = Date(millisecondsSince1970: 100)
+        let x = try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "y").encodedManifest()
+        take.uploadedAt = Date(millisecondsSince1970: 300)
+        drive.seedDuplicateManifest(x, modifiedTime: "c-1")
+        drive.seedDuplicateManifest(try SyncBlob(projects: [Self.song("s")], recordings: [take], savedByClientId: "z").encodedManifest(), modifiedTime: "c-2")
+        let a = drive.seedDuplicateManifest(x, modifiedTime: "c-3")
+        drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(projects: [Self.song("s")], savedByClientId: "x").encodedManifest())
+        drive.seedRecording(take, content: audio)
+        let tombstone = try SyncBlob(deletions: [SyncDeletion(projectId: "s", recordingId: "t", fileName: take.fileName, deletedAt: 200)], savedByClientId: "y").encodedManifest()
+        var reads = 0
+        drive.beforeDownload = {
+            guard drive.downloadAttempts.last == a.id else { return }
+            reads += 1
+            if reads == 2 { drive.rewriteExtra(id: a.id, content: tombstone, modifiedTime: "c-4") }
+        }
+
+        try await harness.service.backupNow(modelContext: harness.context)
+        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(reads >= 2 && written.recordings.map(\.id) == ["t"])
+        #expect(drive.content(named: take.driveName) != nil, "the take's audio is not deleted")
+    }
+
     /// A recovered take's tombstone (200) is in one kept file; two others record the take
     /// at 300, and one of them is rewritten to 100 between recovery's listing and its
     /// download. That file is now the newest, so the tombstone stands and the take is not

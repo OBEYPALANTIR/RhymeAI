@@ -1284,27 +1284,23 @@ final class BackupService {
         // resolves once (A18). Content seen once is never dropped (A14).
         var inputs: [SyncBlob] = legacy.map { [$0.blob] } ?? []
         var seen = Set<String>()
-        // Each content ranks at the newest (modifiedTime, file id) seen holding it, and the
-        // inputs stay in that order so the newest file's entries win the merge: a file
-        // rewritten between its listing and its download is ranked again by the next look.
+        // What each listed file held when last read, keyed (modifiedTime, file id).
+        var current: [String: (sha: String, key: [String])] = [:]
         var rank: [String: [String]] = [:]
-        // What each file held when last read, and when: a file's current content outranks what
-        // it held before though its modifiedTime did not move. The count only grows, and only
-        // when a file's content changes, so the rank stays monotonic.
-        var current: [String: (sha: String, read: Int)] = [:]
-        var changes = 0
         /// Adds a manifest read from `file`; true when it is new or moved the order.
         func take(_ blob: SyncBlob, from file: DriveAppDataFile) -> Bool {
             let sha = blob.manifestSha256
             let isNew = seen.insert(sha).inserted
             if isNew { inputs.append(blob) }
-            if current[file.id]?.sha != sha {
-                changes += 1
-                current[file.id] = (sha, changes)
+            current[file.id] = (sha, [file.modifiedTime ?? "", file.id])
+            // Each content ranks at the newest file holding it now, and the inputs stay in that
+            // order so the newest file's entries win the merge. Content no file holds any more
+            // (a file's earlier content, though its modifiedTime did not move) stays an input
+            // (A14), below every held one, in the order it arrived.
+            rank = [:]
+            for held in current.values where rank[held.sha].map({ $0.lexicographicallyPrecedes(held.key) }) ?? true {
+                rank[held.sha] = held.key
             }
-            let key = [file.modifiedTime ?? "", file.id, String(format: "%020d", current[file.id]!.read)]
-            if let held = rank[sha], !held.lexicographicallyPrecedes(key) { return isNew }
-            rank[sha] = key
             let before = inputs.map(\.manifestSha256)
             inputs = inputs.enumerated().sorted { a, b in
                 let (x, y) = (rank[a.element.manifestSha256] ?? [], rank[b.element.manifestSha256] ?? [])
@@ -1338,7 +1334,10 @@ final class BackupService {
         /// Folds in any manifest written since the last look; true when something new arrived.
         func absorbFreshManifests() async throws -> Bool {
             var changed = false
-            for file in try await manifestFiles(accessToken: accessToken) {
+            let listed = try await manifestFiles(accessToken: accessToken)
+            // A file no longer listed holds nothing; the next take reorders without it.
+            current = current.filter { held in listed.contains { $0.id == held.key } }
+            for file in listed {
                 if !manifests.contains(where: { $0.id == file.id }) { manifests.append(file) }
                 if take(try await downloadManifest(file, accessToken: accessToken), from: file) { changed = true }
             }
