@@ -1388,9 +1388,11 @@ final class BackupService {
         let verifiedInputs = inputs()
         // One more look: audio is deleted only while Drive still holds the look the candidate
         // was built from, with the verified write in place. Its reads count as observations.
-        // A look that fails (other than a stop) counts as changed; what it read still counts.
+        // A look that fails or is stopped counts as changed; what it read still counts, and a
+        // stop is rethrown after the pass below has saved the proof those reads contradict.
         let others = look.filter { $0.file.id != target.id }
         var unchanged = false
+        var stopped = false
         do {
             let after = try await stableLook(accessToken: accessToken) { _, blob in observe(blob) }
             let afterOthers = after.filter { $0.file.id != target.id }
@@ -1398,7 +1400,7 @@ final class BackupService {
                 && afterOthers.count == others.count
                 && zip(afterOthers, others).allSatisfy { $0.file == $1.file && $0.blob.manifestSha256 == $1.blob.manifestSha256 }
         } catch is CancellationError {
-            throw CancellationError()
+            stopped = true
         } catch {}
         // Duplicate manifests are kept and gathered on every run, never deleted: another device
         // may write one after our listing, and Drive has no conditional delete to protect that write.
@@ -1415,6 +1417,7 @@ final class BackupService {
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
                                                            gathered: gathered, observed: observed, deleting: unchanged, remote: remoteRecordings,
                                                            accessToken: accessToken, report: &report)
+        if stopped { throw CancellationError() }
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
@@ -1793,8 +1796,9 @@ final class BackupService {
     /// entry is kept here until its objects are gone, so a retry after a failed
     /// removal still has its proof.
     /// Every entry this run observed for the id with the object's digest and length must
-    /// be covered: one that is not vetoes the delete, is reported like a repaired time, and
-    /// clears the id's proof. With no observation of the id, the proof alone decides.
+    /// be covered: one that is not vetoes the delete and clears the id's proof, even when the
+    /// object is reported as a conflict; the veto is reported only when a repaired time is what
+    /// keeps the object. With no observation of the id, the proof alone decides.
     /// `deleting` false (Drive changed after the write) removes nothing and adds no proof but a
     /// repaired one. Every object is decided and the proof saved before the first delete, so a
     /// failed delete cannot leave proof a veto contradicted.
@@ -1824,6 +1828,11 @@ final class BackupService {
             func covered(_ entry: SyncRecording) -> Bool {
                 deletions.contains { $0.covers(projectId: entry.projectId, recordingId: id, sha256: sha, at: entry.uploadedAt, repaired: entry.precedenceRepaired) }
             }
+            // An entry of this content no deletion covers contradicts its proof, whatever is
+            // decided below (a conflict included): the proof goes first.
+            if let proof = proven[id], matches(proof), observed[id]?.contains(where: { matches($0) && !covered($0) }) == true {
+                proven[id] = nil
+            }
             if let winner = gathered[id], !matches(winner) {
                 conflicting.append(file.name)
                 continue
@@ -1837,10 +1846,11 @@ final class BackupService {
                 }
                 guard !live.contains(file.name) else { continue }
                 let uncovered = matching.filter { !covered($0) }
-                if let keeper = uncovered.first {
-                    // An entry no deletion covers keeps the audio, and proof it contradicts goes.
-                    if let proof = proven[id], matches(proof) { proven[id] = nil }
-                    if uncovered.count < matching.count, !report.deferredRepairedCleanup.contains(keeper.fileName) {
+                if !uncovered.isEmpty {
+                    // An entry no deletion covers keeps the audio (its proof went above). It is
+                    // reported only when a repaired time is what keeps it.
+                    if uncovered.count < matching.count, let keeper = uncovered.first(where: \.precedenceRepaired),
+                       !report.deferredRepairedCleanup.contains(keeper.fileName) {
                         report.deferredRepairedCleanup.append(keeper.fileName)
                     }
                     continue
