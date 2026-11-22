@@ -73,9 +73,12 @@ final class MacWorkspaceModel: ObservableObject {
     /// File › Save: writes the open song now. When it cannot, says why.
     func save(_ viewModel: EditorViewModel) {
         guard !viewModel.flushCurrentDraft(checkpoint: true) else { return }
-        saveError = viewModel.cloudOperationHoldsEditor
-            ? "A backup or restore is running. Your edits are kept and are saved when it finishes."
-            : viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open."
+        if viewModel.cloudOperationHoldsEditor {
+            saveError = "A backup or restore is running. Your edits are kept and are saved when it finishes."
+        } else if viewModel.saveStatus == .failed {
+            saveError = viewModel.errorMessage ?? "Couldn't save this song. Your edits remain open."
+        }
+        // Otherwise the open song's row is gone with nothing edited: nothing to save or report.
     }
 
     /// Song › Cancel Generation: stops a running suggestion or rewrite. A finished

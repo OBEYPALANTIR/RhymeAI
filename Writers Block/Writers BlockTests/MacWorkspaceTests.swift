@@ -289,6 +289,82 @@ struct MacSongSidebarTests {
     }
 
     @Test
+    func keepAlternateAndSaveVersionOnACopyThatDisappearedKeepNothingUnderTheOtherCopysId() throws {
+        // Given: copy A open and unedited, copy B under the same song id, and A removed (by sync)
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let a = SongProject(id: "a", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        let b = SongProject(id: "a", title: "Paper Moon", lyrics: "tide", theme: "")
+        container.mainContext.insert(a)
+        container.mainContext.insert(b)
+        try container.mainContext.save()
+        let store = WritingCompanionStore(inMemory: true)
+        let viewModel = EditorViewModel(companionStore: store)
+        viewModel.modelContext = container.mainContext
+        viewModel.loadProject(a)
+        container.mainContext.delete(a)
+        try container.mainContext.save()
+        let notebookBefore = try store.read("a")
+
+        // When: the writer keeps an alternate line, then saves a version
+        viewModel.keepAlternate("salt on the rope")
+        let versionSaved = viewModel.flushCurrentDraft(checkpoint: true)
+
+        // Then: neither reports success, and nothing is stored under the song id copy B now holds
+        #expect(viewModel.companionError == "Could not keep this line because the song did not save. Try again.")
+        #expect(!versionSaved, "Save Version has no row of its own to save")
+        #expect(try store.read("a") == notebookBefore)
+        #expect(b.title == "Paper Moon" && b.lyrics == "tide", "\(b.title): \(b.lyrics)")
+    }
+
+    enum EditTiming: CaseIterable, Sendable {
+        case pendingWhenTheRestoreStarts
+        case madeDuringTheRestore
+    }
+
+    @Test(arguments: EditTiming.allCases)
+    func aRestoreThatRemovesTheEditedOpenCopyKeepsTheEditsOffTheOtherCopy(_ timing: EditTiming) async throws {
+        // Given: copies A and B under one song id with the same words, A open
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let a = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "sea")
+        let b = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "sea")
+        container.mainContext.insert(a)
+        try container.mainContext.save()
+        container.mainContext.insert(b)
+        try container.mainContext.save()
+        var editor: EditorViewModel?
+        let restore = RestoringBackup {
+            container.mainContext.delete(a)
+            if timing == .madeDuringTheRestore {
+                editor?.lyrics = "ropes, edited"
+                editor?.triggerAutoSave()
+            }
+        }
+        let viewModel = EditorViewModel(backupService: restore, companionStore: WritingCompanionStore(inMemory: true))
+        editor = viewModel
+        viewModel.modelContext = container.mainContext
+        #expect(MacWorkspaceModel().openSong(a, in: viewModel))
+        if timing == .pendingWhenTheRestoreStarts {
+            viewModel.lyrics = "ropes, edited"
+            viewModel.triggerAutoSave()
+        }
+
+        // When: a restore removes copy A
+        await viewModel.restoreBackupNow()
+        #expect(restore.restores == 1)
+
+        // Then: copy B is unchanged, and A's edited words are a separate song the editor holds
+        #expect(b.id == "s" && b.title == "Harbour Lights" && b.lyrics == "ropes" && b.theme == "sea", "\(b.title): \(b.lyrics)")
+        let rows = try container.mainContext.fetch(FetchDescriptor<SongProject>())
+        let recovered = try #require(rows.first { $0.lyrics == "ropes, edited" }, "\(rows.map(\.lyrics))")
+        #expect(recovered.id != "s")
+        #expect(recovered.title == "Harbour Lights" && recovered.theme == "sea")
+        #expect(viewModel.loadedProjectRow == recovered.persistentModelID)
+        #expect(viewModel.lyrics == "ropes, edited")
+    }
+
+    @Test
     func deleteMovesTheSelectedShownSongToTrash() throws {
         // The positive control for the filtered Delete in SidebarSelectionFocusTests.
         let (viewModel, container) = try MacWorkspaceLibraryTests.library()
@@ -731,6 +807,149 @@ struct MacWorkspaceLibraryTests {
         workspace.save(viewModel)
 
         #expect(workspace.saveError == "This song is no longer in the library. Your edits remain open.")
+    }
+
+    /// An open song whose row was removed meanwhile, its words not edited.
+    private static func vanishedUnedited() throws -> (EditorViewModel, ModelContainer) {
+        let (viewModel, container) = try library()
+        let song = SongProject(id: "gone", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        container.mainContext.insert(song)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        container.mainContext.delete(song)
+        try container.mainContext.save()
+        return (viewModel, container)
+    }
+
+    /// Waits for the autosave just scheduled: it shows .saving while it waits, then ends.
+    /// One with nothing to write ends without showing .saving.
+    private static func autosaveFinished(_ viewModel: EditorViewModel) async throws {
+        var waited = 0
+        while viewModel.saveStatus != .saving, waited < 40 { try await Task.sleep(for: .milliseconds(50)); waited += 1 }
+        waited = 0
+        while viewModel.saveStatus == .saving, waited < 400 { try await Task.sleep(for: .milliseconds(50)); waited += 1 }
+    }
+
+    @Test
+    func quitAsksAfterTheAutosaveRefusedAnEditThatErasedTheSong() async throws {
+        // Given: an open song whose row is gone, then every field erased, and its autosave run
+        let (viewModel, container) = try Self.vanishedUnedited()
+        _ = container
+        viewModel.title = ""
+        viewModel.lyrics = ""
+        viewModel.theme = ""
+        viewModel.triggerAutoSave()
+        try await Self.autosaveFinished(viewModel)
+
+        // When: the writer quits
+        var reasons: [String] = []
+        let reply = MacAppDelegate.terminateReply(viewModel: viewModel) { reasons.append($0); return .keepOpen }
+
+        // Then: Quit asks, with the reason
+        #expect(reply == .terminateCancel)
+        #expect(reasons == ["This song is no longer in the library. Your edits remain open."])
+        #expect(viewModel.saveStatus == .failed)
+    }
+
+    @Test
+    func quitAsksAfterARefusedOpenCancelledThePendingAutosave() throws {
+        // Given: copy A open, copy B under its song id, A removed, and an edit waiting to autosave
+        let (viewModel, container) = try Self.library()
+        let a = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        let b = SongProject(id: "s", title: "Paper Moon", lyrics: "tide", theme: "")
+        container.mainContext.insert(a)
+        container.mainContext.insert(b)
+        try container.mainContext.save()
+        viewModel.loadProject(a)
+        container.mainContext.delete(a)
+        try container.mainContext.save()
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+
+        // When: opening B is refused, which cancels the waiting autosave, then the writer quits
+        #expect(!MacWorkspaceModel().openSong(b, in: viewModel))
+        var reasons: [String] = []
+        let reply = MacAppDelegate.terminateReply(viewModel: viewModel) { reasons.append($0); return .keepOpen }
+
+        // Then: Quit asks, and B keeps its own words
+        #expect(reply == .terminateCancel)
+        #expect(reasons == ["This song is no longer in the library. Your edits remain open."])
+        #expect(b.title == "Paper Moon" && b.lyrics == "tide", "\(b.title): \(b.lyrics)")
+    }
+
+    @Test(arguments: [true, false])
+    func quitDoesNotAskForAnUneditedSongWhoseRowIsGone(autosavePending: Bool) async throws {
+        // Given: an open song whose row is gone, its words unedited, with an autosave waiting or run
+        let (viewModel, container) = try Self.vanishedUnedited()
+        _ = container
+        viewModel.triggerAutoSave()
+        if !autosavePending {
+            try await Self.autosaveFinished(viewModel)
+            #expect(viewModel.saveStatus == .idle, "nothing to save is not a save in progress")
+        }
+
+        // When: the writer quits
+        let reply = MacAppDelegate.terminateReply(viewModel: viewModel) { _ in
+            Issue.record("asked with nothing unsaved")
+            return .keepOpen
+        }
+
+        // Then: the app quits without asking
+        #expect(reply == .terminateNow)
+        #expect(viewModel.saveStatus != .failed)
+    }
+
+    @Test
+    func aFailedSaveClearsOnALaterSaveOrOpen() throws {
+        // Given: an edit the library refused, and a second song
+        let (viewModel, container) = try Self.library()
+        let song = SongProject(id: "s", title: "Harbour Lights", lyrics: "ropes", theme: "")
+        let other = SongProject(id: "t", title: "Paper Moon", lyrics: "tide", theme: "")
+        container.mainContext.insert(song)
+        container.mainContext.insert(other)
+        try container.mainContext.save()
+        viewModel.loadProject(song)
+        viewModel.lyrics = "ropes and tide"
+        viewModel.modelContext = nil
+        #expect(!viewModel.flushCurrentDraft())
+        #expect(viewModel.saveStatus == .failed)
+
+        // When: a later save succeeds
+        viewModel.modelContext = container.mainContext
+        let workspace = MacWorkspaceModel()
+        workspace.save(viewModel)
+
+        // Then: the failure is gone and Quit does not ask
+        #expect(workspace.saveError == nil)
+        #expect(viewModel.saveStatus == .saved)
+        #expect(MacAppDelegate.terminateReply(viewModel: viewModel) { _ in Issue.record("asked after a save"); return .keepOpen } == .terminateNow)
+
+        // Given: then an edit refused because the open song's row is gone, undone again
+        container.mainContext.delete(song)
+        try container.mainContext.save()
+        viewModel.lyrics = "ropes and tide, edited"
+        #expect(!viewModel.flushCurrentDraft())
+        #expect(viewModel.saveStatus == .failed)
+        viewModel.lyrics = "ropes and tide"
+
+        // When: the writer opens the other song
+        #expect(workspace.openSong(other, in: viewModel))
+
+        // Then: the failure is gone and Quit does not ask
+        #expect(viewModel.saveStatus == .idle)
+        #expect(MacAppDelegate.terminateReply(viewModel: viewModel) { _ in Issue.record("asked after an open"); return .keepOpen } == .terminateNow)
+    }
+
+    @Test
+    func fileSaveOnAnUneditedSongWhoseRowIsGoneSaysNothingAndStaysIdle() throws {
+        let (viewModel, container) = try Self.vanishedUnedited()
+        _ = container
+        let workspace = MacWorkspaceModel()
+
+        workspace.save(viewModel)
+
+        #expect(workspace.saveError == nil)
+        #expect(viewModel.saveStatus == .idle)
     }
 
     @Test

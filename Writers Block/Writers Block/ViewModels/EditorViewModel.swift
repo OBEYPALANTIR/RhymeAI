@@ -2331,7 +2331,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     func goToStartMenu() {
-        guard flushCurrentDraft(checkpoint: true) else { return }
+        guard flushCurrentDraft(checkpoint: true) || openRowVanishedUnedited() else { return }
         showWelcome = true
     }
 
@@ -2377,7 +2377,7 @@ final class EditorViewModel: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             // Finished: no autosave is pending. A replaced or stopped task was cancelled and leaves it.
             defer { if !Task.isCancelled { autoSaveTask = nil } }
-            guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            guard !emptiedDraftNeedsNoSave else {
                 saveStatus = .idle
                 return
             }
@@ -2395,12 +2395,31 @@ final class EditorViewModel: ObservableObject {
     private func runAutoSave(projectIdAtTrigger: String?) -> Bool {
         // The editor switched projects (or cleared) during the debounce —
         // saving now would write into the wrong project or create an empty one.
-        guard currentProjectId == projectIdAtTrigger,
-              !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+        guard currentProjectId == projectIdAtTrigger, !emptiedDraftNeedsNoSave else {
             saveStatus = .idle
             return true
         }
         return persistCurrentDraft(checkpoint: false)
+    }
+
+    /// An emptied editor has nothing to save, unless it holds a stored song whose row a lookup
+    /// does not find: erasing that song is a refused edit, which Close and Quit must see.
+    private var emptiedDraftNeedsNoSave: Bool {
+        guard title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
+        guard let id = currentProjectId, let context = modelContext else { return true }
+        return (try? storedProject(id: id, in: context, adoptingAnother: false)) != nil
+    }
+
+    /// Leaving the editor (Open, New, import, template, Start Menu) without writing: its bound
+    /// row is confirmed gone and it holds that row's words unchanged, so there is nothing to keep.
+    /// A failed lookup proves nothing. Saves also read it, only to report such a refusal as idle.
+    private func openRowVanishedUnedited() -> Bool {
+        guard activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
+              let words = loadedProjectWords, let context = modelContext,
+              let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
+              !rows.contains(where: { $0.persistentModelID == row }) else { return false }
+        let title = words.title.isEmpty ? Self.untitledProjectTitle : words.title
+        return OpenDraft(title: title, lyrics: words.lyrics, theme: words.theme) == openDraft
     }
 
     /// A backup or restore holds the library; saves wait for it to finish and the
@@ -2411,15 +2430,13 @@ final class EditorViewModel: ObservableObject {
     /// waiting nothing is written, and a failed last save is reported, not retried.
     /// False when the open song's edits are not saved.
     func savePendingEdit() -> Bool {
-        guard let task = autoSaveTask, !task.isCancelled else { return saveStatus != .failed }
-        task.cancel()
-        autoSaveTask = nil
-        guard runAutoSave(projectIdAtTrigger: autoSaveProjectId) else {
-            // Not every refusal marks the save failed; the next close or quit must still report it.
-            saveStatus = .failed
-            return false
+        if let task = autoSaveTask, !task.isCancelled {
+            task.cancel()
+            autoSaveTask = nil
+            runAutoSave(projectIdAtTrigger: autoSaveProjectId)
         }
-        return true
+        // A refused edit is .failed; a vanished row with nothing edited is not.
+        return saveStatus != .failed
     }
 
     @discardableResult
@@ -2445,10 +2462,12 @@ final class EditorViewModel: ObservableObject {
             if let id = currentProjectId {
                 // A save never writes over another row that took the open one's song id.
                 guard let project = try storedProject(id: id, in: context, adoptingAnother: false) else {
-                    // The open row is gone and its words are unedited: nothing of the writer's to keep.
-                    if loadedProjectRow != nil, openDraft == loadedProjectWords,
-                       try storedProject(id: id, in: context) != nil { return true }
-                    saveStatus = .idle
+                    // The open row is gone: nothing is saved. Unedited, nothing has failed either.
+                    if openRowVanishedUnedited() {
+                        saveStatus = .idle
+                        return false
+                    }
+                    saveStatus = .failed
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
                 }
@@ -3362,7 +3381,9 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func preserveOutgoingDraftBeforeNavigation(checkpoint: Bool = false) -> Bool {
-        guard let operation = activeCloudEditorOperation else { return flushCurrentDraft(checkpoint: checkpoint) }
+        guard let operation = activeCloudEditorOperation else {
+            return flushCurrentDraft(checkpoint: checkpoint) || openRowVanishedUnedited()
+        }
         autoSaveTask?.cancel()
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
@@ -3725,20 +3746,24 @@ final class EditorViewModel: ObservableObject {
         autoSaveTask?.cancel()
         let draft = openDraft
         let edited = operation.currentHadPendingEdit || draft != operation.currentBaseline
+        // The row the editor held, before the lookup can fall back to another under its song id.
+        let boundRow = loadedProjectRow
 
         do {
             guard operation.recordingProjectId == currentProjectId else {
                 throw CocoaError(.fileReadUnknown)
             }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            // Edits go into the row they were made on; if that one is gone they are recovered separately.
+            let originalKept = boundRow != nil && stored?.0.persistentModelID == boundRow
             // Every branch below leaves the editor with this row's words, or a new row's.
             if let stored { bindEditor(to: stored.0) }
             if edited {
-                if stored?.1 == draft {
+                if originalKept, stored?.1 == draft {
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
                     return operation.savedSeparateOutgoingDraft
                 }
-                if let stored, stored.1 == operation.currentBaseline {
+                if originalKept, let stored, stored.1 == operation.currentBaseline {
                     stored.0.title = draft.title
                     stored.0.lyrics = draft.lyrics
                     stored.0.theme = draft.theme
