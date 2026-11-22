@@ -1,0 +1,55 @@
+name: macOS
+
+# The Mac app shares most of its code with iOS, so it runs on the same
+# path filters as the iOS workflow.
+on:
+  pull_request:
+    paths:
+      - "Writers Block/**"
+      - "shared/**"
+      - ".github/workflows/macos.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Writers Block/**"
+      - "shared/**"
+      - ".github/workflows/macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos-unit-tests:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: xcodebuild -version
+      # Ad-hoc signed with no entitlements file: the app's iCloud and app
+      # group entitlements need a provisioning profile the runner does not have.
+      - name: Unit tests
+        run: |
+          xcodebuild test \
+            -project "Writers Block/Writers Block.xcodeproj" \
+            -scheme "Writers Block macOS Tests" \
+            -destination "platform=macOS" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/macos-unit.xcresult" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM= \
+            CODE_SIGN_ENTITLEMENTS=
+      - name: Upload result bundle
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-unit-xcresult
+          path: ${{ runner.temp }}/macos-unit.xcresult
+          retention-days: 7
