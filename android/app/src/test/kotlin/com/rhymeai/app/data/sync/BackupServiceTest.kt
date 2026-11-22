@@ -987,6 +987,93 @@ class BackupServiceTest {
         assertEquals("edited words", fresh.projectsFlow.first().firstOrNull { it.id == "t" }?.lyrics)
     }
 
+    /**
+     * Late take, pinned as it is today: a kept duplicate still carries song p's deletion at 200; the
+     * primary holds p edited at 300, so p is active. A take of p recorded at 100 (a real time) then
+     * arrives late. The stale song tombstone still covers it.
+     */
+    private fun lateTakeDrive() {
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion("p", deletedAt = 200L))), 0L, "stale"))
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("p", updatedAt = 300L, lyrics = "edited words"))), 0L, "current"))
+    }
+
+    private fun takeTombstones(written: SyncBlob, take: RecordingManifestEntry) =
+        written.deletions.filter { it.recordingId == take.id }.map { it.deletedAt }
+
+    @Test
+    fun aLateTakeInAnotherDevicesManifestIsDroppedTombstonedAndItsDriveAudioDeletedByTheNextBackup() = runBlocking<Unit> {
+        lateTakeDrive()
+        repository.saveProjects(listOf(song("p", updatedAt = 300L, lyrics = "edited words")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        // Precondition: the edit beat the deletion and the song tombstone is not rewritten.
+        assertEquals("edited words", remote().projects.single { it.id == "p" }.lyrics)
+        assertTrue(remote().deletions.none { it.projectId == "p" })
+
+        // A third device writes its manifest with the take (real time 100) and uploads the take's audio.
+        val bytes = "late take".toByteArray()
+        val take = entry("p", "take.m4a", bytes, uploadedAt = 100L)
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("p", updatedAt = 300L, lyrics = "edited words")), recordings = listOf(take)), 0L, "third"))
+        putRaw(take, bytes)
+        val rawName = BackupManifest.recordingDriveName(take.id)
+        val rawId = drive.listFilesByNamePrefix("t", rawName).single().id
+        assertEquals(100L to false, remote().recordings.single().let { it.precedenceTime to it.precedenceRepaired })
+        assertEquals(3, drive.count(BackupManifest.FILE_NAME))
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        // The kept duplicate's song tombstone (200) beats the take (100): not listed, a per-take
+        // tombstone at 200 is written, and that backup deletes the take's only Drive audio.
+        val written = remote()
+        assertEquals("edited words", written.projects.single { it.id == "p" }.lyrics)
+        assertTrue(written.recordings.none { it.id == take.id })
+        assertEquals(listOf(200L), takeTombstones(written, take))
+        assertTrue(written.deletions.none { it.projectId == "p" && it.isSongTombstone })
+        assertNull(drive.file(rawName))
+        assertTrue(rawId in drive.deleted)
+
+        // A fresh device restoring gets the song without the take.
+        val (fresh, freshSide) = secondDevice("fresh")
+        assertIs<SyncResult.Success>(freshSide.second.restore(fresh))
+        assertEquals("edited words", fresh.projectsFlow.first().single { it.id == "p" }.lyrics)
+        assertTrue(fresh.recordingRecords().none { it.id == take.id })
+        assertTrue(freshSide.first.walk().none { it.isFile && it.name.startsWith(take.id) })
+    }
+
+    @Test
+    fun aLateLocalTakeIsNotUploadedIsTombstonedKeptOnBackupAndQuarantinedOnRestore() = runBlocking<Unit> {
+        lateTakeDrive()
+        repository.saveProjects(listOf(song("p", updatedAt = 300L, lyrics = "edited words")))
+        // Recorded here at 100 (a real time) and never uploaded.
+        val bytes = "local take".toByteArray()
+        val take = writeMemo("p", "take.m4a", bytes, modifiedAt = 100L)
+        val local = RecordingFileStore.targetFile(filesDir, "p", take.id, "take.m4a")
+        assertEquals(100L to false, repository.recordingRecords().single().let { it.uploadedAt to it.precedenceRepaired })
+        assertTrue(local.exists())
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        // Back up: not listed, a per-take tombstone at 200, never uploaded; this device's file and record stay.
+        val written = remote()
+        assertEquals("edited words", written.projects.single { it.id == "p" }.lyrics)
+        assertTrue(written.recordings.none { it.id == take.id })
+        assertEquals(listOf(200L), takeTombstones(written, take))
+        assertTrue(drive.writes.none { it.startsWith("upload:${BackupManifest.RECORDING_PREFIX}") })
+        assertNull(drive.file(BackupManifest.recordingDriveName(take.id)))
+        assertContentEquals(bytes, local.readBytes())
+        assertEquals(listOf(take.id), repository.recordingRecords().map { it.id })
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        // Restore: the record goes and the bytes move to quarantine (kept on the device, not in Drive).
+        assertFalse(local.exists())
+        assertTrue(repository.recordingRecords().none { it.id == take.id })
+        val quarantined = RecordingFiles.quarantineDirectory(filesDir, "p").walk().filter { it.isFile }.toList()
+        assertEquals(listOf("${take.id}.m4a"), quarantined.map { it.name })
+        assertContentEquals(bytes, quarantined.single().readBytes())
+        assertEquals("edited words", repository.projectsFlow.first().single { it.id == "p" }.lyrics)
+        assertNull(drive.file(BackupManifest.recordingDriveName(take.id)))
+    }
+
     @Test
     fun anOlderCopyInAStaleDuplicateNeverOverwritesANewerSongOrTrashState() = runBlocking<Unit> {
         val (written, fresh) = syncAgainstStaleDuplicate(
