@@ -136,6 +136,13 @@ class LyricsExporterTest {
     }
 
     @Test
+    fun jsonImportStillReadsMillisWrittenAsAString() {
+        val text = """{"id":"s","title":"t","lyrics":"","theme":"","updatedAt":"1780374654123"}"""
+
+        assertEquals(1_780_374_654_123L, LyricsExporter.parseJson(text).updatedAt)
+    }
+
+    @Test
     fun jsonImportRejectsAnUnreadableDateInsteadOfGuessingOne() {
         val text = """{"id":"s","title":"t","lyrics":"","theme":"","updatedAt":"next Tuesday"}"""
 
