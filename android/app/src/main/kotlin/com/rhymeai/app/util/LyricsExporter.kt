@@ -31,6 +31,9 @@ object LyricsExporter {
         return json.encodeToString(SongProject.serializer(), project).toByteArray(Charsets.UTF_8)
     }
 
+    /** Reads a project JSON file for import; the counterpart of [buildJson], like iOS `decodeJsonExport`. */
+    fun parseJson(text: String): SongProject = json.decodeFromString(SongProject.serializer(), text)
+
     fun buildLrc(project: SongProject): ByteArray {
         val title = project.title.ifBlank { "Untitled" }
         val sb = StringBuilder()
