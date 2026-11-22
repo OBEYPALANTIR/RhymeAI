@@ -1967,8 +1967,12 @@ class BackupServiceTest {
         fun count(name: String) = files.values.count { it.name == name }
         fun clear() = files.clear()
 
+        /** As Drive: a file's modifiedTime moves with each write, so an older file can become the newest. Off by default. */
+        var modifiedTimeFollowsWrites = false
+
         private fun meta(id: String, file: StoredFile) = DriveFileMetadata(
-            id, file.name, modifiedTime = "%08d".format(file.created), version = file.version.toString(), appProperties = file.appProperties
+            id, file.name, version = file.version.toString(), appProperties = file.appProperties,
+            modifiedTime = "%08d".format(if (modifiedTimeFollowsWrites) file.revisions.last().number else file.created)
         )
 
         private fun manifestWritten() {
@@ -2540,6 +2544,73 @@ class BackupServiceTest {
         val recovered = repository.projectsFlow.first().single { it.id != "s" }
         assertEquals("old words", recovered.lyrics)
         assertEquals(2, drive.count(BackupManifest.FILE_NAME))
+    }
+
+    @Test
+    fun aPinnedRevisionStaysListedAndRecoverableAfterAnotherManifestFileBecomesTheNewest() = runBlocking<Unit> {
+        drive.modifiedTimeFollowsWrites = true
+        val older = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"))), 0L, "a"))
+        val newer = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "words in b"))), 0L, "b"))
+        repository.saveProjects(listOf(song("here")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("update:$newer", drive.writes.last())
+
+        // Recover the newer file's first revision: it is pinned.
+        val pinned = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions.last { it.fileId == newer }
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, pinned))
+
+        // Another device writes the older file, which becomes the newest: the next backup writes there.
+        drive.updateFile("token", older, BackupManifest.MIME_TYPE, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"), song("other"))), 0L, "a"), emptyMap())
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("update:$older", drive.writes.last())
+
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+        assertEquals(pinned.copy(kept = true), listed.single { it.fileId == newer && it.revisionId == pinned.revisionId })
+        assertTrue(listed.any { it.fileId == older })
+        assertEquals(listed.sortedByDescending { it.modifiedTime }, listed)
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, listed.single { it.fileId == newer && it.revisionId == pinned.revisionId }))
+    }
+
+    /**
+     * A recovery of the oldest revision stopped after its songs; then a kept duplicate holds a
+     * tombstone at [tombstoneAt] for the recovered "one" while the newest manifest holds an edit of it at [editAt].
+     */
+    private suspend fun stoppedRecoveryWithADuplicateTombstone(tombstoneAt: Long, editAt: Long): Triple<ProjectRepository, String, RecoverySummary> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        val one = fresh.songsByTitle().getValue("one").id
+        assertTrue(fresh.recordingRecords().isEmpty())
+
+        drive.modifiedTimeFollowsWrites = true
+        val current = drive.listFilesByNamePrefix("token", BackupManifest.FILE_NAME).single()
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion(one, deletedAt = tombstoneAt))), 0L, "stale"))
+        val blob = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.bytes)
+        val edited = song(one, updatedAt = editAt, lyrics = "edited elsewhere").copy(title = "one")
+        drive.updateFile("token", current.id, BackupManifest.MIME_TYPE, BackupManifest.encode(blob.copy(projects = blob.projects + edited), 0L, "b"), emptyMap())
+
+        val summary = assertIs<RecoveryResult.Recovered>(freshService.recoverRevision(fresh, chosen)).summary
+        return Triple(fresh, one, summary)
+    }
+
+    @Test
+    fun aDuplicateTombstoneDefeatedByALaterEditDoesNotStopARecoveryFromFinishing() = runBlocking<Unit> {
+        val (fresh, one, summary) = stoppedRecoveryWithADuplicateTombstone(tombstoneAt = clock + 100L, editAt = clock + 200L)
+
+        assertEquals(2, summary.recordingsAdded)
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().filter { it.projectId == one }.map { it.displayName })
+    }
+
+    @Test
+    fun aDuplicateTombstoneNewerThanTheEditStillKeepsTheRecoveredSongEmpty() = runBlocking<Unit> {
+        val (fresh, one, summary) = stoppedRecoveryWithADuplicateTombstone(tombstoneAt = clock + 200L, editAt = clock + 100L)
+
+        assertEquals(1, summary.deletedSongs)
+        assertEquals(1, summary.recordingsAdded)
+        assertTrue(fresh.recordingRecords().none { it.projectId == one })
     }
 
     /** The oldest listed revision (A's backup); listing asks nothing of Drive but the list. */

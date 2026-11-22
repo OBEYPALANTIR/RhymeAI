@@ -568,8 +568,8 @@ below is the contract it must meet, not verified behaviour.
   (`BackupGate`); a library or Drive count that cannot be read never uploads. Not
   now leaves Drive untouched and keeps backup paused; Back up now in that state
   asks before merging Drive's songs with nothing. "Recover an earlier backup"
-  lists the manifest's Drive revisions newest first, the 50 newest plus every
-  kept-forever one (marked Kept), by time and size without downloading them.
+  lists the manifest's Drive revisions newest first (Android: of every kept
+  manifest file), the 50 newest plus every kept-forever one (marked Kept), by time and size without downloading them.
   Choosing one only asks for confirmation; on Recover that revision alone is
   marked `keepForever` (Drive serves an earlier blob revision only then; at most
   200 per file, a full set refuses with "Recover one of the versions marked
@@ -585,7 +585,8 @@ below is the contract it must meet, not verified behaviour.
   the shared vector `writersblock-recovery/f1/r1/song-1` →
   `3ec9dc72-4f40-37c0-a588-f62dc27d13de`, so a stopped recovery is finished by
   the next one of the same revision without duplicates. A tombstone with a known
-  time naming a recovered song or take, here or in the backup, keeps it deleted;
+  time naming a recovered song or take, here or in the backup (Android: once
+  resolved, so one a later edit defeated does not count), keeps it deleted;
   a recovered song's own tombstone decides first, so a deleted recovered song gets
   no takes even when an earlier run's copy is still on the device. A tombstone of
   unknown date also keeps a recovered item from being placed and is reported
