@@ -225,6 +225,8 @@ internal object LaunchTestHooks {
 internal object BackupTestHooks {
     @Volatile var driveClient: DriveClient? = null
     @Volatile var authorizer: DriveAuthorizer? = null
+    /** Runs in a hold after its draft save, before the operation (a test interleaves another window, or stops there). */
+    @Volatile var beforeHeldOperation: (suspend () -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -779,23 +781,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             positionSaveJob?.cancelAndJoin()
             // Edits the flush is about to write over the stored song are marked in that same write: a commit that
             // replaces them keeps them as a new song, also when the app dies in between.
-            val stored = projects.firstOrNull { it.id == currentProjectId }?.takeIf { it.id !in pendingProjectCreationIds }
+            val songId = currentProjectId
+            val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingProjectCreationIds }
             val edited = stored != null && createUntitledProjectSnapshot().let {
                 stored.title != it.title || stored.lyrics != it.lyrics || stored.theme != it.theme
             }
+            // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
+            // before the app died. The reload takes it from here, never from the shared selection another window moves.
+            val keptId = if (edited) java.util.UUID.randomUUID().toString()
+                else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
-            val flush = try { startDraftFlush({}, preserve = edited) } finally { flushingHeldDraft = false }
+            val flush = try { startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
             if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
             restoringDraft = true
             // Also after a failed or cancelled operation: whatever it committed is what the editor shows.
-            try { operation() } finally {
+            try {
+                BackupTestHooks.beforeHeldOperation?.invoke()
+                operation()
+            } finally {
                 withContext(NonCancellable) {
-                    // Not committed (or already consumed by the commit): nothing more to preserve.
-                    try { repo.clearPreservedSong() } catch (_: Exception) {}
-                    showStoredOpenSong()
+                    // Not committed (or already consumed by the commit): nothing more to preserve for this song.
+                    if (songId != null) try { repo.clearPreservedSong(songId) } catch (_: Exception) {}
+                    showStoredOpenSong(keptId)
                 }
             }
             return true
@@ -810,19 +820,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var opensInFlight = 0
     private var draftWritesInFlight = 0
 
-    /** The editor shows the open song as stored (its selection written with it), or clears when the song is gone. */
-    private suspend fun showStoredOpenSong() {
-        val id = currentProjectId ?: return
+    /**
+     * The editor shows the open song as stored (its selection written with it), or clears when the song is gone.
+     * When the commit kept this operation's edits as [keptId], the editor moves to that copy.
+     */
+    private suspend fun showStoredOpenSong(keptId: String? = null) {
+        var id = currentProjectId ?: return
         try {
             val stored = repo.projectsFlow.first()
-            val storedSelection = repo.currentProjectIdFlow.first()
             if (currentProjectId != id) return
             projects = projects.filter { it.id in pendingProjectCreationIds && stored.none { s -> s.id == it.id } } + stored
-            if (storedSelection != null && storedSelection != id && stored.any { it.id == storedSelection }) {
-                // The commit kept the words the editor shows as this new song and selected it in the same edit.
-                currentProjectId = storedSelection
+            if (keptId != null && stored.any { it.id == keptId }) {
+                id = keptId
+                currentProjectId = keptId
                 persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
-                return
             }
             val row = stored.firstOrNull { it.id == id }
             if (row == null) {
@@ -851,7 +862,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Null when there was nothing to save; otherwise true once the editor's words committed. */
-    private fun startDraftFlush(onSaved: () -> Unit, preserve: Boolean = false): Deferred<Boolean>? {
+    private fun startDraftFlush(onSaved: () -> Unit, preserveAs: String? = null): Deferred<Boolean>? {
         if (!appearanceLoaded || showStartMenu) { onSaved(); return null }
         autoSaveJob?.cancel()
         positionSaveJob?.cancel()
@@ -880,7 +891,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         return viewModelScope.async {
             try {
-                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, preserve)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, preserveAs)
                 if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
                     if (missingId != null) reportRecoveredDraft()
                     onSaved()
@@ -2895,14 +2906,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorLyrics: String,
         editorTheme: String,
         attempt: Long,
-        preserve: Boolean = false
+        preserveAs: String? = null
     ): List<SongProject> {
         if (currentProjectId != project.id) throw CancellationException("Song changed")
         draftWritesInFlight++ // a hold waits for it
         val committed = try {
             DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
             if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
-            repo.saveActiveState(project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme, preserve)
+            repo.saveActiveState(project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme, preserveAs)
         } finally { draftWritesInFlight-- }
         pendingProjectCreationIds.remove(project.id)
         if (currentProjectId == project.id) projects = committed

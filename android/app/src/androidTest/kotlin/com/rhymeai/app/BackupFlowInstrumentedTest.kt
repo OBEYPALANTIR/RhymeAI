@@ -19,6 +19,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import androidx.datastore.preferences.core.edit
+import com.rhymeai.app.data.repository.dataStore
+import kotlinx.coroutines.cancel
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
@@ -999,23 +1003,84 @@ class BackupFlowInstrumentedTest {
         }
     }
 
-    /** The app died after the hold's draft save stored the edited words (no notebook version written) and before the commit. */
+    /**
+     * The production hold saves the edited words, then stops before the commit and never resumes, so its cleanup
+     * (clearing the mark, reloading) never runs: the closest this harness gets to the process dying there. The
+     * stopped view model stays in memory until the end; a fresh one over the same storage retries with the notebook failing.
+     */
     @Test fun aRetryAfterTheAppDiedBetweenTheDraftSaveAndTheCommitKeepsTheSavedWordsAsANewSong() {
         putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = 200L))))
-        openSongInEditor()
+        val dying = openSongInEditor()
         val saved = "saved before the crash"
-        // What the hold's draft save wrote: the words, the editor state and the mark, in one write.
-        runBlocking { repo.saveActiveState(openSong.copy(lyrics = saved), false, openSong.title, saved, openSong.theme, preserve = true) }
-        val vm = relaunchedViewModel(saved)
+        val incoming = "words from a later backup"
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val workspacesKey = androidx.datastore.preferences.core.stringPreferencesKey("local_song_workspaces_json")
+        var workspaces: String? = null
+        BackupTestHooks.beforeHeldOperation = { reached.complete(Unit); kotlinx.coroutines.awaitCancellation() }
         try {
+            instrumentation.runOnMainSync {
+                dying.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(saved)
+                dying.restoreFromBackup()
+            }
+            runBlocking { kotlinx.coroutines.withTimeout(30_000) { reached.await() } }
+            BackupTestHooks.beforeHeldOperation = null
+            assertEquals("precondition: the hold's draft save stored the words", saved, storedOpenSong().lyrics)
+            // Newer than that save, so the retry replaces the saved words.
+            putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = incoming, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+            // The notebook cannot be read at relaunch, so it holds no version of the saved words: only the mark keeps them.
+            runBlocking {
+                context.dataStore.edit { workspaces = it[workspacesKey]; it[workspacesKey] = "{not json" }
+            }
+            val vm = relaunchedViewModel(saved)
+            waitUntil({ "notebook ${vm.notebookError}" }) { vm.notebookError != null }
             instrumentation.runOnMainSync { vm.showStartMenu = false; vm.restoreFromBackup() }
             waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
             instrumentation.waitForIdleSync()
-            assertEquals(newerWords, storedOpenSong().lyrics)
+            assertEquals(incoming, storedOpenSong().lyrics)
             val copy = runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id }
             assertEquals(saved, copy.lyrics)
             assertEquals(copy.id to saved, vm.currentProjectId to vm.lyrics)
         } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            // Ends the stopped view model; its cleanup runs now, after the checks.
+            dying.viewModelScope.cancel()
+            waitUntil({ "dying held ${dying.editorHeld}" }) { !dying.editorHeld }
+            runBlocking {
+                context.dataStore.edit { if (workspaces == null) it.remove(workspacesKey) else it[workspacesKey] = workspaces!! }
+            }
+            resetOpenSong()
+        }
+    }
+
+    /**
+     * Another window selects song B after A's draft save and before A's commit. A's reload goes to the copy its own
+     * commit kept, never to B, and A's next save leaves B's words alone.
+     */
+    @Test fun aSongSelectedElsewhereDuringARestoreIsNeverTakenOverByTheEditorsWords() {
+        val songB = SongProject("song-b", "Song B", "b words", "", 100L)
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))))
+        val vm = openSongInEditor(otherSongs = listOf(songB))
+        val edits = "edits in window A"
+        BackupTestHooks.beforeHeldOperation = { repo.selectProject(songB.id) }
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(edits)
+                vm.restoreFromBackup()
+            }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            val copy = runBlocking { repo.projectsFlow.first() }.single { it.id != openSong.id && it.id != songB.id }
+            assertEquals(edits, copy.lyrics)
+            assertEquals(copy.id to edits, vm.currentProjectId to vm.lyrics)
+            instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+            waitUntil { !vm.savingBeforeNavigation }
+            instrumentation.waitForIdleSync()
+            val stored = runBlocking { repo.projectsFlow.first() }
+            assertEquals("b words", stored.single { it.id == songB.id }.lyrics)
+            assertEquals(edits, stored.single { it.id == copy.id }.lyrics)
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
             resetOpenSong()
         }
     }

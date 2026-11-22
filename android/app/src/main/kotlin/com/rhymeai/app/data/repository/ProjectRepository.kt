@@ -135,8 +135,8 @@ class ProjectRepository internal constructor(
         )
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
-        /** The song whose editor words a held flush just wrote: the next sync commit that replaces it keeps them. */
-        private val PRESERVED_SONG_ID_KEY = stringPreferencesKey("preserved_song_id")
+        /** Song id to kept-copy id, one per song a held flush just wrote edits for: a sync commit that replaces the song keeps them. */
+        private val PRESERVED_SONGS_KEY = stringPreferencesKey("preserved_songs_json")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
@@ -310,7 +310,7 @@ class ProjectRepository internal constructor(
         title: String,
         lyrics: String,
         theme: String,
-        preserve: Boolean = false
+        preserveAs: String? = null
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         dataStore.edit { prefs ->
@@ -351,15 +351,25 @@ class ProjectRepository internal constructor(
             prefs[CURRENT_TITLE_KEY] = title
             prefs[CURRENT_LYRICS_KEY] = lyrics
             prefs[CURRENT_THEME_KEY] = theme
-            if (preserve && project != null) prefs[PRESERVED_SONG_ID_KEY] = project.id
+            if (preserveAs != null && project != null) prefs.setPreservedSongs(preservedSongs(prefs) + (project.id to preserveAs))
             committed = next
         }
         checkNotNull(committed)
     }
 
-    /** The operation a held flush preceded ended without a sync commit: nothing more to preserve. */
-    suspend fun clearPreservedSong() = projectSaveMutex.withLock {
-        dataStore.edit { it.remove(PRESERVED_SONG_ID_KEY) }
+    private fun preservedSongs(prefs: Preferences): Map<String, String> =
+        prefs[PRESERVED_SONGS_KEY]?.let { runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrNull() }.orEmpty()
+
+    private fun MutablePreferences.setPreservedSongs(marks: Map<String, String>) {
+        if (marks.isEmpty()) remove(PRESERVED_SONGS_KEY) else this[PRESERVED_SONGS_KEY] = json.encodeToString(marks)
+    }
+
+    /** The id a sync commit gives [songId]'s kept copy, while a held flush's mark for it is stored. */
+    suspend fun preservedCopyId(songId: String): String? = preservedSongs(dataStore.data.first())[songId]
+
+    /** The operation a held flush preceded ended: nothing more to preserve for [songId]; other songs' marks stay. */
+    suspend fun clearPreservedSong(songId: String) = projectSaveMutex.withLock {
+        dataStore.edit { prefs -> prefs.setPreservedSongs(preservedSongs(prefs) - songId) }
     }
 
     suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {
@@ -874,36 +884,36 @@ class ProjectRepository internal constructor(
                 // A41: a song here or incoming whose repaired time lost to a tombstone is kept aside
                 // in the same edit, not erased; one that lost with a real time is a genuine deletion.
                 keptHere = keepRepairedLosers(prefs, gatheredHere, resolved).losers
-                // Words this edit would replace or remove are kept as new songs in it: the editor words saved apart
-                // from the selected song (an older install; startup shows them), else the words a held flush just
-                // wrote (marked in that flush, so a crash before this edit keeps them too). The editor's saved state
+                // Words this edit would replace or remove are kept as new songs in it: those a held flush marked
+                // (under the copy id its operation chose, so a crash before this edit keeps them too), and editor words
+                // saved apart from the selected song (an older install; startup shows them). The editor's saved state
                 // follows a selected song this edit changed or removed; an unchanged song keeps its saved editor words.
                 fun SongProject.sameWords(other: SongProject) = title == other.title && lyrics == other.lyrics && theme == other.theme
                 fun replaced(id: String?) = current.projects.firstOrNull { it.id == id }
                     ?.takeUnless { before -> nextProjects.firstOrNull { it.id == before.id }?.sameWords(before) == true }
-                fun keptCopy(words: SongProject) = words.copy(id = java.util.UUID.randomUUID().toString(), updatedAt = System.currentTimeMillis(), precedenceRepaired = false)
+                val now = System.currentTimeMillis()
+                val marks = preservedSongs(prefs)
+                val markedCopies = marks.mapNotNull { (songId, copyId) ->
+                    replaced(songId)?.copy(id = copyId, updatedAt = now, precedenceRepaired = false)
+                        ?.takeIf { copy -> nextProjects.none { it.id == copy.id } }?.let { songId to it }
+                }.toMap()
+                // Only the marks this edit acted on are consumed; another song's mark stays for its own operation.
+                prefs.setPreservedSongs(marks - markedCopies.keys)
                 val selectedId = prefs[CURRENT_PROJECT_ID_KEY]
-                val preservedId = prefs[PRESERVED_SONG_ID_KEY]
-                prefs.remove(PRESERVED_SONG_ID_KEY)
-                val editorWords = listOf(CURRENT_TITLE_KEY, CURRENT_LYRICS_KEY, CURRENT_THEME_KEY).map { prefs[it] ?: "" }
                 val selectedBefore = replaced(selectedId)
-                val selectedCopy = selectedBefore?.let { before ->
-                    val editor = SongProject(id = before.id, title = editorWords[0].ifEmpty { "Untitled Song" }, lyrics = editorWords[1], theme = editorWords[2])
-                    when {
-                        editorWords.any { it.isNotEmpty() } && !editor.sameWords(before) -> keptCopy(editor)
-                        preservedId == selectedId -> keptCopy(before)
-                        else -> null
-                    }
+                val editorWords = listOf(CURRENT_TITLE_KEY, CURRENT_LYRICS_KEY, CURRENT_THEME_KEY).map { prefs[it] ?: "" }
+                val editorCopy = selectedBefore?.let { before ->
+                    SongProject(title = editorWords[0].ifEmpty { "Untitled Song" }, lyrics = editorWords[1], theme = editorWords[2], updatedAt = now)
+                        .takeIf { editorWords.any(String::isNotEmpty) && !it.sameWords(before) }
                 }
-                val otherCopy = replaced(preservedId)?.takeIf { it.id != selectedId }?.let(::keptCopy)
                 if (selectedBefore != null) {
-                    val shown = selectedCopy ?: nextProjects.firstOrNull { it.id == selectedId }
+                    val shown = editorCopy ?: markedCopies[selectedId] ?: nextProjects.firstOrNull { it.id == selectedId }
                     if (shown == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = shown.id
                     prefs[CURRENT_TITLE_KEY] = shown?.title ?: ""
                     prefs[CURRENT_LYRICS_KEY] = shown?.lyrics ?: ""
                     prefs[CURRENT_THEME_KEY] = shown?.theme ?: ""
                 }
-                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(selectedCopy, otherCopy) + nextProjects)
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(editorCopy) + markedCopies.values + nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
