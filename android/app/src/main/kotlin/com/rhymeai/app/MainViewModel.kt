@@ -765,7 +765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _selectedProvider
         set(value) {
             if (_selectedProvider == value) return
-            cancelEditorAIWork(keepRewriteTarget = settingsOpensAiSetup)
+            cancelEditorAIWork(keepRewriteTarget = true)
             _selectedProvider = value
         }
     private var _selectedModel by mutableStateOf(AIModel.LOCAL_MODEL)
@@ -773,7 +773,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = _selectedModel
         set(value) {
             if (_selectedModel == value) return
-            cancelEditorAIWork(keepRewriteTarget = settingsOpensAiSetup)
+            cancelEditorAIWork(keepRewriteTarget = true)
             _selectedModel = value
         }
     var showSettingsDialog by mutableStateOf(false)
@@ -909,9 +909,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * [keepRewriteTarget] is passed only by model changes and Apply made in AI setup opened by "Set up model":
-     * requests still stop, but the selection the writer came to rewrite stays. Paths that swap the text or the
-     * song never pass it, and each of them clears the range itself, so a kept range is always on the current lyrics.
+     * Stops in-flight AI work and closes the rewrite review. With [keepRewriteTarget], the writer's selection
+     * survives, as on iOS, where cancelling AI work never clears it. Only cancels that leave the lyrics and the
+     * song as they are pass it (model and provider changes, Apply, going to the background); every path that
+     * changes the text or the song clears the range itself, so a kept range is always on the current lyrics.
      */
     private fun cancelEditorAIWork(keepRewriteTarget: Boolean = false) {
         val rewriteTarget = pendingRewriteRange.takeIf { keepRewriteTarget }
@@ -3008,19 +3009,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         keys: Map<AIProvider, String>
     ): Result<Unit> {
         modelChoiceRevision++
-        // Decided when Apply is pressed, so leaving AI setup while it saves does not drop the selection.
-        val keepRewriteTarget = settingsOpensAiSetup
-        cancelEditorAIWork(keepRewriteTarget)
+        cancelEditorAIWork(keepRewriteTarget = true)
         return try {
             withContext(Dispatchers.IO) {
                 keys.forEach { (keyProvider, key) -> repo.saveApiKey(keyProvider.name, key) }
                 repo.saveSelectedProvider(provider.name)
                 repo.saveModelId(model.id)
             }
-            cancelEditorAIWork(keepRewriteTarget)
-            // The setters would cancel again with the current flag; the work was just cancelled above.
-            _selectedProvider = provider
-            _selectedModel = model
+            cancelEditorAIWork(keepRewriteTarget = true)
+            selectedProvider = provider
+            selectedModel = model
             apiKeyPresence = apiKeyPresence + keys
                 .mapKeys { it.key.name }
                 .mapValues { it.value.isNotEmpty() }
@@ -3383,7 +3381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         localModelValidationGeneration++
         localModelValidationJob?.cancel()
         localModelValidationJob = null
-        cancelEditorAIWork(keepRewriteTarget = settingsOpensAiSetup)
+        cancelEditorAIWork(keepRewriteTarget = true)
         localModelLoaded = false
         localModelLoading = true
         localModelError = null
@@ -3502,7 +3500,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onBackground() {
-        cancelEditorAIWork()
+        cancelEditorAIWork(keepRewriteTarget = true)
     }
 }
 
