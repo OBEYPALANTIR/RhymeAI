@@ -29,6 +29,7 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.repository.PreservationTicket
 import com.rhymeai.app.data.repository.SongCreation
 import com.rhymeai.app.data.repository.CreationIdTakenException
 import com.rhymeai.app.data.repository.SameIdTrashCopiesException
@@ -863,13 +864,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // left behind is no edit, writes nothing and reloads after the operation.
             val dirty = editorDirty
             val edited = dirty && stored != null
-            // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
+            // The ticket for this song's kept copy: new for edits this flush writes, else one a flush stored
             // before the app died. The reload takes it from here, never from the shared selection another window moves.
-            val keptId = if (edited) SongIdAllocator.next()
-                else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
+            val ticket = if (edited) PreservationTicket(SongIdAllocator.next())
+                else songId?.let { try { repo.preservedTicket(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
-            val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
+            val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = ticket.takeIf { edited }) } finally { flushingHeldDraft = false }
             if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
@@ -881,8 +882,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 withContext(NonCancellable) {
                     // Only the mark this operation wrote goes; one it read (written before the app died) stays until a commit uses it.
-                    if (songId != null && edited && keptId != null) try { repo.clearPreservedSong(songId, keptId) } catch (_: Exception) {}
-                    showStoredOpenSong(keptId, untouchedRow = stored.takeIf { !dirty })
+                    if (songId != null && edited && ticket != null) try { repo.clearPreservedSong(songId, ticket) } catch (_: Exception) {}
+                    showStoredOpenSong(ticket?.copyId, untouchedRow = stored.takeIf { !dirty })
                 }
             }
             return true
@@ -943,7 +944,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Null when there was nothing to save; otherwise true once the editor's words committed. */
-    private fun startDraftFlush(onSaved: () -> Unit, preserveAs: String? = null): Deferred<Boolean>? {
+    private fun startDraftFlush(onSaved: () -> Unit, preserveAs: PreservationTicket? = null): Deferred<Boolean>? {
         if (!appearanceLoaded || showStartMenu) { onSaved(); return null }
         autoSaveJob?.cancel()
         positionSaveJob?.cancel()
@@ -2998,9 +2999,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorTheme: String,
         attempt: Long,
         creation: CreationAttempt?,
-        preserveAs: String? = null
+        preserveAs: PreservationTicket? = null
     ): List<SongProject> {
-        // Notebook changes queued on a new song wait on this save; one queued after a failed save waits on a Retry's.
+        // Notebook changes queued on a new song wait on this save; after a failure, a Retry's save gets a fresh outcome.
         val outcome = creation?.let {
             if (!it.retired && !it.creation.inserted && it.outcome.isCompleted) CompletableDeferred<Boolean>().also { fresh -> it.outcome = fresh }
             else it.outcome

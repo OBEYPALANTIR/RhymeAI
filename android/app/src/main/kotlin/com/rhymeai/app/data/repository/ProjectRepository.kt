@@ -32,9 +32,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -61,6 +63,34 @@ internal class CreationIdTakenException(id: String) : MissingActiveProjectExcept
  */
 class SongCreation(val token: String = java.util.UUID.randomUUID().toString()) {
     @Volatile internal var inserted = false
+}
+
+/**
+ * One held operation's request to keep its edits: the copy id it asked for and a token naming this request alone.
+ * A mark stored before tokens existed decodes with an empty token, so its readers share it.
+ */
+@Serializable
+data class PreservationTicket(val copyId: String, val token: String = java.util.UUID.randomUUID().toString())
+
+/** What a sync commit did with one acted-on ticket: the row its words are in, while that row stays as it was then. */
+@Serializable
+internal data class PreservationReceipt(
+    val source: String,
+    val ticket: PreservationTicket,
+    val target: String,
+    val generation: String,
+    val title: String,
+    val lyrics: String,
+    val theme: String,
+    val appended: Boolean
+)
+
+/** Where a held editor's song is after its operation, read without writing anything. */
+internal sealed interface HoldResult {
+    /** The commit kept the held words in [row]; [appended] when it made a new song for them. */
+    data class Adopted(val row: SongProject, val appended: Boolean) : HoldResult
+    /** No valid result: the source as stored now (null when gone) and the stored selection and editor words. */
+    data class Miss(val source: SongProject?, val selectedId: String?, val editor: Triple<String, String, String>) : HoldResult
 }
 
 /** Every draw for a new song id in one edit was taken: the edit writes nothing. */
@@ -150,10 +180,12 @@ class ProjectRepository internal constructor(
         )
         private val CURRENT_PROJECT_ID_KEY = stringPreferencesKey("current_project_id")
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
-        /** Song id to kept-copy id, one per song a held flush just wrote edits for: a sync commit that replaces the song keeps them. */
+        /** Song id to the ticket (kept-copy id and request token), one per song a held flush just wrote edits for: a sync commit that replaces the song keeps them. */
         private val PRESERVED_SONGS_KEY = stringPreferencesKey("preserved_songs_json")
         /** Song id to a local generation naming one continuous active row; only tracked ids (creations, kept copies) have one. */
         private val ROW_GENERATIONS_KEY = stringPreferencesKey("row_generations_json")
+        /** What sync commits did with acted-on preservation tickets; each lasts while its target row keeps its generation and words. */
+        private val PRESERVED_RECEIPTS_KEY = stringPreferencesKey("preserved_receipts_json")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
@@ -350,7 +382,7 @@ class ProjectRepository internal constructor(
         title: String,
         lyrics: String,
         theme: String,
-        preserveAs: String? = null
+        preserveAs: PreservationTicket? = null
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         var inserted = false
@@ -423,27 +455,70 @@ class ProjectRepository internal constructor(
         val generations = rowGenerations(this)
         val kept = generations.filterKeys { id -> before.count { it.id == id } == 1 && after.count { it.id == id } == 1 }
         if (kept != generations) setRowGenerations(kept)
+        // A receipt ends with its target's generation or with a change to its words; changing them back cannot revive it.
+        val receipts = receipts(this)
+        val valid = receipts.filter { r ->
+            kept[r.target] == r.generation &&
+                after.single { it.id == r.target }.let { it.title == r.title && it.lyrics == r.lyrics && it.theme == r.theme }
+        }
+        if (valid != receipts) setReceipts(valid)
     }
 
-    private fun preservedSongs(prefs: Preferences): Map<String, String> =
-        prefs[PRESERVED_SONGS_KEY]?.let { runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrNull() }.orEmpty()
+    private fun receipts(prefs: Preferences): List<PreservationReceipt> =
+        prefs[PRESERVED_RECEIPTS_KEY]?.let { runCatching { json.decodeFromString<List<PreservationReceipt>>(it) }.getOrNull() }.orEmpty()
 
-    private fun MutablePreferences.setPreservedSongs(marks: Map<String, String>) {
+    private fun MutablePreferences.setReceipts(receipts: List<PreservationReceipt>) {
+        if (receipts.isEmpty()) remove(PRESERVED_RECEIPTS_KEY) else this[PRESERVED_RECEIPTS_KEY] = json.encodeToString(receipts)
+    }
+
+    private fun preservedSongs(prefs: Preferences): Map<String, PreservationTicket> =
+        prefs[PRESERVED_SONGS_KEY]?.let { raw ->
+            runCatching {
+                json.decodeFromString<Map<String, JsonElement>>(raw).mapValues { (_, mark) ->
+                    // A pre-upgrade mark is the bare copy id.
+                    if (mark is JsonPrimitive) PreservationTicket(mark.content, token = "") else json.decodeFromJsonElement<PreservationTicket>(mark)
+                }
+            }.getOrNull()
+        }.orEmpty()
+
+    private fun MutablePreferences.setPreservedSongs(marks: Map<String, PreservationTicket>) {
         if (marks.isEmpty()) remove(PRESERVED_SONGS_KEY) else this[PRESERVED_SONGS_KEY] = json.encodeToString(marks)
     }
 
-    /** The id a sync commit gives [songId]'s kept copy, while a held flush's mark for it is stored. */
-    suspend fun preservedCopyId(songId: String): String? = preservedSongs(dataStore.data.first())[songId]
+    /** The ticket a held flush stored for [songId]'s kept copy, while it is stored. */
+    suspend fun preservedTicket(songId: String): PreservationTicket? = preservedSongs(dataStore.data.first())[songId]
 
     /**
-     * The operation that marked [songId] with [copyId] ended: its mark goes. A mark another operation wrote since
-     * (another window on the same song) carries another copy id and stays, as do other songs' marks.
+     * The operation that marked [songId] with [ticket] ended: its mark goes. A mark another operation wrote since
+     * (another window on the same song) carries another ticket and stays, as do other songs' marks.
      */
-    suspend fun clearPreservedSong(songId: String, copyId: String) = projectSaveMutex.withLock {
+    suspend fun clearPreservedSong(songId: String, ticket: PreservationTicket) = projectSaveMutex.withLock {
         dataStore.edit { prefs ->
             val marks = preservedSongs(prefs)
-            if (marks[songId] == copyId) prefs.setPreservedSongs(marks - songId)
+            if (marks[songId] == ticket) prefs.setPreservedSongs(marks - songId)
         }
+    }
+
+    /**
+     * Where [source]'s held words are after a commit acted on [ticket], from one read of the store: the result's row
+     * while it is the one active row with that generation and those words, else the source and the stored editor
+     * state. Nothing is written or consumed, so every reader of one ticket gets the same answer.
+     */
+    internal suspend fun resolveHold(source: String, ticket: PreservationTicket): HoldResult {
+        val prefs = dataStore.data.first()
+        val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+        val receipt = receipts(prefs).firstOrNull { it.source == source && it.ticket == ticket }
+        val row = receipt?.let { r ->
+            active.singleOrNull { it.id == r.target }?.takeIf {
+                rowGenerations(prefs)[r.target] == r.generation && it.title == r.title && it.lyrics == r.lyrics && it.theme == r.theme
+            }
+        }
+        if (receipt != null && row != null) return HoldResult.Adopted(row, receipt.appended)
+        return HoldResult.Miss(
+            active.firstOrNull { it.id == source },
+            prefs[CURRENT_PROJECT_ID_KEY],
+            Triple(prefs[CURRENT_TITLE_KEY] ?: "", prefs[CURRENT_LYRICS_KEY] ?: "", prefs[CURRENT_THEME_KEY] ?: "")
+        )
     }
 
     suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {
@@ -464,7 +539,8 @@ class ProjectRepository internal constructor(
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
-            prefs.setRowGenerations(emptyMap())
+            // A wholesale replacement continues no row: every generation and receipt ends.
+            prefs.retireGenerations(emptyList(), projects)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - projects.map { it.id }.toSet()
         }
@@ -994,7 +1070,8 @@ class ProjectRepository internal constructor(
                 val actedSources = marks.keys.filterTo(HashSet()) { replaced(it) != null }
                 val targets = HashMap<String, String>()
                 val appended = mutableListOf<SongProject>()
-                for ((source, copyId) in marks) {
+                for ((source, ticket) in marks) {
+                    val copyId = ticket.copyId
                     val before = replaced(source) ?: continue
                     val target = if (copyId !in extra && copyId !in actedSources && nextProjects.any { it.id == copyId && it.sameWords(before) }) {
                         copyId
@@ -1019,6 +1096,18 @@ class ProjectRepository internal constructor(
                 val written = listOfNotNull(editorCopy) + appended + nextProjects
                 prefs[PROJECTS_KEY] = explicitJson.encodeToString(written)
                 prefs.retireGenerations(current.projects, written)
+                // Each acted-on ticket's result, with its target's generation (given now if it has none), in this same edit.
+                val generations = rowGenerations(prefs).toMutableMap()
+                val results = targets.mapNotNull { (source, target) ->
+                    // A reused id that several rows share names no one row: that ticket gets no result.
+                    val row = written.singleOrNull { it.id == target } ?: return@mapNotNull null
+                    PreservationReceipt(
+                        source, marks.getValue(source), target, generations.getOrPut(target) { java.util.UUID.randomUUID().toString() },
+                        row.title, row.lyrics, row.theme, appended = appended.any { it.id == target }
+                    )
+                }
+                prefs.setRowGenerations(generations)
+                prefs.setReceipts(receipts(prefs) + results)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
