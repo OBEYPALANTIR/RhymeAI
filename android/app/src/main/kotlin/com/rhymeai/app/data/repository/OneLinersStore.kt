@@ -302,10 +302,13 @@ class OneLinersStore internal constructor(
      * song and the used marker are stored in one write: both land, or neither does. Returns
      * the stored songs; null when the song is no longer active.
      */
-    suspend fun sendToSong(id: String, projectId: String, songs: ProjectRepository, now: Long = System.currentTimeMillis()): List<SongProject>? {
+    suspend fun sendToSong(
+        id: String, projectId: String, songs: ProjectRepository, now: Long = System.currentTimeMillis(),
+        adoptedFrom: Pair<String, PreservationTicket>? = null
+    ): List<SongProject>? {
         val line = all().firstOrNull { it.id == id } ?: return null
         if (line.text.isBlank()) throw OneLinerHasNoWordsException()
-        return songs.appendLineToProject(projectId, line.text.trim(), now) { prefs -> markUsedIn(prefs, id, projectId) }
+        return songs.appendLineToProject(projectId, line.text.trim(), now, adoptedFrom) { prefs -> markUsedIn(prefs, id, projectId) }
     }
 
     /**

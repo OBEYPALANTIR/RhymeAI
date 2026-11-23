@@ -1714,7 +1714,7 @@ class ProjectRepositoryTest {
         assertEquals("x", repository.currentProjectIdFlow.first())
         assertEquals(Triple("A", "a old", ""), repository.editorStateFlow().first())
         assertNull(repository.preservedTicket("a")?.copyId)
-        assertEquals(HoldResult.Adopted(songs.single { it.id == "x" }, appended = false), repository.resolveHold("a", held))
+        assertEquals(HoldResult.Adopted(songs.single { it.id == "x" }, appended = false, editorWritten = true), repository.resolveHold("a", held))
     }
 
     @Test
@@ -1827,8 +1827,10 @@ class ProjectRepositoryTest {
         val appended = kept.single { it.id != "x" }
         assertEquals(
             setOf(HoldResult.Adopted(reused, appended = false), HoldResult.Adopted(appended, appended = true)),
-            setOf(resultA, resultB)
+            setOf(resultA.copy(editorWritten = false), resultB.copy(editorWritten = false))
         )
+        // Only the selected song's (b's, saved last) commit wrote the shared editor state.
+        assertEquals(false to true, resultA.editorWritten to resultB.editorWritten)
 
         val edited = resultA.row.copy(lyrics = "edited a copy", updatedAt = later)
         repository.saveActiveState(edited, null, edited.title, edited.lyrics, edited.theme)
@@ -1937,13 +1939,13 @@ class ProjectRepositoryTest {
         assertEquals(winner, repository.preservedTicket("a"))
         repository.replace(a)
         val kept = repository.projectsFlow.first().single { it.lyrics == "a old" }
-        assertEquals(HoldResult.Adopted(kept, appended = true), repository.resolveHold("a", winner))
+        assertEquals(HoldResult.Adopted(kept, appended = true, editorWritten = true), repository.resolveHold("a", winner))
         // The older request and one the commit never saw get the source, not the winner's copy.
         for (other in listOf(older, PreservationTicket("x"))) {
             val miss = repository.resolveHold("a", other)
             assertTrue(miss is HoldResult.Miss && miss.source?.lyrics == "a new", "$other: $miss")
         }
-        assertEquals(HoldResult.Adopted(kept, appended = true), repository.resolveHold("a", winner))
+        assertEquals(HoldResult.Adopted(kept, appended = true, editorWritten = true), repository.resolveHold("a", winner))
     }
 
     @Test
@@ -1955,7 +1957,7 @@ class ProjectRepositoryTest {
         repository.replace(a)
         val kept = repository.projectsFlow.first().single { it.id == "kept" }
         assertEquals("a old", kept.lyrics)
-        assertEquals(HoldResult.Adopted(kept, appended = true), repository.resolveHold("a", repository.preservedTicket("a") ?: legacy))
+        assertEquals(HoldResult.Adopted(kept, appended = true, editorWritten = true), repository.resolveHold("a", repository.preservedTicket("a") ?: legacy))
     }
 
     @Test
@@ -1964,7 +1966,7 @@ class ProjectRepositoryTest {
         val a = repository.heldSong("a", held)
         repository.replace(a)
         val x = repository.projectsFlow.first().single { it.id == "x" }
-        assertEquals(HoldResult.Adopted(x, appended = true), repository.resolveHold("a", held))
+        assertEquals(HoldResult.Adopted(x, appended = true, editorWritten = true), repository.resolveHold("a", held))
         // X leaves for Trash, then a newer incoming X with the same words is active again before anyone claims.
         repository.moveProjectToTrash("x", 300L)
         val current = repository.projectsFlow.first()
@@ -2036,7 +2038,7 @@ class ProjectRepositoryTest {
                 assertEquals("x", prefs[stringPreferencesKey("current_project_id")])
                 assertEquals("a old", prefs[stringPreferencesKey("current_lyrics")])
                 assertNull(reopened.preservedTicket("a"))
-                assertEquals(HoldResult.Adopted(x, appended = true), reopened.resolveHold("a", held))
+                assertEquals(HoldResult.Adopted(x, appended = true, editorWritten = true), reopened.resolveHold("a", held))
                 reopened.saveActiveState(x.copy(lyrics = "next"), null, x.title, "next", x.theme)
                 assertEquals(mapOf("a" to "a new", "x" to "next"), reopened.projectsFlow.first().associate { it.id to it.lyrics })
             } finally {

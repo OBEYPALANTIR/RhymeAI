@@ -87,13 +87,22 @@ internal data class PreservationReceipt(
     val title: String,
     val lyrics: String,
     val theme: String,
-    val appended: Boolean
+    val appended: Boolean,
+    /** The same commit selected [target] for this source's editor and wrote its words as the shared editor state. */
+    val editorWritten: Boolean = false
 )
+
+/**
+ * A held editor's draft saved as a new song once its adopted copy was refused. [baseline] is the shared selection and
+ * editor words the commit itself wrote for that editor (null when it wrote none): only while they are still stored does
+ * the insert replace them, in the same edit. [notebook] is applied to the new song's notebook in that edit.
+ */
+class RecoveryInsert(val baseline: List<String?>?, var notebook: ((SongWorkspace) -> SongWorkspace)? = null)
 
 /** Where a held editor's song is after its operation, read without writing anything. */
 internal sealed interface HoldResult {
     /** The commit kept the held words in [row]; [appended] when it made a new song for them. */
-    data class Adopted(val row: SongProject, val appended: Boolean) : HoldResult
+    data class Adopted(val row: SongProject, val appended: Boolean, val editorWritten: Boolean = false) : HoldResult
     /** No valid result: the source as stored now (null when gone) and the stored selection and editor words. */
     data class Miss(val source: SongProject?, val selectedId: String?, val editor: Triple<String, String, String>) : HoldResult
 }
@@ -400,7 +409,8 @@ class ProjectRepository internal constructor(
         lyrics: String,
         theme: String,
         preserveAs: PreservationTicket? = null,
-        adoptedFrom: Pair<String, PreservationTicket>? = null
+        adoptedFrom: Pair<String, PreservationTicket>? = null,
+        recovery: RecoveryInsert? = null
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         var inserted = false
@@ -422,9 +432,7 @@ class ProjectRepository internal constructor(
                     if (creation != null && (stored > 1 || rowGenerations(prefs)[project.id] != creation.token)) {
                         throw CreationIdTakenException(project.id)
                     }
-                    if (adoptedFrom != null && receipts(prefs).firstOrNull { it.source == adoptedFrom.first && it.ticket == adoptedFrom.second }
-                            ?.takeIf { it.target == project.id }?.let { receiptRow(prefs, active, it) } == null
-                    ) throw HeldCopyChangedException(project.id)
+                    if (adoptedFrom != null && heldRow(prefs, active, adoptedFrom, project.id) == null) throw HeldCopyChangedException(project.id)
                     active.map { current ->
                         if (current.id != project.id) current else current.copy(
                             title = project.title,
@@ -449,11 +457,19 @@ class ProjectRepository internal constructor(
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - project.id
             }
-            if (project == null) prefs.remove(CURRENT_PROJECT_ID_KEY)
-            else prefs[CURRENT_PROJECT_ID_KEY] = project.id
-            prefs[CURRENT_TITLE_KEY] = title
-            prefs[CURRENT_LYRICS_KEY] = lyrics
-            prefs[CURRENT_THEME_KEY] = theme
+            val fold = recovery?.notebook
+            if (inserted && fold != null) {
+                val current = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
+                prefs[WORKSPACES_KEY] = json.encodeToString(current + (project!!.id to fold(current[project.id] ?: SongWorkspace())))
+            }
+            // A recovery replaces the shared editor state only while it is what the commit wrote for this editor.
+            if (recovery == null || recovery.baseline != null && recovery.baseline == editorKeys(prefs)) {
+                if (project == null) prefs.remove(CURRENT_PROJECT_ID_KEY)
+                else prefs[CURRENT_PROJECT_ID_KEY] = project.id
+                prefs[CURRENT_TITLE_KEY] = title
+                prefs[CURRENT_LYRICS_KEY] = lyrics
+                prefs[CURRENT_THEME_KEY] = theme
+            }
             if (preserveAs != null && project != null) prefs.setPreservedSongs(preservedSongs(prefs) + (project.id to preserveAs))
             committed = next
         }
@@ -531,12 +547,44 @@ class ProjectRepository internal constructor(
         val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
         val receipt = ticket?.let { receipts(prefs).firstOrNull { it.source == source && it.ticket == ticket } }
         val row = receipt?.let { receiptRow(prefs, active, it) }
-        if (receipt != null && row != null) return HoldResult.Adopted(row, receipt.appended)
+        if (receipt != null && row != null) return HoldResult.Adopted(row, receipt.appended, receipt.editorWritten)
         return HoldResult.Miss(
             active.firstOrNull { it.id == source },
             prefs[CURRENT_PROJECT_ID_KEY],
             Triple(prefs[CURRENT_TITLE_KEY] ?: "", prefs[CURRENT_LYRICS_KEY] ?: "", prefs[CURRENT_THEME_KEY] ?: "")
         )
+    }
+
+    private fun editorKeys(prefs: Preferences): List<String?> =
+        listOf(prefs[CURRENT_PROJECT_ID_KEY], prefs[CURRENT_TITLE_KEY] ?: "", prefs[CURRENT_LYRICS_KEY] ?: "", prefs[CURRENT_THEME_KEY] ?: "")
+
+    /** [id]'s row while the receipt [adoptedFrom] names (source and ticket) still names it as its commit left it. */
+    private fun heldRow(prefs: Preferences, active: List<SongProject>, adoptedFrom: Pair<String, PreservationTicket>, id: String): SongProject? =
+        receipts(prefs).firstOrNull { it.source == adoptedFrom.first && it.ticket == adoptedFrom.second }
+            ?.takeIf { it.target == id }?.let { receiptRow(prefs, active, it) }
+
+    /** The stored songs, and whether [adoptedFrom] still names [id]'s row, from one read. Nothing is written. */
+    internal suspend fun refreshHold(adoptedFrom: Pair<String, PreservationTicket>, id: String): Pair<List<SongProject>, Boolean> {
+        val prefs = dataStore.data.first()
+        val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+        return active to (heldRow(prefs, active, adoptedFrom, id) != null)
+    }
+
+    /**
+     * Applies [change] to [id]'s stored notebook in one edit, returning it as committed. With [adoptedFrom] the edit first
+     * checks that receipt still names the row (else [HeldCopyChangedException]). The editor state is never written.
+     */
+    internal suspend fun updateWorkspace(id: String, adoptedFrom: Pair<String, PreservationTicket>?, change: (SongWorkspace) -> SongWorkspace): SongWorkspace {
+        lateinit var committed: SongWorkspace
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            if (adoptedFrom != null && heldRow(prefs, active, adoptedFrom, id) == null) throw HeldCopyChangedException(id)
+            if (active.none { it.id == id }) throw MissingActiveProjectException(id)
+            val current = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
+            committed = change(current[id] ?: SongWorkspace())
+            prefs[WORKSPACES_KEY] = json.encodeToString(current + (id to committed))
+        }
+        return committed
     }
 
     /** [r]'s row while it is the one active row with the receipt's generation and words. */
@@ -678,11 +726,14 @@ class ProjectRepository internal constructor(
         id: String,
         line: String,
         now: Long,
+        adoptedFrom: Pair<String, PreservationTicket>? = null,
         inSameWrite: (MutablePreferences) -> Unit = {}
     ): List<SongProject>? = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         dataStore.edit { prefs ->
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            // A held editor's adopted copy is appended to only while its receipt still names it; nothing is written otherwise.
+            if (adoptedFrom != null && heldRow(prefs, active, adoptedFrom, id) == null) throw HeldCopyChangedException(id)
             val project = active.firstOrNull { it.id == id } ?: return@edit
             // A repeated id is refused before anything is written: the first copy's words would replace every other copy's.
             if (active.count { it.id == id } > 1) throw SameIdActiveCopiesException(id)
@@ -1127,7 +1178,9 @@ class ProjectRepository internal constructor(
                     val row = written.singleOrNull { it.id == target } ?: return@mapNotNull null
                     PreservationReceipt(
                         source, marks.getValue(source), target, generations.getOrPut(target) { java.util.UUID.randomUUID().toString() },
-                        row.title, row.lyrics, row.theme, appended = appended.any { it.id == target }
+                        row.title, row.lyrics, row.theme, appended = appended.any { it.id == target },
+                        // Only where the edit above wrote this target as the shared editor state.
+                        editorWritten = source == selectedId && selectedBefore != null && editorCopy == null && targets[selectedId] != null
                     )
                 }
                 prefs.setRowGenerations(generations)
