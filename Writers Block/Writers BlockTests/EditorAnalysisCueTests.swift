@@ -24,17 +24,21 @@ struct EditorAnalysisCueTests {
             debounceEntered.yield(editUnderTest.value)
             try await Task.sleep(for: .seconds(3_600))
         }
-        // An instant stand-in counter (characters for syllables), held at a gate the
-        // test opens, so the header can be read while the count is outstanding.
+        // An instant stand-in counter (characters for syllables), held at its edit's
+        // own gate until the test opens it, so the header can be read while the count
+        // is outstanding. A hold that times out instead is recorded and fails the edit.
         let count: @Sendable (String) -> (words: Int, syllables: Int) = { text in
             (SyllableCounter.lyricWordCount(text), text.utf16.count)
         }
         let (countStarts, countStarted) = AsyncStream.makeStream(of: String.self)
-        let gate = DispatchSemaphore(value: 0)
+        let gates = HookBox<[String: DispatchSemaphore]>([:])
+        let expiredHolds = HookBox<Set<String>>([])
         viewModel.countLyrics = { text in
             countStarted.yield(text)
-            // Bounded so a failed test never pins a pool thread for good.
-            _ = gate.wait(timeout: .now() + 120)
+            // The timeout only keeps a failed test from pinning a pool thread for good.
+            if let gate = gates.value[text], gate.wait(timeout: .now() + 120) == .timedOut {
+                expiredHolds.value.insert(text) // one worker at a time: edits are serial
+            }
             return count(text)
         }
         var beforeCounting: [(words: Int, syllables: Int)] = []
@@ -43,8 +47,19 @@ struct EditorAnalysisCueTests {
         // above CI stalls seen so far (~40 s) and far below the 3,600 s debounce.
         func edit(to text: String) async throws {
             editUnderTest.value = text
+            let gate = DispatchSemaphore(value: 0)
+            gates.value[text] = gate
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
             let countTask = try #require(viewModel.countTask)
+            // On any early exit, cancel the count first so a late result is discarded,
+            // then release its worker.
+            var gateOpened = false
+            defer {
+                if !gateOpened {
+                    countTask.cancel()
+                    gate.signal()
+                }
+            }
             beforeCounting.append((viewModel.wordCount, viewModel.syllableCount))
 
             let started = await observed(within: .seconds(120), onGiveUp: { countTask.cancel() }) {
@@ -57,14 +72,19 @@ struct EditorAnalysisCueTests {
                 for await entered in debounceEntries where entered == text { return true }
                 return false
             }
-            gate.signal()
             try #require(held, "the rhyme context's debounce never held for \"\(text)\"")
+            gateOpened = true
+            gate.signal()
 
             let landed = await observed(within: .seconds(120), onGiveUp: { countTask.cancel() }) {
                 await countTask.value
                 return true
             }
             try #require(landed, "the count for \"\(text)\" did not finish within 120 s")
+            try #require(
+                !expiredHolds.value.contains(text),
+                "the count for \"\(text)\" was never held: its gate timed out before the test opened it"
+            )
             try #require(viewModel.lyrics == text)
             try #require(
                 (viewModel.wordCount, viewModel.syllableCount) == count(text),
@@ -189,7 +209,8 @@ private func observed(
 ) async -> Bool {
     let deadline = ContinuousClock.now.advanced(by: limit)
     let (outcomes, outcome) = AsyncStream.makeStream(of: Bool.self)
-    let work = Task { outcome.yield(await observe()) }
+    // Judged when the observation completes, so a late one fails even if delivered first.
+    let work = Task { outcome.yield(await observe() && ContinuousClock.now <= deadline) }
     let timer = Task {
         do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
         outcome.yield(false)
