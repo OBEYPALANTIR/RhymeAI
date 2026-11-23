@@ -369,6 +369,8 @@ struct OneLinersView: View {
     private func row(_ line: OneLiner) -> some View {
         let usedTitle = line.usedInProjectId.flatMap { projectTitles[$0] }
         let isVoiceOnly = line.text.isEmpty
+        let audioURL = line.audioFileName.map { store.audioURL(fileName: $0) }
+        let availability = Self.takeAvailability(audioURL)
         return HStack(alignment: .center, spacing: RhymeAITokens.Spacing.xs) {
             VStack(alignment: .leading, spacing: RhymeAITokens.Spacing.xxs) {
                 Text(isVoiceOnly ? "Voice line" : line.text)
@@ -377,8 +379,17 @@ struct OneLinersView: View {
                     .foregroundStyle(line.usedInProjectId == nil && !isVoiceOnly ? palette.primaryInk : palette.secondaryInk)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                if availability == .missing {
+                    Text("Voice take unavailable on this device")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondaryInk)
+                }
+
                 if isVoiceOnly {
-                    Text("Transcribe or type the words first. \(PlatformWording.tap) to add them.")
+                    let editHint = availability == .missing
+                        ? "\(PlatformWording.tap) to type the words."
+                        : "Transcribe or type the words first. \(PlatformWording.tap) to add them."
+                    Text(editHint)
                         .font(.caption)
                         .foregroundStyle(palette.secondaryInk)
                 }
@@ -418,16 +429,36 @@ struct OneLinersView: View {
             .accessibilityHint("Edits the words")
             .accessibilityAction { openCapture(.edit(line)) }
 
-            if let fileName = line.audioFileName {
-                playButton(store.audioURL(fileName: fileName))
+            if let url = audioURL, availability == .local(url) || player.playingURL == url {
+                playButton(url)
             }
         }
+    }
+
+    enum TakeAvailability: Equatable {
+        case noTake
+        case missing
+        case local(URL)
+    }
+
+    static func takeAvailability(_ url: URL?) -> TakeAvailability {
+        guard let url else { return .noTake }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return .missing }
+        return .local(url)
     }
 
     private func playButton(_ url: URL) -> some View {
         let isPlaying = player.playingURL == url
         return Button {
-            if !isPlaying { viewModel.voiceMemoService.stopPlayback() }
+            if player.playingURL != url {
+                guard Self.takeAvailability(url) == .local(url) else {
+                    showToast(Toast(message: "Voice take unavailable on this device"))
+                    return
+                }
+                viewModel.voiceMemoService.stopPlayback()
+            }
             if !player.toggle(url, memoRecording: viewModel.voiceMemoService.isRecording) {
                 showToast(Toast(message: "Finish recording first"))
             }
