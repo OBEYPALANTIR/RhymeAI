@@ -154,7 +154,9 @@ struct RestorePendingDraftTests {
         var expectedAudio = Set(audios)
         var alternateID: String?
         if mode == "missingTake" {
-            try FileManager.default.removeItem(at: folder.appendingPathComponent(try #require(takes.first).fileName))
+            let missing = folder.appendingPathComponent(try #require(takes.first).fileName)
+            expectedAudio.remove(try Data(contentsOf: missing))
+            try FileManager.default.removeItem(at: missing)
         } else if mode == "partial" {
             let take = try #require(takes.first)
             let target = harness.file(take.recordingID(for: kept.id), kept.id)
@@ -192,7 +194,7 @@ struct RestorePendingDraftTests {
         let files = try FileManager.default.contentsOfDirectory(atPath: recovery.deletingLastPathComponent().path)
         let retry = mode == "missingTake" || mode == "ambiguous"
         #expect(files.contains { $0.hasPrefix("unrecovered-") } == retry)
-        #expect(reopened.audios("reserved") == (retry ? [] : expectedAudio))
+        #expect(reopened.audios("reserved") == (mode == "ambiguous" ? [] : expectedAudio))
         if retry {
             #expect(editor.errorMessage?.contains("retried") == true)
         } else {
@@ -240,7 +242,7 @@ struct RestorePendingDraftTests {
     }
 
     @Test(arguments: [false, true], [false, true])
-    func relaunchKeepsAnIncompleteJournalAfterSavingItsLyrics(inPlace: Bool, missingFolder: Bool) async throws {
+    func audioRetryAfterAnOrdinaryEditKeepsTheLatestWordsOnTheSameSong(inPlace: Bool, missingFolder: Bool) async throws {
         let harness = try await BackupCoreTests().makeHarness()
         let original = SongProject(id: "original", title: "Original", lyrics: "baseline")
         harness.context.insert(original)
@@ -277,19 +279,67 @@ struct RestorePendingDraftTests {
         }
         try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
 
-        let first = try await reopenEditor(harness, recovery: recovery)
+        let (first, editor) = try await reopenRecoveryEditor(harness, recovery: recovery)
         let keptID = inPlace ? original.id : "reserved"
         let saved = try first.context.fetch(FetchDescriptor<SongProject>())
         #expect(saved.filter { $0.lyrics == "last typed words" }.map(\.id) == [keptID])
         #expect(try retryJournals(beside: recovery).count == 1)
+        let kept = try #require(saved.first { $0.id == keptID && $0.lyrics == "last typed words" })
+        let owner = try durableRowID(kept)
         if !missingFolder {
             let remaining = try #require(takes.last)
-            #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent(remaining.fileName).path))
+            let remainingBytes = try Data(contentsOf: folder.appendingPathComponent(remaining.fileName))
+            #expect(first.audios(keptID) == [remainingBytes])
+            let adopted = try first.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == keptID }
+            #expect(adopted.map(\.audio) == [remainingBytes])
+            let retryName = try #require(try retryJournals(beside: recovery).first)
+            let retryFile = recovery.deletingLastPathComponent().appendingPathComponent(retryName)
+            let retry = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: retryFile)) as? [String: Any])
+            let inventory = try #require(retry["recordingTakes"] as? [[String: Any]])
+            #expect(inventory.contains { $0["fileName"] as? String == firstTake.fileName })
+            editor.loadProject(kept)
+            editor.lyrics = "words edited after recovery"
+            #expect(editor.flushCurrentDraft())
             try lost.write(to: folder.appendingPathComponent(firstTake.fileName))
             let second = try await reopenEditor(first, recovery: recovery)
+            let songs = try second.context.fetch(FetchDescriptor<SongProject>())
+            #expect(songs.allSatisfy { $0.lyrics != "last typed words" })
+            #expect(try songs.first { $0.id == keptID }.map(durableRowID) == owner)
+            #expect(songs.first { $0.id == keptID }?.lyrics == "words edited after recovery")
             #expect(second.audios(keptID) == Set(audio))
             #expect(try retryJournals(beside: recovery).isEmpty)
         }
+    }
+
+    @Test(arguments: [false, true])
+    func relaunchRecoversIntactTakesWithoutAReadableNameIndex(corrupt: Bool) async throws {
+        let harness = try await BackupCoreTests().makeHarness()
+        let song = SongProject(id: "original", title: "Original", lyrics: "remote winner")
+        harness.context.insert(song)
+        try harness.context.save()
+        let bytes = Data([0x41, 0x42])
+        try await harness.writeMemo(bytes, projectId: song.id, fileName: "physical.m4a")
+        let row = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first)
+        let snapshot = try #require(try OpenRecordingSnapshot(projectId: song.id, recordingsRoot: harness.memosRoot,
+                                                              displayNames: [row.storedName: "Named take.m4a"]))
+        let takes = try snapshot.takesForRecovery()
+        let folder = OpenRecordingSnapshot.stagingRoot(for: harness.memosRoot).appendingPathComponent(snapshot.folderName)
+        let recovery = harness.memosRoot.deletingLastPathComponent().appendingPathComponent("draft-recovery.json")
+        let journal: [String: Any] = [
+            "projectId": song.id, "title": "Local", "lyrics": "local words", "theme": "",
+            "baselineTitle": song.title, "baselineLyrics": "baseline", "baselineTheme": "",
+            "savedAt": Date().timeIntervalSinceReferenceDate, "separateCopyId": "reserved",
+            "recordingSnapshotFolder": snapshot.folderName,
+            "recordingTakes": try JSONSerialization.jsonObject(with: JSONEncoder().encode(takes))
+        ]
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        let names = folder.appendingPathComponent("names.json")
+        if corrupt { try Data([0x00]).write(to: names) } else { try FileManager.default.removeItem(at: names) }
+        let reopened = try await reopenEditor(harness, recovery: recovery)
+        let attached = try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == "reserved" }
+        #expect(attached.map(\.audio) == [bytes])
+        #expect(attached.map(\.displayName) == ["Named take.m4a"])
+        #expect(try retryJournals(beside: recovery).isEmpty)
     }
 
     @Test func returningToTheDisplacedDraftKeepsItsOriginalTitle() async throws {
@@ -314,21 +364,374 @@ struct RestorePendingDraftTests {
         #expect(fixture.editor.currentProjectId == keptID)
     }
 
+    @Test(arguments: ["editor", "editorInPlace", "restore", "import", "beforeIntent", "rollback"])
+    func reopenAtTheTextCommitBoundaryResolvesTheAttempt(_ cut: String) async throws {
+        if cut == "restore" || cut == "import" {
+            let fixture = try await makePendingDraft()
+            let harness = fixture.harness
+            let recovery = recoveryURL(harness)
+            var frozen: (journal: Data, folder: URL, name: String, audio: Data)?
+            harness.service.saveAppliedChanges = { context in
+                let journal = try Data(contentsOf: recovery)
+                let payload = try journalObject(journal)
+                let name = try #require(payload["recordingSnapshotFolder"] as? String)
+                let folder = OpenRecordingSnapshot.stagingRoot(for: harness.memosRoot).appendingPathComponent(name)
+                let inventory = try #require(payload["recordingTakes"] as? [[String: Any]])
+                let take = try #require(inventory.first?["fileName"] as? String)
+                let audio = try Data(contentsOf: folder.appendingPathComponent(take))
+                try context.save()
+                frozen = (journal, folder, take, audio)
+                try FileManager.default.removeItem(at: folder.appendingPathComponent(take))
+            }
+            let manifest = try fixture.remote.encodedManifest()
+            if cut == "restore" {
+                harness.drive.seed(name: SyncBlob.driveFileName, content: manifest)
+                harness.drive.seed(name: BackupCoreTests.lateTake.entry.driveName, content: BackupCoreTests.lateTake.audio)
+                await fixture.editor.restoreBackupNow()
+            } else {
+                await fixture.editor.importBackupFile(try BackupArchive.zip([
+                    ("manifest.json", manifest), ("recordings/song-a/late.m4a", BackupCoreTests.lateTake.audio)
+                ]))
+            }
+            let state = try #require(frozen)
+            try clearRetryJournals(beside: recovery)
+            try FileManager.default.createDirectory(at: state.folder, withIntermediateDirectories: true)
+            try state.audio.write(to: state.folder.appendingPathComponent(state.name))
+            try state.journal.write(to: recovery, options: .atomic)
+            try await assertOwnerAfterInterveningEdit(harness, recovery: recovery, bytes: state.audio)
+            return
+        }
+
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery(inPlace: cut == "editorInPlace")
+        if cut == "beforeIntent" {
+            let reopened = try await reopenEditor(harness, recovery: recovery)
+            #expect(reopened.audios("reserved") == [bytes])
+            #expect(try retryJournals(beside: recovery).isEmpty)
+            return
+        }
+        let staged = snapshot.appendingPathComponent(take.fileName)
+        try FileManager.default.removeItem(at: staged)
+        var frozen: Data?
+        let (first, _) = try await reopenRecoveryEditor(harness, recovery: recovery, save: { context in
+            if let journal = try retryJournals(beside: recovery).first,
+               try context.fetch(FetchDescriptor<SongProject>()).contains(where: { $0.lyrics == "pending local words" }) {
+                frozen = try Data(contentsOf: recovery.deletingLastPathComponent().appendingPathComponent(journal))
+                if cut == "rollback" { throw CocoaError(.fileWriteUnknown) }
+            }
+            try context.save()
+        })
+        let journal = try #require(frozen)
+        try clearRetryJournals(beside: recovery)
+        try bytes.write(to: staged)
+        if cut == "rollback" {
+            for number in [1, 2] {
+                let copy = recovery.deletingLastPathComponent().appendingPathComponent("unrecovered-\(number).json")
+                try journal.write(to: copy, options: .atomic)
+            }
+            #expect(try !first.context.fetch(FetchDescriptor<SongProject>()).contains { $0.lyrics == "pending local words" })
+            let reopened = try await reopenEditor(first, recovery: recovery)
+            #expect(reopened.audios("reserved") == [bytes])
+            #expect(try reopened.context.fetch(FetchDescriptor<SongProject>()).filter { $0.lyrics == "pending local words" }.count == 1)
+            #expect(try retryJournals(beside: recovery).isEmpty)
+        } else {
+            try journal.write(to: recovery, options: .atomic)
+            try await assertOwnerAfterInterveningEdit(first, recovery: recovery, bytes: bytes)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func alreadySatisfiedRecoveryStaysAudioOnlyAfterAnEdit(historyUnavailable: Bool) async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery(inPlace: true)
+        let original = try #require(try harness.context.fetch(FetchDescriptor<SongProject>()).first)
+        original.lyrics = "pending local words"
+        try harness.context.save()
+        let staged = snapshot.appendingPathComponent(take.fileName)
+        try FileManager.default.removeItem(at: staged)
+        if historyUnavailable {
+            var record = try journalObject(Data(contentsOf: recovery))
+            record["attempt"] = ["id": UUID().uuidString, "projectId": original.id, "store": "unavailable"]
+            try JSONSerialization.data(withJSONObject: record).write(to: recovery, options: .atomic)
+        }
+        let (first, editor) = try await reopenRecoveryEditor(harness, recovery: recovery)
+        let retry = try #require(try retryJournals(beside: recovery).first)
+        let retryURL = recovery.deletingLastPathComponent().appendingPathComponent(retry)
+        let record = try journalObject(Data(contentsOf: retryURL))
+        if historyUnavailable {
+            #expect(record["owner"] == nil)
+            #expect(record["lyrics"] as? String == "pending local words")
+        } else {
+            #expect(record["attempt"] == nil)
+            #expect(record["owner"] != nil)
+        }
+        let kept = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first)
+        editor.loadProject(kept)
+        editor.lyrics = "words edited after recovery"
+        #expect(editor.flushCurrentDraft())
+        try bytes.write(to: staged)
+        let second = try await reopenEditor(first, recovery: recovery)
+        #expect(try second.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["words edited after recovery"])
+        #expect(second.audios(original.id) == (historyUnavailable ? [] : [bytes]))
+        #expect(try retryJournals(beside: recovery).isEmpty == !historyUnavailable)
+    }
+
+    @Test(arguments: [false, true])
+    func audioRetryRefusesASameIDReplacement(throughTrash: Bool) async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
+        let staged = snapshot.appendingPathComponent(take.fileName)
+        try FileManager.default.removeItem(at: staged)
+        let (first, editor) = try await reopenRecoveryEditor(harness, recovery: recovery)
+        let saved = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "reserved" })
+        let id = saved.id
+        let row = try durableRowID(saved)
+        if throughTrash {
+            #expect(editor.moveProjectToTrash(saved))
+            let trash = try #require(try first.context.fetch(FetchDescriptor<TrashedSongProject>()).first { $0.id == id })
+            #expect(editor.restoreTrashedProject(trash) != nil)
+        } else {
+            let replacement = SongProject(id: id, title: saved.title, lyrics: saved.lyrics, theme: saved.theme)
+            first.context.delete(saved)
+            try first.context.save()
+            first.context.insert(replacement)
+            try first.context.save()
+        }
+        try bytes.write(to: staged)
+        let second = try await reopenEditor(first, recovery: recovery)
+        let songs = try second.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.filter { $0.lyrics == "pending local words" }.map(\.id) == [id])
+        #expect(try songs.first { $0.id == id }.map(durableRowID) != row)
+        #expect(second.audios(id).isEmpty)
+        #expect(try retryJournals(beside: recovery).count == 1)
+    }
+
+    @Test(arguments: ["alias", "intent", "blockedAdoption", "adopted"])
+    func relaunchAtRecordingPublicationBoundariesKeepsOneVerifiedTake(_ cut: String) async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
+        let staged = snapshot.appendingPathComponent(take.fileName)
+        let originalID = take.recordingID(for: "reserved")
+        let alternate = UUID().uuidString.lowercased()
+        let target = harness.file(alternate, "reserved")
+        let occupant = Data([0x61, 0x62])
+        try harness.writeFile(occupant, projectId: "reserved", fileName: "\(originalID).m4a")
+        var journal = try journalObject(Data(contentsOf: recovery))
+        journal["recordingIDs"] = [originalID: alternate]
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        if cut != "alias" {
+            try harness.service.library.expectCopies([(target, alternate, take.displayName, take.sha256)])
+        }
+        if cut == "blockedAdoption" {
+            let next = try await harness.reopened()
+            try next.service.library.expectCopies([(target, alternate, take.displayName, take.sha256)])
+            try bytes.write(to: target)
+            next.service.library.save = { _ in throw CocoaError(.fileWriteUnknown) }
+            let editor = makeRecoveryEditor(next, recovery: recovery)
+            await editor.recordingsLaunchTask?.value
+            #expect(try retryJournals(beside: recovery).count == 1)
+            #expect(FileManager.default.fileExists(atPath: staged.path))
+            #expect(try !next.context.fetch(FetchDescriptor<Recording>()).contains { $0.id == alternate })
+        } else if cut == "adopted" {
+            try bytes.write(to: target)
+            try await harness.service.library.reconcile(context: harness.context)
+            try FileManager.default.removeItem(at: staged)
+        }
+        let reopened = try await reopenEditor(harness, recovery: recovery)
+        let rows = try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == "reserved" }
+        #expect(rows.filter { $0.audio == bytes }.map(\.id) == [alternate])
+        #expect(rows.first { $0.id == originalID }?.audio == occupant)
+        #expect(try retryJournals(beside: recovery).isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func pendingAudioDoesNotResurrectADeletedSongOrTake(deleteSong: Bool) async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
+        let firstPath = snapshot.appendingPathComponent(take.fileName)
+        let other = Data([0x34])
+        let secondTake = OpenRecordingSnapshot.Take(fileName: "another.m4a", displayName: "Another.m4a",
+            bytes: 1, sha256: RecordingBackupManifest.sha256Hex(other))
+        var journal = try journalObject(Data(contentsOf: recovery))
+        journal["recordingTakes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([take, secondTake]))
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        try FileManager.default.removeItem(at: firstPath)
+        let first = try await reopenEditor(harness, recovery: recovery)
+        let saved = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "reserved" })
+        let id = saved.id
+        let key = take.recordingID(for: id)
+        let date = Date().addingTimeInterval(120).epochMilliseconds
+        if deleteSong {
+            first.context.delete(saved)
+        } else {
+            try first.writeFile(Data([0x67]), projectId: id, fileName: "\(key).m4a")
+        }
+        try DeletionStore.upsert(SyncDeletion(projectId: id, recordingId: deleteSong ? nil : key,
+            deletedAt: date), in: first.context)
+        try first.context.save()
+        try bytes.write(to: firstPath)
+        try other.write(to: snapshot.appendingPathComponent(secondTake.fileName))
+        let next = try await first.reopened()
+        let editor = makeRecoveryEditor(next, recovery: recovery)
+        if deleteSong {
+            #expect(try !next.context.fetch(FetchDescriptor<SongProject>()).contains { $0.lyrics == "pending local words" })
+        }
+        await editor.recordingsLaunchTask?.value
+        #expect(!next.audios(id).contains(bytes))
+        if !deleteSong { #expect(next.audios(id).contains(other)) }
+        #expect(try retryJournals(beside: recovery).isEmpty)
+        #expect(try Data(contentsOf: firstPath) == bytes)
+    }
+
+    @Test func overlappingRecoveryJournalsShareAnAliasWithoutDroppingDrafts() async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
+        let staged = snapshot.appendingPathComponent(take.fileName)
+        let initial = try Data(contentsOf: recovery)
+        try FileManager.default.removeItem(at: staged)
+        let first = try await reopenEditor(harness, recovery: recovery)
+        let retry = try #require(try retryJournals(beside: recovery).first)
+        let folder = recovery.deletingLastPathComponent()
+        let previous = folder.appendingPathComponent(retry)
+        var firstDraft = try journalObject(Data(contentsOf: previous))
+        var secondDraft = firstDraft
+        let key = take.recordingID(for: "reserved")
+        let alternate = UUID().uuidString.lowercased()
+        firstDraft["recordingIDs"] = [key: alternate]
+        let equalBytes = OpenRecordingSnapshot.Take(fileName: "equal.m4a", displayName: "Equal.m4a",
+            bytes: take.bytes, sha256: take.sha256)
+        secondDraft["recordingTakes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([take, equalBytes]))
+        try FileManager.default.removeItem(at: previous)
+        try JSONSerialization.data(withJSONObject: firstDraft).write(to: folder.appendingPathComponent("unrecovered-1.json"))
+        try JSONSerialization.data(withJSONObject: secondDraft).write(to: folder.appendingPathComponent("unrecovered-2.json"))
+        var thirdDraft = try journalObject(initial)
+        thirdDraft["lyrics"] = "a different unsaved draft"
+        thirdDraft["recordingTakes"] = []
+        try JSONSerialization.data(withJSONObject: thirdDraft).write(to: folder.appendingPathComponent("unrecovered-3.json"))
+        try first.writeFile(Data([0x67]), projectId: "reserved", fileName: "\(key).m4a")
+        try bytes.write(to: staged)
+        try bytes.write(to: snapshot.appendingPathComponent(equalBytes.fileName))
+        let second = try await reopenEditor(first, recovery: recovery)
+        let rows = try second.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == "reserved" && $0.audio == bytes }
+        #expect(Set(rows.map(\.id)) == [alternate, equalBytes.recordingID(for: "reserved")])
+        let songs = try second.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.filter { $0.lyrics == "pending local words" }.count == 1)
+        #expect(songs.filter { $0.lyrics == "a different unsaved draft" }.count == 1)
+        #expect(try retryJournals(beside: recovery).isEmpty)
+    }
+
+    @Test(arguments: ["none", "absent", "readable", "unreadable"])
+    func legacyDraftJournalKeepsMainRecoveryBehavior(_ folderState: String) async throws {
+        let (harness, recovery, snapshot, _, bytes) = try await singleTakeRecovery()
+        var journal = try journalObject(Data(contentsOf: recovery))
+        journal["recordingTakes"] = nil
+        switch folderState {
+        case "none":
+            journal["recordingSnapshotFolder"] = nil
+        case "absent":
+            try FileManager.default.removeItem(at: snapshot)
+        case "readable":
+            try FileManager.default.removeItem(at: snapshot.appendingPathComponent("names.json"))
+        default:
+            try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: snapshot.path)
+        }
+        defer {
+            if folderState == "unreadable" {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: snapshot.path)
+            }
+        }
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        let second = try await reopenEditor(harness, recovery: recovery)
+        let kept = try second.context.fetch(FetchDescriptor<SongProject>()).filter { $0.lyrics == "pending local words" }
+        #expect(kept.map(\.id) == (folderState == "unreadable" ? [] : ["reserved"]))
+        #expect(second.audios("reserved") == (folderState == "readable" ? [bytes] : []))
+        #expect(try retryJournals(beside: recovery).count == (folderState == "unreadable" ? 1 : 0))
+    }
+
+    private func recoveryURL(_ harness: BackupHarness) -> URL {
+        harness.memosRoot.deletingLastPathComponent().appendingPathComponent("draft-recovery.json")
+    }
+
+    private func journalObject(_ data: Data) throws -> [String: Any] {
+        try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func durableRowID(_ song: SongProject) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(song.persistentModelID)
+    }
+
+    private func clearRetryJournals(beside recovery: URL) throws {
+        for journal in try retryJournals(beside: recovery) {
+            try FileManager.default.removeItem(at: recovery.deletingLastPathComponent().appendingPathComponent(journal))
+        }
+    }
+
+    private func singleTakeRecovery(inPlace: Bool = false) async throws
+        -> (BackupHarness, URL, URL, OpenRecordingSnapshot.Take, Data) {
+        let harness = try await BackupCoreTests().makeHarness()
+        let original = SongProject(id: "original", title: "Original", lyrics: inPlace ? "baseline" : "remote words")
+        harness.context.insert(original)
+        try harness.context.save()
+        let bytes = Data([0x35, 0x38])
+        try await harness.writeMemo(bytes, projectId: original.id, fileName: "take.m4a")
+        let snapshot = try #require(try OpenRecordingSnapshot(projectId: original.id, recordingsRoot: harness.memosRoot))
+        let take = try #require(try snapshot.takesForRecovery().first)
+        let folder = OpenRecordingSnapshot.stagingRoot(for: harness.memosRoot).appendingPathComponent(snapshot.folderName)
+        for row in try harness.context.fetch(FetchDescriptor<Recording>()) { harness.context.delete(row) }
+        try harness.context.save()
+        try FileManager.default.removeItem(at: harness.memosRoot.appendingPathComponent(original.id))
+        let recovery = recoveryURL(harness)
+        let journal: [String: Any] = [
+            "projectId": original.id, "title": original.title, "lyrics": "pending local words", "theme": "",
+            "baselineTitle": original.title, "baselineLyrics": "baseline", "baselineTheme": "",
+            "savedAt": Date().timeIntervalSinceReferenceDate, "separateCopyId": "reserved",
+            "recordingSnapshotFolder": snapshot.folderName,
+            "recordingTakes": try JSONSerialization.jsonObject(with: JSONEncoder().encode([take]))
+        ]
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        return (harness, recovery, folder, take, bytes)
+    }
+
+    private func assertOwnerAfterInterveningEdit(_ harness: BackupHarness, recovery: URL, bytes: Data) async throws {
+        let first = try await harness.reopened()
+        let saved = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.lyrics == "pending local words" })
+        let owner = try durableRowID(saved)
+        let id = saved.id
+        saved.lyrics = "words edited across the app restart"
+        try first.context.save()
+        let second = try await reopenEditor(first, recovery: recovery)
+        let songs = try second.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.allSatisfy { $0.lyrics != "pending local words" })
+        #expect(try songs.first { $0.id == id }.map(durableRowID) == owner)
+        #expect(songs.first { $0.id == id }?.lyrics == "words edited across the app restart")
+        #expect(second.audios(id) == [bytes])
+        #expect(try retryJournals(beside: recovery).isEmpty)
+    }
+
     private func retryJournals(beside recovery: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: recovery.deletingLastPathComponent().path)
             .filter { $0.hasPrefix("unrecovered-") }
     }
 
     private func reopenEditor(_ harness: BackupHarness, recovery: URL) async throws -> BackupHarness {
+        try await reopenRecoveryEditor(harness, recovery: recovery).0
+    }
+
+    private func reopenRecoveryEditor(_ harness: BackupHarness, recovery: URL,
+                                      save: @escaping (ModelContext) throws -> Void = { try $0.save() })
+        async throws -> (BackupHarness, EditorViewModel) {
         let reopened = try await harness.reopened()
-        let editor = EditorViewModel(
-            keychainStore: InMemoryKeychainStore(), backupService: reopened.service,
-            recordingLibrary: reopened.service.library, defaults: reopened.defaults, draftRecoveryURL: recovery
-        )
-        editor.modelContext = reopened.context
+        let editor = makeRecoveryEditor(reopened, recovery: recovery, save: save)
         await editor.recordingsLaunchTask?.value
         await editor.waitForRecordingSnapshotSweepForTesting()
-        return reopened
+        return (reopened, editor)
+    }
+
+    private func makeRecoveryEditor(_ reopened: BackupHarness, recovery: URL,
+                                    save: @escaping (ModelContext) throws -> Void = { try $0.save() }) -> EditorViewModel {
+        let editor = EditorViewModel(
+            keychainStore: InMemoryKeychainStore(), backupService: reopened.service,
+            recordingLibrary: reopened.service.library, defaults: reopened.defaults, draftRecoveryURL: recovery,
+            saveModelContext: save
+        )
+        editor.modelContext = reopened.context
+        return editor
     }
 
     private typealias PendingFixture = (harness: BackupHarness, editor: EditorViewModel, remote: SyncBlob, audio: Data)

@@ -860,6 +860,7 @@ struct BackupApplyOutcome {
 final class BackupDraftHandoff {
     var pendingDraft: () -> BackupPendingDraft?
     var replaceReservation: (String) throws -> Void = { _ in }
+    var prepareCommit: (String, ModelContext) throws -> String? = { _, _ in nil }
     var savedDrafts: [BackupPendingDraft] = []
     private(set) var outcome: BackupApplyOutcome?
     private let didCommit: ((BackupApplyOutcome) -> Void)?
@@ -2468,6 +2469,15 @@ final class BackupService {
         // Deleted recordings leave the memo folders and the Trash for quarantine,
         // recorded before this save and finished after it (A28).
         try library.saveRecordingMoves(quarantine: removedFiles, in: modelContext) {
+            let previousAuthor = modelContext.author
+            if let handoff = draftHandoff, let pending = handoff.pendingDraft(),
+               let copy = copies.first(where: { pending.matches($0.source, rowID: $0.sourceRowID) }),
+               case .song(let id) = copy.destination,
+               !snapshots.contains(where: { $0.0.id == id }),
+               let author = try handoff.prepareCommit(id, modelContext) {
+                modelContext.author = author
+            }
+            defer { modelContext.author = previousAuthor }
             try saveAppliedChanges(modelContext)
             saved = true
             draftHandoff?.publish(BackupApplyOutcome(copies: copies))
