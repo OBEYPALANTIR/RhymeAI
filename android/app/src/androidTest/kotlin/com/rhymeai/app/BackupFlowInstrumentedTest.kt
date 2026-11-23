@@ -22,8 +22,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.datastore.preferences.core.edit
 import com.rhymeai.app.data.repository.dataStore
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withTimeout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
@@ -53,6 +54,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
+
+/**
+ * Cancels and joins view models a test built by hand (no Activity clears them), so none keeps saving or backing up
+ * into the next test, and empties [viewModels]. All are cancelled before any is joined, so one that never finishes still
+ * leaves the others stopped; the joint wait is bounded and fails the test instead of hanging the run.
+ */
+internal fun stopViewModels(viewModels: MutableList<MainViewModel>) {
+    try {
+        val jobs = viewModels.map { it.viewModelScope.coroutineContext[Job]!! }
+        jobs.forEach { it.cancel() }
+        runBlocking { withTimeout(10_000) { jobs.joinAll() } }
+    } finally {
+        viewModels.clear()
+    }
+}
 
 /** Settings Backup rows rendered for each status, with no Drive involved. */
 class BackupSectionUiTest {
@@ -179,6 +195,8 @@ class BackupFlowInstrumentedTest {
     private var savedProjects: List<SongProject> = emptyList()
     private var savedTrash: List<TrashedSongProject> = emptyList()
     private var scenario: ActivityScenario<MainActivity>? = null
+    /** View models built here without an Activity; [stopViewModels] ends them before the stored state is reset. */
+    private val handBuilt = mutableListOf<MainViewModel>()
 
     // Each launch while the dictionary is still loading starts another full load; this class relaunches
     // fast enough to stack them past the 192 MB heap. Loaded once here, no launch loads it again.
@@ -216,25 +234,57 @@ class BackupFlowInstrumentedTest {
 
     private fun prefs() = context.getSharedPreferences("rhymeai_backup", Context.MODE_PRIVATE)
 
-    /** Not now on the empty phone: backup pauses and Drive keeps its bytes; a song saved here then ends the pause. */
+    /**
+     * Not now on the empty phone: backup pauses and Drive keeps its bytes; a song saved here then ends the pause.
+     *
+     * The save reaches the backup scheduler through the view model's change collector, at a time the test cannot see,
+     * and Not now decides its pause from a library read that can also land after the save. A Back up now started before
+     * either of them made that change arrive mid-run, which queues one more backup and leaves the status Pending for the
+     * 30 s debounce. So the pause is ended by the queued automatic backup itself: the background flush runs a backup only
+     * once a change is queued (after one first flush, made here while the restore offer stops any run).
+     *
+     * Not now's own coroutine is joined before the save (launch already shows the same Paused(2), so the status cannot
+     * tell): its read then sees the empty library and pauses instead of starting a run of its own. The only thing that
+     * can queue the run is the save's change reaching the scheduler, so Connected means that change was consumed and
+     * backed up, and nothing from this setup can turn a later test's status Pending.
+     */
     private fun declineThenEndThePauseWithASongHere(vm: MainViewModel) {
         val before = drive.bytes(BackupManifest.FILE_NAME)
-        compose.onNodeWithText("Not now").performClick()
-        waitUntil { vm.backupStatus == BackupStatus.Paused(2) }
+        val scope = vm.viewModelScope.coroutineContext[Job]!!
+        var notNow = emptyList<Job>()
+        instrumentation.runOnMainSync {
+            check(vm.restoreOffer != null) { "The first background flush must run while the restore offer stops it." }
+            vm.triggerBackgroundDriveSync()
+            val running = scope.children.toSet()
+            vm.declineRestoreOffer()
+            notNow = scope.children.filterNot(running::contains).toList()
+        }
+        runBlocking { withTimeout(10_000) { notNow.joinAll() } }
+        assertEquals(BackupStatus.Paused(2), vm.backupStatus)
         assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
-        instrumentation.runOnMainSync { vm.backUpNow() }
-        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) {
+            var connected = false
+            instrumentation.runOnMainSync {
+                connected = vm.backupStatus is BackupStatus.Connected
+                if (!connected) vm.triggerBackgroundDriveSync()
+            }
+            connected
+        }
     }
 
     @After fun restore() {
-        scenario?.close()
-        BackupTestHooks.driveClient = null
-        BackupTestHooks.authorizer = null
-        prefs().edit().clear().commit()
-        if (::repo.isInitialized) runBlocking {
-            repo.saveProjects(savedProjects)
-            repo.saveTrashedProjects(savedTrash)
+        try {
+            stopViewModels(handBuilt)
+        } finally {
+            scenario?.close()
+            BackupTestHooks.driveClient = null
+            BackupTestHooks.authorizer = null
+            prefs().edit().clear().commit()
+            if (::repo.isInitialized) runBlocking {
+                repo.saveProjects(savedProjects)
+                repo.saveTrashedProjects(savedTrash)
+            }
         }
     }
 
@@ -600,7 +650,7 @@ class BackupFlowInstrumentedTest {
             override suspend fun authorize() = DriveAuthorization.Granted("token")
         }
         prefs().edit().clear().putBoolean("drive_connected", true).commit()
-        val vm = MainViewModel(context.applicationContext as android.app.Application)
+        val vm = MainViewModel(context.applicationContext as android.app.Application).also(handBuilt::add)
         waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == (draft ?: openSong.lyrics) }
         instrumentation.runOnMainSync { vm.showStartMenu = false }
         return vm
@@ -624,9 +674,16 @@ class BackupFlowInstrumentedTest {
         )
     }
 
-    private fun resetOpenSong() = runBlocking {
-        repo.setCurrentProjectId(null)
-        repo.saveEditorState("", "", "")
+    /** Ends the hand-built view models first, so no queued save of theirs writes after the reset. */
+    private fun resetOpenSong() {
+        try {
+            stopViewModels(handBuilt)
+        } finally {
+            runBlocking {
+                repo.setCurrentProjectId(null)
+                repo.saveEditorState("", "", "")
+            }
+        }
     }
 
     @Test fun aRestoresNewerWordsForTheOpenSongSurviveTheNextSave() {
@@ -798,7 +855,7 @@ class BackupFlowInstrumentedTest {
             // The typing queued an autosave that would otherwise write "typed words" into the next test's open song.
             // Bounded: a join that never returns fails the test instead of hanging the run.
             try {
-                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+                stopViewModels(handBuilt)
             } finally {
                 line?.let { runBlocking { vm.oneLinersStore.permanentlyDelete(it.id) } }
                 resetOpenSong()
@@ -834,7 +891,7 @@ class BackupFlowInstrumentedTest {
                 listOf(stored, vm.lyrics).all { it.contains("first sent line") && it.contains("second sent line") })
         } finally {
             try {
-                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+                stopViewModels(handBuilt)
             } finally {
                 runBlocking { listOf(first, second).forEach { vm.oneLinersStore.permanentlyDelete(it.id) } }
                 resetOpenSong()
@@ -869,7 +926,7 @@ class BackupFlowInstrumentedTest {
                 listOf(stored, vm.lyrics).all { it.contains(newerWords) && it.contains("a sent line") })
         } finally {
             try {
-                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+                stopViewModels(handBuilt)
             } finally {
                 runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
                 resetOpenSong()
@@ -914,7 +971,7 @@ class BackupFlowInstrumentedTest {
             BackupTestHooks.beforeMenuSend = null
             held.complete(Unit)
             try {
-                runBlocking { kotlinx.coroutines.withTimeout(10_000) { vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() } }
+                stopViewModels(handBuilt)
             } finally {
                 runBlocking { vm.oneLinersStore.permanentlyDelete(line.id) }
                 resetOpenSong()
@@ -1051,7 +1108,7 @@ class BackupFlowInstrumentedTest {
 
     /** A new view-model over the stored state, as after a relaunch; it shows [lyrics] for the open song. */
     private fun relaunchedViewModel(lyrics: String): MainViewModel {
-        val vm = MainViewModel(context.applicationContext as android.app.Application)
+        val vm = MainViewModel(context.applicationContext as android.app.Application).also(handBuilt::add)
         waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == lyrics }
         return vm
     }
@@ -1384,6 +1441,7 @@ class BackupFlowInstrumentedTest {
         val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
         val workspacesKey = androidx.datastore.preferences.core.stringPreferencesKey("local_song_workspaces_json")
         var workspaces: String? = null
+        var corrupted = false
         BackupTestHooks.beforeHeldOperation = { reached.complete(Unit); kotlinx.coroutines.awaitCancellation() }
         try {
             instrumentation.runOnMainSync {
@@ -1397,7 +1455,7 @@ class BackupFlowInstrumentedTest {
             putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = incoming, updatedAt = System.currentTimeMillis() + 3_600_000L))))
             // The notebook cannot be read at relaunch, so it holds no version of the saved words: only the mark keeps them.
             runBlocking {
-                context.dataStore.edit { workspaces = it[workspacesKey]; it[workspacesKey] = "{not json" }
+                context.dataStore.edit { workspaces = it[workspacesKey]; it[workspacesKey] = "{not json"; corrupted = true }
             }
             val vm = relaunchedViewModel(saved)
             waitUntil({ "notebook ${vm.notebookError}" }) { vm.notebookError != null }
@@ -1410,13 +1468,17 @@ class BackupFlowInstrumentedTest {
             assertEquals(copy.id to saved, vm.currentProjectId to vm.lyrics)
         } finally {
             BackupTestHooks.beforeHeldOperation = null
-            // Ends the stopped view model; its cleanup runs now, after the checks.
-            dying.viewModelScope.cancel()
-            waitUntil({ "dying held ${dying.editorHeld}" }) { !dying.editorHeld }
-            runBlocking {
-                context.dataStore.edit { if (workspaces == null) it.remove(workspacesKey) else it[workspacesKey] = workspaces!! }
+            try {
+                // Ends the stopped view model (and the relaunched one); its cleanup runs now, after the checks.
+                stopViewModels(handBuilt)
+                waitUntil({ "dying held ${dying.editorHeld}" }) { !dying.editorHeld }
+            } finally {
+                // The corrupted notebook goes back even when stopping failed; no other teardown knows it.
+                if (corrupted) runBlocking {
+                    context.dataStore.edit { if (workspaces == null) it.remove(workspacesKey) else it[workspacesKey] = workspaces!! }
+                }
+                resetOpenSong()
             }
-            resetOpenSong()
         }
     }
 
