@@ -34,35 +34,106 @@ enum BackupArchive {
         var archive = Data()
         var central = Data()
         for entry in entries {
-            let name = Data(entry.path.utf8)
-            let offset = archive.count
-            let crc = crc32(entry.data)
-            guard entry.data.count < Int(UInt32.max), offset < Int(UInt32.max) else { throw BackupArchiveError.tooLarge }
-            // Version 2.0, UTF-8 names, stored, 1980-01-01 00:00.
-            let common: [Any] = [UInt16(20), UInt16(0x0800), UInt16(0), UInt16(0), UInt16(0x21),
-                                 crc, UInt32(entry.data.count), UInt32(entry.data.count), UInt16(name.count), UInt16(0)]
-            archive.append(le(UInt32(0x0403_4b50)))
-            common.forEach { archive.append(le($0)) }
-            archive.append(name)
+            archive.append(try header(entry.path, crc: crc32(entry.data), size: entry.data.count, offset: archive.count, central: &central))
             archive.append(entry.data)
-
-            central.append(le(UInt32(0x0201_4b50)))
-            central.append(le(UInt16(20)))
-            common.forEach { central.append(le($0)) }
-            [UInt16(0), UInt16(0), UInt16(0)].forEach { central.append(le($0)) }
-            central.append(le(UInt32(0)))
-            central.append(le(UInt32(offset)))
-            central.append(name)
         }
-        guard archive.count < Int(UInt32.max), entries.count < Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
-        let centralOffset = archive.count
-        archive.append(central)
-        archive.append(le(UInt32(0x0605_4b50)))
-        [UInt16(0), UInt16(0), UInt16(entries.count), UInt16(entries.count)].forEach { archive.append(le($0)) }
-        archive.append(le(UInt32(central.count)))
-        archive.append(le(UInt32(centralOffset)))
-        archive.append(le(UInt16(0)))
+        archive.append(try endRecord(central, offset: archive.count, count: entries.count))
         return archive
+    }
+
+    /// Bytes the file writer reads from a source at a time.
+    static let chunkBytes = 64 * 1024
+
+    /// The same stored zip as `zip(_:budget:)`, written to `destination` while each
+    /// source file is read `chunkBytes` at a time, so no whole member or archive is
+    /// held in memory. It is built in a hidden file beside `destination` and moved
+    /// there only when complete; on any error that file is removed and an existing
+    /// `destination` is left as it was. `read` is the chunk reader, replaceable in tests.
+    static func zip(_ entries: [(path: String, source: URL)], to destination: URL, budget: Budget = .production,
+                    read: (FileHandle, Int) throws -> Data? = { try $0.read(upToCount: $1) }) throws {
+        // Every size is checked against the budget before anything is written.
+        var total = 0
+        let sizes = try entries.map { entry in
+            guard let size = try entry.source.resourceValues(forKeys: [.fileSizeKey]).fileSize else { throw BackupArchiveError.unreadable }
+            try budget.add(size, to: &total)
+            return size
+        }
+        let temporary = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(UUID().uuidString)") // fixed length, so any valid destination name works
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else { throw BackupArchiveError.unreadable }
+        do {
+            let output = try FileHandle(forWritingTo: temporary)
+            defer { try? output.close() }
+            var offset = 0
+            var central = Data()
+            for (entry, size) in Swift.zip(entries, sizes) {
+                let input = try FileHandle(forReadingFrom: entry.source)
+                defer { try? input.close() }
+                var unused = Data()
+                let local = try header(entry.path, crc: 0, size: size, offset: offset, central: &unused)
+                try output.write(contentsOf: local)
+                var crc: UInt32 = 0
+                var remaining = size
+                while remaining > 0 {
+                    try autoreleasepool {
+                        guard let chunk = try read(input, min(chunkBytes, remaining)), !chunk.isEmpty, chunk.count <= remaining else {
+                            throw BackupArchiveError.unreadable
+                        }
+                        crc = crc32(chunk, continuing: crc)
+                        try output.write(contentsOf: chunk)
+                        remaining -= chunk.count
+                    }
+                }
+                // A source that grew since it was measured would be cut short.
+                guard try read(input, 1)?.isEmpty ?? true else { throw BackupArchiveError.unreadable }
+                // The CRC sits 14 bytes into the local header; a data descriptor would change the format.
+                try output.seek(toOffset: UInt64(offset + 14))
+                try output.write(contentsOf: le(crc))
+                try output.seekToEnd()
+                _ = try header(entry.path, crc: crc, size: size, offset: offset, central: &central)
+                offset += local.count + size
+            }
+            try output.write(contentsOf: try endRecord(central, offset: offset, count: entries.count))
+            try output.close()
+            // rename(2) swaps the file in one step on this volume, or fails leaving the destination as it was.
+            guard rename(temporary.path, destination.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    /// The local header of one stored member at `offset`; its central record is appended to `central`.
+    private static func header(_ path: String, crc: UInt32, size: Int, offset: Int, central: inout Data) throws -> Data {
+        let name = Data(path.utf8)
+        guard size < Int(UInt32.max), offset < Int(UInt32.max), name.count <= Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
+        // Version 2.0, UTF-8 names, stored, 1980-01-01 00:00.
+        let common: [Any] = [UInt16(20), UInt16(0x0800), UInt16(0), UInt16(0), UInt16(0x21),
+                             crc, UInt32(size), UInt32(size), UInt16(name.count), UInt16(0)]
+        var local = le(UInt32(0x0403_4b50))
+        common.forEach { local.append(le($0)) }
+        local.append(name)
+
+        central.append(le(UInt32(0x0201_4b50)))
+        central.append(le(UInt16(20)))
+        common.forEach { central.append(le($0)) }
+        [UInt16(0), UInt16(0), UInt16(0)].forEach { central.append(le($0)) }
+        central.append(le(UInt32(0)))
+        central.append(le(UInt32(offset)))
+        central.append(name)
+        return local
+    }
+
+    /// The central directory and end record for `count` members ending at `offset`.
+    private static func endRecord(_ central: Data, offset: Int, count: Int) throws -> Data {
+        guard offset + central.count < Int(UInt32.max), count < Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
+        var end = central
+        end.append(le(UInt32(0x0605_4b50)))
+        [UInt16(0), UInt16(0), UInt16(count), UInt16(count)].forEach { end.append(le($0)) }
+        end.append(le(UInt32(central.count)))
+        end.append(le(UInt32(offset)))
+        end.append(le(UInt16(0)))
+        return end
     }
 
     static func isZip(_ data: Data) -> Bool {
@@ -165,7 +236,8 @@ enum BackupArchive {
         (0..<8).reduce(UInt32(index)) { crc, _ in crc & 1 == 1 ? 0xEDB8_8320 ^ (crc >> 1) : crc >> 1 }
     }
 
-    static func crc32(_ data: Data) -> UInt32 {
-        ~data.reduce(~UInt32(0)) { crc, byte in crcTable[Int((crc ^ UInt32(byte)) & 0xff)] ^ (crc >> 8) }
+    /// Pass the previous result as `continuing` to extend a CRC over a following chunk.
+    static func crc32(_ data: Data, continuing crc: UInt32 = 0) -> UInt32 {
+        ~data.reduce(~crc) { crc, byte in crcTable[Int((crc ^ UInt32(byte)) & 0xff)] ^ (crc >> 8) }
     }
 }
