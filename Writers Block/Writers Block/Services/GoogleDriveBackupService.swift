@@ -831,6 +831,12 @@ struct BackupPendingDraft {
     let lyrics: String
     let theme: String
     let copyID: String
+
+    func matches(_ source: SongRecoveryStore.Song, rowID: PersistentIdentifier) -> Bool {
+        sourceRowID == rowID && source.project.map {
+            $0.title == title && $0.lyrics == lyrics && $0.theme == theme
+        } == true
+    }
 }
 
 /// Local results are delivered at the save boundary, even if a later step throws.
@@ -847,6 +853,26 @@ struct BackupApplyOutcome {
     }
 
     let copies: [Copy]
+}
+
+/// One editor operation owns both the reservation and the copies saved while the merge waits.
+@MainActor
+final class BackupDraftHandoff {
+    var pendingDraft: () -> BackupPendingDraft?
+    var replaceReservation: (String) throws -> Void = { _ in }
+    var savedDrafts: [BackupPendingDraft] = []
+    private(set) var outcome: BackupApplyOutcome?
+    private let didCommit: ((BackupApplyOutcome) -> Void)?
+
+    init(pendingDraft: BackupPendingDraft? = nil, didCommit: ((BackupApplyOutcome) -> Void)? = nil) {
+        self.pendingDraft = { pendingDraft }
+        self.didCommit = didCommit
+    }
+
+    func publish(_ outcome: BackupApplyOutcome) {
+        self.outcome = outcome
+        didCommit?(outcome)
+    }
 }
 
 struct RemoteBackupSummary: Equatable, Sendable {
@@ -1018,10 +1044,15 @@ final class BackupService {
 
     func restoreNow(modelContext: ModelContext, pendingDraft: BackupPendingDraft? = nil,
                     didCommit: ((BackupApplyOutcome) -> Void)?) async throws {
+        try await restoreNow(modelContext: modelContext,
+                             draftHandoff: BackupDraftHandoff(pendingDraft: pendingDraft, didCommit: didCommit))
+    }
+
+    func restoreNow(modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
         try await recordingFailure {
             let accessToken = try await oauthProvider.accessToken(interactive: true)
             try await sync(modelContext: modelContext, accessToken: accessToken, restore: true,
-                           pendingDraft: pendingDraft, didCommit: didCommit)
+                           draftHandoff: draftHandoff)
         }
     }
 
@@ -1285,13 +1316,13 @@ final class BackupService {
     /// alone; a migration is a backup. Restore merges both ways: it applies the merge
     /// here, uploads local-only items, then downloads missing recordings.
     private func sync(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String? = nil,
-                      pendingDraft: BackupPendingDraft? = nil, didCommit: ((BackupApplyOutcome) -> Void)? = nil) async throws {
+                      draftHandoff: BackupDraftHandoff? = nil) async throws {
         // A restore changes recordings, so it holds the library's gate throughout (T4);
         // a backup only reads them.
         if restore {
             try await library.withGate {
                 try await syncHoldingGate(modelContext: modelContext, accessToken: accessToken, restore: true,
-                                          enteredPassphrase: enteredPassphrase, pendingDraft: pendingDraft, didCommit: didCommit)
+                                          enteredPassphrase: enteredPassphrase, draftHandoff: draftHandoff)
             }
         } else {
             try await syncHoldingGate(modelContext: modelContext, accessToken: accessToken, restore: false, enteredPassphrase: enteredPassphrase)
@@ -1299,7 +1330,7 @@ final class BackupService {
     }
 
     private func syncHoldingGate(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String?,
-                                 pendingDraft: BackupPendingDraft? = nil, didCommit: ((BackupApplyOutcome) -> Void)? = nil) async throws {
+                                 draftHandoff: BackupDraftHandoff? = nil) async throws {
         var report = BackupReport()
         // Restore recovery: drop what an interrupted restore or import left staged,
         // except what a row is waiting for (T1.7).
@@ -1464,7 +1495,7 @@ final class BackupService {
         if restore {
             // The commit resolves the current local state with the original inputs, once.
             let applied = try apply(inputs: verifiedInputs, to: modelContext, report: &report,
-                                    pendingDraft: pendingDraft, didCommit: didCommit)
+                                    draftHandoff: draftHandoff)
             // Nothing a tombstone without a time names is brought back (T5.24).
             let held = try library.held(in: modelContext)
             (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(
@@ -2030,13 +2061,17 @@ final class BackupService {
 
     func importArchive(_ data: Data, modelContext: ModelContext, pendingDraft: BackupPendingDraft? = nil,
                        didCommit: ((BackupApplyOutcome) -> Void)?) async throws {
+        try await importArchive(data, modelContext: modelContext,
+                                draftHandoff: BackupDraftHandoff(pendingDraft: pendingDraft, didCommit: didCommit))
+    }
+
+    func importArchive(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
         try await library.withGate {
-            try await importArchiveHoldingGate(data, modelContext: modelContext, pendingDraft: pendingDraft, didCommit: didCommit)
+            try await importArchiveHoldingGate(data, modelContext: modelContext, draftHandoff: draftHandoff)
         }
     }
 
-    private func importArchiveHoldingGate(_ data: Data, modelContext: ModelContext, pendingDraft: BackupPendingDraft?,
-                                          didCommit: ((BackupApplyOutcome) -> Void)?) async throws {
+    private func importArchiveHoldingGate(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
         var report = BackupReport()
         library.clearStaging(context: modelContext)
         var files: [String: Data] = [:]
@@ -2069,7 +2104,7 @@ final class BackupService {
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = library.oversizedCount
         let merged = try apply(inputs: [imported], to: modelContext, report: &report,
-                               pendingDraft: pendingDraft, didCommit: didCommit)
+                               draftHandoff: draftHandoff)
         // Decided by id: a recording this device lacks is written to its id; its bytes
         // must match hash and declared size. The archive holds each recording under
         // the name the export gave it (its display name, numbered where names repeat),
@@ -2315,7 +2350,7 @@ final class BackupService {
 
     @discardableResult
     private func apply(inputs raw: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport,
-                       pendingDraft: BackupPendingDraft?, didCommit: ((BackupApplyOutcome) -> Void)?) throws -> SyncBlob {
+                       draftHandoff: BackupDraftHandoff? = nil) throws -> SyncBlob {
         // After the network waits: the recordings' last check must still hold, and the
         // tombstones and move record read now, before anything changes (finding 7).
         try library.requireChecked(modelContext)
@@ -2349,8 +2384,8 @@ final class BackupService {
         // A song a tombstone without a time still names (none with a time superseded
         // it above) is left exactly as it is here: not changed, removed or brought back (T5.24).
         let held = try library.held(in: modelContext)
-        let copies = keepDisplacedLyrics(snapshots, before: before, merged: blob, held: held.songs,
-                                        deleted: deletedProjectIds, repaired: repaired, pendingDraft: pendingDraft, in: modelContext)
+        let copies = try keepDisplacedLyrics(snapshots, before: before, merged: blob, held: held.songs,
+                                        deleted: deletedProjectIds, repaired: repaired, draftHandoff: draftHandoff, in: modelContext)
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
         var removedFiles: [(url: URL, sha256: String, recordingId: String)] = []
@@ -2435,7 +2470,7 @@ final class BackupService {
         try library.saveRecordingMoves(quarantine: removedFiles, in: modelContext) {
             try saveAppliedChanges(modelContext)
             saved = true
-            didCommit?(BackupApplyOutcome(copies: copies))
+            draftHandoff?.publish(BackupApplyOutcome(copies: copies))
         }
         return blob
     }
@@ -2445,13 +2480,15 @@ final class BackupService {
     private func keepDisplacedLyrics(
         _ snapshots: [(SongRecoveryStore.Song, PersistentIdentifier)],
         before: SyncBlob, merged: SyncBlob, held: Set<String>, deleted: Set<String>,
-        repaired: [SongRecoveryStore.Song], pendingDraft: BackupPendingDraft?, in context: ModelContext
-    ) -> [BackupApplyOutcome.Copy] {
+        repaired: [SongRecoveryStore.Song], draftHandoff: BackupDraftHandoff?, in context: ModelContext
+    ) throws -> [BackupApplyOutcome.Copy] {
         let winners = Dictionary(merged.projects.map { ($0.id, $0.lyrics) } + merged.trashed.map { ($0.id, $0.lyrics) },
                                  uniquingKeysWith: { active, _ in active })
         var usedIDs = Set(snapshots.map { $0.0.id } + before.deletions.map(\.projectId) + merged.deletions.map(\.projectId))
         usedIDs.formUnion(winners.keys)
         usedIDs.formUnion(held)
+        let pendingDraft = draftHandoff?.pendingDraft()
+        let savedDrafts = draftHandoff?.savedDrafts ?? []
         var considered: [String: Set<String>] = [:]
         var copies: [BackupApplyOutcome.Copy] = []
         for (source, rowID) in snapshots {
@@ -2459,25 +2496,33 @@ final class BackupService {
                   let lyrics = source.project?.lyrics ?? source.trashed?.lyrics,
                   !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, lyrics != winners[source.id],
                   considered[source.id, default: []].insert(lyrics).inserted else { continue }
-            if repaired.contains(source) {
+            if let saved = savedDrafts.first(where: { draft in
+                draft.matches(source, rowID: rowID) && (
+                    merged.projects.contains { $0.id == draft.copyID && $0.title == draft.title && $0.lyrics == draft.lyrics && $0.theme == draft.theme } ||
+                    merged.trashed.contains { $0.id == draft.copyID && $0.title == draft.title && $0.lyrics == draft.lyrics && $0.theme == draft.theme }
+                )
+            }) {
+                copies.append(.init(source: source, sourceRowID: rowID, destination: .song(saved.copyID)))
+                continue
+            }
+            let matchesPending = pendingDraft?.matches(source, rowID: rowID) == true
+            if repaired.contains(source), !matchesPending {
                 copies.append(.init(source: source, sourceRowID: rowID, destination: .repairedSongRecovery))
                 continue
             }
             let theme = source.project?.theme ?? source.trashed?.theme ?? ""
             let copyID: String
-            let title: String
-            if let pendingDraft, source.project != nil, pendingDraft.sourceRowID == rowID,
-               pendingDraft.title == source.title, pendingDraft.lyrics == lyrics, pendingDraft.theme == theme,
+            if let pendingDraft, matchesPending,
                (try? SyncIdentity.validateProjectId(pendingDraft.copyID)) != nil,
                usedIDs.insert(pendingDraft.copyID).inserted {
                 copyID = pendingDraft.copyID
-                title = source.title
             } else {
                 var id = UUID().uuidString.lowercased()
                 while !usedIDs.insert(id).inserted { id = UUID().uuidString.lowercased() }
                 copyID = id
-                title = "\(source.title) (before restore)"
+                if matchesPending { try draftHandoff?.replaceReservation(copyID) }
             }
+            let title = matchesPending ? source.title : "\(source.title) (before restore)"
             context.insert(SongProject(id: copyID, title: title, lyrics: lyrics, theme: theme))
             copies.append(.init(source: source, sourceRowID: rowID, destination: .song(copyID)))
         }

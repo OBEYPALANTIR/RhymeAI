@@ -4290,7 +4290,12 @@ struct BackupCoreTests {
         viewModel.modelContext = harness.context
         viewModel.loadProject(project)
         saveAttempts = 0
-        viewModel.lyrics = "pending local A"
+        // A draft typed after the initial flush still needs the editor's own
+        // save. The service can only commit the earlier stored words.
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "pending local A"
+            viewModel.triggerAutoSave()
+        }
         let remote: SyncBlob
         if mode == "restoreTombstone" {
             remote = SyncBlob(deletions: [
@@ -4561,7 +4566,7 @@ struct BackupCoreTests {
     }
 
     @MainActor
-    private func makeHarness() async throws -> BackupHarness {
+    func makeHarness() async throws -> BackupHarness {
         try await makeHarness(oauthProvider: FakeOAuthProvider())
     }
 
@@ -4591,10 +4596,10 @@ struct BackupCoreTests {
 }
 
 @MainActor
-private struct BackupHarness {
+struct BackupHarness {
     let container: ModelContainer
     let drive: FakeDriveClient
-    let secrets: FakeBackupSecretStore
+    fileprivate let secrets: FakeBackupSecretStore
     let service: BackupService
     let memosRoot: URL
     let defaults: UserDefaults
@@ -4810,7 +4815,7 @@ private final class PagingURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated override func stopLoading() {}
 }
 
-private final class FakeDriveClient: DriveAppDataClient {
+final class FakeDriveClient: DriveAppDataClient {
     private struct StoredFile {
         var file: DriveAppDataFile
         var content: Data
