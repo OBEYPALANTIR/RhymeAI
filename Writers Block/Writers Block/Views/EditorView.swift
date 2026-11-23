@@ -866,8 +866,9 @@ struct EditorView: View {
                     } else {
                         // The words where "Exit Focus" fits the bar, else the icon,
                         // in both states: the hidden label reserves the wider
-                        // title, so the choice and the bar do not change when
-                        // Focus turns on. The visible one sits against the
+                        // title, so with the same neighbouring controls the
+                        // choice and the bar do not change when Focus turns on.
+                        // The visible one sits against the
                         // trailing icons so the three read as one group.
                         ViewThatFits(in: .horizontal) {
                             focusLabel {

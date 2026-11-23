@@ -135,7 +135,7 @@ struct AppAppearanceTests {
             #expect(Self.contrast(style.disabledInkHexValue, canvas) >= 4.1, "\(style) disabled ink on canvas")
             #expect(Self.contrast(style.disabledInkHexValue, raised) >= 3.3, "\(style) disabled ink on raised")
         }
-        // DESIGN.md: the Graphite track is 4.5:1 to the thumb and 3.9:1 to the canvas.
+        // DESIGN.md: the Graphite track is 4.5:1 to the thumb and at least 3.9:1 to the canvas.
         let graphiteCanvas = Self.hex(AppAppearanceStyle.graphite.palette.canvas)
         #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, 0xFFFFFF) >= 4.5)
         #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, graphiteCanvas) >= 3.9)
