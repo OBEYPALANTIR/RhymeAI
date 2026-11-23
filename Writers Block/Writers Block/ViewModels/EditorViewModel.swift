@@ -1752,6 +1752,29 @@ final class EditorViewModel: ObservableObject {
         trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
     }
 
+    /// Welcome's Continue, Android's `continueSong`: the row last open in the editor while it is
+    /// listed, else the most recently updated song; never one a stored tombstone is about to remove.
+    func continueSong(in projects: [SongProject], context: ModelContext) -> SongProject? {
+        // Unreadable tombstones offer nothing: Welcome stays as it was without Continue.
+        guard let deletions = try? SyncMerger.mergeDeletions(DeletionStore.all(in: context)) else { return nil }
+        let tombstones = Self.songTombstones(deletions)
+        let listed = projects.filter { !Self.tombstoneRemoves($0, tombstones[$0.id]) }
+        // The bound row first, so a newer row sharing its song id does not stand in for it.
+        return listed.first { $0.persistentModelID == loadedProjectRow }
+            ?? listed.first { $0.id == currentProjectId }
+            ?? listed.max { $0.updatedAt < $1.updatedAt }
+    }
+
+    /// Continue's tap. Opens `song` through `loadProject` only while Welcome is up and only if,
+    /// read from the store now, it is still the song to continue.
+    func continueSong(_ song: SongProject) {
+        // A refused open leaves Welcome up, so the tap can be tried again.
+        guard showWelcome, let context = modelContext,
+              let current = continueSong(in: (try? context.fetch(FetchDescriptor<SongProject>())) ?? [], context: context),
+              current.persistentModelID == song.persistentModelID else { return }
+        loadProject(current)
+    }
+
     /// Why the last `moveProjectToTrash` was refused, for the song lists. Kept
     /// out of `errorMessage`, which the assistant panel treats as an AI failure,
     /// and cleared when the backup or restore that caused it ends.
@@ -2031,6 +2054,18 @@ final class EditorViewModel: ObservableObject {
         if (try? repairSongTimes(in: context)) == true { try? saveModelContext(context) }
     }
 
+    /// Each song's newest tombstone time.
+    private static func songTombstones(_ deletions: [SyncDeletion]) -> [String: Int64] {
+        Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+    }
+
+    /// A tombstone removes a song only when it is newer than the song's last change,
+    /// or that time is a repair (A38: a recorded time beats a repaired one).
+    private static func tombstoneRemoves(_ project: SongProject, _ deletedAt: Int64?) -> Bool {
+        guard let deletedAt else { return false }
+        return project.precedenceRepaired || deletedAt > project.updatedAt.epochMilliseconds
+    }
+
     private func applyPersistedDeletions() {
         guard let context = modelContext else { return }
         do {
@@ -2042,7 +2077,7 @@ final class EditorViewModel: ObservableObject {
             guard !deletions.isEmpty else { return }
             // A tombstone removes a song only when it is newer than the song's last change,
             // or that time is a repair (A38: a recorded time beats a repaired one).
-            let tombstones = Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+            let tombstones = Self.songTombstones(deletions)
             // An edit to the open song typed before this launch-time work ran (the
             // editor is usable at once) is saved first: its new time then stands
             // against the tombstone instead of the edit being lost with the song.
@@ -2057,7 +2092,7 @@ final class EditorViewModel: ObservableObject {
             var deletedProjects = Set(tombstones.keys)
             let memosRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
-                if project.precedenceRepaired || tombstones[project.id]! > project.updatedAt.epochMilliseconds {
+                if Self.tombstoneRemoves(project, tombstones[project.id]) {
                     // A41: a song removed against a repaired time is kept first.
                     if project.precedenceRepaired { try SongRecoveryStore.keep(.init(project: SyncSongProject(project: project)), memosRoot: memosRoot) }
                     context.delete(project)

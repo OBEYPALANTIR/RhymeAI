@@ -7,6 +7,7 @@ struct WelcomeView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
     // The rows the projects sheet lists, so Continue opens one the sheet would.
     @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.appAppearanceStyle) private var appearance
@@ -146,28 +147,17 @@ struct WelcomeView: View {
     /// Shown first, on the floating step, only while there is a song to continue.
     @ViewBuilder
     private var continueCard: some View {
-        if let song = Self.continueSong(in: projects, lastOpenedId: viewModel.currentProjectId) {
+        if let song = viewModel.continueSong(in: projects, context: modelContext) {
             WelcomeCard(
                 icon: "music.note",
                 title: "Continue \(song.title.isEmpty ? "Untitled Song" : song.title)",
                 subtitle: "Return to your writing",
                 level: .floating
             ) {
-                Self.continueSong(song, viewModel)
+                viewModel.continueSong(song)
             }
             .accessibilityIdentifier("welcomeContinueSong")
         }
-    }
-
-    /// Android's `continueSong`: the song last open in the editor while it is still listed,
-    /// else the most recently updated one. A song in Trash is no longer a `SongProject` row.
-    static func continueSong(in projects: [SongProject], lastOpenedId: String?) -> SongProject? {
-        projects.first { $0.id == lastOpenedId } ?? projects.max { $0.updatedAt < $1.updatedAt }
-    }
-
-    /// The projects sheet's row tap, so its guards apply.
-    static func continueSong(_ song: SongProject, _ viewModel: EditorViewModel) {
-        viewModel.loadProject(song)
     }
 
     static func loadSong(_ viewModel: EditorViewModel) {
@@ -377,5 +367,6 @@ extension WelcomeCard where Actions == EmptyView {
 #Preview {
     WelcomeView()
         .environmentObject(EditorViewModel())
+        .modelContainer(for: [SongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self], inMemory: true)
 }
 #endif

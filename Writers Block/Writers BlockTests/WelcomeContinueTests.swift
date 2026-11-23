@@ -17,8 +17,8 @@ struct WelcomeContinueTests {
         context.insert(newest)
         try context.save()
 
-        let song = try #require(WelcomeView.continueSong(in: try Self.fetchProjects(context), lastOpenedId: viewModel.currentProjectId))
-        WelcomeView.continueSong(song, viewModel)
+        let song = try #require(viewModel.continueSong(in: try Self.fetchProjects(context), context: context))
+        viewModel.continueSong(song)
 
         #expect(viewModel.currentProjectId == "newest")
         #expect(viewModel.loadedProjectRow == newest.persistentModelID)
@@ -27,10 +27,45 @@ struct WelcomeContinueTests {
     }
 
     @MainActor
+    @Test func continuePrefersTheLastOpenSongOverANewerOne() throws {
+        let (viewModel, context, container) = try Self.makeHarness()
+        _ = container
+        let lastOpen = SongProject(id: "last-open", title: "Last Open", lyrics: "open words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        let newer = SongProject(id: "newer", title: "Newer", lyrics: "newer words", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000))
+        context.insert(lastOpen)
+        context.insert(newer)
+        try context.save()
+        viewModel.loadProject(lastOpen)
+        viewModel.goToStartMenu()
+        #expect(viewModel.showWelcome)
+
+        // Back on Welcome, the song last open still wins even if another was updated later (sync, import).
+        newer.updatedAt = Date().addingTimeInterval(3_600)
+        try context.save()
+        #expect(viewModel.continueSong(in: try Self.fetchProjects(context), context: context)?.id == "last-open")
+    }
+
+    @MainActor
+    @Test func continuePrefersTheBoundRowOverANewerDuplicate() throws {
+        let (viewModel, context, container) = try Self.makeHarness()
+        _ = container
+        let opened = SongProject(id: "dup", title: "Dup", lyrics: "opened words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        let newerDuplicate = SongProject(id: "dup", title: "Dup", lyrics: "other device words", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000))
+        context.insert(opened)
+        context.insert(newerDuplicate)
+        try context.save()
+        viewModel.loadProject(opened)
+        viewModel.goToStartMenu()
+
+        let song = viewModel.continueSong(in: try Self.fetchProjects(context), context: context)
+        #expect(song?.persistentModelID == opened.persistentModelID)
+    }
+
+    @MainActor
     @Test func noSongsMeansNoContinue() throws {
         let (viewModel, context, container) = try Self.makeHarness()
         _ = container
-        #expect(WelcomeView.continueSong(in: try Self.fetchProjects(context), lastOpenedId: viewModel.currentProjectId) == nil)
+        #expect(viewModel.continueSong(in: try Self.fetchProjects(context), context: context) == nil)
     }
 
     @MainActor
@@ -47,12 +82,60 @@ struct WelcomeContinueTests {
 
         // The last-open song goes to Trash: Continue falls back to the newest song still listed, as on Android.
         #expect(viewModel.moveProjectToTrash(last))
-        let fallback = WelcomeView.continueSong(in: try Self.fetchProjects(context), lastOpenedId: "last")
-        #expect(fallback?.id == "other")
+        #expect(viewModel.continueSong(in: try Self.fetchProjects(context), context: context)?.id == "other")
 
         // With the only remaining song trashed too, nothing is opened directly.
         #expect(viewModel.moveProjectToTrash(other))
-        #expect(WelcomeView.continueSong(in: try Self.fetchProjects(context), lastOpenedId: "other") == nil)
+        #expect(viewModel.continueSong(in: try Self.fetchProjects(context), context: context) == nil)
+    }
+
+    @MainActor
+    @Test func aSongAStoredTombstoneWillRemoveIsNotContinued() throws {
+        let (viewModel, context, container) = try Self.makeHarness()
+        _ = container
+        let doomed = SongProject(id: "doomed", title: "Doomed", lyrics: "gone words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
+        context.insert(doomed)
+        // Another device deleted it later; the launch pass that applies this has not run yet.
+        try DeletionStore.upsert(SyncDeletion(projectId: "doomed", deletedAt: 2_000_000), in: context)
+        try context.save()
+
+        #expect(viewModel.continueSong(in: try Self.fetchProjects(context), context: context) == nil)
+        viewModel.continueSong(doomed)
+        #expect(viewModel.currentProjectId == nil && viewModel.showWelcome)
+    }
+
+    @MainActor
+    @Test func aRowRemovedAfterTheCardWasDrawnIsNotOpened() throws {
+        let (viewModel, context, container) = try Self.makeHarness()
+        _ = container
+        context.insert(SongProject(id: "kept", title: "Kept", lyrics: "kept words", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000)))
+        context.insert(SongProject(id: "drawn", title: "Drawn", lyrics: "drawn words", theme: "", updatedAt: Date(timeIntervalSince1970: 2_000)))
+        try context.save()
+        let drawn = try #require(viewModel.continueSong(in: try Self.fetchProjects(context), context: context))
+        #expect(drawn.id == "drawn")
+
+        // Sync removes the drawn row before the tap arrives.
+        context.delete(drawn)
+        try context.save()
+        viewModel.continueSong(drawn)
+
+        #expect(viewModel.currentProjectId == nil && viewModel.showWelcome)
+    }
+
+    @MainActor
+    @Test func aSecondContinueTapDoesNotOpenAgain() throws {
+        let (viewModel, context, container) = try Self.makeHarness()
+        _ = container
+        context.insert(SongProject(id: "song", title: "Song", lyrics: "words", theme: ""))
+        try context.save()
+        let song = try #require(viewModel.continueSong(in: try Self.fetchProjects(context), context: context))
+
+        viewModel.continueSong(song)
+        let firstOpen = viewModel.editorOpen
+        viewModel.continueSong(song)
+
+        #expect(viewModel.currentProjectId == "song")
+        #expect(viewModel.editorOpen == firstOpen)
     }
 
     @MainActor
@@ -61,7 +144,6 @@ struct WelcomeContinueTests {
         _ = container
         context.insert(SongProject(id: "song", title: "Song", lyrics: "words", theme: ""))
         try context.save()
-        #expect(WelcomeView.continueSong(in: try Self.fetchProjects(context), lastOpenedId: nil) != nil)
 
         WelcomeView.loadSong(viewModel)
 
