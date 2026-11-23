@@ -372,7 +372,16 @@ final class EditorViewModel: ObservableObject {
 
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
-    @Published var errorMessage: String?
+    /// Any assignment turns `suggestionsFailed` off; only the suggestions
+    /// failure path turns it back on, right after setting its message.
+    @Published var errorMessage: String? {
+        didSet { suggestionsFailed = false }
+    }
+    /// True while the error shown was set by the latest suggestions request's
+    /// failure. `errorMessage` also carries editor errors, so on iOS the
+    /// assistant only offers "Try again" and scrolls to the error when this is
+    /// set; the Mac panel still does both for any local error.
+    @Published private(set) var suggestionsFailed = false
     /// The request whose stream ended on its own with its lines still listed.
     /// Cleared when a request starts and on every cancel, so Stop, Settings
     /// changes, navigation, errors and lines used before the end never leave it set.
@@ -1174,6 +1183,7 @@ final class EditorViewModel: ObservableObject {
                 if !Task.isCancelled, self.suggestionsRequestID == requestID {
                     if !emittedSuggestion {
                         self.errorMessage = "AI did not return suggestions. Try again."
+                        self.suggestionsFailed = true
                     } else if !self.suggestions.isEmpty {
                         // Lines can be used or cleared while the stream finishes
                         // (an inserted line clears the list); only results still
@@ -1186,6 +1196,7 @@ final class EditorViewModel: ObservableObject {
             } catch {
                 guard self.suggestionsRequestID == requestID else { return }
                 self.errorMessage = error.localizedDescription
+                self.suggestionsFailed = true
             }
         }
     }
@@ -1240,6 +1251,8 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask = nil
         suggestionsRequestID = nil
         completedSuggestionsRequestID = nil
+        // A finished request's failure stays on screen (with its iOS heading)
+        // through caret moves and edits; a new request or another message retires it.
         isLoading = false
     }
 
@@ -2321,6 +2334,7 @@ final class EditorViewModel: ObservableObject {
         currentProjectId = nil
         resetCompanionPosition()
         suggestions = []
+        errorMessage = nil
         saveStatus = .idle
         showWelcome = false
         showTemplatesSheet = false

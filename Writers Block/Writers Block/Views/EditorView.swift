@@ -739,14 +739,19 @@ struct EditorView: View {
                     }
                     HStack(spacing: RhymeAITokens.Spacing.xxs) {
                         Spacer()
-                        topBarTrailing
+                        topBarTrailing()
                     }
                 }
             } else {
+                // The Focus words stay on one line; on iPhone a save warning
+                // leaves no room for them, so the icon stands in instead. The
+                // trailing group is offered all the room the Spacer does not
+                // need, so the Focus control is measured against the bar.
                 HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     topBarLeading
                     Spacer()
-                    topBarTrailing
+                    topBarTrailing(focusIcon: horizontalSizeClass == .compact && viewModel.saveStatus == .failed)
+                        .layoutPriority(1)
                 }
             }
         }
@@ -792,7 +797,14 @@ struct EditorView: View {
                 )
             }
 
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
+            ZStack(alignment: .leading) {
+                // Holds the saving and saved marks' width in every state, so
+                // the Focus control's form does not change when one appears.
+                ZStack {
+                    ProgressView()
+                    Image(systemName: "checkmark").font(.caption)
+                }
+                .hidden()
                 if viewModel.saveStatus == .saving {
                     ProgressView()
                         .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
@@ -826,7 +838,22 @@ struct EditorView: View {
         }
     }
 
-    private var topBarTrailing: some View {
+    private var focusModeIcon: some View {
+        Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
+            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
+            .foregroundStyle(appearance.palette.secondaryInk)
+    }
+
+    private func focusLabel(@ViewBuilder _ text: () -> some View) -> some View {
+        text()
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(appearance.palette.secondaryInk)
+            .lineLimit(1)
+            .padding(.horizontal, RhymeAITokens.Spacing.xs)
+            .fixedSize()
+    }
+
+    private func topBarTrailing(focusIcon: Bool = false) -> some View {
         HStack(spacing: RhymeAITokens.Spacing.xxs) {
             Button {
                 withRhymeAnimation(nil, reduceMotion: reduceMotion) {
@@ -834,22 +861,24 @@ struct EditorView: View {
                 }
             } label: {
                 Group {
-                    if usesCompactControlChrome {
-                        Image(systemName: isFocusMode ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
-                            .font(.system(size: EditorViewConstants.ControlChrome.iconSize, weight: .medium))
-                            .foregroundStyle(appearance.palette.secondaryInk)
+                    if usesCompactControlChrome || focusIcon {
+                        focusModeIcon
                     } else {
-                        // The hidden label reserves the wider title so the
-                        // bar does not shift; the visible one sits against
-                        // the trailing icons so the three read as one group.
-                        ZStack(alignment: .trailing) {
-                            Text("Exit Focus").hidden()
-                            Text(isFocusMode ? "Exit Focus" : "Focus")
+                        // The words where "Exit Focus" fits the bar, else the icon,
+                        // in both states: the hidden label reserves the wider
+                        // title, so with the same neighbouring controls the
+                        // choice and the bar do not change when Focus turns on.
+                        // The visible one sits against the
+                        // trailing icons so the three read as one group.
+                        ViewThatFits(in: .horizontal) {
+                            focusLabel {
+                                ZStack(alignment: .trailing) {
+                                    Text("Exit Focus").hidden()
+                                    Text(isFocusMode ? "Exit Focus" : "Focus")
+                                }
+                            }
+                            focusModeIcon
                         }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(appearance.palette.secondaryInk)
-                        .padding(.horizontal, RhymeAITokens.Spacing.xs)
-                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .frame(minWidth: RhymeAITokens.Touch.minimum, minHeight: RhymeAITokens.Touch.minimum)

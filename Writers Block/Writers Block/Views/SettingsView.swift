@@ -8,6 +8,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAppearanceStyle) var appearance
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #endif
 
     @State private var editingKeys: [String: String] = [:]
     /// Keys as last read from or written to the Keychain. API keys are the
@@ -92,6 +96,15 @@ struct SettingsView: View {
                 } else {
                     ToolbarItem(placement: .cancellationAction) { doneButton }
                 }
+                // The system bar title ignores Dynamic Type; this one follows it
+                // up to the bar's cap.
+                ToolbarItem(placement: .principal) {
+                    Text("Settings")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .dynamicTypeSize(topBarTypeSize)
+                        .accessibilityAddTraits(.isHeader)
+                }
             }
             .confirmationDialog(
                 "Save your API key before closing?",
@@ -119,6 +132,7 @@ struct SettingsView: View {
         #endif
     }
 
+    #if !os(macOS)
     private var doneButton: some View {
         Button {
             if hasUnsavedKeys {
@@ -127,8 +141,24 @@ struct SettingsView: View {
                 dismiss()
             }
         } label: {
-            Text("Done").foregroundStyle(appearance.palette.action)
+            Text("Done")
+                .font(.body)
+                .foregroundStyle(appearance.palette.action)
+                .lineLimit(1)
+                .dynamicTypeSize(topBarTypeSize)
         }
+    }
+
+    private var topBarTypeSize: DynamicTypeSize {
+        Self.barTypeSize(for: dynamicTypeSize, isCompact: horizontalSizeClass == .compact)
+    }
+    #endif
+
+    /// The title and Done grow with the user's text size, capped at XXX Large
+    /// on a compact width so they still fit the bar; never smaller as the
+    /// size grows.
+    static func barTypeSize(for size: DynamicTypeSize, isCompact: Bool) -> DynamicTypeSize {
+        isCompact ? min(size, .xxxLarge) : size
     }
 
     @ViewBuilder

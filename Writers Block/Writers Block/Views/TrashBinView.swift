@@ -197,7 +197,13 @@ struct TrashBinView: View {
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
+        #if os(macOS)
         .liquidGlassSurface(cornerRadius: 0)
+        #else
+        // A plain band with a bottom divider: the bordered surface drew a box
+        // whose side edges ran down the screen edges.
+        .background(appearance.palette.surface)
+        #endif
         .overlay(Divider().opacity(0.18), alignment: .bottom)
     }
 
@@ -510,7 +516,11 @@ struct TrashBinView: View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(spacing: RhymeAITokens.Spacing.xs))
             : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.sm))
+        // The system bordered styles faded the disabled labels to about 1.5:1;
+        // the palette's disabled ink keeps them readable until a row is selected.
+        let enabled = activeSelectionCount > 0
         return layout {
+            #if os(macOS)
             Button {
                 restoreSelected()
             } label: {
@@ -521,7 +531,7 @@ struct TrashBinView: View {
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
-            .disabled(activeSelectionCount == 0)
+            .disabled(!enabled)
 
             Button(role: .destructive) {
                 confirmPermanentDelete = true
@@ -536,14 +546,49 @@ struct TrashBinView: View {
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
-            .disabled(activeSelectionCount == 0)
+            .disabled(!enabled)
+            #else
+            Button {
+                restoreSelected()
+            } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(enabled ? appearance.palette.primaryInk : appearance.palette.disabledInk)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    // Delete's shape, so the pair still match once the labels outgrow 44pt.
+                    .background(
+                        appearance.palette.raisedSurface,
+                        in: RoundedRectangle(cornerRadius: RhymeAITokens.Touch.minimum / 2, style: .continuous)
+                    )
+            }
+            .buttonStyle(.rhymePress)
+            .disabled(!enabled)
+
+            Button(role: .destructive) {
+                confirmPermanentDelete = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: RhymeAITokens.Touch.minimum)
+                    .appearanceActionSurface(cornerRadius: RhymeAITokens.Touch.minimum / 2, isEnabled: enabled)
+            }
+            .buttonStyle(.rhymePress)
+            .disabled(!enabled)
+            #endif
         }
         .padding(.horizontal, RhymeAITokens.Spacing.md)
         .padding(.top, RhymeAITokens.Spacing.sm)
         .padding(.bottom, RhymeAITokens.Spacing.sm)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
+        #if os(macOS)
         .liquidGlassSurface(cornerRadius: 0)
+        #else
+        .background(appearance.palette.surface)
+        .overlay(Divider(), alignment: .top)
+        #endif
     }
 
     /// On regular width the screen keeps the editor's 740pt column, centred.
