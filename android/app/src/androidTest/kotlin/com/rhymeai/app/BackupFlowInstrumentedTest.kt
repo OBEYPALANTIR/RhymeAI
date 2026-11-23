@@ -4259,8 +4259,14 @@ class BackupFlowInstrumentedTest {
                 val nId = onMain { vm.currentProjectId }!!
                 assertTrue(nId != copyId)
                 assertTrue(onMain { vm.lyrics }.contains("a sent line"))
+                // STOP must start its own flush of the speculative words, not queue behind another save (V: flushCurrentDraft).
+                val queued = java.util.concurrent.atomic.AtomicBoolean(false)
+                RecoveryTestHooks.onNavigationQueued = { queued.set(true) }
+                assertFalse("a save was already running before STOP", onMain { vm.savingBeforeNavigation })
                 scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 instrumentation.waitForIdleSync()
+                RecoveryTestHooks.onNavigationQueued = null
+                assertFalse("STOP queued instead of flushing", queued.get())
                 assertTrue("STOP's flush joined N", onMain { vm.savingBeforeNavigation })
                 sendRelease.complete(Unit)
                 val message = result(sent)
