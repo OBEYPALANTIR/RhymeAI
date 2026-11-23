@@ -1559,10 +1559,10 @@ class BackupFlowInstrumentedTest {
     private fun songs() = runBlocking { repo.projectsFlow.first() }
 
     /** Another leg of one test on a fresh open song; teardown still restores the library the test found. */
-    private fun openSongAgain(otherSongs: List<SongProject> = emptyList()): MainViewModel {
+    private fun openSongAgain(otherSongs: List<SongProject> = emptyList(), activity: Boolean = false): MainViewModel {
         resetOpenSong()
         val found = savedProjects to savedTrash
-        return openSongInEditor(otherSongs = otherSongs).also { savedProjects = found.first; savedTrash = found.second }
+        return openSongInEditor(otherSongs = otherSongs, activity = activity).also { savedProjects = found.first; savedTrash = found.second }
     }
 
     /** The hold's kept copy asks for [id] (its first id draw). */
@@ -1750,7 +1750,7 @@ class BackupFlowInstrumentedTest {
     @Test fun holdReloadLeavesOtherWindowsSelectionAndRawDraftAlone() {
         val songB = SongProject("song-b", "Song B", "b words", "", 100L)
         newerOpenSong()
-        val vm = openSongInEditor(otherSongs = listOf(songB))
+        val vm = openSongInEditor(activity = true, otherSongs = listOf(songB))
         // Another window selects B after A's draft save and leaves a raw draft with an empty title.
         BackupTestHooks.beforeHeldOperation = { repo.selectProject(songB.id); repo.saveEditorState("", "b raw draft", "b theme") }
         try {
@@ -1765,7 +1765,7 @@ class BackupFlowInstrumentedTest {
         }
         // Another window's saved draft of the song differs from A's edits: the commit keeps it as its own song and selects it.
         newerOpenSong()
-        val second = openSongAgain()
+        val second = openSongAgain(activity = true)
         BackupTestHooks.beforeHeldOperation = { repo.saveEditorState(openSong.title, "other window draft", "") }
         try {
             editAndRestore(second)
@@ -1786,7 +1786,7 @@ class BackupFlowInstrumentedTest {
             openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L),
             SongProject("reuse-x", openSong.title, heldEdits, "", 100L)
         )))
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         try {
             firstSongIdIs("reuse-x") { editAndRestore(vm) }
             assertEquals("reuse-x" to heldEdits, vm.currentProjectId to vm.lyrics)
@@ -1795,7 +1795,7 @@ class BackupFlowInstrumentedTest {
 
             // The result cannot be read: the open words stay and are kept apart; U, at the requested id, is never selected.
             newerOpenSong()
-            val failed = openSongAgain(otherSongs = listOf(songU))
+            val failed = openSongAgain(activity = true, otherSongs = listOf(songU))
             BackupTestHooks.beforeHoldResolve = { throw java.io.IOException("injected read failure") }
             firstSongIdIs(songU.id) { editAndRestore(failed) }
             BackupTestHooks.beforeHoldResolve = null
@@ -1806,7 +1806,7 @@ class BackupFlowInstrumentedTest {
 
             // The result was read and the song list refresh fails: the editor stays on the copy and its next save writes it in place.
             newerOpenSong()
-            val refreshed = openSongAgain(otherSongs = listOf(songU))
+            val refreshed = openSongAgain(activity = true, otherSongs = listOf(songU))
             BackupTestHooks.beforeHoldListRefresh = { throw java.io.IOException("injected list failure") }
             firstSongIdIs(songU.id) { editAndRestore(refreshed) }
             BackupTestHooks.beforeHoldListRefresh = null
@@ -1827,7 +1827,7 @@ class BackupFlowInstrumentedTest {
         val reused = SongProject("reuse-x", "Untitled Song", heldEdits, "", 100L)
         putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L), reused)))
         val position = com.rhymeai.app.data.model.SongWorkspace(selectionStart = 3, selectionEnd = 7, scrollOffset = 55f)
-        val vm = openSongInEditor(otherSongs = listOf(reused), workspaces = mapOf(reused.id to position))
+        val vm = openSongInEditor(activity = true, otherSongs = listOf(reused), workspaces = mapOf(reused.id to position))
         try {
             val opened = vm.openRevision
             // A's edits: an empty raw title and new words, undoable.
@@ -1857,7 +1857,7 @@ class BackupFlowInstrumentedTest {
     /** Another window trashes the copy while A refreshes its list after adopting it: A's next save keeps its words as a new song. */
     @Test fun aCopyTrashedDuringTheListRefreshIsNotSavedOverByTheNextSave() {
         newerOpenSong()
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         BackupTestHooks.beforeHoldListRefresh = {
             BackupTestHooks.beforeHoldListRefresh = null
             repo.moveProjectToTrash(repo.projectsFlow.first().single { it.id != openSong.id }.id, System.currentTimeMillis())
@@ -1882,7 +1882,7 @@ class BackupFlowInstrumentedTest {
 
     @Test fun movedThenReintroducedIdenticalWordsDoNotSatisfyOldReceipt() {
         newerOpenSong()
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         // After the commit and before A reads its result, the copy goes to Trash and a newer incoming copy with the same words comes back.
         BackupTestHooks.beforeHoldResolve = {
             val copy = repo.projectsFlow.first().single { it.id != openSong.id }
@@ -1909,7 +1909,7 @@ class BackupFlowInstrumentedTest {
 
     @Test fun targetEditedBeforeClaimCannotBeReplayed() {
         newerOpenSong()
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         // Another window edits the copy before A reads its result.
         BackupTestHooks.beforeHoldResolve = {
             val copy = repo.projectsFlow.first().single { it.id != openSong.id }
@@ -1987,7 +1987,7 @@ class BackupFlowInstrumentedTest {
     /** A mark a dead window left cannot be read: the unedited hold has no ticket and shows the song's new words, with no notice. */
     @Test fun aMarkReadFailureBeforeTheHoldReloadsTheSourceWithoutANotice() {
         newerOpenSong()
-        val vm = openSongInEditor(otherSongs = listOf(songU))
+        val vm = openSongInEditor(activity = true, otherSongs = listOf(songU))
         val marks = androidx.datastore.preferences.core.stringPreferencesKey("preserved_songs_json")
         runBlocking { context.dataStore.edit { it[marks] = "{not json" } }
         try {
@@ -2004,7 +2004,7 @@ class BackupFlowInstrumentedTest {
     }
 
     @Test fun aRetriedImportAfterAPreservingCommitMakesNoSecondCopy() {
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         val zip = java.io.File(context.cacheDir, "retried.zip")
         zip.outputStream().use {
             com.rhymeai.app.data.sync.BackupArchive.write(
