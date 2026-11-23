@@ -57,6 +57,9 @@ internal open class MissingActiveProjectException(id: String) :
 /** A new song's id is held by another row, Trash or a song tombstone: nothing was written. */
 internal class CreationIdTakenException(id: String) : MissingActiveProjectException(id)
 
+/** A held editor's first save found its adopted copy no longer as the commit left it: nothing was written. */
+internal class HeldCopyChangedException(id: String) : MissingActiveProjectException(id)
+
 /**
  * One new song's creation. Its insert writes [token] as the row's generation; once that insert has committed the
  * creation may only update that same row, never insert again.
@@ -388,6 +391,7 @@ class ProjectRepository internal constructor(
      *
      * A [creation] inserts the song only at a free id (not active, in Trash or named by a song tombstone) and
      * afterwards updates only the one row its insert made; without one an absent song is refused, as always.
+     * [adoptedFrom] (source and ticket) updates the row only while that receipt still names it as its commit left it.
      */
     suspend fun saveActiveState(
         project: SongProject?,
@@ -395,7 +399,8 @@ class ProjectRepository internal constructor(
         title: String,
         lyrics: String,
         theme: String,
-        preserveAs: PreservationTicket? = null
+        preserveAs: PreservationTicket? = null,
+        adoptedFrom: Pair<String, PreservationTicket>? = null
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
         var inserted = false
@@ -417,6 +422,9 @@ class ProjectRepository internal constructor(
                     if (creation != null && (stored > 1 || rowGenerations(prefs)[project.id] != creation.token)) {
                         throw CreationIdTakenException(project.id)
                     }
+                    if (adoptedFrom != null && receipts(prefs).firstOrNull { it.source == adoptedFrom.first && it.ticket == adoptedFrom.second }
+                            ?.takeIf { it.target == project.id }?.let { receiptRow(prefs, active, it) } == null
+                    ) throw HeldCopyChangedException(project.id)
                     active.map { current ->
                         if (current.id != project.id) current else current.copy(
                             title = project.title,
@@ -522,11 +530,7 @@ class ProjectRepository internal constructor(
         val prefs = dataStore.data.first()
         val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
         val receipt = ticket?.let { receipts(prefs).firstOrNull { it.source == source && it.ticket == ticket } }
-        val row = receipt?.let { r ->
-            active.singleOrNull { it.id == r.target }?.takeIf {
-                rowGenerations(prefs)[r.target] == r.generation && it.title == r.title && it.lyrics == r.lyrics && it.theme == r.theme
-            }
-        }
+        val row = receipt?.let { receiptRow(prefs, active, it) }
         if (receipt != null && row != null) return HoldResult.Adopted(row, receipt.appended)
         return HoldResult.Miss(
             active.firstOrNull { it.id == source },
@@ -534,6 +538,12 @@ class ProjectRepository internal constructor(
             Triple(prefs[CURRENT_TITLE_KEY] ?: "", prefs[CURRENT_LYRICS_KEY] ?: "", prefs[CURRENT_THEME_KEY] ?: "")
         )
     }
+
+    /** [r]'s row while it is the one active row with the receipt's generation and words. */
+    private fun receiptRow(prefs: Preferences, active: List<SongProject>, r: PreservationReceipt): SongProject? =
+        active.singleOrNull { it.id == r.target }?.takeIf {
+            rowGenerations(prefs)[r.target] == r.generation && it.title == r.title && it.lyrics == r.lyrics && it.theme == r.theme
+        }
 
     suspend fun selectProject(id: String): SongProject = projectSaveMutex.withLock {
         lateinit var selected: SongProject

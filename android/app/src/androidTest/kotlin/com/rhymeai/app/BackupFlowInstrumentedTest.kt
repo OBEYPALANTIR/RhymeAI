@@ -1880,6 +1880,117 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** During the list refresh another window trashes the copy and a sync brings back a different song at its id. */
+    @Test fun aCopyReplacedDuringTheListRefreshIsNotSavedOverByTheNextSave() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val other = "other words at the copy's id"
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            val copy = repo.projectsFlow.first().single { it.id != openSong.id }
+            repo.moveProjectToTrash(copy.id, System.currentTimeMillis())
+            repo.saveProjects(repo.projectsFlow.first() + SongProject(copy.id, "Other Song", other, "", System.currentTimeMillis()))
+        }
+        try {
+            editAndRestore(vm)
+            val copyId = runBlocking { repo.trashedProjectsFlow.first() }.single().project.id
+            saveNow(vm)
+            assertEquals(other, songs().single { it.id == copyId }.lyrics)
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            // The held words are saved as a new song by the save that follows the refused one.
+            waitUntil({ "stored ${songs()}" }) { songs().any { it.lyrics == heldEdits } && !vm.savingBeforeNavigation }
+            val kept = songs().filter { it.lyrics == heldEdits }
+            assertEquals("${songs()}", 1, kept.size)
+            assertEquals(kept.single().id to heldEdits, vm.currentProjectId to vm.lyrics)
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    private val windowBWords = "words window B wrote in place"
+    private val changedNotice = "This song was changed elsewhere while it was being restored. Your draft stays open and will be saved as a new song."
+
+    /** Window B edits the kept copy in place (same id and generation, new words) and keeps a line in its notebook. */
+    private suspend fun editCopyInPlaceInWindowB() {
+        val copy = repo.projectsFlow.first().single { it.id != openSong.id }
+        repo.saveActiveState(copy.copy(lyrics = windowBWords), null, copy.title, windowBWords, copy.theme)
+        repo.saveWorkspace(copy.id, (repo.workspacesFlow.first()[copy.id] ?: com.rhymeai.app.data.model.SongWorkspace()).keep("window B line", 1L))
+    }
+
+    /** Window B's words and notebook line are still at the copy, and none of window A's [aWords] went there. */
+    private fun assertWindowBKeptTheCopy(copyId: String, aWords: String) {
+        assertEquals(windowBWords, songs().single { it.id == copyId }.lyrics)
+        val notebook = runBlocking { repo.workspacesFlow.first() }[copyId]
+        assertTrue("$notebook", notebook?.alternates.orEmpty().any { it.text == "window B line" })
+        assertTrue("$notebook", notebook?.versions.orEmpty().none { it.lyrics == aWords })
+    }
+
+    /** During the list refresh another window edits the copy in place; the held editor's first save then runs. */
+    @Test fun aCopyEditedInPlaceDuringTheListRefreshKeepsBothWritersWords() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val typed = "typed in window A after the hold"
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            editCopyInPlaceInWindowB()
+        }
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            assertEquals(heldEdits, vm.lyrics)
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(typed) }
+            saveNow(vm)
+            assertWindowBKeptTheCopy(copyId, typed)
+            waitUntil({ "stored ${songs()}" }) { songs().any { it.lyrics == typed } && !vm.savingBeforeNavigation }
+            val kept = songs().single { it.lyrics == typed }
+            assertEquals(mapOf(openSong.id to newerWords, copyId to windowBWords, kept.id to typed), songs().associate { it.id to it.lyrics })
+            assertEquals(Triple(kept.id, typed, changedNotice), Triple(vm.currentProjectId, vm.lyrics, vm.persistenceError))
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** The same edit by another window, with the first save being the lifecycle save queued while held: nothing typed. */
+    @Test fun aCopyEditedInPlaceDuringTheListRefreshIsNotOverwrittenByTheQueuedSaveAtRelease() {
+        newerOpenSong()
+        val vm = openSongInEditor(activity = true)
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            reached.complete(Unit)
+            gate.await()
+        }
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(heldEdits)
+                vm.restoreFromBackup()
+            }
+            waitUntil({ "held ${vm.editorHeld} status ${vm.backupStatus}" }) { reached.isCompleted }
+            var copyId: String? = null
+            instrumentation.runOnMainSync { copyId = vm.currentProjectId }
+            runBlocking { editCopyInPlaceInWindowB() }
+            // Going to the background while held: the lifecycle observer's save waits for the hold to end.
+            scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            gate.complete(Unit)
+            waitUntil({ "stored ${songs()} held ${vm.editorHeld}" }) {
+                !vm.editorHeld && !vm.savingBeforeNavigation && songs().any { it.lyrics == heldEdits }
+            }
+            assertWindowBKeptTheCopy(checkNotNull(copyId), heldEdits)
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            val kept = songs().filter { it.lyrics == heldEdits }
+            assertEquals("${songs()}", 1, kept.size)
+            assertEquals(kept.single().id to heldEdits, vm.currentProjectId to vm.lyrics)
+            scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            gate.complete(Unit)
+            resetOpenSong()
+        }
+    }
+
     @Test fun movedThenReintroducedIdenticalWordsDoNotSatisfyOldReceipt() {
         newerOpenSong()
         val vm = openSongInEditor(activity = true)
