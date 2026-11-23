@@ -511,7 +511,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         var outcome = CompletableDeferred<Boolean>()
         /** Notebook changes made before the song is stored, kept apart from [workspaces] (which may cache another song at this id). */
         var workspace by mutableStateOf<SongWorkspace?>(null)
-        fun retire() { retired = true; outcome.complete(false) }
+        fun retire() { retired = true; creation.withdrawn = true; outcome.complete(false) }
     }
 
     /** New songs not yet known to be stored, each with the attempt its saves carry (captured before they suspend). */
@@ -3050,7 +3050,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally { draftWritesInFlight-- }
             stored = true
             // The stored song's notebook changes made while it was new now join the loaded notebooks.
-            if (creation == null || pendingCreations[project.id] === creation) {
+            // A save without a creation never owns one: an attempt at its id now is a newer song's.
+            if (creation != null && pendingCreations[project.id] === creation) {
                 pendingCreations.remove(project.id)?.workspace?.let { workspaces = workspaces + (project.id to it) }
             }
             outcome?.complete(true)
@@ -3080,7 +3081,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // An attempt already refused or detached, or one a newer creation at this id replaced, has nothing here to mark or detach.
         if (creation?.retired == true) return
         if (missing) creation?.retire()
-        if (creation != null && pendingCreations[project.id].let { it != null && it !== creation }) return
+        if (pendingCreations[project.id].let { it != null && it !== creation }) return
         val known = storedBefore?.takeIf { it.id !in pendingCreations }
         if (missing) pendingCreations.remove(project.id)?.retire()
         val unedited = known != null && known.title == title.ifEmpty { "Untitled Song" } &&

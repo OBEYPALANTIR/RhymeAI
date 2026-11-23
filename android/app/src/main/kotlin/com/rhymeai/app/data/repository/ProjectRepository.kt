@@ -63,6 +63,8 @@ internal class CreationIdTakenException(id: String) : MissingActiveProjectExcept
  */
 class SongCreation(val token: String = java.util.UUID.randomUUID().toString()) {
     @Volatile internal var inserted = false
+    /** Set when the window gives the creation up; a write already past its own check then cannot insert. */
+    @Volatile internal var withdrawn = false
 }
 
 /**
@@ -393,7 +395,7 @@ class ProjectRepository internal constructor(
             } else {
                 val stored = active.count { it.id == project.id }
                 if (stored == 0) {
-                    if (creation == null || creation.inserted) throw MissingActiveProjectException(project.id)
+                    if (creation == null || creation.inserted || creation.withdrawn) throw MissingActiveProjectException(project.id)
                     if (trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]").any { it.project.id == project.id } ||
                         deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]").any { it.isSongTombstone && it.projectId == project.id }
                     ) throw CreationIdTakenException(project.id)

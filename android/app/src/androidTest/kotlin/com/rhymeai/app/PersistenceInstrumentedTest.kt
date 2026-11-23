@@ -963,6 +963,78 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun anOldSongsLateSaveCannotTakeOrReviveAnotherCreationAtItsId() {
+        val x = SongProject("song-x", "X", "x words", "", 100L)
+        val other = SongProject("song-other", "Other", "other words", "", 100L)
+        runBlocking {
+            for (song in listOf(x, other)) repo.saveActiveState(song, SongCreation(), song.title, song.lyrics, song.theme)
+            repo.setCurrentProjectId(null)
+            repo.saveEditorState("", "", "")
+        }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized && viewModel.projects.size == 2 }
+        val draws = SongIdAllocator.next
+        val holds = List(3) { CompletableDeferred<Unit>() }
+        fun heldRecording(hold: CompletableDeferred<Unit>): kotlinx.coroutines.Deferred<Result<String>> {
+            DraftSaveTestHooks.beforeWrite = hold
+            val recording = kotlinx.coroutines.CoroutineScope(Dispatchers.Main).async { runCatching { viewModel.ensureProjectForRecording() } }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            return recording
+        }
+        // An old song's recording save is held; the editor leaves it, and a new draft's creation draws the same id.
+        fun heldSaveThenNewDraftAt(song: SongProject, oldHold: CompletableDeferred<Unit>, newHold: CompletableDeferred<Unit>, words: String): kotlinx.coroutines.Deferred<Result<String>> {
+            SongIdAllocator.next = draws
+            onMain { viewModel.loadProject(song) }
+            waitUntil { viewModel.currentProjectId == song.id && viewModel.lyrics == song.lyrics }
+            val recording = heldRecording(oldHold)
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() && !viewModel.savingBeforeNavigation }
+            SongIdAllocator.next = { song.id }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue(words) }
+            DraftSaveTestHooks.beforeWrite = newHold
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == song.id }
+            return recording
+        }
+        fun settle(recording: kotlinx.coroutines.Deferred<Result<String>>) {
+            runBlocking { withTimeout(5_000) { recording.await() } }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+        }
+        try {
+            // Success: X's late save leaves the new draft's creation in place, so its next save is refused, not written over X.
+            settle(heldSaveThenNewDraftAt(x, holds[0], holds[1], "new words").also { holds[0].complete(Unit) })
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { !viewModel.savingBeforeNavigation }
+            SystemClock.sleep(300)
+            assertEquals("x words", stored().single { it.id == x.id }.lyrics)
+            assertEquals(null, viewModel.currentProjectId)
+            assertEquals("new words", viewModel.lyrics)
+
+            // A retired creation's held insert: the draft was detached and saved under a new id; the old insert must not land too.
+            SongIdAllocator.next = draws
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() && !viewModel.savingBeforeNavigation }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("third words") }
+            val held = heldRecording(holds[2])
+            val pending = viewModel.currentProjectId!!
+            onMain { viewModel.moveProjectToTrash(other.id) }
+            waitUntil { stored().none { it.id == other.id } && viewModel.projects.none { it.id == pending } }
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { stored().any { it.lyrics == "third words" } }
+            holds[2].complete(Unit)
+            settle(held)
+            assertEquals(1, stored().count { it.lyrics == "third words" })
+            assertTrue(stored().none { it.id == pending })
+        } finally {
+            SongIdAllocator.next = draws
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())
