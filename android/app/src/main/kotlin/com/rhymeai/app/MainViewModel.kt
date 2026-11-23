@@ -285,6 +285,8 @@ internal object RecoveryTestHooks {
     @Volatile var beforeRecoveryInsert: (suspend () -> Unit)? = null
     /** Called each time a queued navigation runs. */
     @Volatile var onQueuedNavigationRun: ((MainViewModel) -> Unit)? = null
+    /** Called each time a navigation is queued behind a save or a held editor. */
+    @Volatile var onNavigationQueued: ((MainViewModel) -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -929,7 +931,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (editorHeld && onSaved === justSave && queuedNavigation != null) return
         // A navigation asked for while a draft is being saved, or while the editor is held, runs once
         // that is done (the latest one wins); it then saves whatever the editor holds by then, first.
-        if (savingBeforeNavigation || editorHeld) { queuedNavigation = { flushCurrentDraft(onSaved) }; return }
+        if (savingBeforeNavigation || editorHeld) {
+            queuedNavigation = { flushCurrentDraft(onSaved) }
+            RecoveryTestHooks.onNavigationQueued?.invoke(this)
+            return
+        }
         if (restoringDraft) return
         startDraftFlush(onSaved)
     }
