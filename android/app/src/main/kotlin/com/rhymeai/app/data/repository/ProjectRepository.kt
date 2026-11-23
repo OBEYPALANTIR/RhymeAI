@@ -95,6 +95,11 @@ internal sealed interface HoldResult {
     data class Miss(val source: SongProject?, val selectedId: String?, val editor: Triple<String, String, String>) : HoldResult
 }
 
+internal object RepositoryTestHooks {
+    /** Runs once inside the next new song's insert, after its checks passed and before it is stored. */
+    @Volatile var afterInsertCheck: (suspend () -> Unit)? = null
+}
+
 /** Every draw for a new song id in one edit was taken: the edit writes nothing. */
 internal class SongIdUnavailableException : IllegalStateException("No free song id could be drawn")
 
@@ -405,6 +410,7 @@ class ProjectRepository internal constructor(
                     if (trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]").any { it.project.id == project.id } ||
                         deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]").any { it.isSongTombstone && it.projectId == project.id }
                     ) throw CreationIdTakenException(project.id)
+                    RepositoryTestHooks.afterInsertCheck?.let { RepositoryTestHooks.afterInsertCheck = null; it() }
                     inserted = true
                     listOf(project) + active
                 } else {

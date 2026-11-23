@@ -1485,6 +1485,16 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun aWithdrawnCreationCannotInsert() = withRepository { _, repository ->
+        // The window gave the creation up after its write was queued: that write stores nothing.
+        val song = SongProject(id = "withdrawn", title = "W", lyrics = "w words", updatedAt = 100L)
+        val creation = SongCreation().apply { withdrawn = true }
+        assertFailsWith<MissingActiveProjectException> { repository.saveActiveState(song, creation, song.title, song.lyrics, song.theme) }
+        assertTrue(repository.projectsFlow.first().none { it.id == song.id })
+        assertEquals(false, creation.inserted)
+    }
+
+    @Test
     fun anOperationEndingOnTheSameSongClearsOnlyItsOwnMarkSoAnotherWindowsEditsAreKept() = withRepository { _, repository ->
         val a = SongProject(id = "a", title = "A", lyrics = "w1", updatedAt = 100L)
         repository.saveActiveState(a, SongCreation(), a.title, a.lyrics, a.theme)

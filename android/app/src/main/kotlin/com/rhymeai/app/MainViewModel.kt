@@ -2776,7 +2776,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 pendingCreations.remove(id)?.retire()
-                projects = committed.projects
+                // A new song this window is still storing is not in the committed list yet; it stays, so its save is not lost or made twice.
+                projects = projects.filter { it.id in pendingCreations && committed.projects.none { saved -> saved.id == it.id } } + committed.projects
                 trashedProjects = committed.trashedProjects
                 if (currentProjectId == id) clearEditorAfterProjectDelete()
                 scheduleTrashPurge()
@@ -2796,7 +2797,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
                     ?: return@launch reportMissingTrashProject()
-                projects = committed.projects
+                projects = projects.filter { it.id in pendingCreations && committed.projects.none { saved -> saved.id == it.id } } + committed.projects
                 trashedProjects = committed.trashedProjects
                 restored = true
                 // The active song with this id is never changed; only a Trash copy with other words returns, as a new song.

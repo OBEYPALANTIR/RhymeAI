@@ -1028,26 +1028,84 @@ class PersistenceInstrumentedTest {
             assertEquals("x words", stored().single { it.id == x.id }.lyrics)
             assertEquals(null, viewModel.currentProjectId)
             assertEquals("new words", viewModel.lyrics)
-
-            // A retired creation's held insert: the draft was detached and saved under a new id; the old insert must not land too.
-            SongIdAllocator.next = draws
-            onMain { viewModel.newProject() }
-            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() && !viewModel.savingBeforeNavigation }
-            onMain { viewModel.lyricsFieldValue = TextFieldValue("third words") }
-            val held = heldRecording(holds[2])
-            val pending = viewModel.currentProjectId!!
-            onMain { viewModel.moveProjectToTrash(other.id) }
-            waitUntil { stored().none { it.id == other.id } && viewModel.projects.none { it.id == pending } }
-            onMain { viewModel.flushCurrentDraft() }
-            waitUntil { stored().any { it.lyrics == "third words" } }
-            holds[2].complete(Unit)
-            settle(held)
-            assertEquals(1, stored().count { it.lyrics == "third words" })
-            assertTrue(stored().none { it.id == pending })
+            // A pending creation across another song's Trash: pendingCreationAcrossAnUnrelatedTrash. A withdrawn
+            // creation's insert: ProjectRepositoryTest.aWithdrawnCreationCannotInsert.
         } finally {
             SongIdAllocator.next = draws
             holds.forEach { it.complete(Unit) }
             DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
+    @Test
+    fun aPendingSongFlushedWhileItsInsertWaitsAcrossAnUnrelatedTrashIsStoredOnce() = pendingCreationAcrossAnUnrelatedTrash(insertCommitsFirst = false)
+
+    @Test
+    fun aPendingSongWhoseInsertIsBeingWrittenAcrossAnUnrelatedTrashIsStoredOnce() = pendingCreationAcrossAnUnrelatedTrash(insertCommitsFirst = true)
+
+    @Test
+    fun aPendingSongFlushedAcrossAnUnrelatedRestoreFromTrashIsStoredOnce() = pendingCreationAcrossAnUnrelatedTrash(insertCommitsFirst = false, restore = true)
+
+    /**
+     * Another song goes to Trash while the new song X is being inserted, with a line kept on X waiting for it; the editor
+     * then flushes. [insertCommitsFirst]: X's insert has passed its checks and is being written when the flush runs.
+     * [restore]: another song comes back from Trash instead.
+     */
+    private fun pendingCreationAcrossAnUnrelatedTrash(insertCommitsFirst: Boolean, restore: Boolean = false) {
+        val other = SongProject("song-other", "Other", "other words", "", 100L)
+        runBlocking {
+            repo.saveActiveState(other, SongCreation(), other.title, other.lyrics, other.theme)
+            if (restore) {
+                repo.saveProjects(emptyList())
+                repo.saveTrashedProjects(listOf(com.rhymeai.app.data.model.TrashedSongProject(other, System.currentTimeMillis())))
+            }
+            repo.setCurrentProjectId(null)
+            repo.saveEditorState("", "", "")
+        }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized && (if (restore) viewModel.trashedProjects.any { it.project.id == other.id } else viewModel.projects.any { it.id == other.id }) }
+        val insert = CompletableDeferred<Unit>()
+        val learned = CompletableDeferred<Unit>()
+        try {
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("pending words") }
+            DraftSaveTestHooks.beforeWrite = insert
+            val recording = kotlinx.coroutines.CoroutineScope(Dispatchers.Main).async { runCatching { viewModel.ensureProjectForRecording() } }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            onMain { viewModel.keepAlternate("queued line") }
+            if (restore) {
+                onMain { viewModel.restoreTrashedProject(other.id) }
+                waitUntil { stored().any { it.id == other.id } && viewModel.projects.any { it.id == other.id } }
+            } else {
+                onMain { viewModel.moveProjectToTrash(other.id) }
+                waitUntil { stored().none { it.id == other.id } && viewModel.projects.none { it.id == other.id } }
+            }
+            if (insertCommitsFirst) {
+                // X's insert passes its checks, then waits inside its write while the flush below runs.
+                val reached = CompletableDeferred<Unit>()
+                com.rhymeai.app.data.repository.RepositoryTestHooks.afterInsertCheck = { reached.complete(Unit); learned.await() }
+                insert.complete(Unit)
+                runBlocking { withTimeout(5_000) { reached.await() } }
+            }
+            onMain { viewModel.flushCurrentDraft() }
+            // The flush's own write waits for X's to finish.
+            learned.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            insert.complete(Unit)
+            runBlocking { withTimeout(5_000) { recording.await() } }
+            SystemClock.sleep(500)
+            instrumentation.waitForIdleSync()
+            // One song holds the draft, at the id its creation drew, with the line that waited on it.
+            assertEquals(listOf(x), stored().filter { it.lyrics == "pending words" }.map { it.id })
+            assertEquals(listOf("queued line"), storedWorkspace(x)?.alternates.orEmpty().map { it.text })
+            assertEquals(x, viewModel.currentProjectId)
+        } finally {
+            insert.complete(Unit)
+            learned.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+            com.rhymeai.app.data.repository.RepositoryTestHooks.afterInsertCheck = null
         }
     }
 
