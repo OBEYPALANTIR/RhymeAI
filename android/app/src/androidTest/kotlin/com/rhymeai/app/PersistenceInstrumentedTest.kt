@@ -14,6 +14,7 @@ import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIModel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -675,6 +676,85 @@ class PersistenceInstrumentedTest {
         assertEquals(setOf(legacy.id, imported.id, template.id), stored().map { it.id }.toSet())
         assertEquals("second window words", stored().single { it.id == legacy.id }.lyrics)
         assertEquals(Triple("Untitled Blues", "template edited", "blue theme"), editorSaved())
+    }
+
+    @Test
+    fun creationRefusalKeepsDraftAndCannotDetachLaterAttempt() {
+        // Another window's new song already holds the id every new draft here draws.
+        val occupant = SongProject("occupied", "Occupant", "occupant words", "", 100L)
+        runBlocking {
+            repo.saveActiveState(occupant, SongCreation(), occupant.title, occupant.lyrics, occupant.theme)
+            repo.setCurrentProjectId(null)
+            repo.saveEditorState("", "", "")
+        }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        fun occupantKept() = assertEquals(occupant.lyrics, stored().single { it.id == occupant.id }.lyrics)
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized && viewModel.projects.any { it.id == occupant.id } }
+        val draws = SongIdAllocator.next
+        val first = CompletableDeferred<Unit>()
+        val second = CompletableDeferred<Unit>()
+        try {
+            SongIdAllocator.next = { occupant.id }
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("draft words") }
+            // A recording's save of the new draft is held before it writes.
+            DraftSaveTestHooks.beforeWrite = first
+            val recording = kotlinx.coroutines.CoroutineScope(Dispatchers.Main).async {
+                runCatching { viewModel.ensureProjectForRecording() }
+            }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == occupant.id }
+
+            // A version restore while the id is refused changes no words and leaves the notebook usable.
+            onMain { viewModel.restoreDraftVersion(com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)) }
+            waitUntil { !viewModel.restoringDraft }
+            assertEquals("draft words", viewModel.lyrics)
+            assertEquals(null, viewModel.notebookError)
+
+            // The refused flush does not navigate; it detaches the draft from the id.
+            val navigated = java.util.concurrent.atomic.AtomicBoolean()
+            onMain { viewModel.newProject { navigated.set(true) } }
+            waitUntil { viewModel.currentProjectId == null && !viewModel.savingBeforeNavigation }
+            assertTrue(!navigated.get())
+            assertEquals("draft words", viewModel.lyrics)
+
+            // A later attempt draws the same id; the older recording's refusal arrives after it and must not detach it.
+            DraftSaveTestHooks.beforeWrite = second
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == occupant.id }
+            first.complete(Unit)
+            val recorded = runBlocking { withTimeout(5_000) { recording.await() } }
+            assertTrue(recorded.exceptionOrNull() is com.rhymeai.app.data.repository.CreationIdTakenException)
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(occupant.id, viewModel.currentProjectId)
+            second.complete(Unit)
+            waitUntil { viewModel.currentProjectId == null }
+
+            // A fresh writing save keeps the words under a new id.
+            SongIdAllocator.next = draws
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { stored().any { it.id != occupant.id && it.lyrics == "draft words" } }
+            occupantKept()
+            assertEquals(null, viewModel.notebookError)
+
+            // A refused import does not run its ready callback and keeps its words for the next save.
+            SongIdAllocator.next = { occupant.id }
+            val ready = java.util.concurrent.atomic.AtomicBoolean()
+            onMain { viewModel.importProject(SongProject("source", "Imported", "import words", "", 1L)) { ready.set(true) } }
+            waitUntil { viewModel.lyrics == "import words" && viewModel.currentProjectId == null }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertTrue(!ready.get())
+            SongIdAllocator.next = draws
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { stored().any { it.id != occupant.id && it.lyrics == "import words" } }
+            occupantKept()
+        } finally {
+            SongIdAllocator.next = draws
+            first.complete(Unit)
+            second.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+        }
     }
 
     private fun resetRepository() {
