@@ -1037,6 +1037,42 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    /** A new song's save is parked before its write; another save of it is refused, which retires the creation. */
+    @Test
+    fun aRetiredCreationsParkedInsertNeverLandsOnceItsIdIsFree() {
+        val id = "song-retired"
+        runBlocking { repo.saveTrashedProjects(listOf(com.rhymeai.app.data.model.TrashedSongProject(SongProject(id, "Gone", "gone words", "", 100L), System.currentTimeMillis()))) }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val draws = SongIdAllocator.next
+        val parked = CompletableDeferred<Unit>()
+        try {
+            SongIdAllocator.next = { id }
+            onMain {
+                viewModel.showStartMenu = false
+                viewModel.lyricsFieldValue = TextFieldValue("draft words")
+            }
+            DraftSaveTestHooks.beforeWrite = parked
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == id }
+            // The second save meets the trashed song at the id: refused, the creation is retired and the editor detached.
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { viewModel.currentProjectId == null }
+            // The id is free again before the parked save writes.
+            runBlocking { repo.saveTrashedProjects(emptyList()) }
+            parked.complete(Unit)
+            waitUntil { !viewModel.savingBeforeNavigation }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(emptyList<SongProject>(), runBlocking { repo.projectsFlow.first() }.filter { it.id == id })
+            assertEquals(null to "draft words", viewModel.currentProjectId to viewModel.lyrics)
+        } finally {
+            SongIdAllocator.next = draws
+            parked.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
     @Test
     fun aPendingSongFlushedWhileItsInsertWaitsAcrossAnUnrelatedTrashIsStoredOnce() = pendingCreationAcrossAnUnrelatedTrash(insertCommitsFirst = false)
 
