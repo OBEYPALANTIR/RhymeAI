@@ -15,9 +15,9 @@ struct EditorAnalysisCueTests {
     @Test @MainActor func headerCountsFollowEachDeletionWithoutAnEmptyState() async throws {
         let viewModel = EditorViewModel()
         viewModel.newProject()
-        let debounceWaits = HookBox(0)
+        let (debounceEntries, debounceEntered) = AsyncStream.makeStream(of: Void.self)
         viewModel.derivedStateDebounce = { _ in
-            debounceWaits.value += 1
+            debounceEntered.yield()
             try await Task.sleep(for: .seconds(3_600))
         }
         // An instant stand-in counter (characters for syllables).
@@ -26,28 +26,32 @@ struct EditorAnalysisCueTests {
         }
         viewModel.countLyrics = count
         var seen: [(words: Int, syllables: Int)] = []
-        // A sanity bound only: a loaded machine can be slow, never stuck.
-        func settle(on text: String) async throws {
-            let expected = count(text)
-            let deadline = ContinuousClock.now + .seconds(30)
-            while (viewModel.wordCount, viewModel.syllableCount) != expected, ContinuousClock.now < deadline {
-                seen.append((viewModel.wordCount, viewModel.syllableCount))
-                try await Task.sleep(for: .milliseconds(1))
-            }
-            #expect((viewModel.wordCount, viewModel.syllableCount) == expected)
+        // Waits on this edit's own count, not the clock. The bound is a hang guard far
+        // above CI stalls seen so far (up to ~40 s) and far below the 3,600 s debounce.
+        func edit(to text: String) async throws {
+            viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
+            let countTask = try #require(viewModel.countTask)
+            // Until this edit's count lands, the header still shows the previous text's.
+            seen.append((viewModel.wordCount, viewModel.syllableCount))
+            let landed = await finishes(within: .seconds(120)) { await countTask.value }
+            try #require(landed, "the count for \"\(text)\" did not finish within 120 s")
+            #expect(viewModel.lyrics == text)
+            #expect((viewModel.wordCount, viewModel.syllableCount) == count(text))
         }
 
-        viewModel.onLyricsChanged("yellow music", timestampMilliseconds: 0)
-        try await settle(on: "yellow music")
+        try await edit(to: "yellow music")
         seen = []
         for text in ["yellow musi", "yellow mus", "yellow mu", "yellow m", "yellow"] {
-            viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
-            try await settle(on: text)
+            try await edit(to: text)
         }
 
+        #expect(seen.count == 5)
         #expect(seen.allSatisfy { $0.words > 0 && $0.syllables > 0 })
         // The debounce was in force throughout, and the counts never waited on it.
-        #expect(debounceWaits.value > 0)
+        let debounceHeld = await finishes(within: .seconds(120)) {
+            for await _ in debounceEntries { return }
+        }
+        #expect(debounceHeld, "the rhyme context's debounce never started")
     }
 
     /// A slow count for an older text that finishes after the newer text's
@@ -142,5 +146,20 @@ struct EditorAnalysisCueTests {
         RetiredPreferences.remove(from: defaults)
         #expect(defaults.object(forKey: "analysisPresentationStyle") == nil)
     }
+}
+
+/// True once `operation` returns, false after `limit` or if the caller is cancelled.
+/// Never waits past `limit`: an operation that ignores cancellation is abandoned,
+/// not awaited, which a task group or timeout race would still do at scope exit.
+private func finishes(
+    within limit: Duration,
+    _ operation: @escaping @Sendable () async -> Void
+) async -> Bool {
+    let (results, result) = AsyncStream.makeStream(of: Bool.self)
+    let work = Task { await operation(); result.yield(true) }
+    let timer = Task { try? await Task.sleep(for: limit); result.yield(false) }
+    defer { work.cancel(); timer.cancel(); result.finish() }
+    for await finished in results { return finished }
+    return false
 }
 
