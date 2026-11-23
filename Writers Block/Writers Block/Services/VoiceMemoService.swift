@@ -76,6 +76,9 @@ nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
     }
 }
 
+typealias VoiceMemoPlaybackUpdate = @MainActor @Sendable () -> Void
+typealias VoiceMemoPlaybackDelivery = @Sendable (@escaping VoiceMemoPlaybackUpdate) -> Void
+
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
 // voice memos. One instance per EditorViewModel — its lifetime matches the
 // view model so AVAudioSession is torn down cleanly when the VM is released.
@@ -178,6 +181,8 @@ final class VoiceMemoService {
     private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
+    @ObservationIgnored private let makePlaybackPlayer: (URL) throws -> AVAudioPlayer
+    @ObservationIgnored fileprivate let deliverPlaybackUpdate: VoiceMemoPlaybackDelivery
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
     /// The file a recorder is being started on, off the main thread; staging
@@ -197,9 +202,18 @@ final class VoiceMemoService {
 
     @ObservationIgnored let stagingRoot: URL
 
-    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared, stagingRoot: URL = RecordingFiles.recorderStagingRoot()) {
+    init(
+        sessionTransitions: VoiceMemoAudioSessionTransitions = .shared,
+        stagingRoot: URL = RecordingFiles.recorderStagingRoot(),
+        makePlaybackPlayer: @escaping (URL) throws -> AVAudioPlayer = { try AVAudioPlayer(contentsOf: $0) },
+        deliverPlaybackUpdate: @escaping VoiceMemoPlaybackDelivery = { update in
+            Task { @MainActor in update() }
+        }
+    ) {
         self.sessionTransitions = sessionTransitions
         self.stagingRoot = stagingRoot
+        self.makePlaybackPlayer = makePlaybackPlayer
+        self.deliverPlaybackUpdate = deliverPlaybackUpdate
         refreshPendingTakes()
     }
 
@@ -708,8 +722,8 @@ final class VoiceMemoService {
         pendingPlayURL = url
         playingIdentity = identity
         let playbackRevision = audioIntentRevision
-        sessionTransitions.activatePlayback { [weak self] result in
-            Task { @MainActor [weak self] in
+        sessionTransitions.activatePlayback { [weak self, deliverPlaybackUpdate] result in
+            deliverPlaybackUpdate { [weak self] in
                 self?.finishPlaybackActivation(result, url: url, revision: playbackRevision)
             }
         }
@@ -726,12 +740,18 @@ final class VoiceMemoService {
             return
         }
         // Checked again as the player starts: removed meanwhile, it does not play.
-        guard playbackAllowed?(url) ?? true, playbackIdentity?(url) == playingIdentity else {
+        if playbackAllowed?(url) == false {
             stopPlayback()
+            lastError = "This recording was deleted and can't be played."
+            return
+        }
+        guard playbackIdentity?(url) == playingIdentity else {
+            stopPlayback()
+            lastError = "This recording could not be read, so it can't be played."
             return
         }
 
-        guard let player = try? AVAudioPlayer(contentsOf: url) else {
+        guard let player = try? makePlaybackPlayer(url) else {
             failToStartPlayback()
             return
         }
@@ -957,9 +977,12 @@ final class VoiceMemoService {
         }
     }
 
-    fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
+    fileprivate func playbackDidFinish(_ player: AVAudioPlayer, successfully: Bool) {
         guard audioPlayer === player else { return }
         stopPlayback()
+        if !successfully {
+            lastError = "Couldn't finish playing this recording. Try again."
+        }
     }
 
     // MARK: - Cleanup
@@ -989,8 +1012,16 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            self?.service?.playbackDidFinish(player)
+        forwardPlaybackCompletion(player, successfully: flag)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        forwardPlaybackCompletion(player, successfully: false)
+    }
+
+    private func forwardPlaybackCompletion(_ player: AVAudioPlayer, successfully: Bool) {
+        service?.deliverPlaybackUpdate { [weak self] in
+            self?.service?.playbackDidFinish(player, successfully: successfully)
         }
     }
 }

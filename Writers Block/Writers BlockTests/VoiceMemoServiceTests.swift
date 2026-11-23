@@ -5,8 +5,7 @@ import SwiftData
 import Testing
 @testable import Writers_Block
 
-// Pure FileManager / path tests — no microphone hardware needed.
-// AVAudioRecorder/Player are exercised in manual/device testing only.
+// File and playback-state tests that need neither a microphone nor audio output.
 struct VoiceMemoServiceTests {
 
     private final class TransitionEvents: @unchecked Sendable {
@@ -127,26 +126,224 @@ struct VoiceMemoServiceTests {
         #expect(!service.isPlayingMemo(at: url))
     }
 
-    @Test(arguments: [true, false])
-    @MainActor func playbackActivationOrOpenFailureShowsError(activationFails: Bool) async {
-        struct ActivationFailed: Error {}
-        let transitions = VoiceMemoAudioSessionTransitions(
-            activateRecording: {},
-            activatePlayback: { if activationFails { throw ActivationFailed() } },
-            deactivate: {}
-        )
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let service = VoiceMemoService(sessionTransitions: transitions, stagingRoot: root)
-        let missingFile = root.appendingPathComponent("missing.m4a")
-        service.togglePlayback(url: missingFile)
+    private final class PlaybackUpdates: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [VoiceMemoPlaybackUpdate] = []
 
-        let deadline = ContinuousClock.now + .seconds(2)
-        while service.lastError == nil && ContinuousClock.now < deadline {
-            await Task.yield()
+        func enqueue(_ update: @escaping VoiceMemoPlaybackUpdate) {
+            lock.withLock { pending.append(update) }
         }
-        #expect(service.lastError == "Couldn't start playback. Try again.")
-        #expect(!service.isPlaying)
-        #expect(service.playbackPosition(at: missingFile) == nil)
+
+        @MainActor func deliver() {
+            let updates = lock.withLock {
+                let updates = pending
+                pending.removeAll()
+                return updates
+            }
+            for update in updates { update() }
+        }
+    }
+
+    private final class TestPlayer: AVAudioPlayer {
+        var playSucceeds: Bool
+        private(set) var stopCount = 0
+
+        init(playSucceeds: Bool = true) throws {
+            self.playSucceeds = playSucceeds
+            // One 16-bit PCM sample in a WAV container. Only the decoder opens it.
+            try super.init(data: Data([
+                0x52, 0x49, 0x46, 0x46, 38, 0, 0, 0, 0x57, 0x41, 0x56, 0x45,
+                0x66, 0x6D, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0,
+                0x40, 0x1F, 0, 0, 0x80, 0x3E, 0, 0, 2, 0, 16, 0,
+                0x64, 0x61, 0x74, 0x61, 2, 0, 0, 0, 0, 0
+            ]), fileTypeHint: AVFileType.wav.rawValue)
+        }
+
+        override func play() -> Bool { playSucceeds }
+        override func pause() {}
+        override func stop() { stopCount += 1 }
+    }
+
+    @MainActor private struct PlaybackHarness {
+        let transitions: VoiceMemoAudioSessionTransitions
+        let updates = PlaybackUpdates()
+        let events = TransitionEvents()
+        let service: VoiceMemoService
+
+        init(
+            activate: @escaping @Sendable () throws -> Void = {},
+            makePlayer: @escaping (URL) throws -> AVAudioPlayer
+        ) {
+            let events = self.events
+            transitions = VoiceMemoAudioSessionTransitions(
+                activateRecording: {},
+                activatePlayback: {
+                    events.append("activate")
+                    try activate()
+                },
+                deactivate: { events.append("deactivate") }
+            )
+            let updates = self.updates
+            service = VoiceMemoService(
+                sessionTransitions: transitions,
+                stagingRoot: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                makePlaybackPlayer: makePlayer,
+                deliverPlaybackUpdate: { updates.enqueue($0) }
+            )
+            service.playbackIdentity = { $0.lastPathComponent }
+        }
+
+        // This no-op runs after previous work on the same serial session queue.
+        func drainSession() async {
+            await withCheckedContinuation { continuation in
+                transitions.activateRecording { _ in continuation.resume() }
+            }
+        }
+
+        func settle() async {
+            await drainSession()
+            updates.deliver()
+            await drainSession()
+        }
+    }
+
+    private struct PlaybackTestError: Error {}
+
+    enum StartFailure: CaseIterable, Sendable {
+        case activation, open, firstPlay, resume
+    }
+
+    @Test(arguments: StartFailure.allCases)
+    @MainActor func playbackFailureCleansUpAndAllowsRetry(failure: StartFailure) async throws {
+        let player = try TestPlayer(playSucceeds: failure != .firstPlay)
+        let retryPlayer = try TestPlayer()
+        let calls = TransitionEvents()
+        var opened: [URL] = []
+        let harness = PlaybackHarness(activate: {
+            calls.append("activate")
+            if failure == .activation && calls.snapshot.count == 1 { throw PlaybackTestError() }
+        }, makePlayer: { url in
+            opened.append(url)
+            if calls.snapshot.count > 1 { return retryPlayer }
+            if failure == .open { throw PlaybackTestError() }
+            return player
+        })
+        let service = harness.service
+        let url = service.stagingRoot.appendingPathComponent("take.wav")
+        service.togglePlayback(url: url)
+        await harness.settle()
+        if failure == .resume {
+            try #require(service.isPlayingMemo(at: url))
+            service.togglePlayback(url: url)
+            try #require(service.playbackPosition(at: url) != nil && !service.isPlaying)
+            player.playSucceeds = false
+            service.togglePlayback(url: url)
+            await harness.settle()
+        }
+
+        #expect(service.lastError == (failure == .resume ? "Couldn't resume playback. Try again." : "Couldn't start playback. Try again."))
+        #expect(!service.isPlaying && service.playbackPosition(at: url) == nil)
+        #expect(opened == (failure == .activation ? [] : [url]))
+        #expect(harness.events.snapshot == ["activate", "deactivate"])
+        #expect(player.stopCount == (failure == .resume ? 1 : 0))
+        service.lastError = nil
+
+        service.togglePlayback(url: url)
+        await harness.settle()
+        #expect(harness.events.snapshot == ["activate", "deactivate", "activate"])
+        #expect(service.isPlayingMemo(at: url) && service.lastError == nil)
+    }
+
+    @Test(arguments: [true, false], [true, false])
+    @MainActor func playbackRecheckReportsOnlyCurrentRefusal(matchesIdentity: Bool, explicitStop: Bool) async {
+        let opened = TransitionEvents()
+        let harness = PlaybackHarness(makePlayer: { _ in
+            opened.append("open")
+            throw PlaybackTestError()
+        })
+        let service = harness.service
+        let url = service.stagingRoot.appendingPathComponent("take.wav")
+        var allowed = true
+        var identity = "original"
+        service.playbackAllowed = { _ in allowed }
+        service.playbackIdentity = { _ in identity }
+        service.togglePlayback(url: url)
+        // Hold delivery of the completed activation until eligibility changes.
+        await harness.drainSession()
+        if matchesIdentity {
+            allowed = false
+        } else {
+            identity = "replacement"
+        }
+        if explicitStop { service.stopPlayback() }
+        await harness.settle()
+
+        let refusal = matchesIdentity
+            ? "This recording was deleted and can't be played."
+            : "This recording could not be read, so it can't be played."
+        #expect(service.lastError == (explicitStop ? nil : refusal))
+        #expect(!service.isPlaying && service.playbackPosition(at: url) == nil)
+        #expect(harness.events.snapshot == ["activate", "deactivate"])
+        #expect(opened.snapshot.isEmpty)
+    }
+
+    enum PlayerCompletion: CaseIterable, Sendable {
+        case decodedError, unsuccessfulFinish, successfulFinish
+
+        @MainActor func deliver(to delegate: any AVAudioPlayerDelegate, player: AVAudioPlayer) {
+            switch self {
+            case .decodedError:
+                delegate.audioPlayerDecodeErrorDidOccur?(player, error: PlaybackTestError())
+            case .unsuccessfulFinish, .successfulFinish:
+                delegate.audioPlayerDidFinishPlaying?(player, successfully: self == .successfulFinish)
+            }
+        }
+    }
+
+    @Test(arguments: PlayerCompletion.allCases)
+    @MainActor func playbackDelegateCompletionClearsCurrentPlayer(completion: PlayerCompletion) async throws {
+        let player = try TestPlayer()
+        let harness = PlaybackHarness(makePlayer: { _ in player })
+        let service = harness.service
+        let url = service.stagingRoot.appendingPathComponent("take.wav")
+        service.togglePlayback(url: url)
+        await harness.settle()
+        try #require(service.isPlayingMemo(at: url))
+        let delegate = try #require(player.delegate)
+
+        completion.deliver(to: delegate, player: player)
+        await harness.settle()
+        #expect(service.lastError == (completion == .successfulFinish ? nil : "Couldn't finish playing this recording. Try again."))
+        #expect(!service.isPlaying && service.playbackPosition(at: url) == nil)
+        #expect(player.stopCount == 1)
+        #expect(harness.events.snapshot == ["activate", "deactivate"])
+
+        completion.deliver(to: delegate, player: player)
+        await harness.settle()
+        #expect(player.stopCount == 1)
+        #expect(harness.events.snapshot == ["activate", "deactivate"])
+    }
+
+    @Test @MainActor func latePlaybackCallbacksDoNotAffectTheReplacement() async throws {
+        let first = try TestPlayer()
+        let replacement = try TestPlayer()
+        let harness = PlaybackHarness(makePlayer: { $0.lastPathComponent == "a.wav" ? first : replacement })
+        let service = harness.service
+        let a = service.stagingRoot.appendingPathComponent("a.wav")
+        let b = service.stagingRoot.appendingPathComponent("b.wav")
+        service.togglePlayback(url: a)
+        await harness.settle()
+        let oldDelegate = try #require(first.delegate)
+        service.togglePlayback(url: b)
+        await harness.settle()
+        try #require(service.isPlayingMemo(at: b))
+
+        PlayerCompletion.decodedError.deliver(to: oldDelegate, player: first)
+        PlayerCompletion.unsuccessfulFinish.deliver(to: oldDelegate, player: first)
+        await harness.settle()
+        #expect(service.isPlayingMemo(at: b) && service.lastError == nil)
+        #expect(replacement.stopCount == 0)
+        #expect(harness.events.snapshot == ["activate", "deactivate", "activate"])
     }
 
     // MARK: - File Naming
