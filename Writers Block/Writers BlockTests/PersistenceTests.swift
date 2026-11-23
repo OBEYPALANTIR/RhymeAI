@@ -285,6 +285,29 @@ struct PersistenceTests {
     }
 
     @MainActor
+    @Test func backgroundBackupPreservesSyncChangesToAnUntouchedSong() async throws {
+        let backup = FakeCloudBackupService(isConfigured: true, isConnected: true)
+        let harness = try Self.makeHarness(backupService: backup)
+        let viewModel = harness.viewModel
+        let song = SongProject(id: "synced-song", title: "Harbour Lights", lyrics: "ropes")
+        harness.context.insert(song)
+        try harness.context.save()
+        viewModel.loadProject(song)
+
+        let synced = Date(timeIntervalSince1970: 5_000_000_000)
+        song.lyrics = "a line from another device"
+        song.updatedAt = synced
+        try harness.context.save()
+
+        let draftSaved = viewModel.flushEditedDraft()
+        await viewModel.runCloudBackupOnBackgroundIfPossible(draftSaved: draftSaved)
+
+        #expect(backup.backgroundCalls == 1)
+        #expect(song.lyrics == "a line from another device")
+        #expect(song.updatedAt == synced)
+    }
+
+    @MainActor
     @Test func firstRunOfferAppearsAfterConnectingAndRestoresOnlyWhenAccepted() async throws {
         let backupService = FakeCloudBackupService(isConfigured: true, isConnected: false)
         backupService.summary = RemoteBackupSummary(songs: 2, recordings: 1)
@@ -738,9 +761,49 @@ struct PendingEditSaveTests {
         song.updatedAt = synced
         try container.mainContext.save()
 
-        #expect(viewModel.flushEditedDraft() == nil)
+        _ = viewModel.flushEditedDraft()
         #expect(song.lyrics == "ropes, tide and a synced line")
         #expect(song.updatedAt == synced)
+    }
+
+    @Test func backgroundFlushLeavesAnEmptiedSongUnchanged() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        let updatedAt = song.updatedAt
+        viewModel.title = ""
+        viewModel.lyrics = ""
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.flushEditedDraft() == true)
+        #expect(song.title == "Harbour Lights")
+        #expect(song.lyrics == "ropes")
+        #expect(song.updatedAt == updatedAt)
+    }
+
+    @Test func backgroundFlushSavesATitleOnlyEditBeforeAutosaveIsScheduled() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        _ = container
+        viewModel.title = "Lights on the Tide"
+
+        #expect(viewModel.flushEditedDraft() == true)
+        #expect(song.title == "Lights on the Tide")
+        #expect(song.lyrics == "ropes")
+    }
+
+    @Test func backgroundFlushCreatesAnUnsavedDraftOnlyOnce() throws {
+        let (viewModel, container) = try Self.library()
+        viewModel.newProject()
+        viewModel.lyrics = "the harbour lights turn gold"
+        #expect(viewModel.currentProjectId == nil)
+
+        #expect(viewModel.flushEditedDraft() == true)
+        _ = viewModel.flushEditedDraft()
+
+        let songs = try Self.songs(container)
+        #expect(songs.count == 1)
+        let song = try #require(songs.first)
+        #expect(song.lyrics == "the harbour lights turn gold")
+        #expect(song.id == viewModel.currentProjectId)
     }
 
     @Test func aNewSongGivenOnlyATitleIsCreated() throws {

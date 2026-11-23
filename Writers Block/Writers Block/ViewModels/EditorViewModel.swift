@@ -2453,17 +2453,24 @@ final class EditorViewModel: ObservableObject {
         return saveStatus != .failed
     }
 
-    /// Backgrounding saves local edits only. An untouched editor may still show
-    /// the words from before a sync. Return nil when no flush was attempted.
-    func flushEditedDraft() -> Bool? {
+    /// Compares the live draft with the loaded words so edits can save before SwiftUI queues autosave.
+    /// An untouched editor may show words superseded by sync. True means the draft is ready for backup.
+    func flushEditedDraft() -> Bool {
+        guard activeCloudEditorOperation == nil else { return false }
+        let hasLocalEdits: Bool
         if loadedProjectRow != nil, let loadedProjectWords {
             let loadedTitle = loadedProjectWords.title.isEmpty ? Self.untitledProjectTitle : loadedProjectWords.title
             let baseline = OpenDraft(title: loadedTitle, lyrics: loadedProjectWords.lyrics, theme: loadedProjectWords.theme)
-            guard openDraft != baseline else { return nil }
+            hasLocalEdits = openDraft != baseline
         } else {
-            guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return nil }
+            hasLocalEdits = currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty
         }
-        return flushCurrentDraft()
+        if hasLocalEdits, !emptiedDraftNeedsNoSave {
+            return flushCurrentDraft()
+        }
+        autoSaveTask?.cancel()
+        if saveStatus == .saving { saveStatus = .idle }
+        return true
     }
 
     @discardableResult
