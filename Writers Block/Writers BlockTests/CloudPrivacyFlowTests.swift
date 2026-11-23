@@ -593,34 +593,75 @@ struct CloudPrivacyFlowTests {
             #expect(viewModel.errorMessage == editorError)
             #expect(!viewModel.suggestionsFailed)
 
-            let hostedPanel = NSHostingView(rootView: AssistantPanelView(isInline: true)
-                .environmentObject(viewModel)
-                .environmentObject(GGUFDownloadManager.shared))
+            let (downloadDefaults, downloadSuite) = Self.makeDefaults()
+            defer { downloadDefaults.removePersistentDomain(forName: downloadSuite) }
+            let downloads = GGUFDownloadManager(
+                configuration: .ephemeral,
+                modelsRoot: FileManager.default.temporaryDirectory.appendingPathComponent(downloadSuite),
+                defaults: downloadDefaults
+            )
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 500, height: 1000),
                 styleMask: [.titled], backing: .buffered, defer: false
             )
             window.isReleasedWhenClosed = false
-            window.contentView = hostedPanel
             window.ignoresMouseEvents = true
             window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
-            window.orderBack(nil)
             defer { window.close() }
 
-            await Task.yield()
-            hostedPanel.layoutSubtreeIfNeeded()
-            let bitmap = try #require(hostedPanel.bitmapImageRepForCachingDisplay(in: hostedPanel.bounds))
-            hostedPanel.cacheDisplay(in: hostedPanel.bounds, to: bitmap)
-            let image = try #require(bitmap.cgImage)
-            let recognizeText = VNRecognizeTextRequest()
-            recognizeText.recognitionLevel = .fast
-            try VNImageRequestHandler(cgImage: image).perform([recognizeText])
-            let renderedText = (recognizeText.results ?? [])
-                .compactMap { $0.topCandidates(1).first?.string }
-                .joined(separator: " ")
-            #expect(renderedText.contains("Your edits remain open"), "\(renderedText)")
+            let clock = ContinuousClock()
+            let deadline = clock.now + .seconds(5)
+            var renderedText = ""
+            repeat {
+                if let image = Self.captureMacAssistant(window, viewModel: viewModel, downloads: downloads) {
+                    renderedText = try Self.recognizeText(in: image)
+                    if renderedText.contains("Your edits remain open") { break }
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            } while clock.now < deadline
+            try #require(
+                renderedText.contains("Your edits remain open"),
+                "Assistant did not render the editor error within 5 seconds. OCR: \(renderedText)"
+            )
             #expect(renderedText.contains("Try again"), "\(renderedText)")
         }
+    }
+
+    private static func captureMacAssistant(
+        _ window: NSWindow,
+        viewModel: EditorViewModel,
+        downloads: GGUFDownloadManager
+    ) -> CGImage? {
+        // Pin the count only for this synchronous MainActor render. Model loads
+        // can update it between captures, and each capture restores their count.
+        let inferenceStatus = LocalInferenceStatus.shared
+        // Exercise the pin with a pending load even in a focused test run.
+        inferenceStatus.beginLoading()
+        defer { inferenceStatus.endLoading() }
+        let activeLoads = max(0, inferenceStatus.loadingCount)
+        for _ in 0..<activeLoads { inferenceStatus.endLoading() }
+        defer {
+            for _ in 0..<activeLoads { inferenceStatus.beginLoading() }
+        }
+
+        let hostedPanel = NSHostingView(rootView: AssistantPanelView(isInline: true)
+            .environmentObject(viewModel)
+            .environmentObject(downloads))
+        window.contentView = hostedPanel
+        if !window.isVisible { window.orderBack(nil) }
+        hostedPanel.layoutSubtreeIfNeeded()
+        guard let bitmap = hostedPanel.bitmapImageRepForCachingDisplay(in: hostedPanel.bounds) else { return nil }
+        hostedPanel.cacheDisplay(in: hostedPanel.bounds, to: bitmap)
+        return bitmap.cgImage
+    }
+
+    private static func recognizeText(in image: CGImage) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .fast
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        return (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: " ")
     }
     #endif
 
