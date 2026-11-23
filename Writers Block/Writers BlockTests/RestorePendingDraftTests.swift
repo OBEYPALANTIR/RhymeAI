@@ -474,8 +474,8 @@ struct RestorePendingDraftTests {
         #expect(try retryJournals(beside: recovery).isEmpty == !historyUnavailable)
     }
 
-    @Test(arguments: [false, true])
-    func audioRetryRefusesASameIDReplacement(throughTrash: Bool) async throws {
+    @Test(arguments: ["replacement", "trash", "published"])
+    func audioRetryRefusesASameIDReplacement(_ path: String) async throws {
         let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
         let staged = snapshot.appendingPathComponent(take.fileName)
         try FileManager.default.removeItem(at: staged)
@@ -483,7 +483,10 @@ struct RestorePendingDraftTests {
         let saved = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "reserved" })
         let id = saved.id
         let row = try durableRowID(saved)
-        if throughTrash {
+        if path == "published" {
+            try seedPublishedRecovery(take, bytes: bytes, projectId: id, harness: first, recovery: recovery)
+        }
+        if path == "trash" {
             #expect(editor.moveProjectToTrash(saved))
             let trash = try #require(try first.context.fetch(FetchDescriptor<TrashedSongProject>()).first { $0.id == id })
             #expect(editor.restoreTrashedProject(trash) != nil)
@@ -499,7 +502,8 @@ struct RestorePendingDraftTests {
         let songs = try second.context.fetch(FetchDescriptor<SongProject>())
         #expect(songs.filter { $0.lyrics == "pending local words" }.map(\.id) == [id])
         #expect(try songs.first { $0.id == id }.map(durableRowID) != row)
-        #expect(second.audios(id).isEmpty)
+        #expect(try !second.context.fetch(FetchDescriptor<Recording>()).contains { $0.projectId == id })
+        if path != "published" { #expect(second.audios(id).isEmpty) }
         #expect(try retryJournals(beside: recovery).count == 1)
     }
 
@@ -540,8 +544,8 @@ struct RestorePendingDraftTests {
         #expect(try retryJournals(beside: recovery).isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func pendingAudioDoesNotResurrectADeletedSongOrTake(deleteSong: Bool) async throws {
+    @Test(arguments: ["take", "song", "published"])
+    func pendingAudioDoesNotResurrectADeletedSongOrTake(_ path: String) async throws {
         let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
         let firstPath = snapshot.appendingPathComponent(take.fileName)
         let other = Data([0x34])
@@ -556,6 +560,10 @@ struct RestorePendingDraftTests {
         let id = saved.id
         let key = take.recordingID(for: id)
         let date = Date().addingTimeInterval(120).epochMilliseconds
+        let deleteSong = path == "song"
+        if path == "published" {
+            try seedPublishedRecovery(take, bytes: bytes, projectId: id, harness: first, recovery: recovery)
+        }
         if deleteSong {
             first.context.delete(saved)
         } else {
@@ -575,7 +583,46 @@ struct RestorePendingDraftTests {
         #expect(!next.audios(id).contains(bytes))
         if !deleteSong { #expect(next.audios(id).contains(other)) }
         #expect(try retryJournals(beside: recovery).isEmpty)
-        #expect(try Data(contentsOf: firstPath) == bytes)
+        if path == "published" {
+            let quarantine = RecordingFiles.quarantineRoot(for: next.memosRoot)
+            let paths = try FileManager.default.subpathsOfDirectory(atPath: quarantine.path)
+            #expect(paths.contains { (try? Data(contentsOf: quarantine.appendingPathComponent($0))) == bytes })
+        } else {
+            #expect(try Data(contentsOf: firstPath) == bytes)
+        }
+    }
+
+    /// Simulates a crash after the verified alias reached the memo folder and before
+    /// the recording library adopted it. Write the on-disk intent format directly.
+    private func seedPublishedRecovery(_ take: OpenRecordingSnapshot.Take, bytes: Data, projectId: String,
+                                       harness: BackupHarness, recovery: URL) throws {
+        let name = try #require(try retryJournals(beside: recovery).first)
+        let retry = recovery.deletingLastPathComponent().appendingPathComponent(name)
+        var journal = try journalObject(Data(contentsOf: retry))
+        let owner = try #require(journal["owner"] as? [String: Any])
+        let row = try #require(owner["row"])
+        let original = take.recordingID(for: projectId)
+        let alias = UUID().uuidString.lowercased()
+        let target = harness.file(alias, projectId)
+        try harness.writeFile(bytes, projectId: projectId, fileName: "\(alias).m4a")
+        journal["recordingIDs"] = [original: alias]
+        try JSONSerialization.data(withJSONObject: journal).write(to: retry, options: .atomic)
+        let binding: [String: Any] = [
+            "projectId": projectId, "row": row,
+            "sourceProjectId": try #require(journal["projectId"]),
+            "sourceRecordingId": URL(fileURLWithPath: take.fileName).deletingPathExtension().lastPathComponent,
+            "originalId": original, "bytes": take.bytes,
+            "precedenceTime": try #require(journal["savedAt"]), "precedenceRepaired": true
+        ]
+        let move: [String: Any] = [
+            "path": RecordingFiles.canonicalPath(target), "recordingId": alias, "displayName": take.displayName,
+            "sha256": take.sha256, "draftBinding": binding
+        ]
+        let moves: [String: Any] = ["adopt": [move], "quarantine": [], "detach": []]
+        let quarantine = RecordingFiles.quarantineRoot(for: harness.memosRoot)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: moves)
+            .write(to: quarantine.appendingPathComponent("pending-moves.json"), options: .atomic)
     }
 
     @Test func overlappingRecoveryJournalsShareAnAliasWithoutDroppingDrafts() async throws {

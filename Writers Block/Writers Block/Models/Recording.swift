@@ -1140,6 +1140,29 @@ final class RecordingLibrary: RecordingPublishing {
             if let id = file.storedId {
                 // Copies written for a draft, taken in under the identity recorded for them.
                 if let entry = adoptByPath[file.path], entry.sha256 == sha, rowsById[entry.recordingId] == nil {
+                    if let binding = entry.draftBinding {
+                        let projectId = binding.projectId
+                        guard file.projectId == projectId, file.size == binding.bytes else { continue }
+                        let owners = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId }))
+                        if deletions.contains(where: { deletion in
+                            if deletion.isSongTombstone {
+                                return deletion.projectId == projectId && owners.contains {
+                                    $0.persistentModelID == binding.row && deletion.wins(over: $0.updatedAt, repaired: $0.precedenceRepaired)
+                                }
+                            }
+                            let ids = [(binding.sourceProjectId, binding.sourceRecordingId), (projectId, binding.originalId),
+                                       (projectId, entry.recordingId)]
+                            return ids.contains { project, id in
+                                deletion.covers(projectId: project, recordingId: id, sha256: sha,
+                                                at: binding.precedenceTime, repaired: binding.precedenceRepaired)
+                            }
+                        }) {
+                            toQuarantine.append((file.url, sha, entry.recordingId))
+                            continue
+                        }
+                        let trash = try context.fetchCount(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == projectId }))
+                        guard owners.count == 1, owners.first?.persistentModelID == binding.row, trash == 0 else { continue }
+                    }
                     candidates.append(candidate(id: entry.recordingId, displayName: entry.displayName, trashedAt: nil, time: file.modified, file: file))
                     continue
                 }
@@ -2040,9 +2063,21 @@ final class RecordingLibrary: RecordingPublishing {
     /// A draft's copied recordings, written outside the library as `<newId>.<ext>`:
     /// recorded so the next reconcile takes them in with their names.
     func expectCopies(_ copies: [(url: URL, recordingId: String, displayName: String, sha256: String)]) throws {
+        try expectCopies(copies, draftBinding: nil)
+    }
+
+    func expectCopies(_ copies: [(url: URL, recordingId: String, displayName: String, sha256: String)],
+                      draftBinding: RecordingFiles.PendingMoves.Adopt.DraftBinding?) throws {
         guard !copies.isEmpty else { return }
         var moves = try RecordingFiles.readPendingMoves(for: memosRoot)
-        moves.adopt += copies.map { .init(path: RecordingFiles.canonicalPath($0.url), recordingId: $0.recordingId, displayName: $0.displayName, sha256: $0.sha256) }
+        for copy in copies {
+            let path = RecordingFiles.canonicalPath(copy.url)
+            if draftBinding != nil {
+                moves.adopt.removeAll { $0.path == path && $0.recordingId == copy.recordingId && $0.sha256 == copy.sha256 }
+            }
+            moves.adopt.append(.init(path: path, recordingId: copy.recordingId, displayName: copy.displayName,
+                                     sha256: copy.sha256, draftBinding: draftBinding))
+        }
         try RecordingFiles.writePendingMoves(moves, for: memosRoot)
     }
 

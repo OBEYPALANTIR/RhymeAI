@@ -2,6 +2,7 @@ import AVFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import SwiftData
 import os
 
 // A recording sitting in the Trash Bin. On disk it is `<recordingId>.<ext>`
@@ -471,10 +472,22 @@ enum RecordingFiles {
         }
 
         nonisolated struct Adopt: Codable, Equatable, Hashable, Sendable {
+            struct DraftBinding: Codable, Equatable, Hashable, Sendable {
+                let projectId: String
+                let row: PersistentIdentifier
+                let sourceProjectId: String
+                let sourceRecordingId: String
+                let originalId: String
+                let bytes: Int64
+                let precedenceTime: Date
+                let precedenceRepaired: Bool
+            }
+
             var path: String
             var recordingId: String
             var displayName: String
             var sha256: String
+            var draftBinding: DraftBinding? = nil
         }
 
         var isEmpty: Bool { quarantine.isEmpty && detach.isEmpty && adopt.isEmpty }
@@ -485,7 +498,10 @@ enum RecordingFiles {
             Set(quarantine.map(\.path) + detach.filter { !$0.source.isEmpty }.flatMap { [$0.source, $0.destination] })
         }
         /// Not listed or played: waiting for quarantine, or still at its source.
-        var listingHidden: Set<String> { Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }) }
+        var listingHidden: Set<String> {
+            Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }
+                + adopt.filter { $0.draftBinding != nil }.map(\.path))
+        }
 
         /// Every field a replay relies on, checked when the record is read (T3.23):
         /// absolute paths, valid ids, digests and lengths, and times.
@@ -509,6 +525,13 @@ enum RecordingFiles {
             for item in adopt {
                 try path(item.path); try digest(item.sha256); try SyncIdentity.validateRecordingId(item.recordingId)
                 try SyncIdentity.validateDisplayName(item.displayName)
+                if let draft = item.draftBinding {
+                    try SyncIdentity.validateProjectId(draft.projectId)
+                    try SyncIdentity.validateProjectId(draft.sourceProjectId)
+                    try SyncIdentity.validateRecordingId(draft.sourceRecordingId)
+                    try SyncIdentity.validateRecordingId(draft.originalId)
+                    guard draft.bytes > 0 else { throw PendingMovesError.invalid }
+                }
             }
         }
     }

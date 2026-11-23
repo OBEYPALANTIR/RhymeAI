@@ -4279,10 +4279,10 @@ final class EditorViewModel: ObservableObject {
                 var target = try RecordingFiles.localURL(projectId: projectId,
                     fileName: RecordingFiles.storedName(id: id, displayName: take.displayName), memosRoot: root)
                 let moves = try RecordingFiles.readPendingMoves(for: root)
-                let planned = moves.adopt.contains {
+                let planned = moves.adopt.first {
                     $0.recordingId == id && $0.sha256 == take.sha256 && $0.path == RecordingFiles.canonicalPath(target)
                 }
-                if try RecordingFiles.exists(target), planned, (try? take.matches(target)) == true {
+                if try RecordingFiles.exists(target), planned != nil, (try? take.matches(target)) == true {
                     try await library.reconcile(context: context)
                 } else {
                     guard let folder, take.fileName == URL(fileURLWithPath: take.fileName).lastPathComponent else {
@@ -4305,8 +4305,16 @@ final class EditorViewModel: ObservableObject {
                         _ = try library.publishFinished(temporary, projectId: projectId, preferredName: take.displayName,
                             origin: .recorded, id: id, finishedAt: take.origin?.uploadedAt)
                     } else {
-                        if !planned || id != (aliases.first ?? key) {
-                            try library.expectCopies([(target, id, take.displayName, take.sha256)])
+                        let sourceProjectId = record.projectId ?? projectId
+                        let sourceRecordingId = UUID(uuidString: original) != nil ? original : take.recordingID(for: sourceProjectId)
+                        let binding = RecordingFiles.PendingMoves.Adopt.DraftBinding(
+                            projectId: projectId, row: owner.row, sourceProjectId: sourceProjectId,
+                            sourceRecordingId: sourceRecordingId, originalId: key, bytes: take.bytes,
+                            precedenceTime: take.origin?.uploadedAt ?? record.savedAt,
+                            precedenceRepaired: take.origin?.precedenceRepaired ?? true
+                        )
+                        if planned?.draftBinding != binding || id != (aliases.first ?? key) {
+                            try library.expectCopies([(target, id, take.displayName, take.sha256)], draftBinding: binding)
                         }
                         try RecordingFiles.verifiedMove(temporary, to: target, sha256: take.sha256, bytes: take.bytes, within: [root, folder])
                     }
