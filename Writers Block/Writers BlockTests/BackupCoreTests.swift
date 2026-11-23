@@ -3808,11 +3808,13 @@ struct BackupCoreTests {
                 ("manifest.json", manifest),
                 ("recordings/song-a/late.m4a", Self.lateTake.audio)
             ])
-            let root = RecordingFiles.canonicalPath(harness.memosRoot)
+            let staging = RecordingFiles.canonicalPath(RecordingFiles.stagingRoot(for: harness.memosRoot))
+            let memos = RecordingFiles.canonicalPath(harness.memosRoot)
             let hook = RecordingFiles.BoundaryHooks.install { point, source, destination in
-                if point == .beforeCheck && destination != nil && RecordingFiles.canonicalPath(source).hasPrefix(root + "/") {
-                    throw BackupError.network("Synthetic failure after apply")
-                }
+                guard point == .beforeCheck, let destination,
+                      RecordingFiles.canonicalPath(source.deletingLastPathComponent()) == staging,
+                      RecordingFiles.canonicalPath(destination).hasPrefix(memos + "/") else { return }
+                throw BackupError.network("Synthetic failure after apply")
             }
             defer { RecordingFiles.BoundaryHooks.remove(hook) }
             await #expect(throws: BackupError.network("Synthetic failure after apply")) {
