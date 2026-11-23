@@ -106,21 +106,33 @@ final class MacWorkspaceModel: ObservableObject {
         switch MacDropRoute.route(urls, songOpen: songOpen(in: viewModel)) {
         case .songs(let songs):
             let routed = Set(songs)
-            importSongs(songs, into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            importSongs(uniqueDropFiles(songs), into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
             return true
         case .recordings(let audio):
             let routed = Set(audio)
-            importRecordings(audio, into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            importRecordings(uniqueDropFiles(audio), into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
             return true
         case .none:
             return false
         }
     }
 
+    private func uniqueDropFiles(_ urls: [URL]) -> [URL] {
+        var seen: Set<URL> = []
+        // Use the normalized path as the key, keeping Finder's original URL for file access.
+        return urls.filter { seen.insert($0.standardizedFileURL).inserted }
+    }
+
     private func reportUnimportedDropFiles(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
-        let names = urls.map(\.lastPathComponent).joined(separator: "\n")
-        importError = "Could not import:\n\(names)"
+        let byName = Dictionary(grouping: urls, by: \.lastPathComponent)
+        let names = urls.map { url in
+            let name = url.lastPathComponent
+            guard (byName[name]?.count ?? 0) > 1 else { return name }
+            return "\(url.deletingLastPathComponent().lastPathComponent)/\(name)"
+        }.joined(separator: "\n")
+        let report = "Could not import:\n\(names)"
+        importError = importError.map { "\($0)\n\n\(report)" } ?? report
     }
 
     /// Copies dropped or picked audio into the open song's recordings and
@@ -131,20 +143,24 @@ final class MacWorkspaceModel: ObservableObject {
             return
         }
         Task {
-            for (index, url) in urls.enumerated() {
+            var failed: [URL] = []
+            for url in urls {
                 do {
                     try await viewModel.importRecording(at: url, projectId: projectId)
                 } catch {
-                    if let skippedDropFiles {
-                        reportUnimportedDropFiles(Array(urls[index...]) + skippedDropFiles)
-                    } else if !(error is CancellationError) {
+                    if skippedDropFiles != nil {
+                        failed.append(url)
+                        continue
+                    }
+                    if !(error is CancellationError) {
                         importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again."
                     }
                     return
                 }
             }
-            if let skippedDropFiles, !skippedDropFiles.isEmpty {
-                reportUnimportedDropFiles(skippedDropFiles)
+            let unimported = failed + (skippedDropFiles ?? [])
+            if !unimported.isEmpty {
+                reportUnimportedDropFiles(unimported)
             } else if viewModel.currentProjectId == projectId {
                 // Another song's recordings would be the wrong result.
                 showRecordings(for: viewModel)
