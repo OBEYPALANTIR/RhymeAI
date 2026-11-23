@@ -1,9 +1,13 @@
 // The iPhone and iPad screens; the Mac window has its own sidebar and empty state.
 #if !os(macOS)
 import SwiftUI
+import SwiftData
 
 struct WelcomeView: View {
     @EnvironmentObject private var viewModel: EditorViewModel
+    // The rows the projects sheet lists, so Continue opens one the sheet would.
+    @Query(sort: \SongProject.updatedAt, order: .reverse) private var projects: [SongProject]
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.appAppearanceStyle) private var appearance
@@ -70,6 +74,8 @@ struct WelcomeView: View {
                                 // uneven; One Liners, the card with its own buttons,
                                 // spans the width below rather than making the row tall.
                                 VStack(spacing: RhymeAITokens.Spacing.lg) {
+                                    // Continue spans the width above the row, as One Liners does below it.
+                                    continueCard
                                     HStack(spacing: RhymeAITokens.Spacing.lg) {
                                         songCards
                                     }
@@ -79,6 +85,7 @@ struct WelcomeView: View {
                                 }
                             } else {
                                 VStack(spacing: RhymeAITokens.Spacing.md) {
+                                    continueCard
                                     songCards
                                     oneLinersCard
                                 }
@@ -124,7 +131,7 @@ struct WelcomeView: View {
             subtitle: "Continue where you left off",
             compact: usesHorizontalCards
         ) {
-            viewModel.showProjectsSheet = true
+            Self.loadSong(viewModel)
         }
 
         WelcomeCard(
@@ -135,6 +142,26 @@ struct WelcomeView: View {
         ) {
             viewModel.showTemplatesSheet = true
         }
+    }
+
+    /// Shown first, on the floating step, only while there is a song to continue.
+    @ViewBuilder
+    private var continueCard: some View {
+        if let song = viewModel.continueSong(in: projects, context: modelContext) {
+            WelcomeCard(
+                icon: "music.note",
+                title: "Continue \(song.title.isEmpty ? "Untitled Song" : song.title)",
+                subtitle: "Return to your writing",
+                level: .floating
+            ) {
+                viewModel.continueSong(song)
+            }
+            .accessibilityIdentifier("welcomeContinueSong")
+        }
+    }
+
+    static func loadSong(_ viewModel: EditorViewModel) {
+        viewModel.showProjectsSheet = true
     }
 
     private var oneLinersCard: some View {
@@ -204,6 +231,7 @@ private struct WelcomeCard<Actions: View>: View {
     let title: String
     let subtitle: String
     var compact: Bool = false
+    var level: SurfaceLevel = .raised
     let action: () -> Void
     /// Buttons of their own below the card's row, so they are not nested in the card's button.
     @ViewBuilder var actions: Actions
@@ -213,7 +241,7 @@ private struct WelcomeCard<Actions: View>: View {
             Button(action: action) {
                 row
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
-                    .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
+                    .surfaceLevel(level, cornerRadius: RhymeAITokens.Radius.lg)
             }
             .buttonStyle(.rhymePress)
         } else {
@@ -331,13 +359,14 @@ private struct WelcomeCard<Actions: View>: View {
 }
 
 extension WelcomeCard where Actions == EmptyView {
-    init(icon: String, title: String, subtitle: String, compact: Bool = false, action: @escaping () -> Void) {
-        self.init(icon: icon, title: title, subtitle: subtitle, compact: compact, action: action, actions: { EmptyView() })
+    init(icon: String, title: String, subtitle: String, compact: Bool = false, level: SurfaceLevel = .raised, action: @escaping () -> Void) {
+        self.init(icon: icon, title: title, subtitle: subtitle, compact: compact, level: level, action: action, actions: { EmptyView() })
     }
 }
 
 #Preview {
     WelcomeView()
         .environmentObject(EditorViewModel())
+        .modelContainer(for: [SongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self], inMemory: true)
 }
 #endif
