@@ -255,6 +255,38 @@ internal object BackupTestHooks {
     @Volatile var beforeHoldTicketRead: (suspend () -> Unit)? = null
 }
 
+/** Observes editor-position work per view model and open revision (null in the app). */
+internal object PositionTestHooks {
+    /** [event]: "reached" (rememberEditorPosition entered), "scheduled", "wrote" (its stored write finished), "settled" (its job ended). */
+    @Volatile var onEvent: ((vm: MainViewModel, revision: Int, event: String) -> Unit)? = null
+}
+
+/** Observes recording admission (null in the app). */
+internal object RecordingTestHooks {
+    /** Called on entry to ensureProjectForRecording, before any check. */
+    @Volatile var onSaveGate: ((MainViewModel) -> Unit)? = null
+}
+
+/** Notebook seams for the held-copy settlement tests (null in the app). */
+internal object NotebookTestHooks {
+    /** Runs before a loaded song's notebook write, with the song id. */
+    @Volatile var beforeLoadedNotebookWrite: (suspend (id: String) -> Unit)? = null
+    /** Runs after a settling notebook action joined earlier writes, before its edit; only the settlement code runs it. */
+    @Volatile var afterJoinBeforeSettle: (suspend (id: String) -> Unit)? = null
+    /** Called when a settling notebook action starts waiting on earlier writes; only the settlement code calls it. */
+    @Volatile var onJoinWait: ((id: String) -> Unit)? = null
+}
+
+/** Seams for a held draft's recovery insert (null or false in the app). */
+internal object RecoveryTestHooks {
+    /** Fails the next recovery insert; only the recovery code reads it. */
+    val failNextRecovery = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Runs in a recovery attempt before its insert; only the recovery code runs it. */
+    @Volatile var beforeRecoveryInsert: (suspend () -> Unit)? = null
+    /** Called each time a queued navigation runs. */
+    @Volatile var onQueuedNavigationRun: ((MainViewModel) -> Unit)? = null
+}
+
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
 internal fun recordingMaintenanceNotes(leftInPlace: Int, unresolved: Int, unreadableTrash: Int, heldRestores: Int, setAside: Int): List<String> = listOfNotNull(
     leftInPlace.takeIf { it > 0 }?.let { "$it older recording file(s) could not be renamed because a file with their new name already exists. They were left in place." },
@@ -705,6 +737,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         id: String, creation: CreationAttempt?, workspace: SongWorkspace, openedAt: Int, change: (SongWorkspace) -> SongWorkspace
     ): SongWorkspace? {
         if (creation == null) {
+            NotebookTestHooks.beforeLoadedNotebookWrite?.invoke(id)
             repo.saveWorkspace(id, workspace)
             return workspace
         }
@@ -758,6 +791,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun rememberEditorPosition(scrollOffset: Float = editorScrollOffset) {
+        PositionTestHooks.onEvent?.invoke(this, openRevision, "reached")
         editorScrollOffset = scrollOffset.coerceAtLeast(0f)
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val id = currentProjectId ?: return
@@ -769,13 +803,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else workspaces = workspaces + (id to position(songWorkspace))
         positionSaveJob?.cancel()
         val openedAt = openRevision
+        PositionTestHooks.onEvent?.invoke(this, openedAt, "scheduled")
         positionSaveJob = viewModelScope.launch {
+          try {
             delay(250)
             DraftSaveTestHooks.beforePositionSave?.let { DraftSaveTestHooks.beforePositionSave = null; it.await() }
             // An adopted copy's notebook is written only after its first save found the copy still its own.
             if (creation == null && adoptedCopyFor(id) != null) return@launch
             try {
                 (if (creation != null) SongWorkspace() else workspaces[id])?.let { saveWorkspaceForActiveIdentity(id, creation, it, openedAt, position) }
+                    ?.also { PositionTestHooks.onEvent?.invoke(this@MainViewModel, openedAt, "wrote") }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -783,6 +820,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {
                 notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
             }
+          } finally {
+            PositionTestHooks.onEvent?.invoke(this@MainViewModel, openedAt, "settled")
+          }
         }
     }
 
@@ -945,7 +985,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             restoringDraft = false
             editorHeld = false
-            queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
+            queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
         }
     }
 
@@ -1090,7 +1130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 false
             } finally {
                 savingBeforeNavigation = false
-                queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
+                queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
             }
         }
         // Queued once this flush's save has taken its outcome, so the checkpoint waits on the save that carries its words;
@@ -3277,6 +3317,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Reserve identity before suspending so edits keep the same autosave target.
     // Persist retries too: a failed save must not admit an orphaned recording.
     suspend fun ensureProjectForRecording(): String {
+        RecordingTestHooks.onSaveGate?.invoke(this)
         if (editorHeld) throw CancellationException("Song changed")
         val projectId = reserveProjectIdentity()
         val creation = pendingCreations[projectId]
