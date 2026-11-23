@@ -946,7 +946,7 @@ struct EarlierBackupsSheet: View {
                                 .foregroundStyle(appearance.palette.secondaryInk)
                                 .accessibilityIdentifier("earlierBackupsEmpty")
                         }
-                        ForEach(revisions) { revision in
+                        ForEach(revisions, id: \.key) { revision in
                             Button {
                                 viewModel.recoveryToConfirm = revision
                             } label: {
