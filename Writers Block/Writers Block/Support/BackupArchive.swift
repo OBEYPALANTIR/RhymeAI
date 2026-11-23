@@ -12,7 +12,25 @@ enum BackupArchiveError: Error, Equatable {
 /// read back stored or deflated so a zip re-packed by another tool still imports.
 /// No ZIP64, so an archive is limited to 4 GiB.
 enum BackupArchive {
-    static func zip(_ entries: [(path: String, data: Data)]) throws -> Data {
+    struct Budget {
+        let entryBytes: Int
+        let totalBytes: Int
+
+        static let production = Self(entryBytes: BackupArchive.maxEntryBytes, totalBytes: BackupArchive.maxTotalBytes)
+
+        func add(_ bytes: Int, compressedBytes: Int? = nil, to total: inout Int) throws {
+            let (next, overflow) = total.addingReportingOverflow(bytes)
+            guard bytes >= 0, bytes <= entryBytes, (compressedBytes ?? bytes) <= entryBytes,
+                  !overflow, next <= totalBytes else { throw BackupArchiveError.tooLarge }
+            total = next
+        }
+    }
+
+    static func zip(_ entries: [(path: String, data: Data)], budget: Budget = .production) throws -> Data {
+        var total = 0
+        for entry in entries {
+            try budget.add(entry.data.count, to: &total)
+        }
         var archive = Data()
         var central = Data()
         for entry in entries {
@@ -51,14 +69,14 @@ enum BackupArchive {
         data.count >= 4 && data.prefix(4) == Data([0x50, 0x4b, 0x03, 0x04])
     }
 
-    /// Per-file and whole-archive limits for import; recordings are at most 16 MiB.
+    /// Shared per-entry and total payload limits; recordings are at most 16 MiB.
     static let maxEntryBytes = 64 * 1024 * 1024
     static let maxTotalBytes = 1024 * 1024 * 1024
 
     /// Files by path; directories are skipped. Every entry, directories included,
     /// must be a safe path that `allow` accepts, and declared sizes must fit the
     /// limits, before anything is inflated; inflation stops at the declared size.
-    static func unzip(_ input: Data, allow: (String) -> Bool = { _ in true }) throws -> [String: Data] {
+    static func unzip(_ input: Data, budget: Budget = .production, allow: (String) -> Bool = { _ in true }) throws -> [String: Data] {
         let data = Data(input)
         func u16(_ offset: Int) throws -> Int {
             guard offset >= 0, offset + 2 <= data.count else { throw BackupArchiveError.unreadable }
@@ -85,9 +103,7 @@ enum BackupArchive {
             }
             guard isSafePath(name), allow(name) else { throw BackupArchiveError.unsafePath }
             let entry = (name: name, method: try u16(cursor + 10), compressed: try u32(cursor + 20), size: try u32(cursor + 24), local: try u32(cursor + 42))
-            guard entry.size <= maxEntryBytes, entry.compressed <= maxEntryBytes else { throw BackupArchiveError.tooLarge }
-            total += entry.size
-            guard total <= maxTotalBytes else { throw BackupArchiveError.tooLarge }
+            try budget.add(entry.size, compressedBytes: entry.compressed, to: &total)
             entries.append(entry)
             cursor += 46 + nameLength + (try u16(cursor + 30)) + (try u16(cursor + 32))
         }
