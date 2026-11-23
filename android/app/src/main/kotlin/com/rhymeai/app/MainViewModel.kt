@@ -78,6 +78,7 @@ import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
@@ -193,6 +194,8 @@ internal object DraftSaveTestHooks {
     @Volatile var afterAutosaveCommit: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Holds the next draft write before it runs, so a test can order it against another save. */
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Holds the next delayed editor-position save before it writes. */
+    @Volatile var beforePositionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
 /** Draws every generated song id; tests replace [next] to force a clash. */
@@ -496,12 +499,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var currentProjectId by mutableStateOf<String?>(null)
     private var positionSaveJob: Job? = null
     /** One new song's creation in this window; [retired] once it is refused or detached, after which it never writes. */
-    private class CreationAttempt(val creation: SongCreation = SongCreation()) { var retired = false }
+    private class CreationAttempt(val creation: SongCreation = SongCreation()) {
+        var retired = false
+        /** Whether the save that queued notebook changes wait on stored the song; a Retry after a failure gets a fresh one. */
+        var outcome = CompletableDeferred<Boolean>()
+        /** Notebook changes made before the song is stored, kept apart from [workspaces] (which may cache another song at this id). */
+        var workspace by mutableStateOf<SongWorkspace?>(null)
+        fun retire() { retired = true; outcome.complete(false) }
+    }
 
     /** New songs not yet known to be stored, each with the attempt its saves carry (captured before they suspend). */
     private val pendingCreations = mutableMapOf<String, CreationAttempt>()
     private var workspaces by mutableStateOf<Map<String, SongWorkspace>>(emptyMap())
-    val songWorkspace: SongWorkspace get() = workspaces[currentProjectId] ?: SongWorkspace()
+    val songWorkspace: SongWorkspace get() =
+        currentProjectId?.let(pendingCreations::get)?.let { it.workspace ?: SongWorkspace() } ?: workspaces[currentProjectId] ?: SongWorkspace()
     var editorScrollOffset by mutableStateOf(0f)
         private set
     var editorPositionRevision by mutableStateOf(0)
@@ -666,27 +677,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else -> "Choose a model"
     }
 
-    private suspend fun saveWorkspaceForActiveIdentity(id: String, workspace: SongWorkspace) {
-        val creation = pendingCreations[id]
-        if (creation != null) {
-            val project = projects.firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
-            val savedAt = editRevision
-            persistActiveProjectSnapshot(
-                project.copy(title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme),
-                title, lyrics, theme, ++saveAttempts, creation
-            )
-            markEditorSaved(savedAt)
+    /**
+     * A loaded song stores [workspace]. A new song's [change] waits for the save that stores the song and is then applied
+     * to the notebook of the row its creation made; false when that save did not store it, and nothing is written.
+     */
+    private suspend fun saveWorkspaceForActiveIdentity(
+        id: String, creation: CreationAttempt?, workspace: SongWorkspace, change: (SongWorkspace) -> SongWorkspace
+    ): Boolean {
+        if (creation == null) {
+            repo.saveWorkspace(id, workspace)
+            return true
         }
-        repo.saveWorkspace(id, workspace)
+        if (!creation.creation.inserted && !creation.outcome.await() && !creation.creation.inserted) return false
+        repo.saveWorkspace(id, creation.creation, change)
+        return true
     }
 
     private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
-        val next = transform(workspaces[id] ?: SongWorkspace())
-        workspaces = workspaces + (id to next)
+        val creation = pendingCreations[id]
+        val next = transform(creation?.let { it.workspace ?: SongWorkspace() } ?: workspaces[id] ?: SongWorkspace())
+        if (creation != null) creation.workspace = next else workspaces = workspaces + (id to next)
         viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, next)
+                saveWorkspaceForActiveIdentity(id, creation, next, transform)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -702,12 +716,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val id = currentProjectId ?: return
         val range = lyricsFieldValue.selection
-        workspaces = workspaces + (id to songWorkspace.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = editorScrollOffset))
+        val scrollOffset = editorScrollOffset
+        val position: (SongWorkspace) -> SongWorkspace = { it.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = scrollOffset) }
+        val creation = pendingCreations[id]
+        if (creation != null) creation.workspace = position(creation.workspace ?: SongWorkspace())
+        else workspaces = workspaces + (id to position(songWorkspace))
         positionSaveJob?.cancel()
         positionSaveJob = viewModelScope.launch {
             delay(250)
+            DraftSaveTestHooks.beforePositionSave?.let { DraftSaveTestHooks.beforePositionSave = null; it.await() }
             try {
-                workspaces[id]?.let { saveWorkspaceForActiveIdentity(id, it) }
+                (if (creation != null) SongWorkspace() else workspaces[id])?.let { saveWorkspaceForActiveIdentity(id, creation, it, position) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -730,7 +749,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun keepAlternate(text: String) {
         if (text.isBlank() || notebookError != null || restoringDraft || editorHeld) return
         val id = ensureProjectForNotebook()
-        updateWorkspace(id) { it.keep(text, System.currentTimeMillis()) }
+        val now = System.currentTimeMillis()
+        updateWorkspace(id) { it.keep(text, now) }
     }
 
     fun keepSelectedLyrics() {
@@ -745,7 +765,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveDraftVersion() {
         if (notebookError != null || restoringDraft || editorHeld) return
         val id = ensureProjectForNotebook()
-        updateWorkspace(id) { it.checkpoint(title, lyrics, theme, System.currentTimeMillis(), force = true) }
+        val (savedTitle, savedLyrics, savedTheme) = Triple(title, lyrics, theme)
+        val now = System.currentTimeMillis()
+        updateWorkspace(id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true) }
         triggerAutoSave()
     }
 
@@ -756,13 +778,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentTitle = title
         val currentLyrics = lyrics
         val currentTheme = theme
-        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, System.currentTimeMillis(), force = true)
+        val now = System.currentTimeMillis()
+        val creation = pendingCreations[id]
+        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true)
         positionSaveJob?.cancel()
         restoringDraft = true
         var restored = false
         viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, preserved)
+                if (!saveWorkspaceForActiveIdentity(id, creation, preserved) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true) }) return@launch
                 // The song may have started leaving for another one while the checkpoint saved.
                 if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
@@ -792,7 +816,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun detachMissingActiveProject(id: String, creation: CreationAttempt? = pendingCreations[id]) {
-        if (creation != null && pendingCreations[id] === creation) pendingCreations.remove(id)?.retired = true
+        if (creation != null && pendingCreations[id] === creation) pendingCreations.remove(id)?.retire()
         currentProjectId = null
         positionSaveJob?.cancel()
         saveStatus = SaveFailureRules.restingStatus(saveFailed)
@@ -2677,7 +2701,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onCommitted(false)
                     return@launch
                 }
-                pendingCreations.remove(id)
+                pendingCreations.remove(id)?.retire()
                 projects = committed.projects
                 trashedProjects = committed.trashedProjects
                 if (currentProjectId == id) clearEditorAfterProjectDelete()
@@ -2730,7 +2754,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ?: return@launch reportMissingTrashProject()
                 trashedProjects = committed.trashedProjects
                 if (id in committed.purgedIds) { // (c); on (b) the active song keeps its notebook, creation mark and recordings
-                    pendingCreations.remove(id)
+                    pendingCreations.remove(id)?.retire()
                     workspaces = workspaces - id
                     if (!retryPendingRecordingDeletions(id)) {
                         persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
@@ -2779,7 +2803,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val committed = repo.purgeExpiredTrashedProjects(now, adopt = ::adoptRecordings)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
-                for (id in committed.purgedIds) pendingCreations.remove(id)
+                for (id in committed.purgedIds) pendingCreations.remove(id)?.retire()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -2976,19 +3000,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         creation: CreationAttempt?,
         preserveAs: String? = null
     ): List<SongProject> {
-        if (currentProjectId != project.id || creation?.retired == true) throw CancellationException("Song changed")
-        draftWritesInFlight++ // a hold waits for it
-        val committed = try {
-            DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
-            if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
-            repo.saveActiveState(project, creation?.creation, editorTitle, editorLyrics, editorTheme, preserveAs)
-        } finally { draftWritesInFlight-- }
-        pendingCreations.remove(project.id)
-        if (currentProjectId == project.id) projects = committed
-        val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
-        if (currentProjectId == project.id && wordsMatch) committedAttempt = maxOf(committedAttempt, attempt)
-        if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
-        return committed
+        // Notebook changes queued on a new song wait on this save; one queued after a failed save waits on a Retry's.
+        val outcome = creation?.let {
+            if (!it.retired && !it.creation.inserted && it.outcome.isCompleted) CompletableDeferred<Boolean>().also { fresh -> it.outcome = fresh }
+            else it.outcome
+        }
+        var stored = false
+        try {
+            if (currentProjectId != project.id || creation?.retired == true) throw CancellationException("Song changed")
+            draftWritesInFlight++ // a hold waits for it
+            val committed = try {
+                DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
+                if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
+                repo.saveActiveState(project, creation?.creation, editorTitle, editorLyrics, editorTheme, preserveAs)
+            } finally { draftWritesInFlight-- }
+            stored = true
+            // The stored song's notebook changes made while it was new now join the loaded notebooks.
+            if (creation == null || pendingCreations[project.id] === creation) {
+                pendingCreations.remove(project.id)?.workspace?.let { workspaces = workspaces + (project.id to it) }
+            }
+            outcome?.complete(true)
+            if (currentProjectId == project.id) projects = committed
+            val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
+            if (currentProjectId == project.id && wordsMatch) committedAttempt = maxOf(committedAttempt, attempt)
+            if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
+            return committed
+        } finally {
+            if (!stored) outcome?.complete(false)
+        }
     }
 
     /** Marks the open draft failed, unless the failed write belongs to a draft no longer open or a newer commit of its words. */
@@ -3004,11 +3043,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         project: SongProject, error: Exception, attempt: Long, creation: CreationAttempt?, storedBefore: SongProject? = null
     ) {
         val missing = error is MissingActiveProjectException
-        if (missing) creation?.retired = true
-        // A newer creation took this id meanwhile: an older attempt's failure is not its to mark or detach.
+        // An attempt already refused or detached, or one a newer creation at this id replaced, has nothing here to mark or detach.
+        if (creation?.retired == true) return
+        if (missing) creation?.retire()
         if (creation != null && pendingCreations[project.id].let { it != null && it !== creation }) return
         val known = storedBefore?.takeIf { it.id !in pendingCreations }
-        if (missing) pendingCreations.remove(project.id)
+        if (missing) pendingCreations.remove(project.id)?.retire()
         val unedited = known != null && known.title == title.ifEmpty { "Untitled Song" } &&
             known.lyrics == lyrics && known.theme == theme
         // Marked before the reread, so a reread that fails cannot leave the draft unmarked.

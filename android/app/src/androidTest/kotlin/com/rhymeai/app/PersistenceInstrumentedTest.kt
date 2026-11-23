@@ -44,6 +44,7 @@ class PersistenceInstrumentedTest {
     fun tearDown() {
         // A hold a failed test never reached would stall the next test's first draft write.
         DraftSaveTestHooks.beforeWrite = null
+        DraftSaveTestHooks.beforePositionSave = null
         try {
             stopViewModels(handBuilt)
         } finally {
@@ -692,48 +693,73 @@ class PersistenceInstrumentedTest {
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.initialized && viewModel.projects.any { it.id == occupant.id } }
         val draws = SongIdAllocator.next
-        val first = CompletableDeferred<Unit>()
-        val second = CompletableDeferred<Unit>()
-        try {
-            SongIdAllocator.next = { occupant.id }
-            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("draft words") }
-            // A recording's save of the new draft is held before it writes.
-            DraftSaveTestHooks.beforeWrite = first
-            val recording = kotlinx.coroutines.CoroutineScope(Dispatchers.Main).async {
-                runCatching { viewModel.ensureProjectForRecording() }
-            }
+        val holds = List(4) { CompletableDeferred<Unit>() }
+        // A recording's save of the new draft, held before it writes.
+        fun heldRecording(hold: CompletableDeferred<Unit>): kotlinx.coroutines.Deferred<Result<String>> {
+            DraftSaveTestHooks.beforeWrite = hold
+            val recording = kotlinx.coroutines.CoroutineScope(Dispatchers.Main).async { runCatching { viewModel.ensureProjectForRecording() } }
             waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == occupant.id }
-
-            // A version restore while the id is refused changes no words and leaves the notebook usable.
-            onMain { viewModel.restoreDraftVersion(com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)) }
-            waitUntil { !viewModel.restoringDraft }
-            assertEquals("draft words", viewModel.lyrics)
-            assertEquals(null, viewModel.notebookError)
-
-            // The refused flush does not navigate; it detaches the draft from the id.
+            return recording
+        }
+        fun refused(recording: kotlinx.coroutines.Deferred<Result<String>>) =
+            assertTrue(runBlocking { withTimeout(5_000) { recording.await() } }.exceptionOrNull() is com.rhymeai.app.data.repository.CreationIdTakenException)
+        // The refused flush does not navigate; it detaches the draft from the id.
+        fun refusedFlush() {
             val navigated = java.util.concurrent.atomic.AtomicBoolean()
             onMain { viewModel.newProject { navigated.set(true) } }
             waitUntil { viewModel.currentProjectId == null && !viewModel.savingBeforeNavigation }
             assertTrue(!navigated.get())
             assertEquals("draft words", viewModel.lyrics)
+        }
+        try {
+            SongIdAllocator.next = { occupant.id }
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("draft words") }
+
+            // A version restore waits on the held save; its refusal ends the restore with no words changed and the notebook usable.
+            val firstRecording = heldRecording(holds[0])
+            onMain { viewModel.restoreDraftVersion(com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)) }
+            assertTrue(viewModel.restoringDraft)
+            holds[0].complete(Unit)
+            refused(firstRecording)
+            waitUntil { !viewModel.restoringDraft && viewModel.currentProjectId == null }
+            assertEquals("draft words", viewModel.lyrics)
+            assertEquals(null, viewModel.notebookError)
 
             // A later attempt draws the same id; the older recording's refusal arrives after it and must not detach it.
-            DraftSaveTestHooks.beforeWrite = second
+            val secondRecording = heldRecording(holds[1])
+            refusedFlush()
+            DraftSaveTestHooks.beforeWrite = holds[2]
             onMain { viewModel.triggerAutoSave(retry = true) }
             waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == occupant.id }
-            first.complete(Unit)
-            val recorded = runBlocking { withTimeout(5_000) { recording.await() } }
-            assertTrue(recorded.exceptionOrNull() is com.rhymeai.app.data.repository.CreationIdTakenException)
+            holds[1].complete(Unit)
+            refused(secondRecording)
             SystemClock.sleep(300)
             instrumentation.waitForIdleSync()
             assertEquals(occupant.id, viewModel.currentProjectId)
-            second.complete(Unit)
+            holds[2].complete(Unit)
             waitUntil { viewModel.currentProjectId == null }
 
             // A fresh writing save keeps the words under a new id.
             SongIdAllocator.next = draws
             onMain { viewModel.triggerAutoSave(retry = true) }
             waitUntil { stored().any { it.id != occupant.id && it.lyrics == "draft words" } }
+            occupantKept()
+
+            // Nor may an old attempt's late refusal detach the occupant the user opened with nothing newer committed.
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() }
+            SongIdAllocator.next = { occupant.id }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("draft words") }
+            val thirdRecording = heldRecording(holds[3])
+            refusedFlush()
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("") }
+            onMain { viewModel.loadProject(occupant) }
+            waitUntil { viewModel.currentProjectId == occupant.id && viewModel.lyrics == occupant.lyrics }
+            holds[3].complete(Unit)
+            refused(thirdRecording)
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(occupant.id, viewModel.currentProjectId)
             occupantKept()
             assertEquals(null, viewModel.notebookError)
 
@@ -749,10 +775,148 @@ class PersistenceInstrumentedTest {
             onMain { viewModel.triggerAutoSave(retry = true) }
             waitUntil { stored().any { it.id != occupant.id && it.lyrics == "import words" } }
             occupantKept()
+
+            // A version restore on a stored song another window moved to Trash restores nothing and leaves the notebook usable.
+            val importedId = stored().single { it.lyrics == "import words" }.id
+            waitUntil { viewModel.currentProjectId == importedId }
+            runBlocking { repo.moveProjectToTrash(importedId, System.currentTimeMillis()) }
+            onMain { viewModel.restoreDraftVersion(com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)) }
+            waitUntil { !viewModel.restoringDraft }
+            assertEquals("import words", viewModel.lyrics)
+            assertEquals(null, viewModel.notebookError)
         } finally {
             SongIdAllocator.next = draws
-            first.complete(Unit)
-            second.complete(Unit)
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
+    @Test
+    fun delayedPositionAfterAnotherWindowEditsWritesOnlyWorkspace() {
+        val other = SongProject("other-song", "Other", "other words", "", 100L)
+        runBlocking { repo.saveProjects(listOf(other)) }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val a = MainViewModel(app).also(handBuilt::add)
+        waitUntil { a.initialized }
+        val firstWrite = CompletableDeferred<Unit>()
+        val position = CompletableDeferred<Unit>()
+        try {
+            // Window A's new song X: a cursor move is queued while X is still new, then X is stored.
+            DraftSaveTestHooks.beforeWrite = firstWrite
+            onMain { a.showStartMenu = false; a.onLyricsChanged(TextFieldValue("words one", TextRange(2, 5))) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && a.currentProjectId != null }
+            val x = a.currentProjectId!!
+            // Held on the main thread right after the move replaces the autosave's own position save, so only this one waits.
+            onMain { a.rememberEditorPosition(42f); DraftSaveTestHooks.beforePositionSave = position }
+            firstWrite.complete(Unit)
+            waitUntil { stored().any { it.id == x && it.lyrics == "words one" } && DraftSaveTestHooks.beforePositionSave == null }
+
+            // Window B opens X, saves new words, then selects its other song.
+            val b = MainViewModel(app).also(handBuilt::add)
+            waitUntil { b.currentProjectId == x && b.lyrics == "words one" }
+            onMain { b.showStartMenu = false; b.onLyricsChanged(TextFieldValue("words two")) }
+            waitUntil { stored().single { it.id == x }.lyrics == "words two" }
+            onMain { b.loadProject(other) }
+            waitUntil { b.currentProjectId == other.id && runBlocking { repo.currentProjectIdFlow.first() } == other.id }
+            // B's own delayed position save for X (an ordinary whole-notebook write) lands first.
+            SystemClock.sleep(400)
+            instrumentation.waitForIdleSync()
+            val savedByB = stored().single { it.id == x }
+            val editorOfB = runBlocking { repo.editorStateFlow().first() }
+            assertEquals(Triple(other.title, other.lyrics, other.theme), editorOfB)
+
+            // A's position lands in X's notebook and nothing else.
+            position.complete(Unit)
+            waitUntil { storedWorkspace(x)?.scrollOffset == 42f }
+            assertEquals(2 to 5, storedWorkspace(x)!!.let { it.selectionStart to it.selectionEnd })
+            assertEquals(savedByB, stored().single { it.id == x })
+            assertEquals(other.id, runBlocking { repo.currentProjectIdFlow.first() })
+            assertEquals(editorOfB, runBlocking { repo.editorStateFlow().first() })
+        } finally {
+            firstWrite.complete(Unit)
+            position.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.beforePositionSave = null
+        }
+    }
+
+    @Test
+    fun notebookFirstCreationCompletesAndRefusedWorkspaceCannotReachOccupant() {
+        // Another window's new song U already holds the id this window draws, with its own notebook.
+        val occupant = SongProject("occupied", "Occupant", "occupant words", "", 100L)
+        val seeded = com.rhymeai.app.data.model.SongWorkspace().keep("occupant alternate", 1L)
+        runBlocking {
+            repo.saveActiveState(occupant, SongCreation(), occupant.title, occupant.lyrics, occupant.theme)
+            repo.saveWorkspace(occupant.id, seeded)
+            repo.setCurrentProjectId(null)
+            repo.saveEditorState("", "", "")
+        }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val version = com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized && viewModel.projects.any { it.id == occupant.id } }
+        val draws = SongIdAllocator.next
+        val holds = List(3) { CompletableDeferred<Unit>() }
+        try {
+            // Refused: the notebook-first save is held; an alternate and a version restore wait on it and end with it.
+            SongIdAllocator.next = { occupant.id }
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("refused words") }
+            DraftSaveTestHooks.beforeWrite = holds[0]
+            onMain { viewModel.keepAlternate("refused alternate") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId == occupant.id }
+            onMain { viewModel.restoreDraftVersion(version) }
+            assertTrue(viewModel.restoringDraft)
+            holds[0].complete(Unit)
+            waitUntil { !viewModel.restoringDraft && viewModel.currentProjectId == null }
+            assertEquals("refused words", viewModel.lyrics)
+            assertEquals(null, viewModel.notebookError)
+            assertEquals(seeded, storedWorkspace(occupant.id))
+
+            // Reopening U and saving its notebook again still leaves the refused alternate out.
+            SongIdAllocator.next = draws
+            onMain { viewModel.loadProject(occupant) }
+            waitUntil { viewModel.currentProjectId == occupant.id && viewModel.lyrics == occupant.lyrics }
+            onMain { viewModel.keepAlternate("occupant second") }
+            waitUntil { storedWorkspace(occupant.id)!!.alternates.any { it.text == "occupant second" } }
+            assertEquals(listOf("occupant second", "occupant alternate"), storedWorkspace(occupant.id)!!.alternates.map { it.text })
+            assertEquals(occupant.lyrics, stored().single { it.id == occupant.id }.lyrics)
+
+            // Stored: with a free id the held save commits one row, then the alternate and the version join its notebook.
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("new words") }
+            DraftSaveTestHooks.beforeWrite = holds[1]
+            onMain { viewModel.keepAlternate("new alternate") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            onMain { viewModel.saveDraftVersion() }
+            assertTrue(stored().none { it.id == x } && storedWorkspace(x) == null)
+            holds[1].complete(Unit)
+            waitUntil { storedWorkspace(x)?.let { it.alternates.size == 1 && it.versions.size == 1 } == true }
+            assertEquals("new alternate", storedWorkspace(x)!!.alternates.single().text)
+            assertEquals("new words", storedWorkspace(x)!!.versions.single().lyrics)
+            assertEquals(1, stored().count { it.id == x })
+
+            // Cancelled: a held save that ends by cancellation finishes its waiting restore without writing.
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("cancelled words") }
+            DraftSaveTestHooks.beforeWrite = holds[2]
+            onMain { viewModel.keepAlternate("cancelled alternate") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val y = viewModel.currentProjectId!!
+            onMain { viewModel.restoreDraftVersion(version) }
+            assertTrue(viewModel.restoringDraft)
+            holds[2].completeExceptionally(kotlinx.coroutines.CancellationException("save cancelled"))
+            waitUntil { !viewModel.restoringDraft }
+            assertEquals("cancelled words", viewModel.lyrics)
+            assertEquals(null, viewModel.notebookError)
+            assertEquals(null, storedWorkspace(y))
+        } finally {
+            SongIdAllocator.next = draws
+            holds.forEach { it.complete(Unit) }
             DraftSaveTestHooks.beforeWrite = null
         }
     }

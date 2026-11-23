@@ -326,6 +326,16 @@ class ProjectRepository internal constructor(
         }
     }
 
+    /** A new song's notebook change: applied to the stored notebook only of the one row [creation] made; nothing else is written. */
+    suspend fun saveWorkspace(id: String, creation: SongCreation, change: (SongWorkspace) -> SongWorkspace) {
+        dataStore.edit { prefs ->
+            val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
+            if (active.count { it.id == id } != 1 || rowGenerations(prefs)[id] != creation.token) throw CreationIdTakenException(id)
+            val current = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
+            prefs[WORKSPACES_KEY] = json.encodeToString(current + (id to change(current[id] ?: SongWorkspace())))
+        }
+    }
+
     /**
      * Persist only the intended editor entry against the latest library snapshot.
      * A caller's in-memory list may predate a Trash transition; it must never
