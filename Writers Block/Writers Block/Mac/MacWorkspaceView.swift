@@ -65,16 +65,7 @@ struct MacWorkspaceView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            switch MacDropRoute.route(urls, songOpen: workspace.songOpen(in: viewModel)) {
-            case .songs(let urls):
-                workspace.importSongs(urls, into: viewModel)
-                return true
-            case .recordings(let audio):
-                workspace.importRecordings(audio, into: viewModel)
-                return true
-            case .none:
-                return false
-            }
+            workspace.importDroppedFiles(urls, into: viewModel)
         }
         .modifier(EditorSheetsModifier(recordingSong: $workspace.recordingSong))
         .sheet(isPresented: $viewModel.showTemplatesSheet) {
@@ -91,12 +82,17 @@ struct MacWorkspaceView: View {
         }
         .alert(
             "Import Failed",
-            isPresented: Binding(get: { workspace.importError != nil }, set: { if !$0 { workspace.importError = nil } }),
+            isPresented: workspace.importAlertPresentation(),
             presenting: workspace.importError
         ) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
+        }
+        .onChange(of: workspace.importError, initial: true) { _, message in
+            guard message == nil else { return }
+            // Give the dismissed alert a view update before requesting the next one.
+            DispatchQueue.main.async { workspace.presentNextImportAlert() }
         }
         .alert(
             "Couldn't Save",
