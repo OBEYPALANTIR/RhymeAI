@@ -171,7 +171,7 @@ final class MacWorkspaceModel: ObservableObject {
     }
 
     /// Copies dropped or picked audio into the open song's recordings and
-    /// shows them after a complete import. A non-nil `skippedDropFiles` identifies a Finder drop.
+    /// shows them after a complete import; otherwise names the files that failed. A non-nil `skippedDropFiles` identifies a Finder drop.
     @discardableResult
     func importRecordings(_ urls: [URL], into viewModel: EditorViewModel, skippedDropFiles: [URL]? = nil) -> Task<Void, Never>? {
         guard let projectId = viewModel.ensureProjectForRecording() else {
@@ -186,7 +186,8 @@ final class MacWorkspaceModel: ObservableObject {
                 } catch is CancellationError {
                     return
                 } catch {
-                    if skippedDropFiles != nil {
+                    // A drop or a multi-file pick keeps going and names each failure; one picked file keeps the format guidance.
+                    if skippedDropFiles != nil || urls.count > 1 {
                         failed.append(url)
                         continue
                     }

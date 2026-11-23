@@ -699,6 +699,71 @@ struct MacDropImportTests {
         #expect(viewModel.recordingItems().isEmpty)
     }
 
+    @Test
+    func pickedCorruptAudioDoesNotStopTheNextRecording() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (viewModel, workspace) = try await audioWorkspace(in: folder)
+        let corrupt = folder.appendingPathComponent("broken.wav")
+        try Data("not audio".utf8).write(to: corrupt)
+        let playable = folder.appendingPathComponent("take.m4a")
+        try AudioFixtures.long(seconds: 1, at: playable)
+
+        await workspace.importRecordings([corrupt, playable], into: viewModel)?.value
+
+        #expect(workspace.importError == "Could not import:\nbroken.wav")
+        #expect(viewModel.recordingItems().map(\.displayName) == ["take.m4a"])
+    }
+
+    @Test
+    func pickedRecordingsAroundACorruptFileAllImport() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (viewModel, workspace) = try await audioWorkspace(in: folder)
+        let first = folder.appendingPathComponent("first.m4a")
+        try AudioFixtures.long(seconds: 1, at: first)
+        let corrupt = folder.appendingPathComponent("broken.wav")
+        try Data("not audio".utf8).write(to: corrupt)
+        let second = folder.appendingPathComponent("second.m4a")
+        try AudioFixtures.long(seconds: 1, at: second)
+
+        await workspace.importRecordings([first, corrupt, second], into: viewModel)?.value
+
+        #expect(workspace.importError == "Could not import:\nbroken.wav")
+        #expect(viewModel.recordingItems().map(\.displayName).sorted() == ["first.m4a", "second.m4a"])
+    }
+
+    @Test
+    func singlePickedCorruptFileKeepsTheFormatGuidance() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (viewModel, workspace) = try await audioWorkspace(in: folder)
+        let corrupt = folder.appendingPathComponent("broken.wav")
+        try Data("not audio".utf8).write(to: corrupt)
+
+        await workspace.importRecordings([corrupt], into: viewModel)?.value
+
+        #expect(workspace.importError == "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again.")
+        #expect(viewModel.recordingItems().isEmpty)
+    }
+
+    @Test
+    func pickedPlayableRecordingsShowWithoutAReport() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (viewModel, workspace) = try await audioWorkspace(in: folder)
+        let first = folder.appendingPathComponent("first.m4a")
+        try AudioFixtures.long(seconds: 1, at: first)
+        let second = folder.appendingPathComponent("second.m4a")
+        try AudioFixtures.long(seconds: 1, at: second)
+
+        await workspace.importRecordings([first, second], into: viewModel)?.value
+
+        #expect(workspace.importError == nil)
+        #expect(workspace.recordingSong?.id == "drop")
+        #expect(viewModel.recordingItems().map(\.displayName).sorted() == ["first.m4a", "second.m4a"])
+    }
+
     private func audioWorkspace(in folder: URL) async throws -> (EditorViewModel, MacWorkspaceModel) {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let defaults = try #require(UserDefaults(suiteName: folder.lastPathComponent))
