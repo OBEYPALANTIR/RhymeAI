@@ -1005,8 +1005,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun showHeldRow(id: String, result: HoldResult, untouchedRow: SongProject?) {
+        // Only the occurrence the result names (the first): other rows at an id stored twice keep their own words.
         fun install(row: SongProject) {
-            projects = if (projects.any { it.id == row.id }) projects.map { if (it.id == row.id) row else it } else projects + row
+            val at = projects.indexOfFirst { it.id == row.id }
+            projects = if (at < 0) projects + row else projects.toMutableList().also { it[at] = row }
         }
         val row = when (result) {
             is HoldResult.Adopted -> result.row.also { row ->

@@ -1991,6 +1991,35 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** The hold's result is read while two stored rows share the song's id, and the list refresh then fails. */
+    @Test fun aMissOnASongStoredTwiceKeepsBothRowsInTheList() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val twin = SongProject(openSong.id, "Twin", "twin words", "", 50L)
+        BackupTestHooks.beforeHoldResolve = {
+            BackupTestHooks.beforeHoldResolve = null
+            repo.saveProjects(repo.projectsFlow.first() + twin)
+            while (vm.projects.count { it.id == openSong.id } < 2) kotlinx.coroutines.delay(20)
+        }
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            throw java.io.IOException("injected refresh failure")
+        }
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            val stored = songs().filter { it.id == openSong.id }
+            assertEquals(listOf(newerWords, twin.lyrics), stored.map { it.lyrics })
+            assertEquals(stored, vm.projects.filter { it.id == openSong.id })
+            assertEquals(newerWords, vm.lyrics)
+        } finally {
+            BackupTestHooks.beforeHoldResolve = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
     @Test fun movedThenReintroducedIdenticalWordsDoNotSatisfyOldReceipt() {
         newerOpenSong()
         val vm = openSongInEditor(activity = true)
