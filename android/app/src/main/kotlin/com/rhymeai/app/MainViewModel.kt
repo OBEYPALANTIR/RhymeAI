@@ -29,6 +29,7 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.repository.HoldResult
 import com.rhymeai.app.data.repository.PreservationTicket
 import com.rhymeai.app.data.repository.SongCreation
 import com.rhymeai.app.data.repository.CreationIdTakenException
@@ -240,6 +241,10 @@ internal object BackupTestHooks {
     @Volatile var beforeHeldOperation: (suspend () -> Unit)? = null
     /** Holds the next one-liner send to a song behind the start menu before its write (a test runs a restore meanwhile). */
     @Volatile var beforeMenuSend: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Runs in a hold after its operation, before its result is read (a test changes the store there, or fails the read). */
+    @Volatile var beforeHoldResolve: (suspend () -> Unit)? = null
+    /** Runs before a held editor's song-list refresh, after its result was read (a test makes the refresh fail). */
+    @Volatile var beforeHoldListRefresh: (suspend () -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -883,7 +888,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(NonCancellable) {
                     // Only the mark this operation wrote goes; one it read (written before the app died) stays until a commit uses it.
                     if (songId != null && edited && ticket != null) try { repo.clearPreservedSong(songId, ticket) } catch (_: Exception) {}
-                    showStoredOpenSong(ticket?.copyId, untouchedRow = stored.takeIf { !dirty })
+                    showStoredOpenSong(songId, ticket, untouchedRow = stored.takeIf { !dirty })
                 }
             }
             return true
@@ -899,41 +904,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var draftWritesInFlight = 0
 
     /**
-     * The editor shows the open song as stored (its selection written with it), or clears when the song is gone.
-     * When the commit kept this operation's edits as [keptId], the editor moves to that copy. [untouchedRow] is the
-     * song's row before an operation that wrote nothing for this editor.
+     * The held editor shows where the store says its words are, in memory only: the copy the commit made for its
+     * [ticket] when [source] is still open, else the open song as stored, or nothing when the song is gone.
+     * [untouchedRow] is the song's row before an operation that wrote nothing for this editor.
      */
-    private suspend fun showStoredOpenSong(keptId: String? = null, untouchedRow: SongProject? = null) {
-        var id = currentProjectId ?: return
+    private suspend fun showStoredOpenSong(source: String?, ticket: PreservationTicket?, untouchedRow: SongProject? = null) {
+        val id = currentProjectId ?: return
         try {
-            val stored = repo.projectsFlow.first()
-            if (currentProjectId != id) return
-            projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
-            if (keptId != null && stored.any { it.id == keptId }) {
-                id = keptId
-                currentProjectId = keptId
-                persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
-            }
-            val row = stored.firstOrNull { it.id == id }
-            if (row == null) {
-                // Its words were saved before the operation; it removed or trashed them.
-                if (id !in pendingCreations) clearEditorAfterProjectDelete()
-                return
-            }
-            if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
-            // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen and stored.
-            if (row == untouchedRow && repo.editorStateFlow().first() == Triple(title, lyrics, theme)) return
-            val selected = repo.selectProject(id)
-            if (currentProjectId != id) return
-            dismissRewrite()
-            title = selected.title
-            loadWords(selected.lyrics)
-            theme = selected.theme
-            completeDraftTransition()
-            restoreEditorPosition()
-            resetLyricsHistory()
-            markEditorSaved()
-            openRevision++
+            BackupTestHooks.beforeHoldResolve?.invoke()
+            showHeldResult(id, repo.resolveHold(id, ticket.takeIf { source == id }), untouchedRow)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -941,6 +920,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             detachMissingActiveProject(id)
             persistenceError = "Your songs could not be reread. The open draft will be saved as a new song."
         }
+    }
+
+    /**
+     * A held editor still on [id] shows [result]: the row its words went to, or the source as stored now. Nothing is
+     * selected or written, so another window's selection and saved draft stay as they are.
+     */
+    private suspend fun showHeldResult(id: String, result: HoldResult, untouchedRow: SongProject?) {
+        if (currentProjectId != id) return
+        // The song list is a separate read: its failure leaves the result in place.
+        try {
+            BackupTestHooks.beforeHoldListRefresh?.invoke()
+            val stored = repo.projectsFlow.first()
+            if (currentProjectId != id) return
+            projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+        }
+        val row = when (result) {
+            is HoldResult.Adopted -> result.row.also { row ->
+                if (projects.none { it.id == row.id }) projects = projects + row
+                currentProjectId = row.id
+                if (result.appended) {
+                    persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
+                }
+            }
+            is HoldResult.Miss -> {
+                val source = result.source
+                if (source == null) {
+                    // Its words were saved before the operation; it removed or trashed them.
+                    if (id !in pendingCreations) clearEditorAfterProjectDelete()
+                    return
+                }
+                // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen.
+                if (source == untouchedRow && result.editor == Triple(title, lyrics, theme)) return
+                source
+            }
+        }
+        if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
+        dismissRewrite()
+        title = row.title
+        loadWords(row.lyrics)
+        theme = row.theme
+        completeDraftTransition()
+        restoreEditorPosition()
+        resetLyricsHistory()
+        markEditorSaved()
+        openRevision++
     }
 
     /** Null when there was nothing to save; otherwise true once the editor's words committed. */

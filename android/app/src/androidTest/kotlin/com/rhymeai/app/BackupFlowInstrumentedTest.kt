@@ -281,6 +281,8 @@ class BackupFlowInstrumentedTest {
             scenario?.close()
             BackupTestHooks.driveClient = null
             BackupTestHooks.authorizer = null
+            BackupTestHooks.beforeHoldResolve = null
+            BackupTestHooks.beforeHoldListRefresh = null
             prefs().edit().clear().commit()
             if (::repo.isInitialized) runBlocking {
                 repo.saveProjects(savedProjects)
@@ -1047,6 +1049,26 @@ class BackupFlowInstrumentedTest {
         }
     }
 
+    /** The same, when a mark a dead window left for the song gives the unedited hold a ticket the import never acts on. */
+    @Test fun aSavedDraftOverAnUntouchedRowStaysWhenTheHoldHasAnUnusedMark() {
+        val vm = openSongInEditor(draft = newerWords)
+        val marks = androidx.datastore.preferences.core.stringPreferencesKey("preserved_songs_json")
+        runBlocking { context.dataStore.edit { it[marks] = """{"${openSong.id}":{"copyId":"unused-copy","token":"dead-window"}}""" } }
+        val zip = unrelatedArchive()
+        try {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(openSong.id to newerWords, vm.currentProjectId to vm.lyrics)
+            assertEquals(Triple(openSong.title, newerWords, openSong.theme), runBlocking { repo.editorStateFlow().first() })
+            assertEquals(openSong, storedOpenSong())
+        } finally {
+            zip.delete()
+            runBlocking { context.dataStore.edit { it.remove(marks) } }
+            resetOpenSong()
+        }
+    }
+
     /** Typed away and back to the loaded words is still an edit: the hold saves it and a replacing restore keeps it. */
     @Test fun wordsTypedBackToTheLoadedValueAreStillSavedAndKept() {
         assertHeldEditIsKept(otherWindowSave = {
@@ -1512,6 +1534,308 @@ class BackupFlowInstrumentedTest {
             assertEquals(edits, stored.single { it.id == copy.id }.lyrics)
         } finally {
             BackupTestHooks.beforeHeldOperation = null
+            resetOpenSong()
+        }
+    }
+
+    private val heldEdits = "edits in window A"
+    private val songU = SongProject("song-u", "Song U", "u words", "", 100L)
+    private fun newerOpenSong(words: String = newerWords, aheadMillis: Long = 3_600_000L) =
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = words, updatedAt = System.currentTimeMillis() + aheadMillis))))
+    private fun songs() = runBlocking { repo.projectsFlow.first() }
+
+    /** Another leg of one test on a fresh open song; teardown still restores the library the test found. */
+    private fun openSongAgain(otherSongs: List<SongProject> = emptyList()): MainViewModel {
+        resetOpenSong()
+        val found = savedProjects to savedTrash
+        return openSongInEditor(otherSongs = otherSongs).also { savedProjects = found.first; savedTrash = found.second }
+    }
+
+    /** The hold's kept copy asks for [id] (its first id draw). */
+    private fun <T> firstSongIdIs(id: String, block: () -> T): T {
+        val saved = SongIdAllocator.next
+        var drawn = false
+        SongIdAllocator.next = { if (drawn) saved() else { drawn = true; id } }
+        try {
+            return block()
+        } finally {
+            SongIdAllocator.next = saved
+        }
+    }
+
+    private fun editAndRestore(vm: MainViewModel, words: String = heldEdits) {
+        instrumentation.runOnMainSync {
+            vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(words)
+            vm.restoreFromBackup()
+        }
+        waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+        instrumentation.waitForIdleSync()
+    }
+
+    private fun saveNow(vm: MainViewModel) {
+        instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+        waitUntil { !vm.savingBeforeNavigation }
+        instrumentation.waitForIdleSync()
+    }
+
+    private val keptNotice = "This song was replaced from a backup, so your latest edits were saved as a new song."
+
+    /**
+     * Window A's kept copy asked for unrelated U's id, so the commit gave it another. Window B, unedited, starts its hold
+     * after A's draft save and commits first: both read A's one ticket and follow the copy actually made.
+     */
+    @Test fun twoReadersGetTheSameRemappedCopy() {
+        newerOpenSong()
+        val a = openSongInEditor(otherSongs = listOf(songU))
+        val b = relaunchedViewModel(openSong.lyrics)
+        instrumentation.runOnMainSync { b.showStartMenu = false }
+        val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        BackupTestHooks.beforeHeldOperation = {
+            if (first.compareAndSet(true, false)) {
+                b.restoreFromBackup()
+                while (b.editorHeld || b.backupStatus !is BackupStatus.Connected) kotlinx.coroutines.delay(20)
+            }
+        }
+        try {
+            firstSongIdIs(songU.id) { editAndRestore(a) }
+            val copy = songs().single { it.id != openSong.id && it.id != songU.id }
+            assertEquals(heldEdits, copy.lyrics)
+            assertEquals(copy.id to heldEdits, a.currentProjectId to a.lyrics)
+            assertEquals(copy.id to heldEdits, b.currentProjectId to b.lyrics)
+            // Each window's next save writes that copy in place.
+            saveNow(a)
+            saveNow(b)
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to heldEdits), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            resetOpenSong()
+        }
+    }
+
+    /** A follows its own copy without taking the durable selection or the raw editor fields another window or the commit set. */
+    @Test fun holdReloadLeavesOtherWindowsSelectionAndRawDraftAlone() {
+        val songB = SongProject("song-b", "Song B", "b words", "", 100L)
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songB))
+        // Another window selects B after A's draft save and leaves a raw draft with an empty title.
+        BackupTestHooks.beforeHeldOperation = { repo.selectProject(songB.id); repo.saveEditorState("", "b raw draft", "b theme") }
+        try {
+            editAndRestore(vm)
+            val copy = songs().single { it.id != openSong.id && it.id != songB.id }
+            assertEquals(copy.id to heldEdits, vm.currentProjectId to vm.lyrics)
+            // Before A saves again.
+            assertEquals(songB.id, runBlocking { repo.currentProjectIdFlow.first() })
+            assertEquals(Triple("", "b raw draft", "b theme"), runBlocking { repo.editorStateFlow().first() })
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+        }
+        // Another window's saved draft of the song differs from A's edits: the commit keeps it as its own song and selects it.
+        newerOpenSong()
+        val second = openSongAgain()
+        BackupTestHooks.beforeHeldOperation = { repo.saveEditorState(openSong.title, "other window draft", "") }
+        try {
+            editAndRestore(second)
+            val copy = songs().single { it.lyrics == heldEdits }
+            val editorCopy = songs().single { it.lyrics == "other window draft" }
+            assertEquals(copy.id to heldEdits, second.currentProjectId to second.lyrics)
+            assertEquals(editorCopy.id, runBlocking { repo.currentProjectIdFlow.first() })
+            assertEquals(Triple(openSong.title, "other window draft", ""), runBlocking { repo.editorStateFlow().first() })
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun reuseAndClaimReadFailureReportOnlyWhatCommitted() {
+        // The incoming backup already holds the held words under the id the hold asked for: that row is reused, silently.
+        putDriveSongs(SyncBlob(projects = listOf(
+            openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L),
+            SongProject("reuse-x", openSong.title, heldEdits, "", 100L)
+        )))
+        val vm = openSongInEditor()
+        try {
+            firstSongIdIs("reuse-x") { editAndRestore(vm) }
+            assertEquals("reuse-x" to heldEdits, vm.currentProjectId to vm.lyrics)
+            assertEquals(null, vm.persistenceError)
+            assertEquals(mapOf(openSong.id to newerWords, "reuse-x" to heldEdits), songs().associate { it.id to it.lyrics })
+
+            // The result cannot be read: the open words stay and are kept apart; U, at the requested id, is never selected.
+            newerOpenSong()
+            val failed = openSongAgain(otherSongs = listOf(songU))
+            BackupTestHooks.beforeHoldResolve = { throw java.io.IOException("injected read failure") }
+            firstSongIdIs(songU.id) { editAndRestore(failed) }
+            BackupTestHooks.beforeHoldResolve = null
+            assertEquals(heldEdits, failed.lyrics)
+            assertTrue("${failed.persistenceError}", failed.persistenceError.orEmpty().contains("could not be reread"))
+            assertTrue(failed.currentProjectId != songU.id && runBlocking { repo.currentProjectIdFlow.first() } != songU.id)
+            assertEquals("u words", songs().single { it.id == songU.id }.lyrics)
+
+            // The result was read and the song list refresh fails: the editor stays on the copy and its next save writes it in place.
+            newerOpenSong()
+            val refreshed = openSongAgain(otherSongs = listOf(songU))
+            BackupTestHooks.beforeHoldListRefresh = { throw java.io.IOException("injected list failure") }
+            firstSongIdIs(songU.id) { editAndRestore(refreshed) }
+            BackupTestHooks.beforeHoldListRefresh = null
+            val copy = songs().single { it.id != openSong.id && it.id != songU.id }
+            assertEquals(copy.id to heldEdits, refreshed.currentProjectId to refreshed.lyrics)
+            assertEquals(keptNotice, refreshed.persistenceError)
+            saveNow(refreshed)
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to heldEdits), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHoldResolve = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun movedThenReintroducedIdenticalWordsDoNotSatisfyOldReceipt() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        // After the commit and before A reads its result, the copy goes to Trash and a newer incoming copy with the same words comes back.
+        BackupTestHooks.beforeHoldResolve = {
+            val copy = repo.projectsFlow.first().single { it.id != openSong.id }
+            repo.moveProjectToTrash(copy.id, System.currentTimeMillis())
+            repo.applySyncResult(
+                SyncBlob(projects = repo.projectsFlow.first() + copy.copy(updatedAt = System.currentTimeMillis() + 7_200_000L)),
+                repo.snapshotLocalSyncBase()
+            )
+        }
+        try {
+            editAndRestore(vm)
+            val back = songs().single { it.id != openSong.id }
+            assertEquals(heldEdits, back.lyrics)
+            assertEquals(openSong.id to newerWords, vm.currentProjectId to vm.lyrics)
+            assertEquals(null, vm.persistenceError)
+            saveNow(vm)
+            assertEquals(back, songs().single { it.id == back.id })
+            assertEquals(newerWords, storedOpenSong().lyrics)
+        } finally {
+            BackupTestHooks.beforeHoldResolve = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun targetEditedBeforeClaimCannotBeReplayed() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        // Another window edits the copy before A reads its result.
+        BackupTestHooks.beforeHoldResolve = {
+            val copy = repo.projectsFlow.first().single { it.id != openSong.id }
+            repo.saveActiveState(copy.copy(lyrics = "edited elsewhere"), null, copy.title, "edited elsewhere", copy.theme)
+        }
+        try {
+            editAndRestore(vm)
+            val edited = songs().single { it.id != openSong.id }
+            assertEquals("edited elsewhere", edited.lyrics)
+            assertEquals(openSong.id to newerWords, vm.currentProjectId to vm.lyrics)
+
+            // Edited away and back to the kept words before A reads its result.
+            val laterWords = "newer words W3"
+            newerOpenSong(laterWords, aheadMillis = 7_200_000L)
+            BackupTestHooks.beforeHoldResolve = {
+                val copy = repo.projectsFlow.first().single { it.lyrics == "second edits" }
+                repo.saveActiveState(copy.copy(lyrics = "away"), null, copy.title, "away", copy.theme)
+                repo.saveActiveState(copy, null, copy.title, copy.lyrics, copy.theme)
+            }
+            editAndRestore(vm, "second edits")
+            BackupTestHooks.beforeHoldResolve = null
+            val roundTrip = songs().single { it.lyrics == "second edits" }
+            assertEquals(openSong.id to laterWords, vm.currentProjectId to vm.lyrics)
+            saveNow(vm)
+            assertEquals(mapOf(openSong.id to laterWords, edited.id to "edited elsewhere", roundTrip.id to "second edits"), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHoldResolve = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun preservationCommitIsAtomicAndRelaunchUsesStoredSelection() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val committed = kotlinx.coroutines.CompletableDeferred<Triple<String?, Triple<String, String, String>, List<SongProject>>>()
+        // Read right after the commit, before this hold reloads anything; then the window dies there (the reload runs
+        // non-cancellable, so the death is thrown into it).
+        val death = kotlinx.coroutines.CompletableDeferred<Unit>()
+        BackupTestHooks.beforeHoldResolve = {
+            committed.complete(Triple(repo.currentProjectIdFlow.first(), repo.editorStateFlow().first(), repo.projectsFlow.first()))
+            death.await()
+        }
+        try {
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(heldEdits)
+                vm.restoreFromBackup()
+            }
+            val (selected, editor, stored) = runBlocking { withTimeout(30_000) { committed.await() } }
+            BackupTestHooks.beforeHoldResolve = null
+            val copy = stored.single { it.id != openSong.id }
+            assertEquals(heldEdits, copy.lyrics)
+            assertEquals(copy.id, selected)
+            assertEquals(Triple(openSong.title, heldEdits, ""), editor)
+            assertEquals(null, runBlocking { repo.preservedTicket(openSong.id) })
+            death.completeExceptionally(kotlinx.coroutines.CancellationException("window closed"))
+            stopViewModels(handBuilt)
+            scenario?.close()
+            lateinit var fresh: MainViewModel
+            scenario = ActivityScenario.launch(MainActivity::class.java).also { s -> s.onActivity { fresh = ViewModelProvider(it)[MainViewModel::class.java] } }
+            waitUntil({ "id ${fresh.currentProjectId} lyrics ${fresh.lyrics}" }) { fresh.currentProjectId == copy.id && fresh.lyrics == heldEdits }
+            instrumentation.runOnMainSync {
+                fresh.showStartMenu = false
+                fresh.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("after relaunch")
+            }
+            saveNow(fresh)
+            assertEquals(mapOf(openSong.id to newerWords, copy.id to "after relaunch"), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHoldResolve = null
+            death.completeExceptionally(kotlinx.coroutines.CancellationException("test ended"))
+            resetOpenSong()
+        }
+    }
+
+    /** A mark a dead window left cannot be read: the unedited hold has no ticket and shows the song's new words, with no notice. */
+    @Test fun aMarkReadFailureBeforeTheHoldReloadsTheSourceWithoutANotice() {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songU))
+        val marks = androidx.datastore.preferences.core.stringPreferencesKey("preserved_songs_json")
+        runBlocking { context.dataStore.edit { it[marks] = "{not json" } }
+        try {
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            assertEquals(openSong.id to newerWords, vm.currentProjectId to vm.lyrics)
+            assertEquals(null, vm.persistenceError)
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words"), songs().associate { it.id to it.lyrics })
+        } finally {
+            runBlocking { context.dataStore.edit { it.remove(marks) } }
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aRetriedImportAfterAPreservingCommitMakesNoSecondCopy() {
+        val vm = openSongInEditor()
+        val zip = java.io.File(context.cacheDir, "retried.zip")
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))),
+                emptyList(), 0L, "test"
+            )
+        }
+        fun import() {
+            instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+            waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+        }
+        try {
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(heldEdits) }
+            import()
+            val copy = songs().single { it.id != openSong.id }
+            assertEquals(copy.id to heldEdits, vm.currentProjectId to vm.lyrics)
+            assertEquals(keptNotice, vm.persistenceError)
+            import()
+            assertEquals(mapOf(openSong.id to newerWords, copy.id to heldEdits), songs().associate { it.id to it.lyrics })
+            assertEquals(copy.id to heldEdits, vm.currentProjectId to vm.lyrics)
+            assertEquals(keptNotice, vm.persistenceError)
+        } finally {
+            zip.delete()
             resetOpenSong()
         }
     }

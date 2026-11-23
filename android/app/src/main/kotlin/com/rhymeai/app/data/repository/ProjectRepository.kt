@@ -504,10 +504,10 @@ class ProjectRepository internal constructor(
      * while it is the one active row with that generation and those words, else the source and the stored editor
      * state. Nothing is written or consumed, so every reader of one ticket gets the same answer.
      */
-    internal suspend fun resolveHold(source: String, ticket: PreservationTicket): HoldResult {
+    internal suspend fun resolveHold(source: String, ticket: PreservationTicket?): HoldResult {
         val prefs = dataStore.data.first()
         val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
-        val receipt = receipts(prefs).firstOrNull { it.source == source && it.ticket == ticket }
+        val receipt = ticket?.let { receipts(prefs).firstOrNull { it.source == source && it.ticket == ticket } }
         val row = receipt?.let { r ->
             active.singleOrNull { it.id == r.target }?.takeIf {
                 rowGenerations(prefs)[r.target] == r.generation && it.title == r.title && it.lyrics == r.lyrics && it.theme == r.theme
