@@ -2975,16 +2975,19 @@ class BackupFlowInstrumentedTest {
         val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
         val release = kotlinx.coroutines.CompletableDeferred<Unit>()
         val inserts = java.util.concurrent.atomic.AtomicInteger()
+        // Each recovery attempt starts with this read, on the main thread.
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
         try {
             val copyId = unconfirmedChangedCopy(vm)
             val bTuple = storedKeys()
-            RecoveryTestHooks.onRevokeRead = { RecoveryTestHooks.onRevokeRead = null; parked.complete(Unit); release.await() }
+            RecoveryTestHooks.onRevokeRead = { if (attempts.incrementAndGet() == 1) { parked.complete(Unit); release.await() } }
             RecoveryTestHooks.beforeRecoveryInsert = { inserts.incrementAndGet() }
             instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
             waitUntil({ "revoke read" }) { parked.isCompleted }
             // The STOP's flush starts on the main thread before this returns.
             scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             instrumentation.waitForIdleSync()
+            assertEquals("the STOP joined the attempt in flight", 1, attempts.get())
             release.complete(Unit)
             waitUntil({ "stored ${songs()}" }) { songs().any { it.id != copyId && it.lyrics == heldEdits } }
             val n = songs().single { it.id != copyId && it.lyrics == heldEdits }
@@ -2995,6 +2998,7 @@ class BackupFlowInstrumentedTest {
             assertEquals("${notebook(n.id)}", 1, notebook(n.id).alternates.count { it.text == "kept line" })
             assertFalse("${notebook(copyId)}", hasLine(copyId, "kept line"))
             assertEquals("recovery inserts", 1, inserts.get())
+            assertEquals("recovery attempts", 1, attempts.get())
             assertEquals(bTuple, storedKeys())
             assertEquals(n.id, onMain { vm.currentProjectId })
         } finally {
