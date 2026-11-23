@@ -23,7 +23,15 @@ final class MacWorkspaceModel: ObservableObject {
     @Published var recordingSong: SongRecordingTarget?
     @Published var songImporterPresented = false
     @Published var audioImporterPresented = false
-    @Published var importError: String?
+    private struct ImportAlert {
+        let message: String
+        let id = UUID()
+    }
+
+    @Published private var importAlert: ImportAlert?
+    private var pendingImportErrors: [String] = []
+    private var awaitingImportAlertDismissal = false
+    var importError: String? { importAlert?.message }
     /// Why File › Save did not save, until the writer dismisses it.
     @Published var saveError: String?
     /// The editor window is on screen. The menus act only through it.
@@ -131,8 +139,35 @@ final class MacWorkspaceModel: ObservableObject {
             guard (byName[name]?.count ?? 0) > 1 else { return name }
             return "\(url.deletingLastPathComponent().lastPathComponent)/\(name)"
         }.joined(separator: "\n")
-        let report = "Could not import:\n\(names)"
-        importError = importError.map { "\($0)\n\n\(report)" } ?? report
+        reportImportError("Could not import:\n\(names)")
+    }
+
+    private func reportImportError(_ message: String) {
+        if importAlert != nil || awaitingImportAlertDismissal {
+            pendingImportErrors.append(message)
+        } else {
+            importAlert = ImportAlert(message: message)
+        }
+    }
+
+    func importAlertPresentation() -> Binding<Bool> {
+        let id = importAlert?.id
+        return Binding(
+            get: { id != nil && self.importAlert?.id == id },
+            set: { presented in
+                guard !presented, let id, self.importAlert?.id == id else { return }
+                self.awaitingImportAlertDismissal = true
+                self.importAlert = nil
+            }
+        )
+    }
+
+    func presentNextImportAlert() {
+        guard awaitingImportAlertDismissal else { return }
+        awaitingImportAlertDismissal = false
+        if !pendingImportErrors.isEmpty {
+            importAlert = ImportAlert(message: pendingImportErrors.removeFirst())
+        }
     }
 
     /// Copies dropped or picked audio into the open song's recordings and
@@ -155,7 +190,7 @@ final class MacWorkspaceModel: ObservableObject {
                         failed.append(url)
                         continue
                     }
-                    importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again."
+                    reportImportError("Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again.")
                     return
                 }
             }
@@ -172,7 +207,7 @@ final class MacWorkspaceModel: ObservableObject {
     /// A file picker that failed, other than by the writer cancelling it.
     func reportPickerFailure(_ error: Error) {
         guard (error as? CocoaError)?.code != .userCancelled else { return }
-        importError = "Couldn't open the chosen file. Try choosing it again."
+        reportImportError("Couldn't open the chosen file. Try choosing it again.")
     }
 
     /// Opens song JSON exports, as the drawer's Import From File does; the last
@@ -198,9 +233,9 @@ final class MacWorkspaceModel: ObservableObject {
             return
         }
         guard !failed.isEmpty else { return }
-        importError = urls.count == 1
+        reportImportError(urls.count == 1
             ? reason
-            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.map(\.lastPathComponent).joined(separator: ", ")). Pick RhymeAI project JSON files."
+            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.map(\.lastPathComponent).joined(separator: ", ")). Pick RhymeAI project JSON files.")
     }
 }
 

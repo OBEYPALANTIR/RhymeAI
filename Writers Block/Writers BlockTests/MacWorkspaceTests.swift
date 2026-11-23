@@ -643,7 +643,7 @@ struct MacDropImportTests {
     }
 
     @Test
-    func overlappingDropsKeepBothReportsUntilDismissal() async throws {
+    func laterDropReportsSurviveAlertDismissal() async throws {
         let (viewModel, container) = try MacWorkspaceLibraryTests.library()
         defer { _ = container }
         viewModel.newProject()
@@ -652,15 +652,33 @@ struct MacDropImportTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let audio = folder.appendingPathComponent("missing.wav")
         let song = folder.appendingPathComponent("missing.json")
+        let songDuringDismissal = folder.appendingPathComponent("during-dismissal.json")
 
-        // The audio task cannot finish before the synchronous song import returns.
-        #expect(workspace.importDroppedFiles([audio], into: viewModel))
+        let audioTask = try #require(workspace.importRecordings([audio], into: viewModel, skippedDropFiles: []))
         #expect(workspace.importDroppedFiles([song], into: viewModel))
-        let firstReport = try #require(workspace.importError)
-        #expect(firstReport.contains("missing.json"))
+        let firstAlert = workspace.importAlertPresentation()
+        #expect(firstAlert.wrappedValue)
+        #expect(workspace.importError == "Could not import:\nmissing.json")
 
-        let combined = try await waitForReport(in: workspace, containing: "missing.wav")
-        #expect(combined.hasPrefix(firstReport))
+        await audioTask.value
+        #expect(workspace.importError == "Could not import:\nmissing.json")
+        firstAlert.wrappedValue = false
+        #expect(workspace.importError == nil)
+
+        #expect(workspace.importDroppedFiles([songDuringDismissal], into: viewModel))
+        #expect(workspace.importError == nil)
+        workspace.presentNextImportAlert()
+        #expect(workspace.importError == "Could not import:\nmissing.wav")
+
+        firstAlert.wrappedValue = false
+        #expect(workspace.importError == "Could not import:\nmissing.wav")
+        workspace.importAlertPresentation().wrappedValue = false
+        workspace.presentNextImportAlert()
+        #expect(workspace.importError == "Could not import:\nduring-dismissal.json")
+
+        workspace.importAlertPresentation().wrappedValue = false
+        workspace.presentNextImportAlert()
+        #expect(workspace.importError == nil)
     }
 
     @Test(arguments: [true, false])

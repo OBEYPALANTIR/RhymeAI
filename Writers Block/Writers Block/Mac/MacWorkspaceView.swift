@@ -82,12 +82,17 @@ struct MacWorkspaceView: View {
         }
         .alert(
             "Import Failed",
-            isPresented: Binding(get: { workspace.importError != nil }, set: { if !$0 { workspace.importError = nil } }),
+            isPresented: workspace.importAlertPresentation(),
             presenting: workspace.importError
         ) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
+        }
+        .onChange(of: workspace.importError, initial: true) { _, message in
+            guard message == nil else { return }
+            // Give the dismissed alert a view update before requesting the next one.
+            DispatchQueue.main.async { workspace.presentNextImportAlert() }
         }
         .alert(
             "Couldn't Save",
