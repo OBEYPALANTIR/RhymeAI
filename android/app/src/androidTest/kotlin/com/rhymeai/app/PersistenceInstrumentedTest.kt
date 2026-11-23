@@ -1035,6 +1035,45 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun aRefusedNotebookTokenDetachesTheEditorSoItsNextSaveCannotReachTheReplacement() {
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val holds = List(2) { CompletableDeferred<Unit>() }
+        try {
+            // A position is queued while the new song X is pending; its creation then commits.
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("a words") }
+            DraftSaveTestHooks.beforeWrite = holds[0]
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            DraftSaveTestHooks.beforePositionSave = holds[1]
+            onMain { viewModel.rememberEditorPosition() }
+            holds[0].complete(Unit)
+            waitUntil { stored().any { it.id == x } && DraftSaveTestHooks.beforePositionSave == null }
+
+            // Another window replaces the library: X is now a different song.
+            runBlocking { repo.saveProjects(listOf(SongProject(x, "Incoming", "incoming words", "", 200L))) }
+            holds[1].complete(Unit)
+            SystemClock.sleep(500)
+            instrumentation.waitForIdleSync()
+
+            // The editor's next save keeps its words as a new song; the replacement keeps its own.
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("a words edited") }
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { !viewModel.savingBeforeNavigation }
+            SystemClock.sleep(300)
+            assertEquals("incoming words", stored().single { it.id == x }.lyrics)
+            waitUntil { stored().any { it.id != x && it.lyrics == "a words edited" } }
+            assertEquals("a words edited", viewModel.lyrics)
+        } finally {
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.beforePositionSave = null
+        }
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())

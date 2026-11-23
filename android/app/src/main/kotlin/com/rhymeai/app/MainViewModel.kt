@@ -688,14 +688,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * to the notebook of the row its creation made; false when that save did not store it, and nothing is written.
      */
     private suspend fun saveWorkspaceForActiveIdentity(
-        id: String, creation: CreationAttempt?, workspace: SongWorkspace, change: (SongWorkspace) -> SongWorkspace
+        id: String, creation: CreationAttempt?, workspace: SongWorkspace, openedAt: Int, change: (SongWorkspace) -> SongWorkspace
     ): Boolean {
         if (creation == null) {
             repo.saveWorkspace(id, workspace)
             return true
         }
         if (!creation.creation.inserted && !creation.outcome.await() && !creation.creation.inserted) return false
-        repo.saveWorkspace(id, creation.creation, change)
+        try {
+            repo.saveWorkspace(id, creation.creation, change)
+        } catch (refused: CreationIdTakenException) {
+            // The id now names another song: an editor still on this creation's open keeps its words for a new song
+            // instead of saving them over that one. A later open of the id is the user's and stays.
+            if (currentProjectId == id && openRevision == openedAt && !editorHeld) {
+                detachMissingActiveProject(id, creation)
+                persistenceError = "This song is no longer active. Notebook changes were not saved. The draft stays open and will be saved as a new song."
+            }
+            throw refused
+        }
         return true
     }
 
@@ -704,9 +714,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val creation = pendingCreations[id]
         val next = transform(creation?.let { it.workspace ?: SongWorkspace() } ?: workspaces[id] ?: SongWorkspace())
         if (creation != null) creation.workspace = next else workspaces = workspaces + (id to next)
+        val openedAt = openRevision
         viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, creation, next, transform)
+                saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -728,11 +739,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (creation != null) creation.workspace = position(creation.workspace ?: SongWorkspace())
         else workspaces = workspaces + (id to position(songWorkspace))
         positionSaveJob?.cancel()
+        val openedAt = openRevision
         positionSaveJob = viewModelScope.launch {
             delay(250)
             DraftSaveTestHooks.beforePositionSave?.let { DraftSaveTestHooks.beforePositionSave = null; it.await() }
             try {
-                (if (creation != null) SongWorkspace() else workspaces[id])?.let { saveWorkspaceForActiveIdentity(id, creation, it, position) }
+                (if (creation != null) SongWorkspace() else workspaces[id])?.let { saveWorkspaceForActiveIdentity(id, creation, it, openedAt, position) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -794,9 +806,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         positionSaveJob?.cancel()
         restoringDraft = true
         var restored = false
+        val openedAt = openRevision
         viewModelScope.launch {
             try {
-                if (!saveWorkspaceForActiveIdentity(id, creation, preserved) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }) return@launch
+                if (!saveWorkspaceForActiveIdentity(id, creation, preserved, openedAt) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }) return@launch
                 // The song may have started leaving for another one while the checkpoint saved.
                 if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
