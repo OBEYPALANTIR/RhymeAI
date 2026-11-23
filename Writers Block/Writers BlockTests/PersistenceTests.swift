@@ -748,6 +748,29 @@ struct PendingEditSaveTests {
         #expect(song.lyrics == "ropes and tide")
     }
 
+    @Test func continuousEditsArePersistedWithoutAQuietPeriod() async throws {
+        let (viewModel, _, container) = try Self.openSong()
+        let firstEdit = ContinuousClock.now
+        var now = firstEdit
+        viewModel.autoSaveNow = { now }
+        viewModel.autoSaveSleep = { deadline in
+            if deadline > now { throw CancellationError() }
+        }
+
+        // The last edit lands at four seconds, with 250 ms between each edit.
+        for tick in 0...16 {
+            now = firstEdit + .milliseconds(250 * tick)
+            viewModel.lyrics = "ropes and tide, edit \(tick)"
+            viewModel.triggerAutoSave()
+        }
+        now += .milliseconds(250)
+        await viewModel.waitForPendingAutoSaveForTesting()
+
+        let reader = ModelContext(container)
+        let songs = try reader.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.map(\.lyrics) == ["ropes and tide, edit 16"])
+    }
+
     @Test func backgroundFlushSavesLocalEditsAndPreservesSyncedWordsInAnUntouchedSong() throws {
         let (viewModel, song, container) = try Self.openSong()
         viewModel.lyrics = "ropes and tide"
