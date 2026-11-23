@@ -12,8 +12,8 @@ Writers Block backs up to Google Drive's private `appDataFolder`, with the `driv
      refresh tokens after 7 days, so the iOS app (which stores a refresh token)
      silently loses Drive access a week after connecting. Android is not affected
      because Play Services issues its tokens, but use one consent screen for both.
-   - For personal testing before publishing, add Tyler as a test user and expect
-     to reconnect iOS weekly.
+   - For personal testing before publishing, add your own Google account as a
+     test user and expect to reconnect iOS weekly.
 
 ## Android OAuth client
 

@@ -88,6 +88,7 @@ This tracks behavior that must stay aligned between Android and iOS.
 
 Android and the Apple app implement v4 Drive backup, restore, and archive
 import and export. Native cross-platform Drive exchange remains unverified.
+The iOS behavior below reflects source inspection and awaits runtime verification.
 
 - Backup format (v4): Drive `appDataFolder` holds the plain manifest
   `rhymeai-manifest.json` and one raw file `rec_<recordingId>` per recording,
