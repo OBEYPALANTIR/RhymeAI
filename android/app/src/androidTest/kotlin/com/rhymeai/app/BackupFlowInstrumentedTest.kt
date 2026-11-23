@@ -2699,6 +2699,8 @@ class BackupFlowInstrumentedTest {
             fun assertAllLines() = assertTrue("${notebook(reused.id)}",
                 hasLine(reused.id, "window B line") && hasLine(reused.id, "kept line") && hasLine(reused.id, "settling line"))
             assertAllLines()
+            // Leaving X for the adoption already stored "kept line" (the flush's checkpoint), so only the order shows the join.
+            assertFalse("the settling Keep committed before the parked Keep it must join", settledFirst)
             // A later position on X is a stored-position write: it leaves every line where it is.
             instrumentation.runOnMainSync {
                 vm.lyricsFieldValue = vm.lyricsFieldValue.copy(selection = androidx.compose.ui.text.TextRange(5, 8))
