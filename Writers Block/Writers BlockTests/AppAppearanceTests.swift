@@ -122,23 +122,33 @@ struct AppAppearanceTests {
 
     /// WCAG non-text contrast (3:1): a switch's on track against its white
     /// thumb and the canvas, and disabled labels against the canvas and the
-    /// raised surface they sit on. Canvas and raised values are DESIGN.md's.
+    /// raised surface they sit on, read from the palettes, against the ratios DESIGN.md states.
     @Test
     func switchTracksAndDisabledInkMeetNonTextContrast() {
-        let surfaces: [(AppAppearanceStyle, canvas: UInt32, raised: UInt32)] = [
-            (.ink, 0xFCFCF8, 0xE5E5DE),
-            (.paper, 0xF3EEDF, 0xDDD4BF),
-            (.graphite, 0x171716, 0x2B2B28),
-        ]
-        for (style, canvas, raised) in surfaces {
+        for style in [AppAppearanceStyle.ink, .paper, .graphite] {
+            let canvas = Self.hex(style.palette.canvas)
+            let raised = Self.hex(style.palette.raisedSurface)
+            #expect(Self.hex(style.palette.disabledInk) == style.disabledInkHexValue)
             #expect(Self.contrast(style.switchTrackHexValue, 0xFFFFFF) >= 3, "\(style) track to thumb")
             #expect(Self.contrast(style.switchTrackHexValue, canvas) >= 3, "\(style) track to canvas")
-            #expect(Self.contrast(style.disabledInkHexValue, canvas) >= 3, "\(style) disabled ink on canvas")
-            #expect(Self.contrast(style.disabledInkHexValue, raised) >= 3, "\(style) disabled ink on raised")
+            // DESIGN.md: at least 4.1:1 on the canvas and 3.3:1 on the raised surface.
+            #expect(Self.contrast(style.disabledInkHexValue, canvas) >= 4.1, "\(style) disabled ink on canvas")
+            #expect(Self.contrast(style.disabledInkHexValue, raised) >= 3.3, "\(style) disabled ink on raised")
         }
+        // DESIGN.md: the Graphite track is 4.5:1 to the thumb and 3.9:1 to the canvas.
+        let graphiteCanvas = Self.hex(AppAppearanceStyle.graphite.palette.canvas)
+        #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, 0xFFFFFF) >= 4.5)
+        #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, graphiteCanvas) >= 3.9)
         // Ink and Paper keep their action-coloured tracks.
         #expect(AppAppearanceStyle.ink.switchTrackHexValue == 0x050505)
         #expect(AppAppearanceStyle.paper.switchTrackHexValue == 0x302E2A)
+    }
+
+    /// A palette colour back as its sRGB hex value.
+    private static func hex(_ color: Color) -> UInt32 {
+        let resolved = color.resolve(in: EnvironmentValues())
+        func byte(_ c: Float) -> UInt32 { UInt32((Double(c) * 255).rounded()) }
+        return byte(resolved.red) << 16 | byte(resolved.green) << 8 | byte(resolved.blue)
     }
 
     private static func contrast(_ a: UInt32, _ b: UInt32) -> Double {

@@ -76,7 +76,7 @@ enum AppAppearanceStyle: String, CaseIterable, Hashable, Identifiable {
 
     /// On-state switch track. The action colour on the light appearances; on
     /// Graphite the cream action colour sat behind the white thumb at 1.1:1, so
-    /// the track is the strong outline tone (4.5:1 to the thumb, 4.0:1 to the canvas).
+    /// the track is the strong outline tone (4.5:1 to the thumb, 3.9:1 to the canvas).
     var switchTrackHexValue: UInt32 {
         switch self {
         case .ink:
@@ -88,8 +88,8 @@ enum AppAppearanceStyle: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
-    /// Label of a disabled button: at least 3:1 on the canvas and on the
-    /// raised fill a disabled button sits on, and plainly dimmer than secondary ink.
+    /// Label of a disabled button: at least 4.1:1 on the canvas and 3.3:1 on
+    /// the raised fill a disabled button sits on, and plainly dimmer than secondary ink.
     var disabledInkHexValue: UInt32 {
         switch self {
         case .ink:
