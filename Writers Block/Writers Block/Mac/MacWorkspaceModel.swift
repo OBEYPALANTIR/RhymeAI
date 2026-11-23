@@ -23,7 +23,15 @@ final class MacWorkspaceModel: ObservableObject {
     @Published var recordingSong: SongRecordingTarget?
     @Published var songImporterPresented = false
     @Published var audioImporterPresented = false
-    @Published var importError: String?
+    private struct ImportAlert {
+        let message: String
+        let id = UUID()
+    }
+
+    @Published private var importAlert: ImportAlert?
+    private var pendingImportErrors: [String] = []
+    private var awaitingImportAlertDismissal = false
+    var importError: String? { importAlert?.message }
     /// Why File › Save did not save, until the writer dismisses it.
     @Published var saveError: String?
     /// The editor window is on screen. The menus act only through it.
@@ -102,37 +110,110 @@ final class MacWorkspaceModel: ObservableObject {
         viewModel.getSuggestions()
     }
 
+    func importDroppedFiles(_ urls: [URL], into viewModel: EditorViewModel) -> Bool {
+        switch MacDropRoute.route(urls, songOpen: songOpen(in: viewModel)) {
+        case .songs(let songs):
+            let routed = Set(songs)
+            importSongs(uniqueDropFiles(songs), into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            return true
+        case .recordings(let audio):
+            let routed = Set(audio)
+            importRecordings(uniqueDropFiles(audio), into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            return true
+        case .none:
+            return false
+        }
+    }
+
+    private func uniqueDropFiles(_ urls: [URL]) -> [URL] {
+        var seen: Set<URL> = []
+        // Use the normalized path as the key, keeping Finder's original URL for file access.
+        return urls.filter { seen.insert($0.standardizedFileURL).inserted }
+    }
+
+    private func reportUnimportedDropFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let byName = Dictionary(grouping: urls, by: \.lastPathComponent)
+        let names = urls.map { url in
+            let name = url.lastPathComponent
+            guard (byName[name]?.count ?? 0) > 1 else { return name }
+            return "\(url.deletingLastPathComponent().lastPathComponent)/\(name)"
+        }.joined(separator: "\n")
+        reportImportError("Could not import:\n\(names)")
+    }
+
+    private func reportImportError(_ message: String) {
+        if importAlert != nil || awaitingImportAlertDismissal {
+            pendingImportErrors.append(message)
+        } else {
+            importAlert = ImportAlert(message: message)
+        }
+    }
+
+    func importAlertPresentation() -> Binding<Bool> {
+        let id = importAlert?.id
+        return Binding(
+            get: { id != nil && self.importAlert?.id == id },
+            set: { presented in
+                guard !presented, let id, self.importAlert?.id == id else { return }
+                self.awaitingImportAlertDismissal = true
+                self.importAlert = nil
+            }
+        )
+    }
+
+    func presentNextImportAlert() {
+        guard awaitingImportAlertDismissal else { return }
+        awaitingImportAlertDismissal = false
+        if !pendingImportErrors.isEmpty {
+            importAlert = ImportAlert(message: pendingImportErrors.removeFirst())
+        }
+    }
+
     /// Copies dropped or picked audio into the open song's recordings and
-    /// shows them.
-    func importRecordings(_ urls: [URL], into viewModel: EditorViewModel) {
-        guard let projectId = viewModel.ensureProjectForRecording() else { return }
-        Task {
+    /// shows them after a complete import. A non-nil `skippedDropFiles` identifies a Finder drop.
+    @discardableResult
+    func importRecordings(_ urls: [URL], into viewModel: EditorViewModel, skippedDropFiles: [URL]? = nil) -> Task<Void, Never>? {
+        guard let projectId = viewModel.ensureProjectForRecording() else {
+            if let skippedDropFiles { reportUnimportedDropFiles(urls + skippedDropFiles) }
+            return nil
+        }
+        return Task {
+            var failed: [URL] = []
             for url in urls {
                 do {
                     try await viewModel.importRecording(at: url, projectId: projectId)
                 } catch is CancellationError {
                     return
                 } catch {
-                    importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again."
+                    if skippedDropFiles != nil {
+                        failed.append(url)
+                        continue
+                    }
+                    reportImportError("Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again.")
                     return
                 }
             }
-            // Only if that song is still open: another song's recordings, or a
-            // blank song saved to hold them, would be the wrong result.
-            if viewModel.currentProjectId == projectId { showRecordings(for: viewModel) }
+            let unimported = failed + (skippedDropFiles ?? [])
+            if !unimported.isEmpty {
+                reportUnimportedDropFiles(unimported)
+            } else if viewModel.currentProjectId == projectId {
+                // Another song's recordings would be the wrong result.
+                showRecordings(for: viewModel)
+            }
         }
     }
 
     /// A file picker that failed, other than by the writer cancelling it.
     func reportPickerFailure(_ error: Error) {
         guard (error as? CocoaError)?.code != .userCancelled else { return }
-        importError = "Couldn't open the chosen file. Try choosing it again."
+        reportImportError("Couldn't open the chosen file. Try choosing it again.")
     }
 
     /// Opens song JSON exports, as the drawer's Import From File does; the last
     /// one imported is open. Files that fail are named, with how many imported.
-    func importSongs(_ urls: [URL], into viewModel: EditorViewModel) {
-        var failed: [String] = []
+    func importSongs(_ urls: [URL], into viewModel: EditorViewModel, skippedDropFiles: [URL]? = nil) {
+        var failed: [URL] = []
         var reason = ""
         for url in urls {
             do {
@@ -145,12 +226,16 @@ final class MacWorkspaceModel: ObservableObject {
             } catch {
                 reason = "Could not import this file. Pick a RhymeAI project JSON."
             }
-            failed.append(url.lastPathComponent)
+            failed.append(url)
+        }
+        if let skippedDropFiles {
+            reportUnimportedDropFiles(failed + skippedDropFiles)
+            return
         }
         guard !failed.isEmpty else { return }
-        importError = urls.count == 1
+        reportImportError(urls.count == 1
             ? reason
-            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.joined(separator: ", ")). Pick RhymeAI project JSON files."
+            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.map(\.lastPathComponent).joined(separator: ", ")). Pick RhymeAI project JSON files.")
     }
 }
 
