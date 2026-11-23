@@ -18,8 +18,8 @@ struct WelcomeView: View {
             GeometryReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        // A short lead-in keeps the One Liners actions on the first
-                        // screen of a phone at the default text size.
+                        // A short lead-in brings more of the cards onto the first
+                        // screen; on a short phone One Liners can still start below it.
                         Spacer(minLength: dynamicTypeSize.isAccessibilitySize ? RhymeAITokens.Spacing.md : proxy.size.height * 0.04)
 
                         if !dynamicTypeSize.isAccessibilitySize {
