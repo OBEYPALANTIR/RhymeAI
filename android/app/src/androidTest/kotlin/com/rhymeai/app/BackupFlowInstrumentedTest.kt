@@ -633,7 +633,10 @@ class BackupFlowInstrumentedTest {
     private val newerWords = "newer words W2"
 
     /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
-    private fun openSongInEditor(trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList(), draft: String? = null): MainViewModel {
+    private fun openSongInEditor(
+        trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList(), draft: String? = null,
+        workspaces: Map<String, com.rhymeai.app.data.model.SongWorkspace> = emptyMap()
+    ): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
         repo = ProjectRepository(context)
         runBlocking {
@@ -645,6 +648,7 @@ class BackupFlowInstrumentedTest {
             // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
             repo.saveTrashedProjects(trash)
             if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
+            workspaces.forEach { (id, workspace) -> repo.saveWorkspace(id, workspace) }
             // An interrupted save's draft: the editor's saved words differ from the song's row.
             if (draft != null) repo.saveEditorState(openSong.title, draft, openSong.theme)
         }
@@ -1683,6 +1687,64 @@ class BackupFlowInstrumentedTest {
             assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to heldEdits), songs().associate { it.id to it.lyrics })
         } finally {
             BackupTestHooks.beforeHoldResolve = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** The kept copy is a row the library already had, with the same words: the editor opens it as that song. */
+    @Test fun adoptingAReusedRowWithTheSameWordsOpensItAsThatSong() {
+        val reused = SongProject("reuse-x", "Untitled Song", heldEdits, "", 100L)
+        putDriveSongs(SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L), reused)))
+        val position = com.rhymeai.app.data.model.SongWorkspace(selectionStart = 3, selectionEnd = 7, scrollOffset = 55f)
+        val vm = openSongInEditor(otherSongs = listOf(reused), workspaces = mapOf(reused.id to position))
+        try {
+            val opened = vm.openRevision
+            // A's edits: an empty raw title and new words, undoable.
+            instrumentation.runOnMainSync {
+                vm.onTitleChanged("")
+                vm.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue(heldEdits))
+            }
+            assertTrue(vm.canUndoLyrics)
+            // The kept copy asks for the reused row's id; that row already holds the same title, words and theme.
+            firstSongIdIs(reused.id) {
+                instrumentation.runOnMainSync { vm.restoreFromBackup() }
+                waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+                instrumentation.waitForIdleSync()
+            }
+            assertEquals(mapOf(openSong.id to newerWords, reused.id to heldEdits), songs().associate { it.id to it.lyrics })
+            assertEquals(reused.id, vm.currentProjectId)
+            assertEquals(androidx.compose.ui.text.TextRange(3, 7) to 55f, vm.lyricsFieldValue.selection to vm.editorScrollOffset)
+            assertEquals(Triple(reused.title, reused.lyrics, reused.theme), Triple(vm.title, vm.lyrics, vm.theme))
+            assertTrue(vm.openRevision > opened)
+            assertFalse(vm.canUndoLyrics)
+            assertEquals(null, vm.persistenceError)
+        } finally {
+            resetOpenSong()
+        }
+    }
+
+    /** Another window trashes the copy while A refreshes its list after adopting it: A's next save keeps its words as a new song. */
+    @Test fun aCopyTrashedDuringTheListRefreshIsNotSavedOverByTheNextSave() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            repo.moveProjectToTrash(repo.projectsFlow.first().single { it.id != openSong.id }.id, System.currentTimeMillis())
+        }
+        try {
+            editAndRestore(vm)
+            val copy = runBlocking { repo.trashedProjectsFlow.first() }.single().project
+            assertEquals(heldEdits, copy.lyrics)
+            assertEquals(heldEdits, vm.lyrics)
+            saveNow(vm)
+            val kept = songs().filter { it.lyrics == heldEdits }
+            assertEquals(1, kept.size)
+            assertTrue(kept.single().id != copy.id)
+            assertEquals(newerWords, storedOpenSong().lyrics)
+            assertEquals(copy, runBlocking { repo.trashedProjectsFlow.first() }.single().project)
+            assertEquals(kept.single().id, vm.currentProjectId)
+        } finally {
             BackupTestHooks.beforeHoldListRefresh = null
             resetOpenSong()
         }

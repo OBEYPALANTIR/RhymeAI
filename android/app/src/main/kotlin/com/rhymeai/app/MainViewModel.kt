@@ -970,19 +970,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun showHeldResult(id: String, result: HoldResult, untouchedRow: SongProject?) {
         if (currentProjectId != id) return
-        // The song list is a separate read: its failure leaves the result in place.
+        // The result is installed before anything suspends, so a list read taken later cannot be overwritten by it.
+        showHeldRow(id, result, untouchedRow)
+        val shown = currentProjectId
+        // Display only, and a separate read: its failure leaves the result in place.
         try {
             BackupTestHooks.beforeHoldListRefresh?.invoke()
             val stored = repo.projectsFlow.first()
-            if (currentProjectId != id) return
+            if (currentProjectId != shown) return
             projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
         }
+    }
+
+    private fun showHeldRow(id: String, result: HoldResult, untouchedRow: SongProject?) {
+        fun install(row: SongProject) {
+            projects = if (projects.any { it.id == row.id }) projects.map { if (it.id == row.id) row else it } else projects + row
+        }
         val row = when (result) {
             is HoldResult.Adopted -> result.row.also { row ->
-                if (projects.none { it.id == row.id }) projects = projects + row
+                install(row)
                 currentProjectId = row.id
                 if (result.appended) {
                     persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
@@ -992,15 +1001,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val source = result.source
                 if (source == null) {
                     // Its words were saved before the operation; it removed or trashed them.
-                    if (id !in pendingCreations) clearEditorAfterProjectDelete()
+                    if (id !in pendingCreations) {
+                        projects = projects.filter { it.id != id }
+                        clearEditorAfterProjectDelete()
+                    }
                     return
                 }
+                install(source)
                 // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen.
                 if (source == untouchedRow && result.editor == Triple(title, lyrics, theme)) return
                 source
             }
         }
-        if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
+        // Another song is a new document even when its words match: its position, history and title are its own.
+        if (row.id == id && row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
         dismissRewrite()
         title = row.title
         loadWords(row.lyrics)
