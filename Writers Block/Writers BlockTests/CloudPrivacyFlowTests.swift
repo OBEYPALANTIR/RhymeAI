@@ -403,8 +403,9 @@ struct CloudPrivacyFlowTests {
         #expect(emptyViewModel.suggestionsFailed, "the assistant offers Try again only after a failed request")
     }
 
-    /// "Try again" follows the error on screen: another error replaces it,
-    /// and Stop or a setting change clears the failure and its message.
+    /// "Try again" follows the failure while it is the error on screen: caret
+    /// moves and edits keep it, and any other error, even with the same
+    /// words, takes the heading back without the failure returning later.
     @Test func tryAgainOnlyFollowsTheFailureItShows() async throws {
         let (defaults, suiteName) = Self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -430,16 +431,32 @@ struct CloudPrivacyFlowTests {
         }
 
         await fail()
+        let failure = try #require(viewModel.errorMessage)
+        viewModel.cursorPosition = 2
+        #expect(viewModel.suggestionsFailed && viewModel.errorMessage == failure, "a caret move keeps the card and heading")
+        viewModel.lyrics += " still"
+        #expect(viewModel.suggestionsFailed && viewModel.errorMessage == failure, "a lyric edit keeps the card and heading")
+
         viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
         #expect(!viewModel.suggestionsFailed, "a later editor error takes the heading back")
 
         await fail()
+        viewModel.errorMessage = failure
+        #expect(!viewModel.suggestionsFailed, "an editor error with the same words is not the failure")
         viewModel.cancelSuggestions()
-        #expect(!viewModel.suggestionsFailed && viewModel.errorMessage == nil, "Stop")
+        #expect(viewModel.errorMessage == failure, "a cancel keeps an editor error")
 
         await fail()
-        viewModel.saveUseWholeSongContext(true)
-        #expect(!viewModel.suggestionsFailed && viewModel.errorMessage == nil, "a setting change")
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        viewModel.errorMessage = nil
+        viewModel.errorMessage = failure
+        #expect(!viewModel.suggestionsFailed, "the old failure does not come back with its words")
+
+        viewModel.errorMessage = nil
+        viewModel.getSuggestions()
+        #expect(viewModel.isLoading)
+        viewModel.cancelSuggestions()
+        #expect(!viewModel.isLoading && !viewModel.suggestionsFailed && viewModel.errorMessage == nil, "Stop while loading")
     }
 
     /// The ink burst keys off this signal. Each case streams one line, holds
