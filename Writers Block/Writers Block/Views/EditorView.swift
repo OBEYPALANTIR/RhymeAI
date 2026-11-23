@@ -744,11 +744,14 @@ struct EditorView: View {
                 }
             } else {
                 // The Focus words stay on one line; on iPhone a save warning
-                // leaves no room for them, so the icon stands in instead.
+                // leaves no room for them, so the icon stands in instead. The
+                // trailing group is offered all the room the Spacer does not
+                // need, so the Focus control is measured against the bar.
                 HStack(spacing: RhymeAITokens.Spacing.xxs) {
                     topBarLeading
                     Spacer()
                     topBarTrailing(focusIcon: horizontalSizeClass == .compact && viewModel.saveStatus == .failed)
+                        .layoutPriority(1)
                 }
             }
         }
@@ -794,7 +797,14 @@ struct EditorView: View {
                 )
             }
 
-            HStack(spacing: RhymeAITokens.Spacing.xs) {
+            ZStack(alignment: .leading) {
+                // Holds the saving and saved marks' width in every state, so
+                // the Focus control's form does not change when one appears.
+                ZStack {
+                    ProgressView()
+                    Image(systemName: "checkmark").font(.caption)
+                }
+                .hidden()
                 if viewModel.saveStatus == .saving {
                     ProgressView()
                         .scaleEffect(EditorViewConstants.TopBar.saveProgressScale)
@@ -854,10 +864,11 @@ struct EditorView: View {
                     if usesCompactControlChrome || focusIcon {
                         focusModeIcon
                     } else {
-                        // The words when they fit the bar, else the icon. Where
-                        // there is room, the hidden label reserves the wider
-                        // title so the bar does not shift; the visible one sits
-                        // against the trailing icons so the three read as one group.
+                        // The words where "Exit Focus" fits the bar, else the icon,
+                        // in both states: the hidden label reserves the wider
+                        // title, so the choice and the bar do not change when
+                        // Focus turns on. The visible one sits against the
+                        // trailing icons so the three read as one group.
                         ViewThatFits(in: .horizontal) {
                             focusLabel {
                                 ZStack(alignment: .trailing) {
@@ -865,7 +876,6 @@ struct EditorView: View {
                                     Text(isFocusMode ? "Exit Focus" : "Focus")
                                 }
                             }
-                            focusLabel { Text(isFocusMode ? "Exit Focus" : "Focus") }
                             focusModeIcon
                         }
                     }
