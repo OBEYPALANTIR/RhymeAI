@@ -631,6 +631,8 @@ class BackupFlowInstrumentedTest {
     }
 
     private val openSong = SongProject("open-song", "Open Song", "older words W1", "", 100L)
+    /** Notebook entries the fixture replaced, by song id (null: there was none); put back while their rows still exist. */
+    private var seededWorkspaces: Map<String, com.rhymeai.app.data.model.SongWorkspace?> = emptyMap()
     private val newerWords = "newer words W2"
 
     /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
@@ -650,6 +652,7 @@ class BackupFlowInstrumentedTest {
             // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
             repo.saveTrashedProjects(trash)
             if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
+            seededWorkspaces = repo.workspacesFlow.first().let { stored -> workspaces.keys.associateWith { stored[it] } }
             workspaces.forEach { (id, workspace) -> repo.saveWorkspace(id, workspace) }
             // A held flush stored this ticket for the open song before the app died.
             if (mark != null) repo.saveActiveState(openSong, null, openSong.title, openSong.lyrics, openSong.theme, preserveAs = mark)
@@ -699,6 +702,11 @@ class BackupFlowInstrumentedTest {
             runBlocking {
                 repo.setCurrentProjectId(null)
                 repo.saveEditorState("", "", "")
+                for ((id, prior) in seededWorkspaces) {
+                    // A row the test removed took its notebook out of reach; the others get theirs back.
+                    try { repo.saveWorkspace(id, prior) } catch (_: com.rhymeai.app.data.repository.MissingActiveProjectException) {}
+                }
+                seededWorkspaces = emptyMap()
             }
         }
     }
