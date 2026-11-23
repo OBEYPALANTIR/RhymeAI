@@ -10,6 +10,8 @@ import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.SongCreation
+import com.rhymeai.app.data.repository.dataStore
+import androidx.datastore.preferences.core.edit
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIModel
 import kotlinx.coroutines.CompletableDeferred
@@ -34,9 +36,16 @@ class PersistenceInstrumentedTest {
     private val repo = ProjectRepository(app)
     /** View models built here without an Activity; [stopViewModels] ends them before the stored state is reset. */
     private val handBuilt = mutableListOf<MainViewModel>()
+    private val workspacesKey = androidx.datastore.preferences.core.stringPreferencesKey("local_song_workspaces_json")
+    /** The raw notebook preference as found (null when absent): each test starts without it and teardown puts it back. */
+    private var foundWorkspaces: String? = null
 
     @Before
     fun setUp() {
+        runBlocking {
+            foundWorkspaces = app.dataStore.data.first()[workspacesKey]
+            app.dataStore.edit { it.remove(workspacesKey) }
+        }
         resetRepository()
     }
 
@@ -49,6 +58,8 @@ class PersistenceInstrumentedTest {
             stopViewModels(handBuilt)
         } finally {
             resetRepository()
+            // After every writer stopped, also when the test failed.
+            runBlocking { app.dataStore.edit { prefs -> foundWorkspaces?.let { prefs[workspacesKey] = it } ?: prefs.remove(workspacesKey) } }
         }
     }
 

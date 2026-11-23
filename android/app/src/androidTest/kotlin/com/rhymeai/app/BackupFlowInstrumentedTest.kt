@@ -2363,10 +2363,10 @@ class BackupFlowInstrumentedTest {
         // Only what happens once the editor is released (the hook runs on the main thread).
         PositionTestHooks.onEvent = { from, revision, event -> if (from === vm && !from.editorHeld) events += revision to event }
         val density = context.resources.displayMetrics.density
-        if (!clamped) assertTrue("$storedOffset survives the px round trip", kotlin.math.round(storedOffset * density) / density != storedOffset)
         // Confirmed adoption: the refresh sees the row unchanged; another window keeps a line in its notebook first.
         BackupTestHooks.beforeHoldListRefresh = { BackupTestHooks.beforeHoldListRefresh = null; addWindowBLine(reused.id) }
         try {
+            if (!clamped) assertTrue("$storedOffset survives the px round trip", kotlin.math.round(storedOffset * density) / density != storedOffset)
             adoptReused(vm, reused)
             val revision = onMain { vm.openRevision }
             compose.onNodeWithTag("editorScrollContainer").assertExists()
