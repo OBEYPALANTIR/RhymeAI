@@ -3566,6 +3566,55 @@ struct BackupCoreTests {
         #expect(throws: BackupArchiveError.tooLarge) { try BackupArchive.unzip(oversized) }
     }
 
+    @MainActor
+    @Test func zipWriterRejectsPayloadBeyondImportBudget() throws {
+        let budget = BackupArchive.Budget(entryBytes: 8 * 1024, totalBytes: 24 * 1024)
+        let member = Data(repeating: 0x51, count: budget.entryBytes)
+        let exact = [("songs/a.txt", member), ("songs/b.txt", member), ("songs/c.txt", member)]
+        let clock = ContinuousClock()
+        let entryStart = clock.now
+        #expect(throws: BackupArchiveError.tooLarge) {
+            _ = try BackupArchive.zip([("songs/a.txt", member + Data([1]))], budget: budget)
+        }
+        print("ZIP budget measurement: 8193-byte entry check \(entryStart.duration(to: clock.now))")
+        let totalStart = clock.now
+        #expect(throws: BackupArchiveError.tooLarge) {
+            _ = try BackupArchive.zip(exact + [("songs/d.txt", Data([1]))], budget: budget)
+        }
+        print("ZIP budget measurement: 24577-byte sum check \(totalStart.duration(to: clock.now))")
+        let archive = try BackupArchive.zip(exact, budget: budget)
+        #expect(archive.count > budget.totalBytes)
+        #expect(try BackupArchive.unzip(archive, budget: budget) == Dictionary(uniqueKeysWithValues: exact))
+    }
+
+    @MainActor
+    @Test func exportBudgetRejectsBeforeLoadingRecordingAudio() async throws {
+        let harness = try await makeHarness()
+        let project = SongProject(id: "archive-budget", title: "Budget", lyrics: "first line")
+        harness.context.insert(project)
+        let smallAudio = Data([1])
+        let hash = RecordingBackupManifest.sha256Hex(smallAudio)
+        for index in 0..<80 {
+            let recording = Recording(projectId: project.id, displayName: "take-\(index).m4a",
+                                      audio: smallAudio, recordedAt: Date(), sha256: hash)
+            recording.bytes = 14 * 1024 * 1024
+            harness.context.insert(recording)
+        }
+        try harness.context.save()
+
+        var audioReads = 0
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(throws: BackupError.exportTooLarge) {
+            _ = try harness.service.exportArchive(modelContext: harness.context, budget: .production) { _ in
+                audioReads += 1
+                return smallAudio // Keep the failing-before fixture small even if it reads every payload.
+            }
+        }
+        print("ZIP budget measurement: 80 × 14 MiB metadata check \(start.duration(to: clock.now)), audio reads \(audioReads)")
+        #expect(audioReads == 0)
+    }
+
     @Test func zipReaderTakesStoredAndDeflatedEntries() async throws {
         let stored = try BackupArchive.zip([("a.txt", Data("hello".utf8)), ("dir/b.bin", Data([0, 1, 2]))])
         #expect(try BackupArchive.unzip(stored) == ["a.txt": Data("hello".utf8), "dir/b.bin": Data([0, 1, 2])])
