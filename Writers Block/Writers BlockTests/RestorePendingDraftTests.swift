@@ -66,6 +66,60 @@ struct RestorePendingDraftTests {
         _ = try await checkLibrary(fixture)
     }
 
+    @Test func failedParkWhileSwitchingSpendsTheSavedDraftID() async throws {
+        let firstWords = "first outgoing draft under the restore hold"
+        let secondWords = "second outgoing draft under the restore hold"
+        var recovery: URL?
+        var frozen: Data?
+        let fixture = try await makePendingDraft(save: { context in
+            try context.save()
+            guard let recovery, frozen == nil,
+                  try context.fetch(FetchDescriptor<SongProject>()).contains(where: { $0.lyrics == firstWords }) else { return }
+            frozen = try Data(contentsOf: recovery)
+            try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: recovery.path)
+        })
+        let harness = fixture.harness
+        let journal = recoveryURL(harness)
+        recovery = journal
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path) }
+        let next = SongProject(id: "next-song", title: "Next", lyrics: "next saved words")
+        let last = SongProject(id: "last-song", title: "Last", lyrics: "last saved words")
+        harness.context.insert(next)
+        harness.context.insert(last)
+        try harness.context.save()
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try fixture.remote.encodedManifest())
+        harness.drive.seed(name: BackupCoreTests.lateTake.entry.driveName, content: BackupCoreTests.lateTake.audio)
+        harness.drive.beforeManifestWrite = {
+            fixture.editor.lyrics = firstWords
+            fixture.editor.triggerAutoSave()
+            fixture.editor.loadProject(next)
+            let preSeal = try #require(frozen)
+            #expect(try Data(contentsOf: journal) == preSeal)
+            let first = try #require(try harness.context.fetch(FetchDescriptor<SongProject>()).first { $0.lyrics == firstWords })
+            #expect(fixture.editor.currentProjectId == first.id)
+
+            fixture.editor.loadProject(next)
+            #expect(fixture.editor.currentProjectId == next.id)
+            fixture.editor.lyrics = secondWords
+            fixture.editor.triggerAutoSave()
+            fixture.editor.loadProject(last)
+            #expect(fixture.editor.currentProjectId == last.id)
+            let songs = try harness.context.fetch(FetchDescriptor<SongProject>())
+            let second = try #require(songs.first { $0.lyrics == secondWords })
+            #expect(first.id != second.id)
+            #expect(Set(songs.map(\.id)).count == songs.count)
+            #expect(songs.first { $0.id == next.id }?.lyrics == "next saved words")
+            #expect(try Data(contentsOf: journal) == preSeal)
+        }
+
+        await fixture.editor.restoreBackupNow()
+
+        #expect(!fixture.editor.cloudBackupLastResultIsError, "\(fixture.editor.cloudBackupStatusText)")
+        let reopened = try await harness.reopened()
+        let recovered = try reopened.context.fetch(FetchDescriptor<SongProject>()).filter { [firstWords, secondWords].contains($0.lyrics) }
+        #expect(Set(recovered.map(\.id)).count == 2)
+    }
+
     @Test func anEditAfterRestoreCommitsKeepsItsOwnSongAndItsRecording() async throws {
         let fixture = try await makePendingDraft()
         fixture.harness.drive.seed(name: SyncBlob.driveFileName, content: try fixture.remote.encodedManifest())
@@ -114,6 +168,67 @@ struct RestorePendingDraftTests {
         let playable = try reopened.service.library.liveRecordings(projectId: recovered.id, in: reopened.context)
         #expect(try playable.map { try Data(contentsOf: $0.url) } == [fixture.audio])
         #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == recovered.id }.map(\.audio) == [fixture.audio])
+    }
+
+    @Test(arguments: [false, true])
+    func pendingTakeRemembersTheCascadeAfterTheSourceDeletionAdvances(explicitTakeDeletion: Bool) async throws {
+        let words = "editor words kept apart from the deleted song"
+        var recovery: URL?
+        var frozen: Data?
+        let fixture = try await makePendingDraft(save: { context in
+            try context.save()
+            guard let recovery, frozen == nil,
+                  try context.fetch(FetchDescriptor<SongProject>()).contains(where: { $0.lyrics == words }) else { return }
+            frozen = try Data(contentsOf: recovery)
+            try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: recovery.path)
+        })
+        let harness = fixture.harness
+        let journal = recoveryURL(harness)
+        recovery = journal
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path) }
+        let takeID = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first?.id)
+        let t1 = Date().addingTimeInterval(3_600).epochMilliseconds
+        let t2 = t1 + 2
+        harness.drive.seed(name: SyncBlob.driveFileName,
+                           content: try SyncBlob(deletions: [SyncDeletion(projectId: "song-a", deletedAt: t1)]).encodedManifest())
+        harness.drive.beforeManifestWrite = {
+            fixture.editor.lyrics = words
+            fixture.editor.triggerAutoSave()
+        }
+
+        await fixture.editor.restoreBackupNow()
+
+        let preSeal = try #require(frozen)
+        #expect(try Data(contentsOf: journal) == preSeal)
+        let between = try await harness.reopened()
+        let draft = try #require(try between.context.fetch(FetchDescriptor<SongProject>()).first { $0.lyrics == words })
+        let draftID = draft.id
+        let owner = try durableRowID(draft)
+        #expect(between.audios(draftID).isEmpty)
+        let firstDeletions = try DeletionStore.all(in: between.context).filter { $0.projectId == "song-a" }
+        #expect(firstDeletions.contains { $0.isSongTombstone && $0.deletedAt == t1 })
+        #expect(firstDeletions.contains { $0.recordingId == takeID && $0.deletedAt == t1 })
+
+        harness.drive.beforeManifestWrite = nil
+        var remote = [SyncDeletion(projectId: "song-a", deletedAt: t2)]
+        if explicitTakeDeletion { remote.append(SyncDeletion(projectId: "song-a", recordingId: takeID, deletedAt: t1 + 1)) }
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: remote).encodedManifest())
+        try await between.service.restoreNow(modelContext: between.context)
+        let advanced = try DeletionStore.all(in: between.context).filter { $0.projectId == "song-a" }
+        #expect(advanced.filter(\.isSongTombstone).map(\.deletedAt) == [t2])
+        #expect(advanced.filter { $0.recordingId == takeID }.map(\.deletedAt) == [explicitTakeDeletion ? t1 + 1 : t1])
+        #expect(try Data(contentsOf: journal) == preSeal)
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path)
+
+        let reopened = try await reopenEditor(between, recovery: journal)
+
+        let songs = try reopened.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!songs.contains { $0.id == "song-a" })
+        #expect(try songs.first { $0.id == draftID }.map(durableRowID) == owner)
+        let playable = try reopened.service.library.liveRecordings(projectId: draftID, in: reopened.context)
+        let expected = explicitTakeDeletion ? [] : [fixture.audio]
+        #expect(try playable.map { try Data(contentsOf: $0.url) } == expected)
+        #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == draftID }.map(\.audio) == expected)
     }
 
     @Test(arguments: [false, true])

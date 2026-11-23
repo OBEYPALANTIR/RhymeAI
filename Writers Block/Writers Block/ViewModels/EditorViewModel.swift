@@ -3614,6 +3614,7 @@ final class EditorViewModel: ObservableObject {
             if let committed {
                 updateDraftRecoveryCopy(committedCopy: committed)
                 deferDraftRecoveryCopy()
+                operation.separateDraftID = UUID().uuidString
                 bindEditor(to: committed)
                 operation.currentBaseline = openDraft
                 operation.currentHadPendingEdit = false
@@ -4261,9 +4262,11 @@ final class EditorViewModel: ObservableObject {
                     precedenceRepaired: take.origin?.precedenceRepaired ?? true
                 )
                 let rows = try context.fetch(FetchDescriptor<Recording>())
+                let cascadeTimes = sourceProjectId == projectId ? [:] : try RecordingFiles.draftSourceCascadeTimes(for: root)
 
                 if deletions.contains(where: { deletion in
-                    guard !deletion.isSongTombstone, !binding.isSourceSongCascade(deletion, among: deletions) else { return false }
+                    guard !deletion.isSongTombstone,
+                          !binding.isSourceSongCascade(deletion, among: deletions, recordedTimes: cascadeTimes) else { return false }
                     if let origin = take.origin, deletion.covers(origin) { return true }
                     let addresses = [(projectId, id), (projectId, key), (sourceProjectId, sourceRecordingId)]
                     return addresses.contains { project, recording in

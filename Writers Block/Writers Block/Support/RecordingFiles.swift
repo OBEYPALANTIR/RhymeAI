@@ -482,11 +482,13 @@ enum RecordingFiles {
                 let precedenceTime: Date
                 let precedenceRepaired: Bool
 
-                /// The restore service writes cascade take tombstones with the song's
-                /// timestamp. Those remove the source, while the recovered song owns its copy.
-                func isSourceSongCascade(_ deletion: SyncDeletion, among deletions: [SyncDeletion]) -> Bool {
+                /// Locally generated cascade times survive a later source tombstone.
+                /// The current same-time pair also identifies cascades from older builds.
+                func isSourceSongCascade(_ deletion: SyncDeletion, among deletions: [SyncDeletion],
+                                         recordedTimes: [String: Set<Int64>]) -> Bool {
                     sourceProjectId != projectId && deletion.projectId == sourceProjectId
-                        && deletions.contains { $0.isSongTombstone && $0.projectId == sourceProjectId && $0.deletedAt == deletion.deletedAt }
+                        && (recordedTimes[deletion.identity]?.contains(deletion.deletedAt) == true
+                            || deletions.contains { $0.isSongTombstone && $0.projectId == sourceProjectId && $0.deletedAt == deletion.deletedAt })
                 }
 
                 @MainActor func owner(in context: ModelContext) throws -> SongProject? {
@@ -497,8 +499,10 @@ enum RecordingFiles {
                     return song
                 }
 
-                func deletionWins(_ deletion: SyncDeletion, among deletions: [SyncDeletion], id: String, sha256: String) -> Bool {
-                    guard !deletion.isSongTombstone, !isSourceSongCascade(deletion, among: deletions) else { return false }
+                func deletionWins(_ deletion: SyncDeletion, among deletions: [SyncDeletion], recordedTimes: [String: Set<Int64>],
+                                  id: String, sha256: String) -> Bool {
+                    guard !deletion.isSongTombstone,
+                          !isSourceSongCascade(deletion, among: deletions, recordedTimes: recordedTimes) else { return false }
                     return [(sourceProjectId, sourceRecordingId), (projectId, originalId), (projectId, id)].contains { project, id in
                         deletion.covers(projectId: project, recordingId: id, sha256: sha256,
                                         at: precedenceTime, repaired: precedenceRepaired)
@@ -675,6 +679,27 @@ enum RecordingFiles {
         }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(moves).write(to: url, options: .atomic)
+    }
+
+    private nonisolated static func draftSourceCascadeURL(for memosRoot: URL) -> URL {
+        memosRoot.deletingLastPathComponent().appendingPathComponent("draft-source-cascades.json")
+    }
+
+    nonisolated static func draftSourceCascadeTimes(for memosRoot: URL) throws -> [String: Set<Int64>] {
+        let file = draftSourceCascadeURL(for: memosRoot)
+        guard try exists(file) else { return [:] }
+        return try JSONDecoder().decode([String: Set<Int64>].self, from: Data(contentsOf: file))
+    }
+
+    /// Keep exact locally generated take-deletion events across song tombstone
+    /// replacement. A later take deletion at any other time still stands on its own.
+    nonisolated static func rememberDraftSourceCascades(_ deletions: [SyncDeletion], for memosRoot: URL) throws {
+        guard !deletions.isEmpty else { return }
+        var times = try draftSourceCascadeTimes(for: memosRoot)
+        for deletion in deletions { times[deletion.identity, default: []].insert(deletion.deletedAt) }
+        let file = draftSourceCascadeURL(for: memosRoot)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(times).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     /// For listings and playback: nil when the record cannot be read, so nothing is listed.

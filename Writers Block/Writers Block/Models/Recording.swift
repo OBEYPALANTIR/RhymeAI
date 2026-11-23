@@ -1144,13 +1144,15 @@ final class RecordingLibrary: RecordingPublishing {
                         let projectId = binding.projectId
                         guard file.projectId == projectId, file.size == binding.bytes else { continue }
                         let owner = try binding.owner(in: context)
+                        let cascadeTimes = binding.sourceProjectId == binding.projectId ? [:] : try RecordingFiles.draftSourceCascadeTimes(for: memosRoot)
                         if deletions.contains(where: { deletion in
                             if deletion.isSongTombstone {
                                 return deletion.projectId == projectId && owner.map {
                                     deletion.wins(over: $0.updatedAt, repaired: $0.precedenceRepaired)
                                 } == true
                             }
-                            return binding.deletionWins(deletion, among: deletions, id: entry.recordingId, sha256: sha)
+                            return binding.deletionWins(deletion, among: deletions, recordedTimes: cascadeTimes,
+                                                        id: entry.recordingId, sha256: sha)
                         }) {
                             toQuarantine.append((file.url, sha, entry.recordingId))
                             continue
@@ -1904,12 +1906,13 @@ final class RecordingLibrary: RecordingPublishing {
                     throw RecordingLibraryError.notVerified
                 }
                 let deletions = try DeletionStore.all(in: context)
+                let cascadeTimes = binding.sourceProjectId == binding.projectId ? [:] : try RecordingFiles.draftSourceCascadeTimes(for: memosRoot)
                 if deletions.contains(where: { deletion in
                     if deletion.isSongTombstone {
                         return deletion.projectId == binding.projectId
                             && deletion.wins(over: owner.updatedAt, repaired: owner.precedenceRepaired)
                     }
-                    return binding.deletionWins(deletion, among: deletions, id: id, sha256: proofSha)
+                    return binding.deletionWins(deletion, among: deletions, recordedTimes: cascadeTimes, id: id, sha256: proofSha)
                 }) { throw RecordingLibraryError.notVerified }
             }
             if try !holdsTake(target) {
@@ -2150,14 +2153,20 @@ final class RecordingLibrary: RecordingPublishing {
             establishTimes($0)
             return $0.precedenceIsRepair || $0.precedenceTime.epochMilliseconds < deletedAt
         }
-        for row in rows {
-            try DeletionStore.upsert(SyncDeletion(projectId: projectId, recordingId: row.id, fileName: row.displayName, deletedAt: deletedAt), in: context)
+        let cascades = rows.map {
+            SyncDeletion(projectId: projectId, recordingId: $0.id, fileName: $0.displayName, deletedAt: deletedAt)
+        }
+        for (row, cascade) in zip(rows, cascades) {
+            try DeletionStore.upsert(cascade, in: context)
             // Its file holding its bytes is quarantined by the caller; otherwise its audio is kept now.
             var holds = false
             if let file = url(of: row), try RecordingFiles.exists(file) { holds = try RecordingFiles.sha256(of: file) == row.sha256 }
             if !holds { try preserveRowAudio(row) }
             context.delete(row)
         }
+        // The active draft journal may be unavailable. Record the cause before
+        // the caller commits the tombstones so it is still available on reopen.
+        try RecordingFiles.rememberDraftSourceCascades(cascades, for: memosRoot)
         return rows
     }
 
