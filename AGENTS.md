@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-RhymeAI is a native songwriting assistant for writing lyrics, managing song projects, analyzing rhyme context, counting syllables, previewing stress/IPA, and generating AI rewrite/rhyme suggestions. The active app surfaces are the native Android Jetpack Compose app in `android/` and the native SwiftUI iOS app in `Writers Block/`. A desktop variant is planned, but the React/Vite web variant has been removed.
+RhymeAI is a native songwriting assistant for writing lyrics, managing song projects, analyzing rhyme context, counting syllables, previewing stress/IPA, and generating AI rewrite/rhyme suggestions. The active app surfaces are the native Android Jetpack Compose app in `android/` and the native SwiftUI iOS and macOS apps in `Writers Block/`. The React/Vite web variant has been removed.
 
 ## Architecture & Data Flow
 
 - **Android:** `MainViewModel.kt` is the single source of truth for editor, project, settings, AI provider/model, suggestions, rewrite previews, trash state, prosody previews, and save status. Compose screens read/write ViewModel `mutableStateOf` properties directly. `ProjectRepository.kt` persists projects, current editor state, trash state, and provider/model choice in Preferences DataStore, and routes API keys through `SecureKeyStore`/EncryptedSharedPreferences. `AIService.kt` dispatches to Gemini, OpenAI, Claude, or a local GGUF model.
-- **iOS:** `Writers_BlockApp.swift` creates the `EditorViewModel` and SwiftData `ModelContainer`. `ContentView.swift` injects the ViewModel into SwiftUI via `@EnvironmentObject`. `EditorViewModel.swift` owns editor/project/settings state, debounced autosave, trash state, rhyme context, prosody previews, and rewrite flow. `AIService.swift` handles Gemini/OpenAI/Claude/Apple Intelligence calls.
-- **Common flow:** lyrics + cursor position -> stanza/rhyme-context parsing -> section-aware prompt shaping -> AI suggestion/rewrite response -> UI preview/application -> debounced persistence. Android persists to DataStore; iOS persists projects with SwiftData and settings/API keys with `UserDefaults`.
+- **iOS:** `Writers_BlockApp.swift` creates the `EditorViewModel` and SwiftData `ModelContainer` and supplies the ViewModel to `ContentView.swift` via the SwiftUI environment. `EditorViewModel.swift` owns editor/project/settings state, debounced autosave, trash state, rhyme context, prosody previews, and rewrite flow. `AIService.swift` handles Gemini/OpenAI/Claude/Apple Intelligence calls.
+- **Common flow:** lyrics + cursor position -> stanza/rhyme-context parsing -> section-aware prompt shaping -> AI suggestion/rewrite response -> UI preview/application -> debounced persistence. Android persists to DataStore. iOS persists projects with SwiftData, settings with `UserDefaults`, and API keys in Keychain.
 - **Shared prosody assets:** `shared/pronunciation/` contains source fixtures and generated pronunciation data. `scripts/generate-pronunciation-assets.mjs` refreshes native assets for Android and iOS.
 
 ## Key Directories
@@ -76,7 +76,7 @@ Then run `xcodebuild build` or `xcodebuild test` with the confirmed scheme and s
 - Use the Gradle wrapper in `android/`; do not assume a globally installed Gradle.
 - Android uses Kotlin 2.3.20, Android Gradle plugin 8.9.1, Gradle 9.0.0, JVM 17, compile SDK 36, min SDK 26, target SDK 35.
 - iOS is SwiftUI/SwiftData under Xcode; a shared `Writers Block` scheme is checked in, but still confirm schemes and simulator destinations before command-line builds.
-- Android `android/local.properties` is local SDK configuration only. Runtime API keys are entered in-app and stored through encrypted storage. Never commit local secret files.
+- Android `android/local.properties` holds local SDK and optional build configuration. Runtime API keys are entered in-app and stored through encrypted storage. Never commit local secret files.
 - Keep native asset generation in `scripts/`; do not reintroduce a root web package just to run the app.
 
 ## Testing & QA
