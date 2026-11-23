@@ -2507,6 +2507,96 @@ struct BackupCoreTests {
         return try SyncBlob(projects: [Self.song(take.projectId)], recordings: [take], savedByClientId: client).encodedManifest()
     }
 
+    /// Late take (the Apple twin of Android's): a kept duplicate still carries song p's
+    /// deletion at 200; the main file holds p edited at 300, so p is active. A take of p
+    /// recorded at 100 (a real time) then arrives late. The stale song tombstone still covers it.
+    private static let lateSong = SyncSongProject(id: "p", title: "p", lyrics: "edited words", theme: "", updatedAt: Date(millisecondsSince1970: 300))
+
+    @MainActor
+    private static func seedLateTakeDrive(_ harness: BackupHarness) throws {
+        harness.drive.seedDuplicateManifest(try SyncBlob(deletions: [SyncDeletion(projectId: "p", deletedAt: 200)], savedByClientId: "stale").encodedManifest())
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(projects: [lateSong], savedByClientId: "current").encodedManifest())
+        harness.context.insert(SongProject(id: "p", title: "p", lyrics: "edited words", updatedAt: lateSong.updatedAt))
+        try harness.context.save()
+    }
+
+    private static func takeTombstoneTimes(_ written: SyncBlob, _ id: String) -> [Int64] {
+        written.deletions.filter { $0.recordingId == id }.map(\.deletedAt)
+    }
+
+    @MainActor
+    @Test func aLateTakeInAnotherDevicesManifestIsDroppedTombstonedAndItsDriveAudioDeletedByTheNextBackup() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        try Self.seedLateTakeDrive(harness)
+        try await harness.service.backupNow(modelContext: harness.context)
+        // Precondition: the edit beat the deletion and the song tombstone is not rewritten.
+        let first = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(first.projects.map(\.lyrics) == ["edited words"])
+        #expect(!first.deletions.contains { $0.projectId == "p" })
+
+        // A third device writes its manifest with the take (real time 100) and uploads the take's audio.
+        let audio = Data("late take".utf8)
+        var take = Self.take("late", of: "p", audio)
+        take.uploadedAt = Date(millisecondsSince1970: 100)
+        drive.seedDuplicateManifest(try SyncBlob(projects: [Self.lateSong], recordings: [take], savedByClientId: "third").encodedManifest(), modifiedTime: "c-third")
+        drive.seedRecording(take, content: audio)
+        #expect(drive.manifestCount == 3 && drive.objects(named: take.driveName) == 1)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        // The kept duplicate's song tombstone (200) beats the take (100): not listed, a per-take
+        // tombstone at 200 is written, and that backup deletes the take's only Drive audio.
+        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(written.projects.map(\.lyrics) == ["edited words"])
+        #expect(!written.recordings.contains { $0.id == take.id })
+        #expect(Self.takeTombstoneTimes(written, take.id) == [200])
+        #expect(!written.deletions.contains { $0.projectId == "p" && $0.recordingId == nil })
+        #expect(drive.objects(named: take.driveName) == 0)
+
+        // A fresh device restoring gets the song without the take.
+        let fresh = try await makeHarness(oauthProvider: FakeOAuthProvider(), drive: drive)
+        try await fresh.service.restoreNow(modelContext: fresh.context)
+        #expect(try fresh.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["edited words"])
+        #expect(try fresh.context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(fresh.audios("p").isEmpty)
+    }
+
+    @MainActor
+    @Test func aLateLocalTakeIsNotUploadedIsTombstonedKeptOnBackupAndQuarantinedOnRestore() async throws {
+        let harness = try await makeHarness()
+        let drive = harness.drive
+        try Self.seedLateTakeDrive(harness)
+        // Recorded here at 100 (a real time) and never uploaded.
+        let audio = Data("local take".utf8)
+        try await harness.writeMemo(audio, projectId: "p", fileName: "take.m4a")
+        let row = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first)
+        row.recordedAt = Date(millisecondsSince1970: 100)
+        row.uploadedAt = nil
+        try harness.context.save()
+        let id = row.id
+        #expect(row.precedenceTime.epochMilliseconds == 100 && !row.precedenceRepaired)
+
+        try await harness.service.backupNow(modelContext: harness.context)
+
+        // Back up: not listed, a per-take tombstone at 200, never uploaded; this device's file and row stay.
+        let written = try SyncBlob.decodeManifest(try #require(drive.content(named: SyncBlob.driveFileName)))
+        #expect(written.projects.map(\.lyrics) == ["edited words"])
+        #expect(!written.recordings.contains { $0.id == id })
+        #expect(Self.takeTombstoneTimes(written, id) == [200])
+        #expect(drive.uploads(named: RecordingBackupManifest.driveName(recordingId: id)) == 0)
+        #expect(harness.audios("p") == [audio])
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).map(\.id) == [id])
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        // Restore: the row goes and the bytes move to quarantine (kept on the device, not in Drive).
+        #expect(harness.audios("p").isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
+        #expect(quarantined(harness) == [audio])
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["edited words"])
+    }
+
     /// Files F1, F2 (oldest first) record a take at 100 and 300, so the first look writes
     /// it at 300. Before the next look F2 is rewritten to a tombstone for it at 200 and F1
     /// to an empty library, F2 now listed first. Neither earlier content is held any more;
