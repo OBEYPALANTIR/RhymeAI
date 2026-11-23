@@ -261,14 +261,17 @@ class BackupFlowInstrumentedTest {
     }
 
     @After fun restore() {
-        stopViewModels(handBuilt)
-        scenario?.close()
-        BackupTestHooks.driveClient = null
-        BackupTestHooks.authorizer = null
-        prefs().edit().clear().commit()
-        if (::repo.isInitialized) runBlocking {
-            repo.saveProjects(savedProjects)
-            repo.saveTrashedProjects(savedTrash)
+        try {
+            stopViewModels(handBuilt)
+        } finally {
+            scenario?.close()
+            BackupTestHooks.driveClient = null
+            BackupTestHooks.authorizer = null
+            prefs().edit().clear().commit()
+            if (::repo.isInitialized) runBlocking {
+                repo.saveProjects(savedProjects)
+                repo.saveTrashedProjects(savedTrash)
+            }
         }
     }
 
