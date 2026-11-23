@@ -1175,6 +1175,19 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun moveToTrashRefusesTwoActiveSongsSharingAnId() = withSameIdStore { dataStore, repository ->
+        repository.saveProjects(listOf(SongProject(id = "same", lyrics = "A", updatedAt = 1L), SongProject(id = "same", lyrics = "B", updatedAt = 2L)))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "other", lyrics = "T"), deletedAt = 10L)))
+        repository.setCurrentProjectId("same")
+        val before = dataStore.data.first().asMap()
+
+        assertFailsWith<SameIdActiveCopiesException> { repository.moveProjectToTrash("same", now = 5_000L) }
+
+        assertEquals(before, dataStore.data.first().asMap())
+        assertEquals(listOf("A", "B"), repository.projectsFlow.first().map { it.lyrics })
+    }
+
+    @Test
     fun deleteForeverWithTheIdOnlyActiveWritesNothing() = withSameIdStore { dataStore, repository ->
         repository.saveProjects(listOf(SongProject(id = "same", title = "Active", updatedAt = 1L)))
         repository.saveWorkspace("same", SongWorkspace(checkpointAt = 123L))

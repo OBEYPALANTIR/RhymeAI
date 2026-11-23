@@ -196,6 +196,19 @@ class OneLinersStoreTest {
     }
 
     @Test
+    fun sendToSongRefusesTwoActiveSongsSharingAnIdAndLeavesTheLineUnused() = withStore {
+        songs.saveProjects(listOf(SongProject(id = "song", lyrics = "A", updatedAt = 1L), SongProject(id = "song", lyrics = "B", updatedAt = 2L)))
+        val line = store.add("Coffee gone cold")
+        val before = dataStore.data.first().asMap()
+
+        assertFailsWith<SameIdActiveCopiesException> { store.sendToSong(line.id, "song", songs, now = 50L) }
+
+        assertEquals(before, dataStore.data.first().asMap())
+        assertEquals(listOf("A", "B"), songs.projectsFlow.first().map { it.lyrics })
+        assertNull(store.all().single().usedInProjectId)
+    }
+
+    @Test
     fun restoreArrivingWhileThePurgeHoldsTheTakeAsideKeepsTheAudio() = withStore {
         val line = store.add("Voiced", take = pendingTake())
         val audio = store.audioFile(line.audioFileName!!)

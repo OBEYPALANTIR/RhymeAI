@@ -438,6 +438,8 @@ class ProjectRepository internal constructor(
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val trash = trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
             val project = active.firstOrNull { it.id == id } ?: return@edit
+            // A repeated id is refused before anything is written: the move would drop every other copy's words.
+            if (active.count { it.id == id } > 1) throw SameIdActiveCopiesException(id)
             val nextActive = active.filterNot { it.id == id }
             val nextTrash = listOf(TrashedSongProject(project, now, now + TRASH_RETENTION_MILLIS)) +
                 trash.filterNot { it.project.id == id }
@@ -508,6 +510,8 @@ class ProjectRepository internal constructor(
         dataStore.edit { prefs ->
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val project = active.firstOrNull { it.id == id } ?: return@edit
+            // A repeated id is refused before anything is written: the first copy's words would replace every other copy's.
+            if (active.count { it.id == id } > 1) throw SameIdActiveCopiesException(id)
             val updated = project.copy(
                 lyrics = OneLinersStore.appendingLine(line, project.lyrics),
                 updatedAt = now,

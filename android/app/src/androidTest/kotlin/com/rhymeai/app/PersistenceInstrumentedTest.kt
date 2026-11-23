@@ -11,10 +11,14 @@ import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -556,6 +560,57 @@ class PersistenceInstrumentedTest {
 
         waitUntil { restoredViewModel.localModelPath == modelFile.absolutePath }
         modelFile.delete()
+    }
+
+    @Test
+    fun moveToTrashOfASongWhoseIdAnotherSongSharesIsRefused() {
+        val first = SongProject("shared-move", "Shared", "words A", "", 100L)
+        runBlocking { repo.saveProjects(listOf(first, first.copy(lyrics = "words B"))) }
+        val viewModel = MainViewModel(app)
+        try {
+            waitUntil { viewModel.projects.count { it.id == first.id } == 2 }
+            val committed = CompletableDeferred<Boolean>()
+            onMain { viewModel.moveProjectToTrash(first.id) { committed.complete(it) } }
+
+            assertEquals(false, runBlocking { withTimeout(5_000) { committed.await() } })
+            assertEquals("More than one song shares this identity, so nothing was moved to Trash.", viewModel.persistenceError)
+            assertEquals(listOf("words A", "words B"), runBlocking { repo.projectsFlow.first() }.map { it.lyrics })
+            assertTrue(runBlocking { repo.trashedProjectsFlow.first() }.isEmpty())
+        } finally {
+            runBlocking { withTimeout(10_000) { viewModel.viewModelScope.coroutineContext[Job]!!.cancelAndJoin() } }
+        }
+    }
+
+    @Test
+    fun sendToASongWhoseIdAnotherSongSharesIsRefusedAndTheLineStaysUnused() {
+        val first = SongProject("shared-send", "Shared", "words A", "", 100L)
+        runBlocking { repo.saveProjects(listOf(first, first.copy(lyrics = "words B"))) }
+        val viewModel = MainViewModel(app)
+        var seeded: com.rhymeai.app.data.model.OneLiner? = null
+        var deleted = false
+        try {
+            val line = runBlocking { viewModel.oneLinersStore.add("a shared line") }
+            seeded = line
+            waitUntil { viewModel.projects.count { it.id == first.id } == 2 }
+            val sent = CompletableDeferred<String>()
+            onMain { viewModel.sendOneLinerToSong(line, first) { sent.complete(it) } }
+
+            assertEquals("Two songs share this song's identity; the line was not sent.", runBlocking { withTimeout(5_000) { sent.await() } })
+            assertEquals(listOf("words A", "words B"), runBlocking { repo.projectsFlow.first() }.map { it.lyrics })
+            assertEquals(null, runBlocking { viewModel.oneLinersStore.all() }.single { it.id == line.id }.usedInProjectId)
+        } finally {
+            try {
+                runBlocking { withTimeout(10_000) { viewModel.viewModelScope.coroutineContext[Job]!!.cancelAndJoin() } }
+            } finally {
+                // Recorded, not asserted, here: a failed cleanup must not hide the test's own failure.
+                seeded?.let { line ->
+                    deleted = runCatching {
+                        runBlocking { viewModel.oneLinersStore.trash(line.id); viewModel.oneLinersStore.permanentlyDelete(line.id) }
+                    }.getOrDefault(false)
+                }
+            }
+        }
+        assertTrue("the seeded One Liner was not deleted", deleted)
     }
 
     private fun resetRepository() {
