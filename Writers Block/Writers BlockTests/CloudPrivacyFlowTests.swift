@@ -403,6 +403,45 @@ struct CloudPrivacyFlowTests {
         #expect(emptyViewModel.suggestionsFailed, "the assistant offers Try again only after a failed request")
     }
 
+    /// "Try again" follows the error on screen: another error replaces it,
+    /// and Stop or a setting change clears the failure and its message.
+    @Test func tryAgainOnlyFollowsTheFailureItShows() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        #expect(!viewModel.suggestionsFailed, "an editor error is not a failed request")
+
+        func fail() async {
+            viewModel.getSuggestions()
+            #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+        }
+
+        await fail()
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        #expect(!viewModel.suggestionsFailed, "a later editor error takes the heading back")
+
+        await fail()
+        viewModel.cancelSuggestions()
+        #expect(!viewModel.suggestionsFailed && viewModel.errorMessage == nil, "Stop")
+
+        await fail()
+        viewModel.saveUseWholeSongContext(true)
+        #expect(!viewModel.suggestionsFailed && viewModel.errorMessage == nil, "a setting change")
+    }
+
     /// The ink burst keys off this signal. Each case streams one line, holds
     /// the response open, then ends it one way; only a stream that ends on its
     /// own with its lines still listed sets the signal.

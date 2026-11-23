@@ -177,7 +177,7 @@ struct AssistantPanelView: View {
         #if os(macOS)
         viewModel.errorMessage != nil
         #else
-        viewModel.suggestionsFailed && viewModel.errorMessage != nil
+        viewModel.suggestionsFailed
         #endif
     }
 
