@@ -1109,6 +1109,11 @@ class PersistenceInstrumentedTest {
             holds[0].complete(Unit)
             waitUntil { viewModel.persistenceError?.contains(notSaved) == true }
             assertEquals(emptyList<String>(), viewModel.songWorkspace.alternates.map { it.text })
+            // A line kept after the failure and before Retry waits on the failed save too.
+            onMain { viewModel.keepAlternate("between line") }
+            SystemClock.sleep(300)
+            instrumentation.waitForIdleSync()
+            assertEquals(emptyList<String>(), viewModel.songWorkspace.alternates.map { it.text })
 
             // Retry stores the song; a line kept while it writes is shown and stored, and the dropped ones stay out.
             DraftSaveTestHooks.beforeWrite = holds[1]
