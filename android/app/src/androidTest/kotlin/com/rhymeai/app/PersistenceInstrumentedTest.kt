@@ -1074,6 +1074,60 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun aNotebookChangeWhoseSongWasNotSavedIsNotShownAsKept() {
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val notSaved = "A Song Notebook change was not saved"
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val holds = List(3) { CompletableDeferred<Unit>() }
+        try {
+            // The new song's save fails: lines kept while it was writing leave the notebook, and the writer is told.
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("fail words") }
+            DraftSaveTestHooks.beforeWrite = holds[0]
+            onMain { viewModel.keepAlternate("first line") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            onMain { viewModel.keepAlternate("second line") }
+            DraftSaveTestHooks.failNext.set(true)
+            holds[0].complete(Unit)
+            waitUntil { viewModel.persistenceError?.contains(notSaved) == true }
+            assertEquals(emptyList<String>(), viewModel.songWorkspace.alternates.map { it.text })
+
+            // Retry stores the song; a line kept while it writes is shown and stored, and the dropped ones stay out.
+            DraftSaveTestHooks.beforeWrite = holds[1]
+            onMain { viewModel.retrySave() }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null }
+            onMain { viewModel.keepAlternate("third line") }
+            holds[1].complete(Unit)
+            waitUntil { storedWorkspace(x)?.alternates?.isNotEmpty() == true }
+            SystemClock.sleep(300)
+            assertEquals(listOf("third line"), storedWorkspace(x)!!.alternates.map { it.text })
+            assertEquals(listOf("third line"), viewModel.songWorkspace.alternates.map { it.text })
+            val reopened = MainViewModel(app).also(handBuilt::add)
+            waitUntil { reopened.initialized && reopened.currentProjectId == x }
+            assertEquals(listOf("third line"), reopened.songWorkspace.alternates.map { it.text })
+
+            // An autosave cancelled by a flush of the same new song does not fail the flush's checkpoint.
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() && !viewModel.savingBeforeNavigation }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("flush words") }
+            DraftSaveTestHooks.beforeWrite = holds[2]
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val y = viewModel.currentProjectId!!
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { !viewModel.savingBeforeNavigation }
+            SystemClock.sleep(300)
+            assertEquals(listOf("flush words"), storedWorkspace(y)?.versions?.map { it.lyrics })
+            assertEquals(storedWorkspace(y)!!.versions.map { it.id }, viewModel.songWorkspace.versions.map { it.id })
+        } finally {
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.failNext.set(false)
+        }
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())

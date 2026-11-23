@@ -200,6 +200,8 @@ internal object DraftSaveTestHooks {
     @Volatile var beforePositionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
+private const val NOTEBOOK_NOT_SAVED = "A Song Notebook change was not saved because the song could not be saved."
+
 /** Draws every generated song id; tests replace [next] to force a clash. */
 internal object SongIdAllocator {
     @Volatile var next: () -> String = { java.util.UUID.randomUUID().toString() }
@@ -511,6 +513,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         var outcome = CompletableDeferred<Boolean>()
         /** Notebook changes made before the song is stored, kept apart from [workspaces] (which may cache another song at this id). */
         var workspace by mutableStateOf<SongWorkspace?>(null)
+        /** The notebook changes [workspace] shows, in order; one whose save fails is taken out and the rest reapplied. */
+        val changes = mutableListOf<(SongWorkspace) -> SongWorkspace>()
+        /** Saves of this song writing now: the outcome fails only when the last of them ends without storing it. */
+        var producers = 0
+        var notebookDropped = false
         fun retire() { retired = true; creation.withdrawn = true; outcome.complete(false) }
     }
 
@@ -709,15 +716,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
-    private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
+    /** [reported]: the writer asked for this change, so one that could not be saved is reported. */
+    private fun updateWorkspace(id: String, reported: Boolean = true, transform: (SongWorkspace) -> SongWorkspace) {
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val creation = pendingCreations[id]
         val next = transform(creation?.let { it.workspace ?: SongWorkspace() } ?: workspaces[id] ?: SongWorkspace())
-        if (creation != null) creation.workspace = next else workspaces = workspaces + (id to next)
+        if (creation != null) { creation.changes += transform; creation.workspace = next } else workspaces = workspaces + (id to next)
         val openedAt = openRevision
         viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform)
+                if (!saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform) && creation != null && !creation.retired) {
+                    // The song's save failed: the change leaves the notebook shown, so a later save cannot show it as kept.
+                    creation.changes -= transform
+                    val shown = creation.workspace ?: SongWorkspace()
+                    creation.workspace = creation.changes.fold(SongWorkspace()) { workspace, change -> change(workspace) }
+                        .copy(selectionStart = shown.selectionStart, selectionEnd = shown.selectionEnd, scrollOffset = shown.scrollOffset)
+                    if (reported) {
+                        creation.notebookDropped = true
+                        if (persistenceError?.contains(NOTEBOOK_NOT_SAVED) != true) persistenceError = listOfNotNull(persistenceError, NOTEBOOK_NOT_SAVED).joinToString("\n")
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -1013,13 +1031,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
-        // The words this flush saves, not the editor's words when a new song's queued copy is applied.
-        val versionId = java.util.UUID.randomUUID().toString()
-        updateWorkspace(project.id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId) }
         val savedAt = editRevision
         savingBeforeNavigation = true
         val attempt = ++saveAttempts
-        return viewModelScope.async {
+        val flush = viewModelScope.async {
             try {
                 persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, preserveAs)
                 markEditorSaved(savedAt)
@@ -1036,6 +1051,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
             }
         }
+        // Queued once this flush's save has taken its outcome, so the checkpoint waits on the save that carries its words;
+        // the words are this flush's, not the editor's when a new song's queued copy is applied.
+        val versionId = java.util.UUID.randomUUID().toString()
+        updateWorkspace(project.id, reported = false) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId) }
+        return flush
     }
 
     var saveStatus by mutableStateOf(SaveStatus.IDLE)
@@ -3052,6 +3072,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!it.retired && !it.creation.inserted && it.outcome.isCompleted) CompletableDeferred<Boolean>().also { fresh -> it.outcome = fresh }
             else it.outcome
         }
+        creation?.let { it.producers++ }
         var stored = false
         try {
             if (currentProjectId != project.id || creation?.retired == true) throw CancellationException("Song changed")
@@ -3074,7 +3095,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
             return committed
         } finally {
-            if (!stored) outcome?.complete(false)
+            creation?.let { it.producers-- }
+            // Another save of this new song still writing reports for both: the waiters learn its result instead.
+            if (!stored && (creation == null || creation.producers == 0)) outcome?.complete(false)
         }
     }
 
@@ -3135,7 +3158,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is CorruptLibraryException -> corruptLibraryMessage(error)
             else -> if (stale) persistenceError else if (missing) {
                 "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
-            } else "Your draft could not be saved. It is still open. Try again."
+            } else "Your draft could not be saved. It is still open. Try again." +
+                (if (creation?.notebookDropped == true) "\n$NOTEBOOK_NOT_SAVED" else "")
         }
     }
 
