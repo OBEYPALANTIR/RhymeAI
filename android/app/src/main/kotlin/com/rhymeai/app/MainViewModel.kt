@@ -756,7 +756,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isBlank() || notebookError != null || restoringDraft || editorHeld) return
         val id = ensureProjectForNotebook()
         val now = System.currentTimeMillis()
-        updateWorkspace(id) { it.keep(text, now) }
+        // One kept line has one id, in the notebook shown now and in the one stored after a new song's insert.
+        val lineId = java.util.UUID.randomUUID().toString()
+        updateWorkspace(id) { it.keep(text, now, lineId) }
     }
 
     fun keepSelectedLyrics() {
@@ -773,7 +775,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val id = ensureProjectForNotebook()
         val (savedTitle, savedLyrics, savedTheme) = Triple(title, lyrics, theme)
         val now = System.currentTimeMillis()
-        updateWorkspace(id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true) }
+        val versionId = java.util.UUID.randomUUID().toString()
+        updateWorkspace(id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId) }
         triggerAutoSave()
     }
 
@@ -786,13 +789,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentTheme = theme
         val now = System.currentTimeMillis()
         val creation = pendingCreations[id]
-        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true)
+        val versionId = java.util.UUID.randomUUID().toString()
+        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId)
         positionSaveJob?.cancel()
         restoringDraft = true
         var restored = false
         viewModelScope.launch {
             try {
-                if (!saveWorkspaceForActiveIdentity(id, creation, preserved) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true) }) return@launch
+                if (!saveWorkspaceForActiveIdentity(id, creation, preserved) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }) return@launch
                 // The song may have started leaving for another one while the checkpoint saved.
                 if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
@@ -993,10 +997,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentProjectId = project.id
         if (existing == null) projects = listOf(project) + projects
         rememberEditorPosition()
-        updateWorkspace(project.id) { it.checkpoint(title, lyrics, theme, now, force = true) }
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
+        // The words this flush saves, not the editor's words when a new song's queued copy is applied.
+        val versionId = java.util.UUID.randomUUID().toString()
+        updateWorkspace(project.id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId) }
         val savedAt = editRevision
         savingBeforeNavigation = true
         val attempt = ++saveAttempts

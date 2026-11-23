@@ -921,6 +921,48 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test
+    fun aNewSongsNotebookStoresTheRecordsItShowedAndTheWordsItsFlushSaved() {
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val holds = List(2) { CompletableDeferred<Unit>() }
+        try {
+            // Kept and removed before the insert: the removal names the line the notebook showed, and the stored one.
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("kept words") }
+            DraftSaveTestHooks.beforeWrite = holds[0]
+            onMain { viewModel.keepAlternate("kept line") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            onMain { viewModel.saveDraftVersion() }
+            val shownVersion = viewModel.songWorkspace.versions.single().id
+            onMain { viewModel.removeAlternate(viewModel.songWorkspace.alternates.single().id) }
+            holds[0].complete(Unit)
+            waitUntil { storedWorkspace(x)?.versions?.size == 1 }
+            SystemClock.sleep(300)
+            assertEquals(emptyList<String>(), storedWorkspace(x)!!.alternates.map { it.text })
+            assertEquals(shownVersion, storedWorkspace(x)!!.versions.single().id)
+
+            // A flush of W1 followed by W2 before its checkpoint is stored: the version holds W1, the words that flush saved.
+            onMain { viewModel.newProject() }
+            waitUntil { viewModel.currentProjectId == null && viewModel.lyrics.isEmpty() }
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("W1 words") }
+            DraftSaveTestHooks.beforeWrite = holds[1]
+            onMain { viewModel.flushCurrentDraft() }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val y = viewModel.currentProjectId!!
+            onMain { viewModel.lyricsFieldValue = TextFieldValue("W2 words") }
+            holds[1].complete(Unit)
+            waitUntil { storedWorkspace(y)?.versions?.isNotEmpty() == true }
+            SystemClock.sleep(300)
+            assertEquals(listOf("W1 words"), storedWorkspace(y)!!.versions.map { it.lyrics })
+            assertEquals(viewModel.songWorkspace.versions.map { it.id }, storedWorkspace(y)!!.versions.map { it.id })
+        } finally {
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+        }
+    }
+
     private fun resetRepository() {
         runBlocking {
             repo.saveProjects(emptyList())
