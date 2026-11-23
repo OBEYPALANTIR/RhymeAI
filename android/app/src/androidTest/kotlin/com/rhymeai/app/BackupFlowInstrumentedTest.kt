@@ -283,6 +283,7 @@ class BackupFlowInstrumentedTest {
             BackupTestHooks.authorizer = null
             BackupTestHooks.beforeHoldResolve = null
             BackupTestHooks.beforeHoldListRefresh = null
+            BackupTestHooks.beforeHoldTicketRead = null
             prefs().edit().clear().commit()
             if (::repo.isInitialized) runBlocking {
                 repo.saveProjects(savedProjects)
@@ -635,7 +636,8 @@ class BackupFlowInstrumentedTest {
     /** Song A with W1 open in the editor of a real view model, Drive connected to [drive]. */
     private fun openSongInEditor(
         trash: List<TrashedSongProject> = emptyList(), otherSongs: List<SongProject> = emptyList(), draft: String? = null,
-        workspaces: Map<String, com.rhymeai.app.data.model.SongWorkspace> = emptyMap()
+        workspaces: Map<String, com.rhymeai.app.data.model.SongWorkspace> = emptyMap(),
+        mark: com.rhymeai.app.data.repository.PreservationTicket? = null, activity: Boolean = false
     ): MainViewModel {
         check(context.packageName == "com.rhymeai.app.motionqa") { "Backup fixtures require the owned isolated QA app." }
         repo = ProjectRepository(context)
@@ -649,6 +651,8 @@ class BackupFlowInstrumentedTest {
             repo.saveTrashedProjects(trash)
             if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
             workspaces.forEach { (id, workspace) -> repo.saveWorkspace(id, workspace) }
+            // A held flush stored this ticket for the open song before the app died.
+            if (mark != null) repo.saveActiveState(openSong, null, openSong.title, openSong.lyrics, openSong.theme, preserveAs = mark)
             // An interrupted save's draft: the editor's saved words differ from the song's row.
             if (draft != null) repo.saveEditorState(openSong.title, draft, openSong.theme)
         }
@@ -657,7 +661,10 @@ class BackupFlowInstrumentedTest {
             override suspend fun authorize() = DriveAuthorization.Granted("token")
         }
         prefs().edit().clear().putBoolean("drive_connected", true).commit()
-        val vm = MainViewModel(context.applicationContext as android.app.Application).also(handBuilt::add)
+        // [activity]: the editor is the Activity's own view model, with its lifecycle observer (ON_STOP saves the draft).
+        lateinit var vm: MainViewModel
+        if (activity) scenario = ActivityScenario.launch(MainActivity::class.java).also { s -> s.onActivity { vm = ViewModelProvider(it)[MainViewModel::class.java] } }
+        else vm = MainViewModel(context.applicationContext as android.app.Application).also(handBuilt::add)
         waitUntil({ "id ${vm.currentProjectId} lyrics ${vm.lyrics}" }) { vm.currentProjectId == openSong.id && vm.lyrics == (draft ?: openSong.lyrics) }
         instrumentation.runOnMainSync { vm.showStartMenu = false }
         return vm
@@ -684,6 +691,9 @@ class BackupFlowInstrumentedTest {
     /** Ends the hand-built view models first, so no queued save of theirs writes after the reset. */
     private fun resetOpenSong() {
         try {
+            // Closed first: its ON_STOP save then lands before the reset, not after it.
+            scenario?.close()
+            scenario = null
             stopViewModels(handBuilt)
         } finally {
             runBlocking {
@@ -1590,7 +1600,7 @@ class BackupFlowInstrumentedTest {
      */
     @Test fun twoReadersGetTheSameRemappedCopy() {
         newerOpenSong()
-        val a = openSongInEditor(otherSongs = listOf(songU))
+        val a = openSongInEditor(otherSongs = listOf(songU), activity = true)
         val b = relaunchedViewModel(openSong.lyrics)
         instrumentation.runOnMainSync { b.showStartMenu = false }
         val first = java.util.concurrent.atomic.AtomicBoolean(true)
@@ -1604,14 +1614,134 @@ class BackupFlowInstrumentedTest {
             firstSongIdIs(songU.id) { editAndRestore(a) }
             val copy = songs().single { it.id != openSong.id && it.id != songU.id }
             assertEquals(heldEdits, copy.lyrics)
-            assertEquals(copy.id to heldEdits, a.currentProjectId to a.lyrics)
-            assertEquals(copy.id to heldEdits, b.currentProjectId to b.lyrics)
-            // Each window's next save writes that copy in place.
-            saveNow(a)
+            for (vm in listOf(a, b)) {
+                assertEquals(copy.id, vm.currentProjectId)
+                assertEquals(Triple(copy.title, heldEdits, copy.theme), Triple(vm.title, vm.lyrics, vm.theme))
+            }
+            // Each window's next changed save writes that copy in place; A's goes through its Activity going to the background.
+            instrumentation.runOnMainSync { a.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("saved by window A") }
+            saveByGoingToTheBackground(copy.id, "saved by window A")
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to "saved by window A"), songs().associate { it.id to it.lyrics })
+            instrumentation.runOnMainSync { b.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("saved by window B") }
             saveNow(b)
-            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to heldEdits), songs().associate { it.id to it.lyrics })
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to "saved by window B"), songs().associate { it.id to it.lyrics })
         } finally {
             BackupTestHooks.beforeHeldOperation = null
+            resetOpenSong()
+        }
+    }
+
+    /** The Activity goes to the background, so its lifecycle observer saves the draft; it then comes back. */
+    private fun saveByGoingToTheBackground(id: String, words: String) {
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        waitUntil({ "stored ${songs()}" }) { songs().any { it.id == id && it.lyrics == words } }
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        instrumentation.waitForIdleSync()
+    }
+
+    /**
+     * Window B's edited hold of the same song writes its own ticket over A's before the commit, which keeps B's words.
+     * A's ticket names no result: A stays on the song, with no notice, and its next save writes there.
+     */
+    @Test fun aDifferentTicketForTheSameSongStaysOnTheSourceWithoutANotice() {
+        newerOpenSong()
+        val a = openSongInEditor(activity = true)
+        val b = relaunchedViewModel(openSong.lyrics)
+        instrumentation.runOnMainSync { b.showStartMenu = false }
+        val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        BackupTestHooks.beforeHeldOperation = {
+            if (first.compareAndSet(true, false)) {
+                b.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("edits in window B")
+                b.restoreFromBackup()
+                while (b.editorHeld || b.backupStatus !is BackupStatus.Connected) kotlinx.coroutines.delay(20)
+            }
+        }
+        try {
+            editAndRestore(a)
+            val copy = songs().single { it.id != openSong.id }
+            assertEquals("edits in window B", copy.lyrics)
+            assertEquals(copy.id to "edits in window B", b.currentProjectId to b.lyrics)
+            assertEquals(Triple(openSong.id, newerWords, null), Triple(a.currentProjectId, a.lyrics, a.persistenceError))
+            instrumentation.runOnMainSync { a.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("saved by window A") }
+            saveByGoingToTheBackground(openSong.id, "saved by window A")
+            assertEquals(mapOf(openSong.id to "saved by window A", copy.id to "edits in window B"), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            resetOpenSong()
+        }
+    }
+
+    private fun replacingZip(): java.io.File = java.io.File(context.cacheDir, "replacing.zip").also { zip ->
+        zip.outputStream().use {
+            com.rhymeai.app.data.sync.BackupArchive.write(
+                it, SyncBlob(projects = listOf(openSong.copy(lyrics = newerWords, updatedAt = System.currentTimeMillis() + 3_600_000L))),
+                emptyList(), 0L, "test"
+            )
+        }
+    }
+
+    private fun importAndWait(vm: MainViewModel, zip: java.io.File) {
+        instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
+        waitUntil({ "notice ${vm.backupNotice} held ${vm.editorHeld}" }) { vm.backupNotice?.startsWith("Imported") == true && !vm.editorHeld }
+        instrumentation.waitForIdleSync()
+    }
+
+    /** The copy is open and selected, U is untouched, and the next changed save (through the Activity) writes the copy. */
+    private fun assertOnTheActualCopy(vm: MainViewModel, words: String) {
+        val copy = songs().single { it.id != openSong.id && it.id != songU.id }
+        assertEquals(words, copy.lyrics)
+        assertEquals(Triple(copy.id, words, keptNotice), Triple(vm.currentProjectId, vm.lyrics, vm.persistenceError))
+        assertEquals(copy.id, runBlocking { repo.currentProjectIdFlow.first() })
+        assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to words), songs().associate { it.id to it.lyrics })
+        instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("after the import") }
+        saveByGoingToTheBackground(copy.id, "after the import")
+        assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to "after the import"), songs().associate { it.id to it.lyrics })
+    }
+
+    @Test fun anEditedArchiveHoldWithAnOccupiedTicketIdOpensTheActualCopy() {
+        val vm = openSongInEditor(otherSongs = listOf(songU), activity = true)
+        val zip = replacingZip()
+        try {
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(heldEdits) }
+            firstSongIdIs(songU.id) { importAndWait(vm, zip) }
+            assertOnTheActualCopy(vm, heldEdits)
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    /** A flush stored the ticket (asking for U's id) before the app died; the unedited hold reads it. */
+    @Test fun anUneditedArchiveHoldReadingAStoredTicketOpensTheActualCopy() {
+        val vm = openSongInEditor(otherSongs = listOf(songU), mark = com.rhymeai.app.data.repository.PreservationTicket(songU.id), activity = true)
+        val zip = replacingZip()
+        try {
+            importAndWait(vm, zip)
+            assertOnTheActualCopy(vm, openSong.lyrics)
+        } finally {
+            zip.delete()
+            resetOpenSong()
+        }
+    }
+
+    /** The stored ticket cannot be read before the operation: the commit still keeps the marked words, listed but not opened. */
+    @Test fun aTicketReadFailureBeforeTheHoldReloadsTheSourceWithoutANotice() {
+        val vm = openSongInEditor(otherSongs = listOf(songU), mark = com.rhymeai.app.data.repository.PreservationTicket(songU.id), activity = true)
+        val zip = replacingZip()
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        BackupTestHooks.beforeHoldTicketRead = { reads.incrementAndGet(); throw java.io.IOException("injected ticket read failure") }
+        try {
+            importAndWait(vm, zip)
+            assertEquals(1, reads.get())
+            assertEquals(Triple(openSong.id, newerWords, null), Triple(vm.currentProjectId, vm.lyrics, vm.persistenceError))
+            val copy = songs().single { it.id != openSong.id && it.id != songU.id }
+            assertEquals(mapOf(openSong.id to newerWords, songU.id to "u words", copy.id to openSong.lyrics), songs().associate { it.id to it.lyrics })
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue("after the import") }
+            saveByGoingToTheBackground(openSong.id, "after the import")
+            assertEquals(mapOf(openSong.id to "after the import", songU.id to "u words", copy.id to openSong.lyrics), songs().associate { it.id to it.lyrics })
+        } finally {
+            BackupTestHooks.beforeHoldTicketRead = null
+            zip.delete()
             resetOpenSong()
         }
     }
@@ -1813,7 +1943,7 @@ class BackupFlowInstrumentedTest {
 
     @Test fun preservationCommitIsAtomicAndRelaunchUsesStoredSelection() {
         newerOpenSong()
-        val vm = openSongInEditor()
+        val vm = openSongInEditor(activity = true)
         val committed = kotlinx.coroutines.CompletableDeferred<Triple<String?, Triple<String, String, String>, List<SongProject>>>()
         // Read right after the commit, before this hold reloads anything; then the window dies there (the reload runs
         // non-cancellable, so the death is thrown into it).
@@ -1834,9 +1964,10 @@ class BackupFlowInstrumentedTest {
             assertEquals(copy.id, selected)
             assertEquals(Triple(openSong.title, heldEdits, ""), editor)
             assertEquals(null, runBlocking { repo.preservedTicket(openSong.id) })
-            death.completeExceptionally(kotlinx.coroutines.CancellationException("window closed"))
-            stopViewModels(handBuilt)
+            // The window closes while its reload waits (ON_STOP's save waits for the hold); the reload then dies with it.
             scenario?.close()
+            death.completeExceptionally(kotlinx.coroutines.CancellationException("window closed"))
+            waitUntil({ "held ${vm.editorHeld}" }) { !vm.editorHeld }
             lateinit var fresh: MainViewModel
             scenario = ActivityScenario.launch(MainActivity::class.java).also { s -> s.onActivity { fresh = ViewModelProvider(it)[MainViewModel::class.java] } }
             waitUntil({ "id ${fresh.currentProjectId} lyrics ${fresh.lyrics}" }) { fresh.currentProjectId == copy.id && fresh.lyrics == heldEdits }

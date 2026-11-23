@@ -249,6 +249,8 @@ internal object BackupTestHooks {
     @Volatile var beforeHoldResolve: (suspend () -> Unit)? = null
     /** Runs before a held editor's song-list refresh, after its result was read (a test makes the refresh fail). */
     @Volatile var beforeHoldListRefresh: (suspend () -> Unit)? = null
+    /** Runs as an unedited hold reads its song's stored ticket, before the operation (a test makes that read fail). */
+    @Volatile var beforeHoldTicketRead: (suspend () -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -914,7 +916,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // The ticket for this song's kept copy: new for edits this flush writes, else one a flush stored
             // before the app died. The reload takes it from here, never from the shared selection another window moves.
             val ticket = if (edited) PreservationTicket(SongIdAllocator.next())
-                else songId?.let { try { repo.preservedTicket(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
+                else songId?.let { try { BackupTestHooks.beforeHoldTicketRead?.invoke(); repo.preservedTicket(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
             val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = ticket.takeIf { edited }) } finally { flushingHeldDraft = false }
