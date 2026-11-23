@@ -378,8 +378,9 @@ final class EditorViewModel: ObservableObject {
         didSet { suggestionsFailed = false }
     }
     /// True while the error shown was set by the latest suggestions request's
-    /// failure. `errorMessage` also carries editor errors, so the assistant only
-    /// offers "Try again" and scrolls to the error when this is set.
+    /// failure. `errorMessage` also carries editor errors, so on iOS the
+    /// assistant only offers "Try again" and scrolls to the error when this is
+    /// set; the Mac panel still does both for any local error.
     @Published private(set) var suggestionsFailed = false
     /// The request whose stream ended on its own with its lines still listed.
     /// Cleared when a request starts and on every cancel, so Stop, Settings
@@ -1250,8 +1251,8 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask = nil
         suggestionsRequestID = nil
         completedSuggestionsRequestID = nil
-        // A finished request's failure stays on screen with its heading through
-        // caret moves and edits; a new request or another message retires it.
+        // A finished request's failure stays on screen (with its iOS heading)
+        // through caret moves and edits; a new request or another message retires it.
         isLoading = false
     }
 
@@ -2333,6 +2334,7 @@ final class EditorViewModel: ObservableObject {
         currentProjectId = nil
         resetCompanionPosition()
         suggestions = []
+        errorMessage = nil
         saveStatus = .idle
         showWelcome = false
         showTemplatesSheet = false

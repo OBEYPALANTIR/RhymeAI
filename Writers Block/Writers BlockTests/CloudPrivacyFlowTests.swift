@@ -459,6 +459,45 @@ struct CloudPrivacyFlowTests {
         #expect(!viewModel.isLoading && !viewModel.suggestionsFailed && viewModel.errorMessage == nil, "Stop while loading")
     }
 
+    /// A template opens a new draft, so the old song's failed request does not
+    /// follow it, whether or not the template's theme matches the old one.
+    @Test func applyingATemplateRetiresAFailedRequest() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        // A library lets the second template save the first template's draft.
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        let templates = SongTemplate.builtIn
+        #expect(templates[0].theme != templates[1].theme)
+
+        for (template, theme) in [(templates[0], templates[0].theme), (templates[1], templates[0].theme)] {
+            viewModel.theme = theme
+            viewModel.lyrics = "A first unfinished line"
+            viewModel.cursorPosition = viewModel.lyrics.utf16.count
+            viewModel.getSuggestions()
+            #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+            viewModel.applyTemplate(template)
+            #expect(viewModel.title == "Untitled \(template.name)", "the template opened")
+            let label = template.theme == theme ? "same theme" : "different theme"
+            #expect(viewModel.errorMessage == nil, "a template with the \(label) clears the failure")
+            #expect(!viewModel.suggestionsFailed, "a template with the \(label) clears the heading")
+        }
+    }
+
     /// The ink burst keys off this signal. Each case streams one line, holds
     /// the response open, then ends it one way; only a stream that ends on its
     /// own with its lines still listed sets the signal.
