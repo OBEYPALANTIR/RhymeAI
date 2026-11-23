@@ -59,7 +59,7 @@ enum BackupArchive {
             return size
         }
         let temporary = destination.deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+            .appendingPathComponent(".\(UUID().uuidString)") // fixed length, so any valid destination name works
         guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else { throw BackupArchiveError.unreadable }
         do {
             let output = try FileHandle(forWritingTo: temporary)
@@ -95,11 +95,8 @@ enum BackupArchive {
             }
             try output.write(contentsOf: try endRecord(central, offset: offset, count: entries.count))
             try output.close()
-            if FileManager.default.fileExists(atPath: destination.path) {
-                _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
-            } else {
-                try FileManager.default.moveItem(at: temporary, to: destination)
-            }
+            // rename(2) swaps the file in one step on this volume, or fails leaving the destination as it was.
+            guard rename(temporary.path, destination.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         } catch {
             try? FileManager.default.removeItem(at: temporary)
             throw error
@@ -109,7 +106,7 @@ enum BackupArchive {
     /// The local header of one stored member at `offset`; its central record is appended to `central`.
     private static func header(_ path: String, crc: UInt32, size: Int, offset: Int, central: inout Data) throws -> Data {
         let name = Data(path.utf8)
-        guard size < Int(UInt32.max), offset < Int(UInt32.max) else { throw BackupArchiveError.tooLarge }
+        guard size < Int(UInt32.max), offset < Int(UInt32.max), name.count <= Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
         // Version 2.0, UTF-8 names, stored, 1980-01-01 00:00.
         let common: [Any] = [UInt16(20), UInt16(0x0800), UInt16(0), UInt16(0), UInt16(0x21),
                              crc, UInt32(size), UInt32(size), UInt16(name.count), UInt16(0)]
@@ -129,7 +126,7 @@ enum BackupArchive {
 
     /// The central directory and end record for `count` members ending at `offset`.
     private static func endRecord(_ central: Data, offset: Int, count: Int) throws -> Data {
-        guard offset < Int(UInt32.max), count < Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
+        guard offset + central.count < Int(UInt32.max), count < Int(UInt16.max) else { throw BackupArchiveError.tooLarge }
         var end = central
         end.append(le(UInt32(0x0605_4b50)))
         [UInt16(0), UInt16(0), UInt16(count), UInt16(count)].forEach { end.append(le($0)) }
