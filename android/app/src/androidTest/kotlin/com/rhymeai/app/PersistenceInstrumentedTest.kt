@@ -817,11 +817,15 @@ class PersistenceInstrumentedTest {
             waitUntil { b.currentProjectId == x && b.lyrics == "words one" }
             onMain { b.showStartMenu = false; b.onLyricsChanged(TextFieldValue("words two")) }
             waitUntil { stored().single { it.id == x }.lyrics == "words two" }
+            // B also keeps a line and a version in X's notebook; A's later position must leave them.
+            onMain { b.keepAlternate("b line"); b.saveDraftVersion() }
+            waitUntil { storedWorkspace(x)?.let { it.alternates.any { line -> line.text == "b line" } && it.versions.any { v -> v.lyrics == "words two" } } == true }
             onMain { b.loadProject(other) }
             waitUntil { b.currentProjectId == other.id && runBlocking { repo.currentProjectIdFlow.first() } == other.id }
             // B's own delayed position save for X (an ordinary whole-notebook write) lands first.
             SystemClock.sleep(400)
             instrumentation.waitForIdleSync()
+            val notebookOfB = storedWorkspace(x)!!
             val savedByB = stored().single { it.id == x }
             val editorOfB = runBlocking { repo.editorStateFlow().first() }
             assertEquals(Triple(other.title, other.lyrics, other.theme), editorOfB)
@@ -830,6 +834,8 @@ class PersistenceInstrumentedTest {
             position.complete(Unit)
             waitUntil { storedWorkspace(x)?.scrollOffset == 42f }
             assertEquals(2 to 5, storedWorkspace(x)!!.let { it.selectionStart to it.selectionEnd })
+            assertEquals(notebookOfB.alternates, storedWorkspace(x)!!.alternates)
+            assertEquals(notebookOfB.versions, storedWorkspace(x)!!.versions)
             assertEquals(savedByB, stored().single { it.id == x })
             assertEquals(other.id, runBlocking { repo.currentProjectIdFlow.first() })
             assertEquals(editorOfB, runBlocking { repo.editorStateFlow().first() })
@@ -914,6 +920,16 @@ class PersistenceInstrumentedTest {
             assertEquals("cancelled words", viewModel.lyrics)
             assertEquals(null, viewModel.notebookError)
             assertEquals(null, storedWorkspace(y))
+
+            // The next save stores the song; the alternate that waited on the cancelled save is neither shown nor stored.
+            assertEquals(emptyList<String>(), viewModel.songWorkspace.alternates.map { it.text })
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { stored().any { it.id == y && it.lyrics == "cancelled words" } }
+            SystemClock.sleep(300)
+            assertEquals(emptyList<String>(), storedWorkspace(y)?.alternates.orEmpty().map { it.text })
+            val reopened = MainViewModel(app).also(handBuilt::add)
+            waitUntil { reopened.initialized && reopened.currentProjectId == y }
+            assertEquals(viewModel.songWorkspace.alternates to viewModel.songWorkspace.versions, reopened.songWorkspace.alternates to reopened.songWorkspace.versions)
         } finally {
             SongIdAllocator.next = draws
             holds.forEach { it.complete(Unit) }
