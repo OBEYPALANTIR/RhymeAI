@@ -222,9 +222,13 @@ class BackupFlowInstrumentedTest {
         compose.onNodeWithText("Not now").performClick()
         waitUntil { vm.backupStatus == BackupStatus.Paused(2) }
         assertTrue(before.contentEquals(drive.bytes(BackupManifest.FILE_NAME)))
+        assertFalse("no automatic backup queued before the save", onMain { vm.autoBackupPending })
         runBlocking { repo.saveProjects(listOf(SongProject(id = "here", title = "Here"))) }
+        // The save queues its own automatic backup; once it is queued, "Back up now" runs it, so none is left behind.
+        waitUntil({ "the save's automatic backup was never queued" }) { onMain { vm.autoBackupPending } }
         instrumentation.runOnMainSync { vm.backUpNow() }
-        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { vm.backupStatus is BackupStatus.Connected }
+        waitUntil({ "status ${vm.backupStatus} notice ${vm.backupNotice} confirm ${vm.emptyBackupConfirm} songs ${runBlocking { repo.projectsFlow.first().map { it.id } }}" }) { onMain { vm.backupStatus is BackupStatus.Connected } }
+        assertFalse("no automatic backup left queued after Back up now", onMain { vm.autoBackupPending })
     }
 
     @After fun restore() {
@@ -1560,6 +1564,12 @@ class BackupFlowInstrumentedTest {
 
     private fun waitForText(text: String) =
         compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun <T> onMain(read: () -> T): T {
+        var value: T? = null
+        instrumentation.runOnMainSync { value = read() }
+        @Suppress("UNCHECKED_CAST") return value as T
+    }
 
     private fun waitUntil(detail: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 10_000

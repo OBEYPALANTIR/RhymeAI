@@ -1515,6 +1515,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Whether a debounced automatic backup is queued (tests observe that a saved change reached the scheduler). */
+    internal val autoBackupPending: Boolean get() = backupScheduler.pending
+
     /** Debounced automatic backup after a change; waits out any backoff. */
     fun scheduleAutoBackup() = backupScheduler.schedule()
 
