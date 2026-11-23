@@ -1601,6 +1601,41 @@ class ProjectRepositoryTest {
         assertEquals(listOf("gone"), removed)
     }
 
+    @Test
+    fun trashAndPreservedCopyAllocationsSkipReservedIdsOrAbort() = withRepository { store, repository ->
+        val active = SongProject(id = "same", title = "Active", lyrics = "active words", updatedAt = 100L)
+        val other = SongProject(id = "u", title = "Other", lyrics = "other words", updatedAt = 100L)
+        val otherTrash = TrashedSongProject(SongProject(id = "t", title = "T", lyrics = "t words", updatedAt = 50L), deletedAt = 60L)
+        repository.saveProjects(listOf(active, other))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(active.copy(lyrics = "trash words"), deletedAt = 200L), otherTrash))
+        store.edit { it[stringPreferencesKey("sync_deletions_json")] = """[{"projectId":"dead","deletedAt":70}]""" }
+        // Every draw is taken (the keeper, another active song, a Trash song, a song tombstone): nothing is written.
+        val before = store.data.first()
+        withAllocator("same", "u", "t", "dead", "same", "u", "t", "dead") {
+            assertFailsWith<SongIdUnavailableException> { repository.restoreTrashedProject("same", 900L) }
+        }
+        assertEquals(before, store.data.first())
+        // The same clashes, then a free draw: the Trash words come back under it beside the unchanged keeper.
+        withAllocator("same", "u", "t", "dead", "fresh") { repository.restoreTrashedProject("same", 900L) }
+        val songs = repository.projectsFlow.first()
+        assertEquals(listOf("fresh", "same", "u"), songs.map { it.id })
+        assertEquals(Triple("Active", "trash words", 900L), Triple(songs[0].title, songs[0].lyrics, songs[0].updatedAt))
+        assertEquals(active.copy(updatedAt = 201L), songs[1])
+        assertEquals(other, songs[2])
+        assertEquals(listOf(otherTrash), repository.trashedProjectsFlow.first())
+    }
+
+    private suspend fun <T> withAllocator(vararg ids: String, block: suspend () -> T): T {
+        val draws = ArrayDeque(ids.toList())
+        val saved = com.rhymeai.app.SongIdAllocator.next
+        com.rhymeai.app.SongIdAllocator.next = { draws.removeFirst() }
+        try {
+            return block()
+        } finally {
+            com.rhymeai.app.SongIdAllocator.next = saved
+        }
+    }
+
     private fun testKeyStore(): SecureKeyStore = object : SecureKeyStore {
         override fun getKey(provider: String) = ""
         override fun setKey(provider: String, key: String) = Unit

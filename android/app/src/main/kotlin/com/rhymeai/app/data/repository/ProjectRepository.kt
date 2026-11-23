@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.rhymeai.app.SongIdAllocator
 import com.rhymeai.app.data.model.AppAppearance
 import com.rhymeai.app.data.model.DominantHand
 import com.rhymeai.app.data.model.SavedLocalModel
@@ -50,6 +51,9 @@ internal class CorruptLibraryException(
 
 internal class MissingActiveProjectException(id: String) :
     IllegalStateException("Song $id is no longer active")
+
+/** Every draw for a new song id in one edit was taken: the edit writes nothing. */
+internal class SongIdUnavailableException : IllegalStateException("No free song id could be drawn")
 
 internal class SameIdTrashCopiesException(id: String) :
     IllegalStateException("Trash holds more than one song with id $id")
@@ -171,6 +175,16 @@ class ProjectRepository internal constructor(
         val isRhymeHighlightEnabled: Boolean = false,
         val isBeatGridEnabled: Boolean = false
     )
+
+    /** An id is taken when the edit keeps it active or in Trash, a song tombstone names it, or the edit already allocated it. */
+    private fun idTaken(id: String, active: List<SongProject>, trash: List<TrashedSongProject>, deletions: List<SyncDeletion>, extra: Set<String>) =
+        id in extra || active.any { it.id == id } || trash.any { it.project.id == id } ||
+            deletions.any { it.isSongTombstone && it.projectId == id }
+
+    private fun allocate(active: List<SongProject>, trash: List<TrashedSongProject>, deletions: List<SyncDeletion>, extra: Set<String>): String {
+        repeat(8) { SongIdAllocator.next().let { if (!idTaken(it, active, trash, deletions, extra)) return it } }
+        throw SongIdUnavailableException()
+    }
 
     private val projectSaveMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
@@ -472,6 +486,7 @@ class ProjectRepository internal constructor(
             val copy = entry.project.takeIf {
                 held != null && (it.title != held.title || it.lyrics != held.lyrics || it.theme != held.theme)
             }
+            val nextTrash = trash.filterNot { it.project.id == id }
             val nextActive = if (held == null) {
                 listOf(entry.project.copy(updatedAt = now, precedenceRepaired = false)) + active
             } else {
@@ -482,10 +497,11 @@ class ProjectRepository internal constructor(
                 if (!SyncMerger.supersedes(kept.updatedAt, false, entry.deletedAt, entry.deletedAtRepaired)) {
                     throw TrashCopyOutranksActiveException(id)
                 }
-                listOfNotNull(copy?.copy(id = java.util.UUID.randomUUID().toString(), updatedAt = now, precedenceRepaired = false)) +
-                    active.map { if (it.id == id) kept else it }
+                val retained = active.map { if (it.id == id) kept else it }
+                val deletions = deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]")
+                listOfNotNull(copy?.copy(id = allocate(retained, nextTrash, deletions, emptySet()), updatedAt = now, precedenceRepaired = false)) +
+                    retained
             }
-            val nextTrash = trash.filterNot { it.project.id == id }
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id

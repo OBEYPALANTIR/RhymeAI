@@ -193,6 +193,11 @@ internal object DraftSaveTestHooks {
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
 
+/** Draws every generated song id; tests replace [next] to force a clash. */
+internal object SongIdAllocator {
+    @Volatile var next: () -> String = { java.util.UUID.randomUUID().toString() }
+}
+
 internal object NewSongTestHooks {
     @Volatile var beforeSelectionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 }
@@ -823,7 +828,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val edited = dirty && stored != null
             // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
             // before the app died. The reload takes it from here, never from the shared selection another window moves.
-            val keptId = if (edited) java.util.UUID.randomUUID().toString()
+            val keptId = if (edited) SongIdAllocator.next()
                 else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
@@ -2883,7 +2888,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!owned) return@launch
                 dismissRewrite()
                 val project = imported.copy(
-                    id = java.util.UUID.randomUUID().toString(),
+                    id = SongIdAllocator.next(),
                     title = imported.title.ifBlank { "Imported Song" },
                     updatedAt = System.currentTimeMillis()
                 )
@@ -2936,7 +2941,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         title: String,
         lyrics: String,
         theme: String,
-        id: String = java.util.UUID.randomUUID().toString(),
+        id: String = SongIdAllocator.next(),
         updatedAt: Long = System.currentTimeMillis()
     ): SongProject {
         return SongProject(
