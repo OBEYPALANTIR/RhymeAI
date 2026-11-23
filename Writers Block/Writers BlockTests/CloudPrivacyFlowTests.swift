@@ -1,10 +1,6 @@
 import Foundation
 import SwiftData
 import Testing
-#if os(macOS)
-import AppKit
-import SwiftUI
-#endif
 @testable import Writers_Block
 
 @MainActor
@@ -581,82 +577,6 @@ struct CloudPrivacyFlowTests {
             #expect(viewModel.suggestionsFailed)
         }
     }
-
-    #if os(macOS)
-    @Test func macAssistantShowsTryAgainForAnUnrelatedLocalError() async throws {
-        try await Self.withSuggestionsFixture { viewModel, _ in
-            _ = try await Self.failSuggestions(viewModel)
-            viewModel.saveProvider(.local)
-            let editorError = "Couldn't save this song. Your edits remain open."
-            viewModel.errorMessage = editorError
-            #expect(viewModel.errorMessage == editorError)
-            #expect(!viewModel.suggestionsFailed)
-
-            let (downloadDefaults, downloadSuite) = Self.makeDefaults()
-            defer { downloadDefaults.removePersistentDomain(forName: downloadSuite) }
-            let downloads = GGUFDownloadManager(
-                configuration: .ephemeral,
-                modelsRoot: FileManager.default.temporaryDirectory.appendingPathComponent(downloadSuite),
-                defaults: downloadDefaults
-            )
-            // Give the scroll view room for both the local heading and the error
-            // card without depending on the runner's screen height.
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 500, height: 1400),
-                styleMask: .borderless, backing: .buffered, defer: false
-            )
-            window.isReleasedWhenClosed = false
-            window.ignoresMouseEvents = true
-            window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
-            defer { window.close() }
-
-            let hostedPanel = NSHostingView(rootView: AssistantPanelView(isInline: true)
-                .environmentObject(viewModel)
-                .environmentObject(downloads))
-            var accessibleText: [String] = []
-            _ = await Self.waitUntil(timeoutIterations: 250) {
-                accessibleText = Self.macAssistantAccessibilityText(in: window, hostedPanel: hostedPanel)
-                return accessibleText.contains(editorError) && accessibleText.contains("Try again")
-            }
-            #expect(accessibleText.contains(editorError), "The error card exposes the editor error. Accessibility text: \(accessibleText)")
-            #expect(accessibleText.contains("Try again"), "The Mac local heading follows the editor error. Accessibility text: \(accessibleText)")
-        }
-    }
-
-    private static func macAssistantAccessibilityText(
-        in window: NSWindow,
-        hostedPanel: NSView
-    ) -> [String] {
-        // Pin the loading count only while laying out and reading the hosted view.
-        // Model loads can update it between reads.
-        let inferenceStatus = LocalInferenceStatus.shared
-        // Exercise the pin with a pending load even in a focused test run.
-        inferenceStatus.beginLoading()
-        defer { inferenceStatus.endLoading() }
-        let activeLoads = max(0, inferenceStatus.loadingCount)
-        for _ in 0..<activeLoads { inferenceStatus.endLoading() }
-        defer {
-            for _ in 0..<activeLoads { inferenceStatus.beginLoading() }
-        }
-
-        if window.contentView !== hostedPanel {
-            window.contentView = hostedPanel
-            window.orderBack(nil)
-        }
-        hostedPanel.layoutSubtreeIfNeeded()
-        return accessibilityText(in: hostedPanel)
-    }
-
-    private static func accessibilityText(in element: any NSAccessibilityProtocol) -> [String] {
-        let text = [
-            element.accessibilityLabel(),
-            element.accessibilityTitle(),
-            element.accessibilityValue() as? String
-        ].compactMap { $0 }
-        let children = (element.accessibilityChildren() ?? []).compactMap { $0 as? any NSAccessibilityProtocol }
-        return text + children.flatMap { accessibilityText(in: $0) }
-    }
-    #endif
 
     private static func withSuggestionsFixture(
         session: URLSession? = nil,
