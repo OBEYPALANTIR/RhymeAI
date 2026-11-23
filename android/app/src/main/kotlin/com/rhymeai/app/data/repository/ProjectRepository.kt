@@ -919,27 +919,45 @@ class ProjectRepository internal constructor(
                     ?.takeUnless { before -> nextProjects.firstOrNull { it.id == before.id }?.sameWords(before) == true }
                 val now = System.currentTimeMillis()
                 val marks = preservedSongs(prefs)
-                val markedCopies = marks.mapNotNull { (songId, copyId) ->
-                    replaced(songId)?.copy(id = copyId, updatedAt = now, precedenceRepaired = false)
-                        ?.takeIf { copy -> nextProjects.none { it.id == copy.id } }?.let { songId to it }
-                }.toMap()
-                // Only the marks this edit acted on are consumed; another song's mark stays for its own operation.
-                prefs.setPreservedSongs(marks - markedCopies.keys)
                 val selectedId = prefs[CURRENT_PROJECT_ID_KEY]
                 val selectedBefore = replaced(selectedId)
                 val editorWords = listOf(CURRENT_TITLE_KEY, CURRENT_LYRICS_KEY, CURRENT_THEME_KEY).map { prefs[it] ?: "" }
+                // Every id this edit gives a copy is reserved here, so no two copies, and no copy and a kept row, share one.
+                val extra = mutableSetOf<String>()
                 val editorCopy = selectedBefore?.let { before ->
                     SongProject(title = editorWords[0].ifEmpty { "Untitled Song" }, lyrics = editorWords[1], theme = editorWords[2], updatedAt = now)
                         .takeIf { editorWords.any(String::isNotEmpty) && !it.sameWords(before) }
+                        ?.let { it.copy(id = allocate(nextProjects, nextTrash, resolved.deletions, extra)) }
+                        ?.also { extra += it.id }
                 }
+                // Each acted-on mark gets one target: a row already holding its words (reused once), its own id when free,
+                // else a fresh one. Only the marks this edit acted on are consumed; another song's mark stays for its own operation.
+                val actedSources = marks.keys.filterTo(HashSet()) { replaced(it) != null }
+                val targets = HashMap<String, String>()
+                val appended = mutableListOf<SongProject>()
+                for ((source, copyId) in marks) {
+                    val before = replaced(source) ?: continue
+                    val target = if (copyId !in extra && copyId !in actedSources && nextProjects.any { it.id == copyId && it.sameWords(before) }) {
+                        copyId
+                    } else {
+                        val id = if (!idTaken(copyId, nextProjects, nextTrash, resolved.deletions, extra)) copyId
+                            else allocate(nextProjects, nextTrash, resolved.deletions, extra)
+                        appended += before.copy(id = id, updatedAt = now, precedenceRepaired = false)
+                        id
+                    }
+                    extra += target
+                    targets[source] = target
+                }
+                prefs.setPreservedSongs(marks - targets.keys)
                 if (selectedBefore != null) {
-                    val shown = editorCopy ?: markedCopies[selectedId] ?: nextProjects.firstOrNull { it.id == selectedId }
+                    val shown = editorCopy ?: targets[selectedId]?.let { id -> (appended + nextProjects).first { it.id == id } }
+                        ?: nextProjects.firstOrNull { it.id == selectedId }
                     if (shown == null) prefs.remove(CURRENT_PROJECT_ID_KEY) else prefs[CURRENT_PROJECT_ID_KEY] = shown.id
                     prefs[CURRENT_TITLE_KEY] = shown?.title ?: ""
                     prefs[CURRENT_LYRICS_KEY] = shown?.lyrics ?: ""
                     prefs[CURRENT_THEME_KEY] = shown?.theme ?: ""
                 }
-                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(editorCopy) + markedCopies.values + nextProjects)
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(editorCopy) + appended + nextProjects)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
