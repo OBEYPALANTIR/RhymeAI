@@ -34,6 +34,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -123,7 +125,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun SettingsDialog(
     currentAppearance: AppAppearance,
@@ -767,11 +769,12 @@ internal fun SettingsDialog(
                                                     .padding(start = 8.dp),
                                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                                             ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                // Large font scales wrap the title and drop the badge below it instead of overlapping.
+                                                FlowRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
                                                 ) {
-                                                    Text(model.label, fontWeight = FontWeight.Medium)
+                                                    Text(model.label, fontWeight = FontWeight.Medium, modifier = Modifier.align(Alignment.CenterVertically))
                                                     if (isRecommended) {
                                                         Text(
                                                             "Recommended",
@@ -779,6 +782,7 @@ internal fun SettingsDialog(
                                                             fontWeight = FontWeight.Medium,
                                                             color = colorScheme.onSurfaceVariant,
                                                             modifier = Modifier
+                                                                .align(Alignment.CenterVertically)
                                                                 .background(
                                                                     colorScheme.surfaceVariant,
                                                                     RoundedCornerShape(4.dp)

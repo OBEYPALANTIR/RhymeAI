@@ -3211,7 +3211,9 @@ final class EditorViewModel: ObservableObject {
         }
         if let failure {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "\(noun) failed: \(cloudBackupErrorDescription(failure)). Your open edits remain in the local library."
+            let reason = cloudBackupErrorDescription(failure)
+            // Most reasons already end in a full stop; add one only when missing.
+            cloudBackupStatusText = "\(noun) failed: \(reason)\(reason.hasSuffix(".") ? "" : ".") Your open edits remain in the local library."
             return
         }
         automaticBackupFailures = 0

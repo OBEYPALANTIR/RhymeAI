@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SongWorkspace
 import com.rhymeai.app.data.model.TrashedSongProject
@@ -140,6 +141,10 @@ class ProjectRepositoryTest {
             assertFailsWith<CorruptLibraryException> { repository.restoreTrashedProject(song.id, 20L) }
             assertEquals("{broken active", dataStore.data.first()[activeKey])
             assertEquals(originalTrash, dataStore.data.first()[trashKey])
+            // Delete forever reads the song library too, so it refuses rather than deleting blind.
+            assertFailsWith<CorruptLibraryException> { repository.permanentlyDeleteTrashedProject(song.id) }
+            assertEquals("{broken active", dataStore.data.first()[activeKey])
+            assertEquals(originalTrash, dataStore.data.first()[trashKey])
         } finally {
             scope.cancel()
             directory.deleteRecursively()
@@ -236,7 +241,7 @@ class ProjectRepositoryTest {
                 assertEquals(song.id, reopened.trashedProjectsFlow.first().single().project.id)
                 assertEquals(123L, reopened.workspacesFlow.first()[song.id]?.checkpointAt)
                 val afterDelete = reopened.permanentlyDeleteTrashedProject(song.id)
-                assertEquals(emptyList(), afterDelete)
+                assertEquals(emptyList(), afterDelete?.trashedProjects)
                 assertNull(reopened.workspacesFlow.first()[song.id])
                 assertEquals(emptyList(), reopened.trashedProjectsFlow.first())
                 assertFailsWith<MissingActiveProjectException> {
@@ -1027,8 +1032,13 @@ class ProjectRepositoryTest {
             repository.saveProjects(listOf(SongProject(id = "forever", updatedAt = 1L), SongProject(id = "expired", updatedAt = 1L)))
             repository.moveProjectToTrash("forever", 10L)
             repository.moveProjectToTrash("expired", 10L)
+            val expiredTrashRow = repository.trashedProjectsFlow.first().single { it.project.id == "expired" }
 
-            repository.permanentlyDeleteTrashedProject("forever", now = 5_000L)
+            assertEquals(
+                ProjectRepository.TrashPurge(listOf(expiredTrashRow), listOf("forever")),
+                repository.permanentlyDeleteTrashedProject("forever", now = 5_000L)
+            )
+            assertTrue("forever" in repository.pendingRecordingDeletionIds())
             repository.purgeExpiredTrashedProjects(10L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS)
 
             val deletions = repository.snapshotLocalSyncBase().blob.deletions
@@ -1046,6 +1056,150 @@ class ProjectRepositoryTest {
             scope.cancel()
             directory.deleteRecursively()
         }
+    }
+
+    private fun withSameIdStore(test: suspend (DataStore<Preferences>, ProjectRepository) -> Unit) = runBlocking {
+        val directory = kotlin.io.path.createTempDirectory("rhymeai-same-id-delete").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val dataStore = PreferenceDataStoreFactory.create(scope = scope) { File(directory, "prefs.preferences_pb") }
+            test(dataStore, ProjectRepository(dataStore, testKeyStore()))
+        } finally {
+            scope.cancel()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deleteForeverOfATrashCopyOfAnActiveSongRemovesOnlyThatRow() = withSameIdStore { dataStore, repository ->
+        val notebookKey = stringPreferencesKey("local_song_workspaces_json")
+        val deletionsKey = stringPreferencesKey("sync_deletions_json")
+        val pendingKey = androidx.datastore.preferences.core.stringSetPreferencesKey("pending_recording_deletions")
+        repository.saveProjects(listOf(SongProject(id = "same", title = "Active", updatedAt = 1L)))
+        repository.saveWorkspace("same", SongWorkspace(checkpointAt = 123L))
+        val take = RecordingManifestEntry.newRecordingId()
+        repository.updateRecordingRecords {
+            listOf(com.rhymeai.app.data.sync.RecordingRecord(take, "same", "same-take.m4a", 1L, "a".repeat(64), 1L, "recorded", path = "voice-memos/same/same-take.m4a"))
+        }
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed"), deletedAt = 10L)))
+        val before = dataStore.data.first()
+        val activeBefore = repository.projectsFlow.first()
+
+        val result = repository.permanentlyDeleteTrashedProject("same", now = 5_000L)
+
+        assertEquals(ProjectRepository.TrashPurge(emptyList(), emptyList()), result)
+        assertEquals(emptyList(), repository.trashedProjectsFlow.first(), "Trash read back from the store")
+        assertEquals(activeBefore, repository.projectsFlow.first(), "active list read back from the store")
+        val after = dataStore.data.first()
+        assertEquals(before[notebookKey], after[notebookKey])
+        assertEquals(before[pendingKey], after[pendingKey])
+        assertEquals(before[deletionsKey], after[deletionsKey])
+        // A known edit time cannot lose to a Trash copy by being unknown: nothing is set aside.
+        assertEquals(emptyList(), repository.recoveredSongs())
+    }
+
+    private fun assertUnknownTimeActiveSongIsKeptAside(active: SongProject) = withSameIdStore { dataStore, repository ->
+        val keys = listOf("projects_json", "local_song_workspaces_json", "recording_records_json", "sync_deletions_json").map(::stringPreferencesKey)
+        repository.saveProjects(listOf(active))
+        repository.saveWorkspace("same", SongWorkspace(checkpointAt = 123L))
+        val take = RecordingManifestEntry.newRecordingId()
+        repository.updateRecordingRecords {
+            listOf(com.rhymeai.app.data.sync.RecordingRecord(take, "same", "same-take.m4a", 1L, "a".repeat(64), 1L, "recorded", path = "voice-memos/same/same-take.m4a"))
+        }
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed", lyrics = "LT", updatedAt = 400L), deletedAt = 500L)))
+        val stored = repository.projectsFlow.first().single()
+        val before = dataStore.data.first()
+
+        assertEquals(ProjectRepository.TrashPurge(emptyList(), emptyList()), repository.permanentlyDeleteTrashedProject("same", now = 5_000L))
+
+        val kept = RecoveredSong(stored, wasInTrash = false, deletedAt = 5_000L, keptAt = 5_000L, recordingIds = listOf(take), trashedAt = null, trashedAtRepaired = false)
+        assertEquals(listOf(kept), repository.recoveredSongs())
+        assertEquals(emptyList(), repository.trashedProjectsFlow.first())
+        val after = dataStore.data.first()
+        keys.forEach { assertEquals(before[it], after[it], it.name) }
+
+        // Another same-id Trash copy deleted later keeps no second copy of the same words.
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed again", updatedAt = 600L), deletedAt = 700L)))
+        repository.permanentlyDeleteTrashedProject("same", now = 6_000L)
+        assertEquals(listOf(kept), repository.recoveredSongs())
+    }
+
+    @Test
+    fun deleteForeverOfATrashCopyKeepsARepairedTimeActiveSongAside() =
+        assertUnknownTimeActiveSongIsKeptAside(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 300L, precedenceRepaired = true))
+
+    @Test
+    fun deleteForeverOfATrashCopyKeepsAZeroTimeActiveSongAside() =
+        assertUnknownTimeActiveSongIsKeptAside(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 0L))
+
+    @Test
+    fun deleteForeverKeepsEachDistinctUnknownTimeActiveRowOnce() = withSameIdStore { _, repository ->
+        val known = SongProject(id = "same", title = "Known", lyrics = "K", updatedAt = 50L)
+        val repaired = SongProject(id = "same", title = "Repaired", lyrics = "U1", updatedAt = 300L, precedenceRepaired = true)
+        val zero = SongProject(id = "same", title = "Zero", lyrics = "U2", updatedAt = 0L)
+        repository.saveProjects(listOf(known, repaired, zero, repaired))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed", updatedAt = 400L), deletedAt = 500L)))
+
+        repository.permanentlyDeleteTrashedProject("same", now = 5_000L)
+
+        assertEquals(listOf(repaired, zero), repository.recoveredSongs().map { it.project })
+    }
+
+    @Test
+    fun deleteForeverRefusesWhenTheRecoveryStoreIsUnreadable() = withSameIdStore { dataStore, repository ->
+        repository.saveProjects(listOf(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 300L, precedenceRepaired = true)))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "same", title = "Trashed", updatedAt = 400L), deletedAt = 500L)))
+        dataStore.edit { it[stringPreferencesKey("recovered_songs_json")] = "{broken recovery" }
+        val before = dataStore.data.first().asMap()
+
+        assertFailsWith<CorruptLibraryException> { repository.permanentlyDeleteTrashedProject("same", now = 5_000L) }
+
+        assertEquals(before, dataStore.data.first().asMap())
+    }
+
+    @Test
+    fun deleteForeverRefusesTwoTrashCopiesSharingAnId() = withSameIdStore { dataStore, repository ->
+        repository.saveProjects(listOf(SongProject(id = "same", title = "Active", updatedAt = 1L)))
+        repository.saveWorkspace("same", SongWorkspace(checkpointAt = 123L))
+        repository.saveTrashedProjects(
+            listOf(
+                TrashedSongProject(SongProject(id = "same", lyrics = "one"), deletedAt = 10L),
+                TrashedSongProject(SongProject(id = "same", lyrics = "two"), deletedAt = 20L)
+            )
+        )
+        val before = dataStore.data.first().asMap()
+
+        assertFailsWith<SameIdTrashCopiesException> { repository.permanentlyDeleteTrashedProject("same", now = 5_000L) }
+
+        assertEquals(before, dataStore.data.first().asMap())
+    }
+
+    @Test
+    fun moveToTrashRefusesTwoActiveSongsSharingAnId() = withSameIdStore { dataStore, repository ->
+        repository.saveProjects(listOf(SongProject(id = "same", lyrics = "A", updatedAt = 1L), SongProject(id = "same", lyrics = "B", updatedAt = 2L)))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(SongProject(id = "other", lyrics = "T"), deletedAt = 10L)))
+        repository.setCurrentProjectId("same")
+        val before = dataStore.data.first().asMap()
+
+        assertFailsWith<SameIdActiveCopiesException> { repository.moveProjectToTrash("same", now = 5_000L) }
+
+        assertEquals(before, dataStore.data.first().asMap())
+        assertEquals(listOf("A", "B"), repository.projectsFlow.first().map { it.lyrics })
+    }
+
+    @Test
+    fun deleteForeverWithTheIdOnlyActiveWritesNothing() = withSameIdStore { dataStore, repository ->
+        repository.saveProjects(listOf(SongProject(id = "same", title = "Active", updatedAt = 1L)))
+        repository.saveWorkspace("same", SongWorkspace(checkpointAt = 123L))
+        val before = dataStore.data.first().asMap()
+        assertNull(repository.permanentlyDeleteTrashedProject("same", now = 5_000L))
+        assertEquals(before, dataStore.data.first().asMap())
+
+        // No Trash row: nothing is decoded past the Trash, so a broken song library is no refusal.
+        dataStore.edit { it[stringPreferencesKey("projects_json")] = "{broken active" }
+        val broken = dataStore.data.first().asMap()
+        assertNull(repository.permanentlyDeleteTrashedProject("same", now = 5_000L))
+        assertEquals(broken, dataStore.data.first().asMap())
     }
 
     @Test
@@ -1210,6 +1364,241 @@ class ProjectRepositoryTest {
             scope.cancel()
             directory.deleteRecursively()
         }
+    }
+
+    @Test
+    fun aTrashRestoreOfAnActiveIdKeepsTheActiveSongAndReturnsOtherWordsAsANewSong() = withRepository { _, repository ->
+        val active = SongProject(id = "same", title = "Active", lyrics = "active words", updatedAt = 100L)
+        val trashed = TrashedSongProject(active.copy(title = "Trashed", lyrics = "trash words", updatedAt = 50L), deletedAt = 500L)
+        val other = SongProject(id = "other", title = "Other", updatedAt = 10L)
+        repository.saveProjects(listOf(active, other))
+        repository.saveTrashedProjects(listOf(trashed))
+
+        val restored = repository.restoreTrashedProject("same", 900L)!!
+
+        assertTrue(restored.activeKept && restored.copied)
+        val kept = restored.projects.single { it.id == "same" }
+        assertEquals(Triple("Active", "active words", ""), Triple(kept.title, kept.lyrics, kept.theme))
+        assertEquals(501L, kept.updatedAt)
+        assertEquals(false, kept.precedenceRepaired)
+        val copy = restored.projects.single { it.id != "same" && it.id != "other" }
+        assertEquals(Triple("Trashed", "trash words", 900L), Triple(copy.title, copy.lyrics, copy.updatedAt))
+        assertEquals(emptyList(), repository.trashedProjectsFlow.first())
+        assertEquals(restored.projects, repository.projectsFlow.first())
+        // The next merge with a device still holding that Trash copy keeps the active song.
+        val next = SyncMerger.resolve(SyncMerger.gather(SyncBlob(projects = restored.projects), SyncBlob(trashed = listOf(trashed))))
+        assertEquals("active words", next.projects.single { it.id == "same" }.lyrics)
+        assertTrue(next.trashed.none { it.project.id == "same" })
+    }
+
+    @Test
+    fun aTrashRestoreOfAnActiveIdWithTheSameWordsOnlyRemovesTheTrashCopy() = withRepository { _, repository ->
+        val active = SongProject(id = "same", title = "Song", lyrics = "words", updatedAt = 700L)
+        repository.saveProjects(listOf(active))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(active.copy(updatedAt = 1L), deletedAt = 500L)))
+
+        val restored = repository.restoreTrashedProject("same", 900L)!!
+
+        assertTrue(restored.activeKept && !restored.copied)
+        assertEquals(listOf(active), restored.projects)
+        assertEquals(emptyList(), repository.trashedProjectsFlow.first())
+    }
+
+    @Test
+    fun aTrashRestoreOfARepeatedIdWritesNothing() = withRepository { _, repository ->
+        val song = SongProject(id = "same", title = "Song", lyrics = "words", updatedAt = 100L)
+        repository.saveProjects(listOf(SongProject(id = "kept", title = "Kept", updatedAt = 1L)))
+        val twoInTrash = listOf(TrashedSongProject(song, 200L), TrashedSongProject(song.copy(lyrics = "other"), 300L))
+        repository.saveTrashedProjects(twoInTrash)
+        assertFailsWith<SameIdTrashCopiesException> { repository.restoreTrashedProject("same", 900L) }
+        assertEquals("kept", repository.projectsFlow.first().single().id)
+        assertEquals(twoInTrash, repository.trashedProjectsFlow.first())
+
+        val twoActive = listOf(song, song.copy(lyrics = "other"))
+        repository.saveProjects(twoActive)
+        repository.saveTrashedProjects(listOf(TrashedSongProject(song, 200L)))
+        assertFailsWith<SameIdActiveCopiesException> { repository.restoreTrashedProject("same", 900L) }
+        assertEquals(twoActive, repository.projectsFlow.first())
+        assertEquals(listOf(TrashedSongProject(song, 200L)), repository.trashedProjectsFlow.first())
+    }
+
+    @Test
+    fun aSyncCommitMovesTheSavedEditorStateWithTheSelectedSongInTheSameEdit() = withRepository { _, repository ->
+        val open = SongProject(id = "open", title = "Open", lyrics = "older words", updatedAt = 100L)
+        repository.saveActiveState(open, true, open.title, open.lyrics, open.theme)
+        // A newer stored version: the saved editor state follows it, and no copy is made.
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), repository.snapshotLocalSyncBase())
+        assertEquals("open", repository.currentProjectIdFlow.first())
+        assertEquals(Triple("Open", "newer words", ""), repository.editorStateFlow().first())
+        assertEquals(listOf("open"), repository.projectsFlow.first().map { it.id })
+        // A commit that leaves the song unchanged keeps editor words saved apart from it (an older install's draft).
+        repository.saveEditorState("Open", "legacy draft words", "")
+        repository.applySyncResult(SyncBlob(projects = listOf(SongProject(id = "else", title = "Else", updatedAt = 5L))), repository.snapshotLocalSyncBase())
+        assertEquals(Triple("Open", "legacy draft words", ""), repository.editorStateFlow().first())
+        // Moved to Trash by the commit, with editor words equal to the song: the selection and editor state clear.
+        repository.saveEditorState("Open", "newer words", "")
+        repository.applySyncResult(SyncBlob(trashed = listOf(TrashedSongProject(open, deletedAt = 300L))), repository.snapshotLocalSyncBase())
+        assertNull(repository.currentProjectIdFlow.first())
+        assertEquals(Triple("", "", ""), repository.editorStateFlow().first())
+        assertEquals(listOf("else"), repository.projectsFlow.first().map { it.id })
+    }
+
+    @Test
+    fun aSyncCommitThatReplacesWordsAHeldFlushMarkedKeepsThemAsANewSongEvenAfterARelaunch() = withRepository { store, repository ->
+        val open = SongProject(id = "open", title = "Open", lyrics = "older words", updatedAt = 100L)
+        repository.saveActiveState(open, true, open.title, open.lyrics, open.theme)
+        // The held flush writes the edited words and marks them in that same write.
+        repository.saveActiveState(open.copy(lyrics = "edited words"), false, "Open", "edited words", "", preserveAs = "kept-open")
+        // The app dies here: a new repository over the same store has no memory of the editor.
+        val relaunched = ProjectRepository(store, testKeyStore())
+        relaunched.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), relaunched.snapshotLocalSyncBase())
+        val songs = relaunched.projectsFlow.first()
+        assertEquals("newer words", songs.single { it.id == "open" }.lyrics)
+        val copy = songs.single { it.id != "open" }
+        // Under the id the held operation chose, so its reload finds it without reading the shared selection.
+        assertEquals("kept-open", copy.id)
+        assertEquals(Triple("Open", "edited words", false), Triple(copy.title, copy.lyrics, copy.precedenceRepaired))
+        assertNull(relaunched.preservedCopyId("open"))
+        // Selected in that same edit, so a relaunch shows it.
+        assertEquals(copy.id, relaunched.currentProjectIdFlow.first())
+        assertEquals(Triple("Open", "edited words", ""), relaunched.editorStateFlow().first())
+        // The mark was consumed: a later replacement makes no further copy.
+        relaunched.selectProject("open")
+        relaunched.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newest words", updatedAt = 300L))), relaunched.snapshotLocalSyncBase())
+        assertEquals(2, relaunched.projectsFlow.first().size)
+    }
+
+    @Test
+    fun aSyncCommitWithAMarkThatLeavesTheSongOrWasClearedMakesNoCopy() = withRepository { _, repository ->
+        val open = SongProject(id = "open", title = "Open", lyrics = "edited words", updatedAt = 100L)
+        repository.saveActiveState(open, true, open.title, open.lyrics, open.theme, preserveAs = "kept-1")
+        // Unchanged by the commit: no copy, and the mark stays for its own operation to clear.
+        repository.applySyncResult(SyncBlob(projects = listOf(SongProject(id = "else", title = "Else", updatedAt = 5L))), repository.snapshotLocalSyncBase())
+        assertEquals(setOf("open", "else"), repository.projectsFlow.first().map { it.id }.toSet())
+        assertEquals("kept-1", repository.preservedCopyId("open"))
+        // Cleared when its operation ended without replacing the song: a later replacement makes no copy.
+        repository.clearPreservedSong("open", "kept-1")
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), repository.snapshotLocalSyncBase())
+        assertEquals(setOf("open", "else"), repository.projectsFlow.first().map { it.id }.toSet())
+    }
+
+    @Test
+    fun anOperationEndingOnTheSameSongClearsOnlyItsOwnMarkSoAnotherWindowsEditsAreKept() = withRepository { _, repository ->
+        val a = SongProject(id = "a", title = "A", lyrics = "w1", updatedAt = 100L)
+        repository.saveActiveState(a, true, a.title, a.lyrics, a.theme)
+        // Window 1 starts a clean restore of A: it writes no mark. Window 2 flushes W2 and marks A with its own copy id.
+        repository.saveActiveState(a.copy(lyrics = "w2"), false, "A", "w2", "", preserveAs = "kept-2")
+        // Window 1's merge leaves W2 in place; its cleanup cannot clear window 2's mark (another copy id, or none).
+        repository.applySyncResult(SyncBlob(projects = listOf(SongProject(id = "else", title = "Else", updatedAt = 5L))), repository.snapshotLocalSyncBase())
+        repository.clearPreservedSong("a", "kept-1")
+        assertEquals("kept-2", repository.preservedCopyId("a"))
+        // Window 2's commit brings a newer W3: W2 is kept as its own song.
+        repository.applySyncResult(SyncBlob(projects = listOf(a.copy(lyrics = "w3", updatedAt = System.currentTimeMillis() + 60_000L))), repository.snapshotLocalSyncBase())
+        val songs = repository.projectsFlow.first()
+        assertEquals("w3", songs.single { it.id == "a" }.lyrics)
+        assertEquals("w2", songs.single { it.id == "kept-2" }.lyrics)
+    }
+
+    @Test
+    fun marksOnTwoSongsAreKeptAndClearedEachForItsOwnSong() = withRepository { _, repository ->
+        val a = SongProject(id = "a", title = "A", lyrics = "a words", updatedAt = 100L)
+        val b = SongProject(id = "b", title = "B", lyrics = "b words", updatedAt = 100L)
+        repository.saveActiveState(a, true, a.title, a.lyrics, a.theme)
+        repository.saveActiveState(b, true, b.title, b.lyrics, b.theme)
+        // Two held flushes (two windows), one per song.
+        repository.saveActiveState(a.copy(lyrics = "a edits"), false, "A", "a edits", "", preserveAs = "kept-a")
+        repository.saveActiveState(b.copy(lyrics = "b edits"), false, "B", "b edits", "", preserveAs = "kept-b")
+        // B's commit replaces only B: it keeps B's edits and leaves A's mark alone.
+        repository.applySyncResult(SyncBlob(projects = listOf(b.copy(lyrics = "b newer", updatedAt = 200L))), repository.snapshotLocalSyncBase())
+        assertEquals("b edits", repository.projectsFlow.first().single { it.id == "kept-b" }.lyrics)
+        assertNull(repository.preservedCopyId("b"))
+        assertEquals("kept-a", repository.preservedCopyId("a"))
+        // Another hold on B that ends without a commit clears only B's mark.
+        repository.saveActiveState(b.copy(lyrics = "b newer edits"), false, "B", "b newer edits", "", preserveAs = "kept-b2")
+        repository.clearPreservedSong("b", "kept-b2")
+        assertEquals("kept-a", repository.preservedCopyId("a"))
+        // A's commit then keeps A's edits under A's own id.
+        repository.applySyncResult(SyncBlob(projects = listOf(a.copy(lyrics = "a newer", updatedAt = System.currentTimeMillis() + 60_000L))), repository.snapshotLocalSyncBase())
+        val songs = repository.projectsFlow.first()
+        assertEquals("a newer", songs.single { it.id == "a" }.lyrics)
+        assertEquals("a edits", songs.single { it.id == "kept-a" }.lyrics)
+        assertEquals(setOf("a", "b", "kept-a", "kept-b"), songs.map { it.id }.toSet())
+        assertNull(repository.preservedCopyId("a"))
+    }
+
+    @Test
+    fun aSyncCommitThatReplacesTheSelectedSongKeepsDifferentSavedEditorWordsAsANewSong() = withRepository { _, repository ->
+        val open = SongProject(id = "open", title = "Untitled Song", lyrics = "stored words", updatedAt = 100L)
+        repository.saveActiveState(open, true, "", open.lyrics, open.theme)
+        // A blank editor title is the stored "Untitled Song": the same words, so no copy.
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newer words", updatedAt = 200L))), repository.snapshotLocalSyncBase())
+        assertEquals(listOf("open"), repository.projectsFlow.first().map { it.id })
+        // Editor words saved apart from the song (an older install's draft, shown at startup) are kept when it is replaced.
+        repository.saveEditorState("", "legacy draft words", "")
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "newest words", updatedAt = 300L))), repository.snapshotLocalSyncBase())
+        val songs = repository.projectsFlow.first()
+        assertEquals("newest words", songs.single { it.id == "open" }.lyrics)
+        val copy = songs.single { it.id != "open" }
+        assertEquals("Untitled Song" to "legacy draft words", copy.title to copy.lyrics)
+        assertEquals(copy.id, repository.currentProjectIdFlow.first())
+        // All-blank editor fields hold no words: nothing is copied.
+        repository.saveActiveState(songs.single { it.id == "open" }, false, "", "", "")
+        repository.applySyncResult(SyncBlob(projects = listOf(open.copy(lyrics = "latest words", updatedAt = 400L))), repository.snapshotLocalSyncBase())
+        assertEquals(2, repository.projectsFlow.first().size)
+    }
+
+    @Test
+    fun aTrashRestoreOfAnActiveIdIsRefusedWhenTheTrashTimeCannotBeBeaten() = withRepository { _, repository ->
+        val active = SongProject(id = "same", title = "Active", lyrics = "active words", updatedAt = 100L)
+        val trashed = TrashedSongProject(active.copy(lyrics = "trash words"), deletedAt = Long.MAX_VALUE)
+        repository.saveProjects(listOf(active))
+        repository.saveTrashedProjects(listOf(trashed))
+        assertFailsWith<TrashCopyOutranksActiveException> { repository.restoreTrashedProject("same", 900L) }
+        assertEquals(listOf(active), repository.projectsFlow.first())
+        assertEquals(listOf(trashed), repository.trashedProjectsFlow.first())
+    }
+
+    @Test
+    fun aTrashRestoreOfAnActiveIdOverARepairedEndOfTimeTrashTimeIsAcceptedAndTheActiveSongWinsTheNextMerge() = withRepository { _, repository ->
+        val active = SongProject(id = "same", title = "Active", lyrics = "active words", updatedAt = 100L)
+        val trashed = TrashedSongProject(active.copy(lyrics = "trash words"), deletedAt = Long.MAX_VALUE, deletedAtRepaired = true)
+        repository.saveProjects(listOf(active))
+        repository.saveTrashedProjects(listOf(trashed))
+        repository.restoreTrashedProject("same", 900L)
+        val kept = repository.projectsFlow.first().single { it.id == "same" }
+        assertEquals("active words", kept.lyrics)
+        // A device that still holds the Trash entry merges it with the kept row: a real time outranks a repair.
+        val merged = SyncMerger.resolve(SyncMerger.gather(SyncBlob(projects = listOf(kept)), SyncBlob(trashed = listOf(trashed))))
+        assertEquals(listOf(kept), merged.projects)
+        assertTrue(merged.trashed.none { it.project.id == "same" })
+    }
+
+    @Test
+    fun aTrashRestoreOfAnActiveIdClearsOnlyItsOwnPendingCleanupAndKeepsItsRecordingsAndNotebook() = withRepository { store, repository ->
+        val active = SongProject(id = "same", title = "Active", lyrics = "active words", updatedAt = 100L)
+        repository.saveProjects(listOf(active))
+        repository.saveTrashedProjects(listOf(TrashedSongProject(active.copy(lyrics = "trash words"), deletedAt = 500L)))
+        val notebook = com.rhymeai.app.data.model.SongWorkspace(checkpointAt = 123L)
+        repository.saveWorkspace("same", notebook)
+        repository.recordRecordingDeletion("same", "old.m4a", "1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a8b", 50L)
+        store.edit {
+            it[recordsKey] = """[{"id":"$recordingId","projectId":"same","displayName":"take.m4a","uploadedAt":500,"sha256":"$digest",""" +
+                """"bytes":4,"origin":"recorded","path":"voice-memos/same/$recordingId.m4a"}]"""
+            it[stringSetPreferencesKey("pending_recording_deletions")] = setOf("same", "gone")
+        }
+        val records = repository.recordingRecords()
+        val tombstones = repository.syncDeletions()
+
+        repository.restoreTrashedProject("same", 900L)!!
+
+        assertEquals(setOf("gone"), repository.pendingRecordingDeletionIds())
+        assertEquals(records, repository.recordingRecords())
+        assertEquals(tombstones, repository.syncDeletions())
+        assertEquals(notebook, repository.workspacesFlow.first()["same"])
+        // The directory cleanup removes only the song no longer here, never the restored song's recordings.
+        val removed = mutableListOf<String>()
+        repository.retryPendingRecordingDeletions { removed += it; true }
+        assertEquals(listOf("gone"), removed)
     }
 
     private fun testKeyStore(): SecureKeyStore = object : SecureKeyStore {

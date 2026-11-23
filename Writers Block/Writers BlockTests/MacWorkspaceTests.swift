@@ -1032,7 +1032,7 @@ extension OneLinerRouterSuites {
         /// The window's minimum width with this page shown, as AppKit sets it once the hosted
         /// window has run its layout, and the widths of the sidebar and Assistant columns laid
         /// out beside the page (0 when hidden).
-        private static func minimumWidth(of detail: MacWorkspaceModel.Detail, sidebar: NavigationSplitViewVisibility, opening song: SongProject? = nil, assistant: Bool = false, in container: ModelContainer) throws -> (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, songShown: Bool) {
+        private static func minimumWidth(of detail: MacWorkspaceModel.Detail, sidebar: NavigationSplitViewVisibility, opening song: SongProject? = nil, assistant: Bool = false, in container: ModelContainer) throws -> (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, songShown: Bool, settle: String) {
             let (viewModel, workspace) = Self.workspace(detail, sidebar: sidebar, opening: song, assistant: assistant, in: container)
             let view = NSHostingView(rootView: MacWorkspaceView()
                 .environmentObject(viewModel)
@@ -1044,19 +1044,41 @@ extension OneLinerRouterSuites {
             window.isReleasedWhenClosed = false
             window.contentView = view
             defer { window.close() }
-            // The page's floor follows the sidebar inset it reads back, one pass later.
-            view.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-            view.layoutSubtreeIfNeeded()
             func splits(_ v: NSView) -> [NSSplitView] { ((v as? NSSplitView).map { [$0] } ?? []) + v.subviews.flatMap(splits) }
-            // The outer split view holds the sidebar and the detail column; the detail's own
-            // split view holds the page and the Assistant.
-            let all = splits(view)
-            let columns = try #require(all.first, "a split view is laid out").arrangedSubviews
-            let inner = try #require(all.dropFirst().first, "the detail's split view is laid out").arrangedSubviews
-            let sidebarWidth = columns.count > 1 && !columns[0].isHidden ? columns[0].frame.width : 0
-            let assistantWidth = inner.count > 1 && !inner[1].isHidden ? inner[1].frame.width : 0
-            return (window.contentMinSize.width, sidebarWidth, assistantWidth, workspace.songOpen(in: viewModel))
+            // One layout pass: the window's minimum, the shown sidebar and Assistant widths, and
+            // every split view's columns for the failure message.
+            func measure() throws -> (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, columns: String) {
+                view.layoutSubtreeIfNeeded()
+                // The outer split view holds the sidebar and the detail column; the detail's own
+                // split view holds the page and the Assistant.
+                let all = splits(view)
+                let columns = try #require(all.first, "a split view is laid out").arrangedSubviews
+                let inner = try #require(all.dropFirst().first, "the detail's split view is laid out").arrangedSubviews
+                let sidebarWidth = columns.count > 1 && !columns[0].isHidden ? columns[0].frame.width : 0
+                let assistantWidth = inner.count > 1 && !inner[1].isHidden ? inner[1].frame.width : 0
+                let layout = all.map { $0.arrangedSubviews.map { "\($0.isHidden ? "hidden" : "shown") \($0.frame.width)" }.joined(separator: ", ") }.joined(separator: " | ")
+                return (window.contentMinSize.width, sidebarWidth, assistantWidth, layout)
+            }
+            // The page's floor follows the sidebar inset it reads back a pass or more later, which
+            // a fixed wait can miss on a busy machine: pump the run loop until the requested columns
+            // are in effect and the floor holds on two passes in a row, for up to 2 s. A timeout
+            // fails here, with both samples in the message.
+            func holds(_ m: (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, columns: String)) -> Bool {
+                (m.sidebar > 0) == (sidebar != .detailOnly) && (m.assistant > 0) == assistant
+                    && abs(m.window - m.sidebar - m.assistant - Self.pageFloor) <= 1
+            }
+            let start = ContinuousClock.now
+            let first = try measure()
+            var last = first
+            var heldBefore = false
+            while !(heldBefore && holds(last)) && ContinuousClock.now - start < .seconds(2) {
+                heldBefore = holds(last)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                last = try measure()
+            }
+            let settle = "after \(ContinuousClock.now - start): first min \(first.window) [\(first.columns)], last min \(last.window) [\(last.columns)]"
+            #expect(heldBefore && holds(last), "\(detail) \(sidebar) assistant=\(assistant) never settled \(settle)")
+            return (last.window, last.sidebar, last.assistant, workspace.songOpen(in: viewModel), settle)
         }
 
         /// At the window's minimum every page keeps 440pt beside whatever sidebar and Assistant
@@ -1067,7 +1089,7 @@ extension OneLinerRouterSuites {
         @Test
         func everyPageKeepsAReadingWidthAtTheWindowsMinimum() throws {
             let (container, song) = try Self.appLibrary()
-            var cases: [(String, (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, songShown: Bool))] = []
+            var cases: [(String, (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, songShown: Bool, settle: String))] = []
             for sidebar in [NavigationSplitViewVisibility.all, .detailOnly] {
                 for detail in [MacWorkspaceModel.Detail.oneLiners, .trash] {
                     cases.append(("\(detail) \(sidebar)", try Self.minimumWidth(of: detail, sidebar: sidebar, in: container)))

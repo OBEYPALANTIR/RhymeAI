@@ -65,6 +65,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -255,11 +256,12 @@ internal fun historyControlsVisible(
 ): Boolean = editorActionsVisible && !isRecording
 
 /**
- * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics", and
- * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it.
+ * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics",
+ * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it,
+ * and AI setup opened by "Set up model" returns the writer to the selection they wanted to rewrite.
  */
-internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean): Boolean =
-    songNotebookOpen || oneLinersOpen
+internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean, aiSetupOpen: Boolean): Boolean =
+    songNotebookOpen || oneLinersOpen || aiSetupOpen
 
 /** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
 internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
@@ -645,7 +647,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners)) {
+            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners, viewModel.settingsOpensAiSetup)) {
                 viewModel.clearPendingRewriteSelection()
             }
             if (modalOpen) {
@@ -745,6 +747,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     contentDescription = stringResource(R.string.editor_saved),
                                     tint = colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
+                                )
+                            }
+                            // Stays until a save of the open words commits; the dialog explains it once.
+                            SaveStatus.FAILED -> IconButton(
+                                onClick = viewModel::retrySave,
+                                modifier = Modifier.size(DesignTokens.Touch.minTarget).testTag("retrySave")
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = stringResource(R.string.editor_save_failed_retry),
+                                    tint = colorScheme.error
                                 )
                             }
                             else -> {}
@@ -1077,7 +1090,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
                         // The song that is leaving for another one takes no input.
-                        readOnly = viewModel.openingSong,
+                        readOnly = viewModel.openingSong || viewModel.editorHeld,
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1238,7 +1251,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 }
                             },
                             onTextLayout = { lyricsTextLayout = it },
-                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong,
+                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong || viewModel.editorHeld,
                             textStyle = lyricsTextStyle.copy(color = colorScheme.onBackground),
                             visualTransformation = analysisTransformation,
                             cursorBrush = SolidColor(colorScheme.primary),
@@ -1675,7 +1688,11 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         onCancel = { viewModel.cancelRewriteReview() },
                         onRetry = { viewModel.retryRewrite() },
                         needsModelSetup = viewModel.rewriteNeedsModelSetup,
-                        onModelSetup = viewModel::openModelSetup,
+                        // As on iOS: close the no-model bar, keep the selection, then open AI setup.
+                        onModelSetup = {
+                            viewModel.cancelRewriteReview()
+                            viewModel.openModelSetup()
+                        },
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                     }
