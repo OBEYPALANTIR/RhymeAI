@@ -25,6 +25,7 @@ enum BackupError: Error, Equatable {
     case missingRemoteRecordings([String])
     case damagedRemoteRecordings([String])
     case archiveTooLarge
+    case exportTooLarge
     case recordingIntegrityMismatch(String)
     case keychainWriteFailed(OSStatus)
     /// Drive refused (403) or no longer has (404) a revision of the backup.
@@ -73,6 +74,8 @@ extension BackupError: LocalizedError {
             return "\(names.count) \(names.count == 1 ? "recording" : "recordings") on Google Drive did not match the backup and \(names.count == 1 ? "was" : "were") not restored: \(names.joined(separator: ", "))"
         case .archiveTooLarge:
             return "This backup file is too large to import; it was not imported."
+        case .exportTooLarge:
+            return "This library is too large to export as a ZIP that Writers Block can import. Use Google Drive backup instead."
         case .unsafeArchive:
             return "This file is not a Writers Block backup; it was not imported."
         case .recordingIntegrityMismatch(let name):
@@ -1944,6 +1947,13 @@ final class BackupService {
     /// The "Export all songs" zip: `manifest.json` (v4), `songs/<title>.txt`,
     /// `songs/<id>.json` and `recordings/<projectId>/<fileName>`.
     func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> (fileName: String, data: Data) {
+        try exportArchive(modelContext: modelContext, now: now, budget: .production)
+    }
+
+    func exportArchive(
+        modelContext: ModelContext, now: Date = Date(), budget: BackupArchive.Budget,
+        readRecordingAudio: (Recording) -> Data = { $0.audio }
+    ) throws -> (fileName: String, data: Data) {
         // Times are fixed and persisted before anything is resolved (T2.40); this
         // writes rows and settings only, never a recording file.
         try repairLocalPrecedence(modelContext)
@@ -1960,12 +1970,27 @@ final class BackupService {
         let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
         let names = RecordingBackupManifest.exportNames(blob.recordings)
         var report = BackupReport()
-        for entry in blob.recordings {
-            guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
-                report.leftOutRecordings.append(entry.fileName)
-                continue
+        let archive: Data
+        do {
+            var total = 0
+            for entry in entries {
+                try budget.add(entry.data.count, to: &total)
             }
-            entries.append(("recordings/\(entry.projectId)/\(name)", row.audio))
+            // Plan the actual members from metadata before faulting in any audio.
+            var audioEntries: [(path: String, row: Recording)] = []
+            for entry in blob.recordings {
+                guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
+                    report.leftOutRecordings.append(entry.fileName)
+                    continue
+                }
+                guard let bytes = Int(exactly: row.bytes) else { throw BackupArchiveError.tooLarge }
+                try budget.add(bytes, to: &total)
+                audioEntries.append(("recordings/\(entry.projectId)/\(name)", row))
+            }
+            entries.append(contentsOf: audioEntries.map { ($0.path, readRecordingAudio($0.row)) })
+            archive = try BackupArchive.zip(entries, budget: budget)
+        } catch BackupArchiveError.tooLarge {
+            throw BackupError.exportTooLarge
         }
         // Everything else on this device that the archive does not hold is named.
         let omitted = try library.exportOmissions(in: modelContext)
@@ -1979,7 +2004,7 @@ final class BackupService {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
-        return ("WritersBlock-backup-\(formatter.string(from: now)).zip", try BackupArchive.zip(entries))
+        return ("WritersBlock-backup-\(formatter.string(from: now)).zip", archive)
     }
 
     /// Merges an exported zip, or a bare v4 `manifest.json`, into the library.
