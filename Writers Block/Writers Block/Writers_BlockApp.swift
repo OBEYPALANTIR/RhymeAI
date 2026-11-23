@@ -242,13 +242,18 @@ struct Writers_BlockApp: App {
                     viewModel.refreshCloudBackupState()
                     persistenceState.refreshCloudSyncStatus()
                 case .background:
+                    #if os(iOS)
+                    let draftSaved = viewModel.flushEditedDraft()
+                    #else
+                    let draftSaved: Bool? = nil
+                    #endif
                     // Back up now rather than at the end of a pending countdown.
                     // Ask for run time past the move to the background so the backup
                     // can finish and reconcile the open draft instead of being
                     // suspended part-way. The system may still end it early.
                     let assertion = BackgroundTaskAssertion(name: "Cloud backup")
                     Task {
-                        await viewModel.runCloudBackupOnBackgroundIfPossible()
+                        await viewModel.runCloudBackupOnBackgroundIfPossible(draftSaved: draftSaved)
                         assertion.end()
                     }
                 default:

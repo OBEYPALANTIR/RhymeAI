@@ -725,6 +725,24 @@ struct PendingEditSaveTests {
         #expect(song.lyrics == "ropes and tide")
     }
 
+    @Test func backgroundFlushSavesLocalEditsAndPreservesSyncedWordsInAnUntouchedSong() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.lyrics = "ropes and tide"
+        viewModel.triggerAutoSave()
+
+        #expect(viewModel.flushEditedDraft() == true)
+        #expect(song.lyrics == "ropes and tide")
+
+        let synced = Date(timeIntervalSince1970: 5_000_000_000)
+        song.lyrics = "ropes, tide and a synced line"
+        song.updatedAt = synced
+        try container.mainContext.save()
+
+        #expect(viewModel.flushEditedDraft() == nil)
+        #expect(song.lyrics == "ropes, tide and a synced line")
+        #expect(song.updatedAt == synced)
+    }
+
     @Test func aNewSongGivenOnlyATitleIsCreated() throws {
         let (viewModel, container) = try Self.library()
         viewModel.newProject()

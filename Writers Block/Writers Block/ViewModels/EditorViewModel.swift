@@ -2453,6 +2453,19 @@ final class EditorViewModel: ObservableObject {
         return saveStatus != .failed
     }
 
+    /// Backgrounding saves local edits only. An untouched editor may still show
+    /// the words from before a sync. Return nil when no flush was attempted.
+    func flushEditedDraft() -> Bool? {
+        if loadedProjectRow != nil, let loadedProjectWords {
+            let loadedTitle = loadedProjectWords.title.isEmpty ? Self.untitledProjectTitle : loadedProjectWords.title
+            let baseline = OpenDraft(title: loadedTitle, lyrics: loadedProjectWords.lyrics, theme: loadedProjectWords.theme)
+            guard openDraft != baseline else { return nil }
+        } else {
+            guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return nil }
+        }
+        return flushCurrentDraft()
+    }
+
     @discardableResult
     func flushCurrentDraft(checkpoint: Bool = false) -> Bool {
         guard activeCloudEditorOperation == nil else { return false }
@@ -3848,7 +3861,7 @@ final class EditorViewModel: ObservableObject {
     /// The automatic run: on the debounce after a change, on retry, and when the
     /// app moves to the background. A backup only reads the library, so the
     /// editor stays free. Failures are recorded, not thrown.
-    func runCloudBackupOnBackgroundIfPossible() async {
+    func runCloudBackupOnBackgroundIfPossible(draftSaved: Bool? = nil) async {
         refreshCloudBackupState()
         guard let backupService,
               let context = modelContext,
@@ -3857,7 +3870,7 @@ final class EditorViewModel: ObservableObject {
               !cloudBackupIsWorking else {
             return
         }
-        guard flushCurrentDraft() else {
+        guard draftSaved ?? flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Background backup canceled. Your open draft could not be saved."
             return
