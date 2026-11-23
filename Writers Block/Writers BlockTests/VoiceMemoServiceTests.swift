@@ -346,6 +346,70 @@ struct VoiceMemoServiceTests {
         #expect(harness.events.snapshot == ["activate", "deactivate", "activate"])
     }
 
+    @Test(arguments: [false, true])
+    @MainActor func playbackDecodeErrorPreservesNewerRecordRequest(explicitStop: Bool) async throws {
+        let player = try TestPlayer()
+        let updates = PlaybackUpdates()
+        let events = TransitionEvents()
+        let (permissionRequests, request) = AsyncStream<Void>.makeStream()
+        let (permissionReplies, reply) = AsyncStream<Bool>.makeStream()
+        let transitions = VoiceMemoAudioSessionTransitions(
+            activateRecording: {
+                events.append("activate recording")
+                throw PlaybackTestError()
+            },
+            activatePlayback: {},
+            deactivate: { events.append("deactivate") }
+        )
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = VoiceMemoService(
+            sessionTransitions: transitions,
+            stagingRoot: root,
+            makePlaybackPlayer: { _ in player },
+            deliverPlaybackUpdate: { updates.enqueue($0) },
+            requestRecordingPermission: {
+                request.yield(())
+                var replies = permissionReplies.makeAsyncIterator()
+                return await replies.next() ?? false
+            }
+        )
+        func drainSession() async {
+            // A no-op on the serial queue, independent of the recording sentinel.
+            await withCheckedContinuation { continuation in
+                transitions.activatePlayback { _ in continuation.resume() }
+            }
+        }
+
+        let url = root.appendingPathComponent("take.wav")
+        service.togglePlayback(url: url)
+        await drainSession()
+        updates.deliver()
+        try #require(service.isPlayingMemo(at: url))
+        let delegate = try #require(player.delegate)
+
+        let recording = Task { await service.startRecording(projectId: "song") }
+        var requests = permissionRequests.makeAsyncIterator()
+        _ = await requests.next()
+        PlayerCompletion.decodedError.deliver(to: delegate, player: player)
+        updates.deliver()
+        await drainSession()
+        #expect(service.lastError == "Couldn't finish playing this recording. Try again.")
+        #expect(!service.isPlaying && service.playbackPosition(at: url) == nil)
+        #expect(player.stopCount == 1)
+        #expect(events.snapshot == ["deactivate"])
+
+        if explicitStop { service.stopPlayback() }
+        reply.yield(true)
+        reply.finish()
+        request.finish()
+        await recording.value
+        await drainSession()
+        #expect(events.snapshot == (explicitStop
+            ? ["deactivate"]
+            : ["deactivate", "activate recording", "deactivate"]))
+    }
+
     // MARK: - File Naming
 
     @Test func newMemoURLHasMp4aExtension() async {

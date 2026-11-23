@@ -183,6 +183,7 @@ final class VoiceMemoService {
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
     @ObservationIgnored private let makePlaybackPlayer: (URL) throws -> AVAudioPlayer
     @ObservationIgnored fileprivate let deliverPlaybackUpdate: VoiceMemoPlaybackDelivery
+    @ObservationIgnored private let requestRecordingPermission: (@MainActor () async -> Bool)?
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
     /// The file a recorder is being started on, off the main thread; staging
@@ -208,12 +209,14 @@ final class VoiceMemoService {
         makePlaybackPlayer: @escaping (URL) throws -> AVAudioPlayer = { try AVAudioPlayer(contentsOf: $0) },
         deliverPlaybackUpdate: @escaping VoiceMemoPlaybackDelivery = { update in
             Task { @MainActor in update() }
-        }
+        },
+        requestRecordingPermission: (@MainActor () async -> Bool)? = nil
     ) {
         self.sessionTransitions = sessionTransitions
         self.stagingRoot = stagingRoot
         self.makePlaybackPlayer = makePlaybackPlayer
         self.deliverPlaybackUpdate = deliverPlaybackUpdate
+        self.requestRecordingPermission = requestRecordingPermission
         refreshPendingTakes()
     }
 
@@ -486,6 +489,7 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
+        if let requestRecordingPermission { return await requestRecordingPermission() }
         if #available(iOS 17.0, macOS 14.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
@@ -803,6 +807,10 @@ final class VoiceMemoService {
 
     func stopPlayback() {
         audioIntentRevision &+= 1
+        clearPlayback()
+    }
+
+    private func clearPlayback() {
         playingIdentity = nil
         let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
@@ -979,8 +987,11 @@ final class VoiceMemoService {
 
     fileprivate func playbackDidFinish(_ player: AVAudioPlayer, successfully: Bool) {
         guard audioPlayer === player else { return }
-        stopPlayback()
-        if !successfully {
+        if successfully {
+            stopPlayback()
+        } else {
+            // The failed player may predate a Record request awaiting permission.
+            clearPlayback()
             lastError = "Couldn't finish playing this recording. Try again."
         }
     }
