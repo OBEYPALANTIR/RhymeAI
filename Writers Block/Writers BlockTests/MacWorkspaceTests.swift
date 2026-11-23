@@ -663,6 +663,24 @@ struct MacDropImportTests {
         #expect(combined.hasPrefix(firstReport))
     }
 
+    @Test(arguments: [true, false])
+    func cancelledAudioImportIsSilent(fromFinder: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (viewModel, workspace) = try await audioWorkspace(in: folder)
+        let audio = folder.appendingPathComponent("take.m4a")
+        try AudioFixtures.long(seconds: 1, at: audio)
+        let skipped = fromFinder ? [folder.appendingPathComponent("cover.png")] : nil
+        let task = try #require(workspace.importRecordings([audio], into: viewModel, skippedDropFiles: skipped))
+
+        task.cancel()
+        await task.value
+
+        #expect(workspace.importError == nil)
+        #expect(workspace.recordingSong == nil)
+        #expect(viewModel.recordingItems().isEmpty)
+    }
+
     private func audioWorkspace(in folder: URL) async throws -> (EditorViewModel, MacWorkspaceModel) {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let defaults = try #require(UserDefaults(suiteName: folder.lastPathComponent))
