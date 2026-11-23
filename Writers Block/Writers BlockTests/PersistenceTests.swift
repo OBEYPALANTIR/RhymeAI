@@ -714,6 +714,45 @@ struct PendingEditSaveTests {
         #expect(song.updatedAt == synced)
     }
 
+    @Test func aPendingTitleEditPreservesNewerStoredLyrics() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.title = "Harbour at Dusk"
+        viewModel.triggerAutoSave()
+
+        // Model a sync update already visible on the exact row the editor opened.
+        song.lyrics = "ropes and a synced line"
+        song.updatedAt = Date(timeIntervalSince1970: 2_000)
+        try container.mainContext.save()
+        #expect(viewModel.lyrics == "ropes")
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(song.title == "Harbour at Dusk")
+        try #require(song.lyrics == "ropes and a synced line")
+
+        // A later flush still sees the same stale lyrics in the editor.
+        let savedAt = song.updatedAt
+        #expect(viewModel.flushCurrentDraft())
+        #expect(song.lyrics == "ropes and a synced line")
+        #expect(song.updatedAt == savedAt)
+    }
+
+    @Test func aPendingLyricEditStillWinsOverNewerStoredLyrics() throws {
+        let (viewModel, song, container) = try Self.openSong()
+        viewModel.onLyricsChanged("ropes and the writer's line")
+        viewModel.triggerAutoSave()
+
+        song.lyrics = "ropes and a synced line"
+        let syncedAt = Date(timeIntervalSince1970: 2_000)
+        song.updatedAt = syncedAt
+        try container.mainContext.save()
+
+        #expect(viewModel.savePendingEdit())
+
+        #expect(song.lyrics == "ropes and the writer's line")
+        #expect(song.updatedAt > syncedAt)
+    }
+
     @Test func aPendingEditIsWrittenNow() throws {
         let (viewModel, song, container) = try Self.openSong()
         _ = container

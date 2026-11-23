@@ -514,14 +514,13 @@ final class EditorViewModel: ObservableObject {
     /// Read by the Mac sidebar.
     @Published private(set) var loadedProjectRow: PersistentIdentifier?
 
-    /// The editor now holds this stored row's words.
-    /// Assigns only what changed, so a save that keeps the same row publishes nothing.
-    private func bindEditor(to project: SongProject) {
+    /// Binds the editor to a stored row. Assigns only changed IDs, so saving the same row publishes nothing.
+    private func bindEditor(to project: SongProject, editorWords: OpenDraft? = nil) {
         if currentProjectId != project.id { currentProjectId = project.id }
         if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
-        loadedProjectWords = OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+        loadedProjectWords = editorWords ?? OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
     }
-    /// The bound row's words when it was bound, to tell edits apart once that row is gone.
+    /// The editor's baseline for the bound row, used to distinguish edits from stored changes.
     private var loadedProjectWords: OpenDraft?
 
     /// The stored row the open song's words belong to: the bound one; else the first with the
@@ -2470,6 +2469,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
+        let draft = openDraft
         var createdProjectID: String?
         let saved: SongProject
         do {
@@ -2485,10 +2485,15 @@ final class EditorViewModel: ObservableObject {
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
                 }
-                if project.title != normalizedProjectTitle() || project.lyrics != lyrics || project.theme != theme {
-                    project.title = normalizedProjectTitle()
-                    project.lyrics = lyrics
-                    project.theme = theme
+                let baseline = loadedProjectRow == project.persistentModelID ? loadedProjectWords : nil
+                let baselineTitle = baseline?.title == "" ? Self.untitledProjectTitle : baseline?.title
+                let writeTitle = draft.title != baselineTitle && draft.title != project.title
+                let writeLyrics = draft.lyrics != baseline?.lyrics && draft.lyrics != project.lyrics
+                let writeTheme = draft.theme != baseline?.theme && draft.theme != project.theme
+                if writeTitle { project.title = draft.title }
+                if writeLyrics { project.lyrics = draft.lyrics }
+                if writeTheme { project.theme = draft.theme }
+                if writeTitle || writeLyrics || writeTheme {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
@@ -2501,8 +2506,8 @@ final class EditorViewModel: ObservableObject {
                 saved = project
             }
             try saveModelContext(context)
-            // After the save, so a new row's identity is its stored one.
-            bindEditor(to: saved)
+            // Keep the editor's baseline when the row also contains changes it has not seen.
+            bindEditor(to: saved, editorWords: draft)
             if createdProjectID != nil {
                 discardSnapshot(pendingRecordingRecovery)
                 pendingRecordingRecovery = nil
