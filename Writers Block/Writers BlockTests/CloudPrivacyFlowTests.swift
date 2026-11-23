@@ -1,6 +1,10 @@
 import Foundation
 import SwiftData
 import Testing
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 @testable import Writers_Block
 
 @MainActor
@@ -496,6 +500,199 @@ struct CloudPrivacyFlowTests {
             #expect(viewModel.errorMessage == nil, "a template with the \(label) clears the failure")
             #expect(!viewModel.suggestionsFailed, "a template with the \(label) clears the heading")
         }
+    }
+
+    @Test func undoAndRedoKeepTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            let original = viewModel.lyrics
+            let edited = original + " again"
+            viewModel.onLyricsChanged(edited)
+            let failure = try await Self.failSuggestions(viewModel)
+
+            viewModel.undoLyrics()
+            #expect(viewModel.lyrics == original)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+
+            viewModel.redoLyrics()
+            #expect(viewModel.lyrics == edited)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func changingTheRhymeTypeKeepsTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            viewModel.rhymeType = .perfect
+            let failure = try await Self.failSuggestions(viewModel)
+
+            viewModel.rhymeType = .near
+            #expect(viewModel.rhymeType == .near)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func changingTheThemeRetiresTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            _ = try await Self.failSuggestions(viewModel)
+
+            viewModel.theme = "Finding a way home"
+            #expect(viewModel.errorMessage == nil)
+            #expect(!viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func openingAndStartingASongRetireTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, context in
+            let song = SongProject(id: "stored-song", title: "Harbour Lights", lyrics: "Lights across the water", theme: "")
+            context.insert(song)
+            try context.save()
+            _ = try await Self.failSuggestions(viewModel)
+
+            // Keep the theme empty on both sides to exercise navigation's own reset.
+            viewModel.loadProject(song)
+            #expect(viewModel.currentProjectId == song.id)
+            #expect(viewModel.errorMessage == nil, "opening a song clears the message")
+            #expect(!viewModel.suggestionsFailed, "opening a song retires the failure")
+
+            _ = try await Self.failSuggestions(viewModel)
+            viewModel.newProject()
+            #expect(viewModel.currentProjectId == nil)
+            #expect(viewModel.editorOpen.isNewSong)
+            #expect(viewModel.errorMessage == nil, "starting a song clears the message")
+            #expect(!viewModel.suggestionsFailed, "starting a song retires the failure")
+        }
+    }
+
+    @Test func thrownSuggestionsStreamErrorBecomesTheDisplayedFailure() async throws {
+        StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+        defer { StagedStreamURLProtocol.release(.finish) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StagedStreamURLProtocol.self]
+        try await Self.withSuggestionsFixture(session: URLSession(configuration: configuration)) { viewModel, _ in
+            viewModel.getSuggestions()
+            try #require(await Self.waitUntil { viewModel.suggestions.count == 1 })
+            #expect(viewModel.isLoading)
+
+            StagedStreamURLProtocol.release(.fail)
+            try #require(await Self.waitUntil { !viewModel.isLoading })
+            #expect(viewModel.errorMessage == AIServiceError.networkUnavailable.localizedDescription)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    #if os(macOS)
+    @Test func macAssistantShowsTryAgainForAnUnrelatedLocalError() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            _ = try await Self.failSuggestions(viewModel)
+            viewModel.saveProvider(.local)
+            let editorError = "Couldn't save this song. Your edits remain open."
+            viewModel.errorMessage = editorError
+            #expect(viewModel.errorMessage == editorError)
+            #expect(!viewModel.suggestionsFailed)
+
+            let (downloadDefaults, downloadSuite) = Self.makeDefaults()
+            defer { downloadDefaults.removePersistentDomain(forName: downloadSuite) }
+            let downloads = GGUFDownloadManager(
+                configuration: .ephemeral,
+                modelsRoot: FileManager.default.temporaryDirectory.appendingPathComponent(downloadSuite),
+                defaults: downloadDefaults
+            )
+            // Give the scroll view room for both the local heading and the error
+            // card without depending on the runner's screen height.
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 1400),
+                styleMask: .borderless, backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.ignoresMouseEvents = true
+            window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+            defer { window.close() }
+
+            let hostedPanel = NSHostingView(rootView: AssistantPanelView(isInline: true)
+                .environmentObject(viewModel)
+                .environmentObject(downloads))
+            var accessibleText: [String] = []
+            _ = await Self.waitUntil(timeoutIterations: 250) {
+                accessibleText = Self.macAssistantAccessibilityText(in: window, hostedPanel: hostedPanel)
+                return accessibleText.contains(editorError) && accessibleText.contains("Try again")
+            }
+            #expect(accessibleText.contains(editorError), "The error card exposes the editor error. Accessibility text: \(accessibleText)")
+            #expect(accessibleText.contains("Try again"), "The Mac local heading follows the editor error. Accessibility text: \(accessibleText)")
+        }
+    }
+
+    private static func macAssistantAccessibilityText(
+        in window: NSWindow,
+        hostedPanel: NSView
+    ) -> [String] {
+        // Pin the loading count only while laying out and reading the hosted view.
+        // Model loads can update it between reads.
+        let inferenceStatus = LocalInferenceStatus.shared
+        // Exercise the pin with a pending load even in a focused test run.
+        inferenceStatus.beginLoading()
+        defer { inferenceStatus.endLoading() }
+        let activeLoads = max(0, inferenceStatus.loadingCount)
+        for _ in 0..<activeLoads { inferenceStatus.endLoading() }
+        defer {
+            for _ in 0..<activeLoads { inferenceStatus.beginLoading() }
+        }
+
+        if window.contentView !== hostedPanel {
+            window.contentView = hostedPanel
+            window.orderBack(nil)
+        }
+        hostedPanel.layoutSubtreeIfNeeded()
+        return accessibilityText(in: hostedPanel)
+    }
+
+    private static func accessibilityText(in element: any NSAccessibilityProtocol) -> [String] {
+        let text = [
+            element.accessibilityLabel(),
+            element.accessibilityTitle(),
+            element.accessibilityValue() as? String
+        ].compactMap { $0 }
+        let children = (element.accessibilityChildren() ?? []).compactMap { $0 as? any NSAccessibilityProtocol }
+        return text + children.flatMap { accessibilityText(in: $0) }
+    }
+    #endif
+
+    private static func withSuggestionsFixture(
+        session: URLSession? = nil,
+        _ body: (EditorViewModel, ModelContext) async throws -> Void
+    ) async throws {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: session ?? makeSession()),
+            keychainStore: keychain,
+            companionStore: WritingCompanionStore(inMemory: true),
+            defaults: defaults
+        )
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.newProject()
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+        try await body(viewModel, container.mainContext)
+    }
+
+    private static func failSuggestions(_ viewModel: EditorViewModel) async throws -> String {
+        viewModel.getSuggestions()
+        try #require(await waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+        let message = try #require(viewModel.errorMessage)
+        #expect(message == "AI did not return suggestions. Try again.")
+        return message
     }
 
     /// The ink burst keys off this signal. Each case streams one line, holds
