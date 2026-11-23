@@ -3887,16 +3887,19 @@ class BackupFlowInstrumentedTest {
             blankDraft(vm, "")
             RecoveryTestHooks.failNextRecovery.set(true)
             instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
-            waitUntil({ "status ${vm.saveStatus}" }) { onMain { vm.saveStatus == SaveStatus.FAILED && vm.notebookSaving == 0 } }
-            val nId = onMain { vm.currentProjectId }!!
-            assertTrue(nId != copyId)
-            assertEquals(emptyList<SongProject>(), others(copyId))
+            waitUntil({ "status ${vm.saveStatus}" }) { onMain { vm.notebookSaving == 0 && vm.saveStatus != SaveStatus.SAVING } }
+            val failed = onMain { vm.saveStatus }
+            val nId = onMain { vm.currentProjectId }
+            val beforeRetry = others(copyId)
             instrumentation.runOnMainSync { vm.retrySave() }
             quiesce(vm)
             val n = others(copyId)
             assertEquals("${songs()}", listOf(nId), n.map { it.id })
+            assertEquals(SaveStatus.FAILED, failed)
+            assertTrue(nId != copyId)
+            assertEquals(emptyList<SongProject>(), beforeRetry)
             assertEquals(Triple("Untitled Song", "", ""), n.single().let { Triple(it.title, it.lyrics, it.theme) })
-            assertEquals("${notebook(nId)}", 1, notebook(nId).alternates.count { it.text == "kept line" })
+            assertEquals("${notebook(n.single().id)}", 1, notebook(n.single().id).alternates.count { it.text == "kept line" })
             assertEquals(bTuple, storedKeys())
             assertWindowBKeptTheCopy(copyId, heldEdits)
         } finally {
@@ -4212,9 +4215,10 @@ class BackupFlowInstrumentedTest {
             RecoveryTestHooks.beforeRecoveryInsert = { if (!nParked.isCompleted) { nParked.complete(Unit); nRelease.await() } }
             release.complete(Unit)
             assertTrue("${result(admitted)}", result(admitted).isFailure)
-            waitUntil({ "N parked" }) { nParked.isCompleted }
+            // Either N's first write parks, or (no reservation) the Keep settles without one: the rows below decide.
+            waitUntil({ "N parked or the Keep settled" }) { nParked.isCompleted || onMain { vm.notebookSaving == 0 } }
             // Not acknowledged before its own write: the Keep is still saving while N is unstored.
-            assertEquals(1, onMain { vm.notebookSaving })
+            val savingWhileParked = onMain { vm.notebookSaving }
             nRelease.complete(Unit)
             quiesce(vm)
             val n = others(copyId)
@@ -4223,6 +4227,8 @@ class BackupFlowInstrumentedTest {
             assertWindowBKeptTheCopy(copyId, heldEdits)
             assertFalse(hasLine(copyId, "kept line"))
             assertEquals(bTuple, storedKeys())
+            assertTrue("N's first write parked", nParked.isCompleted)
+            assertEquals(1, savingWhileParked)
         } finally {
             release.complete(Unit)
             nRelease.complete(Unit)
@@ -4343,10 +4349,11 @@ class BackupFlowInstrumentedTest {
             if (fail) RecoveryTestHooks.failNextRecovery.set(true)
             release.complete(Unit)
             assertTrue("${result(admitted)}", result(admitted).isFailure)
-            waitUntil({ "N parked" }) { nParked.isCompleted }
-            val nId = onMain { vm.currentProjectId }!!
-            assertEquals(null, atCallback.get())
-            assertEquals("", onMain { vm.lyrics })
+            // Reaching the seam is only waited for here; the rows below decide (no reservation never parks).
+            runCatching { waitUntil({ "N parked" }) { nParked.isCompleted } }
+            val nId = onMain { vm.currentProjectId }
+            val callbackWhileParked = atCallback.get()
+            val lyricsWhileParked = onMain { vm.lyrics }
             nRelease.complete(Unit)
             quiesce(vm)
             if (fail) {
@@ -4362,6 +4369,9 @@ class BackupFlowInstrumentedTest {
             }
             assertWindowBKeptTheCopy(copyId, "version words")
             assertEquals(windowBWords, songs().single { it.id == copyId }.lyrics)
+            assertTrue("N's first write parked", nParked.isCompleted)
+            assertEquals(null, callbackWhileParked)
+            assertEquals("", lyricsWhileParked)
         } finally {
             release.complete(Unit)
             nRelease.complete(Unit)
