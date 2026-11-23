@@ -556,7 +556,11 @@ struct TrashBinView: View {
                     .foregroundStyle(enabled ? appearance.palette.primaryInk : appearance.palette.disabledInk)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: RhymeAITokens.Touch.minimum)
-                    .background(appearance.palette.raisedSurface, in: Capsule())
+                    // Delete's shape, so the pair still match once the labels outgrow 44pt.
+                    .background(
+                        appearance.palette.raisedSurface,
+                        in: RoundedRectangle(cornerRadius: RhymeAITokens.Touch.minimum / 2, style: .continuous)
+                    )
             }
             .buttonStyle(.rhymePress)
             .disabled(!enabled)
