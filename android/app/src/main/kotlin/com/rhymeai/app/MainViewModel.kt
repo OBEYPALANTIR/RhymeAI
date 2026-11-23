@@ -710,6 +710,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (currentProjectId == id && openRevision == openedAt && !editorHeld) {
                 detachMissingActiveProject(id, creation)
                 persistenceError = "This song is no longer active. Notebook changes were not saved. The draft stays open and will be saved as a new song."
+                // An edit whose autosave was armed for this id would now be dropped: save it as the new song instead.
+                if (editorDirty) triggerAutoSave()
             }
             throw refused
         }

@@ -1091,6 +1091,38 @@ class PersistenceInstrumentedTest {
     }
 
     @Test
+    fun aRefusedTokenKeepsAnEditAlreadyWaitingToAutosave() {
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val holds = List(2) { CompletableDeferred<Unit>() }
+        try {
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("a words") }
+            DraftSaveTestHooks.beforeWrite = holds[0]
+            onMain { viewModel.triggerAutoSave(retry = true) }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            DraftSaveTestHooks.beforePositionSave = holds[1]
+            onMain { viewModel.rememberEditorPosition() }
+            holds[0].complete(Unit)
+            waitUntil { stored().any { it.id == x } && DraftSaveTestHooks.beforePositionSave == null }
+            runBlocking { repo.saveProjects(listOf(SongProject(x, "Incoming", "incoming words", "", 200L))) }
+
+            // The writer types while the obsolete position is still held: that edit's autosave is armed for X.
+            onMain { viewModel.onLyricsChanged(TextFieldValue("a words typed")) }
+            holds[1].complete(Unit)
+            // No further edit and no flush: the typed words reach storage as a new song, and X keeps its own words.
+            waitUntil { stored().any { it.id != x && it.lyrics == "a words typed" } }
+            assertEquals("incoming words", stored().single { it.id == x }.lyrics)
+            assertEquals("a words typed", viewModel.lyrics)
+        } finally {
+            holds.forEach { it.complete(Unit) }
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.beforePositionSave = null
+        }
+    }
+
+    @Test
     fun aNotebookChangeWhoseSongWasNotSavedIsNotShownAsKept() {
         fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
         val notSaved = "A Song Notebook change was not saved"
