@@ -2313,7 +2313,8 @@ final class BackupService {
         if modelContext.hasChanges { try modelContext.save() }
     }
 
-    private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext, local: SyncBlob? = nil) throws -> SyncBlob {
+    private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext, local: SyncBlob? = nil,
+                         onWinningCascades: (([SyncDeletion]) -> Void)? = nil) throws -> SyncBlob {
         // Precedence times are fixed before anything is compared (A32).
         let snapshot = fixingPrecedence(try local ?? makeSnapshot(modelContext: modelContext))
         let gathered = try SyncMerger.gather([snapshot] + inputs.map(fixingPrecedence))
@@ -2336,7 +2337,7 @@ final class BackupService {
             if row.precedenceTime != won.uploadedAt { row.uploadedAt = won.uploadedAt }
             if row.precedenceRepaired != won.precedenceRepaired { row.precedenceRepaired = won.precedenceRepaired }
         }
-        var resolved = try SyncMerger.resolve(gathered)
+        var resolved = try SyncMerger.resolve(gathered, onWinningCascades: onWinningCascades)
         resolved.recordings = resolved.recordings.map { entry in
             var named = entry
             if let row = held[entry.id], row.sha256 == entry.sha256, row.displayNameChanged || remoteNames[entry.id] == nil {
@@ -2370,7 +2371,8 @@ final class BackupService {
         defer { if !saved { modelContext.rollback() } }
         // Times are fixed once (A32); resolution and preservation see the same values.
         let inputs = raw.map(fixingPrecedence)
-        let blob = try resolve(inputs, with: modelContext, local: before)
+        var winningCascades: [SyncDeletion] = []
+        let blob = try resolve(inputs, with: modelContext, local: before) { winningCascades = $0 }
         try blob.validate()
         // A41: every repaired song this apply removes (held here or in an input) is
         // kept and read back first; a failure stops the run before anything is deleted.
@@ -2478,6 +2480,7 @@ final class BackupService {
                 modelContext.author = author
             }
             defer { modelContext.author = previousAuthor }
+            try RecordingFiles.rememberDraftSourceCascades(winningCascades, for: memosRoot)
             try saveAppliedChanges(modelContext)
             saved = true
             draftHandoff?.publish(BackupApplyOutcome(copies: copies))

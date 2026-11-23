@@ -170,8 +170,8 @@ struct RestorePendingDraftTests {
         #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == recovered.id }.map(\.audio) == [fixture.audio])
     }
 
-    @Test(arguments: [false, true])
-    func pendingTakeRemembersTheCascadeAfterTheSourceDeletionAdvances(explicitTakeDeletion: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func pendingTakeRemembersTheCascadeAfterTheSourceDeletionAdvances(manifestCascade: Bool, explicitTakeDeletion: Bool) async throws {
         let words = "editor words kept apart from the deleted song"
         var recovery: URL?
         var frozen: Data?
@@ -186,9 +186,11 @@ struct RestorePendingDraftTests {
         let journal = recoveryURL(harness)
         recovery = journal
         defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path) }
-        let takeID = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first?.id)
+        let entry = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first?.syncEntry)
+        let takeID = entry.id
         let t1 = Date().addingTimeInterval(3_600).epochMilliseconds
         let t2 = t1 + 2
+        let t3 = t2 + 2
         harness.drive.seed(name: SyncBlob.driveFileName,
                            content: try SyncBlob(deletions: [SyncDeletion(projectId: "song-a", deletedAt: t1)]).encodedManifest())
         harness.drive.beforeManifestWrite = {
@@ -205,18 +207,28 @@ struct RestorePendingDraftTests {
         let draftID = draft.id
         let owner = try durableRowID(draft)
         #expect(between.audios(draftID).isEmpty)
+        let rows = try between.context.fetch(FetchDescriptor<Recording>())
+        #expect(!rows.contains { $0.id == takeID || $0.projectId == draftID })
         let firstDeletions = try DeletionStore.all(in: between.context).filter { $0.projectId == "song-a" }
         #expect(firstDeletions.contains { $0.isSongTombstone && $0.deletedAt == t1 })
         #expect(firstDeletions.contains { $0.recordingId == takeID && $0.deletedAt == t1 })
 
         harness.drive.beforeManifestWrite = nil
         var remote = [SyncDeletion(projectId: "song-a", deletedAt: t2)]
-        if explicitTakeDeletion { remote.append(SyncDeletion(projectId: "song-a", recordingId: takeID, deletedAt: t1 + 1)) }
-        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: remote).encodedManifest())
+        if explicitTakeDeletion { remote.append(SyncDeletion(projectId: "song-a", recordingId: takeID, deletedAt: t2 + 1)) }
+        let imported = SyncBlob(recordings: manifestCascade ? [entry] : [], deletions: remote)
+        try await between.service.importArchive(try imported.encodedManifest(), modelContext: between.context)
+        let takeTime = explicitTakeDeletion ? t2 + 1 : (manifestCascade ? t2 : t1)
+        let afterImport = try DeletionStore.all(in: between.context).filter { $0.projectId == "song-a" }
+        #expect(afterImport.filter(\.isSongTombstone).map(\.deletedAt) == [t2])
+        #expect(afterImport.filter { $0.recordingId == takeID }.map(\.deletedAt) == [takeTime])
+
+        let newest = SyncBlob(deletions: [SyncDeletion(projectId: "song-a", deletedAt: t3)])
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try newest.encodedManifest())
         try await between.service.restoreNow(modelContext: between.context)
         let advanced = try DeletionStore.all(in: between.context).filter { $0.projectId == "song-a" }
-        #expect(advanced.filter(\.isSongTombstone).map(\.deletedAt) == [t2])
-        #expect(advanced.filter { $0.recordingId == takeID }.map(\.deletedAt) == [explicitTakeDeletion ? t1 + 1 : t1])
+        #expect(advanced.filter(\.isSongTombstone).map(\.deletedAt) == [t3])
+        #expect(advanced.filter { $0.recordingId == takeID }.map(\.deletedAt) == [takeTime])
         #expect(try Data(contentsOf: journal) == preSeal)
         try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path)
 
@@ -227,8 +239,10 @@ struct RestorePendingDraftTests {
         #expect(try songs.first { $0.id == draftID }.map(durableRowID) == owner)
         let playable = try reopened.service.library.liveRecordings(projectId: draftID, in: reopened.context)
         let expected = explicitTakeDeletion ? [] : [fixture.audio]
-        #expect(try playable.map { try Data(contentsOf: $0.url) } == expected)
-        #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == draftID }.map(\.audio) == expected)
+        let playableBytes = try playable.map { try Data(contentsOf: $0.url) }
+        let storedBytes = try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == draftID }.map(\.audio)
+        #expect(playableBytes == expected)
+        #expect(storedBytes == expected)
     }
 
     @Test(arguments: [false, true])
