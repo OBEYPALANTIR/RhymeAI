@@ -1,6 +1,6 @@
 # Cloud backup setup
 
-Writers Block backs up to Google Drive's private `appDataFolder`, with the `drive.appdata` scope only. Android implements the v4 contract below; the iOS side is pending its companion PR. Backups are plain JSON and raw audio protected by the Google account and Drive's encryption at rest; there is no passphrase. API keys are never included.
+Writers Block backs up to Google Drive's private `appDataFolder`, with the `drive.appdata` scope only. Android and the Apple app implement v4 backup, restore, and archive import and export. Backups are plain JSON and raw audio protected by the Google account and Drive's encryption at rest; there is no passphrase. API keys are never included.
 
 ## Google Cloud project
 
@@ -49,8 +49,9 @@ If **Connect Google Drive** shows the account chooser and then nothing happens, 
 
 Drive holds `rhymeai-manifest.json` (plain UTF-8 JSON, `version` 4) and one raw
 file per recording named `rec_<recordingId>` (each recording has a stable UUID), uploaded with Drive
-`appProperties` `id`, `projectId`, `fileName`, `sha256` and `bytes`. A recording's
-`fileName` is its display name; on the device every recording file is named
+`appProperties` `id`, `projectId`, `fileName`, `sha256` and `bytes` (Android omits
+properties that exceed Drive's per-property limit). A recording's
+`fileName` is its display name; on Android every recording file is named
 `<recordingId>.<ext>` (`m4a` for takes, the audio's own extension for imports)
 and a rename changes only the record (A36). The manifest's
 `manifestSha256` covers its canonical form; a manifest whose hash does not match
@@ -83,8 +84,8 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   Import) move a recording whose deletion won to `voice-memos-quarantine/` (A28),
   which deletes no bytes. Recordings over 16 MiB are skipped with a visible count.
 - **Disconnect** revokes the grant at `https://oauth2.googleapis.com/revoke`
-  (Android with the current access token, iOS with the refresh token) and
-  always clears local state. Only a successful revoke counts; otherwise it says
+  (Android with the current access token, iOS with the refresh token if available,
+  otherwise the access token) and always clears local state. If revoke fails, it says
   "Disconnected on this device, but Google still lists the app; remove it at
   myaccount.google.com/permissions."
 - **Export all songs…** writes `WritersBlock-backup-<date>.zip` (`manifest.json`,
@@ -93,8 +94,8 @@ merge rules are in `PARITY.md` (Cloud backup parity checks) and are pinned by
   takes that zip or a bare v4 `manifest.json`, refuses archives with unsafe or
   unexpected entry names, and merges it.
 
-Tombstones apply by timestamp: Delete Forever and expiry purge write a project
-tombstone in the same DataStore transaction that removes the song, and a
+Tombstones apply by timestamp: on Android, Delete Forever and expiry purge write
+a project tombstone in the same DataStore transaction that removes the song. A
 tombstone removes an active song when it is newer than the song's `updatedAt`,
 a song in Trash when newer than its Trash time (a recording: newer than its
 `uploadedAt`). A tombstone always beats a time that was only repaired (first
@@ -110,7 +111,7 @@ time (recorded, restored or imported time, or a pre-existing memo's file time
 stamped once), so the time survives import, re-export and rename. Android does not erase recording bytes
 already in Drive when a song is deleted, except that after a verified backup a
 raw recording that a tombstone covers and whose hash and size match the entry
-gathered in that run is removed.
+gathered in that run is removed if the recording's time was not repaired.
 
 The Drive and revoke hosts are certificate-pinned fail-closed (GTS Root R4 with
 GTS R1-R3 and GlobalSign as backups, no expiration); rotate those pins before
@@ -125,13 +126,13 @@ device:
 
 | Old backup in Drive | Passphrase stored on the device | What happens |
 | --- | --- | --- |
-| yes | yes | On each backup: decrypt, upload every old recording raw, merge the old songs into v4, read v4 back and check its hash. When every old song is there (same content or a newer edit) and every old recording that was not deleted is a raw file with matching hash and size, the passphrase is forgotten and that version is marked migrated. The old files are never deleted. Status: "Your older encrypted backup was moved to the new format. Its files stay in your Google Drive." Otherwise Settings counts what could not move. |
-| yes | no | The old files are left untouched; v4 starts from local data. Settings shows "Migrate older encrypted backup…", which asks for the passphrase once (it is not stored); cancelling keeps the row. |
+| yes | yes | Decrypt, upload old recordings raw, merge the old songs into v4, and verify the result. Android verifies surviving songs and recordings, forgets the passphrase, and marks that version migrated while keeping the old files. Apple verifies the surviving songs and every old recording, including deleted ones, then removes the old manifest and verified encrypted recording objects and forgets the passphrase. Settings counts recordings that could not move. |
+| yes | no | The old files are left untouched; v4 starts from local data. Settings shows "Migrate older encrypted backup…", which asks for the passphrase; cancelling keeps the row. Apple can save the passphrase for an incomplete migration. |
 | no | yes | The stored passphrase is removed. |
 | no | no | Nothing to do. |
 
-Old recordings that cannot move (over 16 MiB, unreadable, missing, or a
-different recording under the same name) keep the migration row available.
+Required recordings that cannot be verified (over 16 MiB, unreadable, missing, or
+with different audio) keep the migration row available.
 
 ## Manual verification
 
@@ -141,6 +142,6 @@ After both OAuth clients exist:
 2. Android restore: clear app data or install on a second device, connect the same Google account, accept "Restore your songs?", and confirm projects, trash, and voice recordings reappear.
 3. iOS: run the same connect, backup and restore flow from Settings.
 4. Cross-platform: back up on one platform and restore on the other. Confirm at least one project and one `.m4a` voice recording round-trip.
-5. Migration: on a device that still has an older encrypted backup, confirm the status reads "moved to the new format" only after `rhymeai-manifest.json` holds every old song (same content or a newer edit) and every old recording that is not tombstoned is a listed raw `rec_<recordingId>` file whose hash and size match. Confirm the old `rhymeai-projects.json` and `rec_*.enc` files are still in `appDataFolder` and the device's own library did not change.
+5. Migration: after "moved to the new format", check that the verified v4 backup preserves surviving songs and has raw recordings with matching hashes and sizes. On Android, check surviving recordings and confirm the old manifest and encrypted audio remain. On Apple, check raw copies of all legacy recordings, including tombstoned ones, and confirm the old manifest and verified encrypted objects were removed. Confirm the device's own library did not change.
 
 If any OAuth client is missing, the code can still build and unit-test, but the live end-to-end backup gate is not complete.
