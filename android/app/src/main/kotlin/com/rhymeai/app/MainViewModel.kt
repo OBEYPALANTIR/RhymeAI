@@ -203,6 +203,8 @@ internal object DraftSaveTestHooks {
     @Volatile var beforePositionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Runs before each new song's notebook change is written, after its song is stored; the test clears it. */
     @Volatile var beforeCreationNotebookWrite: (suspend () -> Unit)? = null
+    /** Runs once in the next save at an adopted copy, holding the copy's lock before its receipt check. */
+    @Volatile var insideCopyLock: (suspend () -> Unit)? = null
 }
 
 private const val NOTEBOOK_NOT_SAVED = "A Song Notebook change was not saved because the song could not be saved."
@@ -259,6 +261,8 @@ internal object BackupTestHooks {
     @Volatile var afterSendMarked: (suspend () -> Unit)? = null
     /** Runs once in a hold after its read of an adopted copy, before that read decides the copy. */
     @Volatile var afterHoldCopyRead: (suspend () -> Unit)? = null
+    /** Runs once in a hold before its read of an undecided adopted copy. */
+    @Volatile var beforeHoldCopyRead: (suspend () -> Unit)? = null
 }
 
 /** Observes editor-position work per view model and open revision (null in the app). */
@@ -745,14 +749,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } else {
                 val wordsRevisionAtSend = lyricsRevision
+                // A recovery song not yet stored (listed behind Welcome) takes the line where its first commit stored it.
+                val target = pendingCreations[project.id]?.first?.let { boundary ->
+                    (boundary.first.await() ?: return "Couldn't send this line. Try again.").id
+                } ?: project.id
                 // Captured before the send waits: a refusal meanwhile refuses this send once (the line is not added).
-                val captured = adoptedCopyFor(project.id)
+                val captured = adoptedCopyFor(target)
                 BackupTestHooks.beforeMenuSend?.let { BackupTestHooks.beforeMenuSend = null; it.await() }
-                val held = captured ?: adoptedCopyFor(project.id)
+                val held = captured ?: adoptedCopyFor(target)
                 val songs = try {
                     // The append is this copy's own write: undecided, it decides the copy, as a first save does.
-                    if (held == null) oneLinersStore.sendToSong(line.id, project.id, repo)
-                    else held.lock.withLock { writeAsDecided(held) { receipt -> oneLinersStore.sendToSong(line.id, project.id, repo, adoptedFrom = receipt) } }
+                    if (held == null) oneLinersStore.sendToSong(line.id, target, repo)
+                    else held.lock.withLock { writeAsDecided(held) { receipt -> oneLinersStore.sendToSong(line.id, target, repo, adoptedFrom = receipt) } }
                 } catch (refused: HeldCopyChangedException) {
                     if (held == null) throw refused
                     // The refusal already moved the draft to its new song (or had nothing to keep).
@@ -762,8 +770,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // The song is the editor's (behind the start menu): its words follow the stored song, unless they changed
                 // meanwhile. Changed words stay unsaved and their next save wins over the appended line, as before.
                 // Only the words are loaded here, so a title or theme edit stays unsaved too: the editor is not marked saved.
-                if (currentProjectId == project.id && lyricsRevision == wordsRevisionAtSend) {
-                    songs.firstOrNull { it.id == project.id }?.let {
+                if (currentProjectId == target && lyricsRevision == wordsRevisionAtSend) {
+                    songs.firstOrNull { it.id == target }?.let {
                         loadWords(it.lyrics)
                         resetLyricsHistory()
                     }
@@ -1151,6 +1159,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // A recovery song not yet stored is written first too (its first commit bounds this hold).
         while (restoringDraft || savingBeforeNavigation || editorHeld || opensInFlight > 0 || draftWritesInFlight > 0 ||
             recoveryFirstPending()) delay(20)
+        // A recovery song whose first commit failed is stored nowhere: nothing runs until its Retry stores it.
+        if (currentProjectId?.let(pendingCreations::get)?.first?.first?.let { it.isCompleted && it.getCompleted() == null } == true) return false
         editorHeld = true
         try {
             autoSaveJob?.cancelAndJoin()
@@ -1158,7 +1168,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // An undecided adoption is decided first, so this hold saves where the words belong now.
             currentProjectId?.let(::adoptedCopyFor)?.let { held ->
                 val valid = if (held.decision.isCompleted) held.decision.getCompleted()
-                    else try { repo.refreshHold(held.receipt, held.id).second } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return false }
+                    else try { BackupTestHooks.beforeHoldCopyRead?.let { BackupTestHooks.beforeHoldCopyRead = null; it() }; repo.refreshHold(held.receipt, held.id).second } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return false }
                 BackupTestHooks.afterHoldCopyRead?.let { BackupTestHooks.afterHoldCopyRead = null; it() }
                 // A decision another writer completed meanwhile stands.
                 held.lock.withLock { decide(held, valid) }
@@ -1312,7 +1322,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 RecoveryTestHooks.onRevokeRead?.invoke()
                 // The copy's cached notebook may hold this window's view of it; show it as stored.
-                try { workspaces = repo.workspacesFlow.first()[h.id]?.let { workspaces + (h.id to it) } ?: (workspaces - h.id) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
+                try {
+                    val before = workspaces[h.id]
+                    val read = repo.workspacesFlow.first()[h.id]
+                    // A write that cached the copy's notebook meanwhile is newer than this read: the read is skipped.
+                    if (workspaces[h.id] === before) workspaces = read?.let { workspaces + (h.id to it) } ?: (workspaces - h.id)
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
                 openSendSettle?.takeIf { it.first == h.id }?.second?.await()
                 RecoveryTestHooks.beforeRecoveryInsert?.invoke()
                 if (pendingCreations[id] !== creation || first.firstBy != -1L) return@launch
@@ -1475,10 +1490,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!appearanceLoaded || showStartMenu) {
             // Behind Welcome a recovery song not yet stored still bounds the navigation: it continues once N committed.
             val first = currentProjectId?.let(pendingCreations::get)?.first?.first ?: run { onSaved(); return null }
+            val id = currentProjectId
             savingBeforeNavigation = true
             return viewModelScope.async {
                 try {
-                    (first.await() != null).also { if (it) onSaved() }
+                    val done = first.await() ?: return@async false
+                    // A taken id moved the draft: the navigation was for the song it left, as for an open editor's flush.
+                    if (currentProjectId != id) return@async true
+                    // Words newer than the first commit are written to its destination before the navigation continues.
+                    if (title != done.title || lyrics != done.lyrics || theme != done.theme) {
+                        val row = projects.firstOrNull { it.id == done.id } ?: return@async false
+                        val (savedTitle, savedLyrics, savedTheme) = Triple(title, lyrics, theme)
+                        val savedAt = editRevision
+                        val attempt = ++saveAttempts
+                        val creation = pendingCreations[done.id]
+                        val project = row.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme, updatedAt = System.currentTimeMillis())
+                        try {
+                            persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, revision = savedAt)
+                            markEditorSaved(savedAt)
+                        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                            reconcileFailedProjectSave(project, error, attempt, creation)
+                            return@async false
+                        }
+                        if (currentProjectId != done.id || title != savedTitle || lyrics != savedLyrics || theme != savedTheme) return@async true
+                    }
+                    onSaved()
+                    true
                 } finally {
                     savingBeforeNavigation = false
                     queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
@@ -3630,6 +3667,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             boundary?.latest = Committed(project.id, editorTitle, editorLyrics, editorTheme, revision)
                         }
                 } else if (adopted != null) adopted.lock.withLock {
+                    DraftSaveTestHooks.insideCopyLock?.let { DraftSaveTestHooks.insideCopyLock = null; it() }
                     writeAsDecided(adopted) { receipt ->
                         try {
                             repo.saveActiveState(project, creation?.creation, editorTitle, editorLyrics, editorTheme, preserveAs, receipt)
