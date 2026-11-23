@@ -1718,6 +1718,25 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun aReceiptStoredBeforeTheEditorFlagStillResolvesButGivesNoEditorBaseline() = withRepository { store, repository ->
+        val a = SongProject(id = "a", title = "A", lyrics = "a old", updatedAt = 100L)
+        val held = ticket("x")
+        repository.saveActiveState(a, SongCreation(), a.title, a.lyrics, a.theme)
+        repository.saveActiveState(a, null, "A", "a old", "", preserveAs = held)
+        repository.applySyncResult(
+            SyncBlob(projects = listOf(a.copy(lyrics = "a new", updatedAt = later), SongProject(id = "x", title = "A", lyrics = "a old", updatedAt = 150L))),
+            repository.snapshotLocalSyncBase()
+        )
+        // An older app wrote this receipt: the same list without the editor flag; its row generation stays valid.
+        val key = stringPreferencesKey("preserved_receipts_json")
+        store.edit { prefs ->
+            val receipts = kotlinx.serialization.json.Json.parseToJsonElement(checkNotNull(prefs[key])) as kotlinx.serialization.json.JsonArray
+            prefs[key] = kotlinx.serialization.json.JsonArray(receipts.map { kotlinx.serialization.json.JsonObject((it as kotlinx.serialization.json.JsonObject) - "editorWritten") }).toString()
+        }
+        assertEquals(HoldResult.Adopted(repository.projectsFlow.first().single { it.id == "x" }, appended = false), repository.resolveHold("a", held))
+    }
+
+    @Test
     fun aTrashedSongAtTheMarkedIdGetsAFreshActiveId() = withRepository { _, repository ->
         val a = SongProject(id = "a", title = "A", lyrics = "a old", updatedAt = 100L)
         val trashed = TrashedSongProject(SongProject(id = "x", title = "T", lyrics = "trash words", updatedAt = 50L), deletedAt = 60L)

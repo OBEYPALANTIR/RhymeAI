@@ -1945,13 +1945,18 @@ class BackupFlowInstrumentedTest {
         }
         try {
             editAndRestore(vm)
-            val copyId = checkNotNull(vm.currentProjectId)
             assertEquals(heldEdits, vm.lyrics)
+            // K0: the refresh found the copy changed, so the held words were kept as one new song before the editor was released.
+            val early = songs().filter { it.lyrics == heldEdits }
+            assertEquals("${songs()}", 1, early.size)
+            assertEquals(early.single().id, vm.currentProjectId)
+            val copyId = songs().single { it.lyrics == windowBWords }.id
             instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(typed) }
             saveNow(vm)
             assertWindowBKeptTheCopy(copyId, typed)
             waitUntil({ "stored ${songs()}" }) { songs().any { it.lyrics == typed } && !vm.savingBeforeNavigation }
             val kept = songs().single { it.lyrics == typed }
+            assertEquals(early.single().id, kept.id)
             assertEquals(mapOf(openSong.id to newerWords, copyId to windowBWords, kept.id to typed), songs().associate { it.id to it.lyrics })
             assertEquals(Triple(kept.id, typed, changedNotice), Triple(vm.currentProjectId, vm.lyrics, vm.persistenceError))
         } finally {
@@ -2388,6 +2393,15 @@ class BackupFlowInstrumentedTest {
             assertTrue("the checkpoint was written to X: $x", x.versions.none { it.lyrics == heldEdits })
             val n = songs().single { it.lyrics == v1.lyrics }
             assertTrue("${notebook(n.id)}", notebook(n.id).versions.any { it.lyrics == heldEdits })
+            // K4(c): X opened again; its next position is stored without the refused notebook A held for it.
+            instrumentation.runOnMainSync { vm.loadProject(songs().single { it.id == reused.id }) }
+            waitUntil({ "on ${vm.currentProjectId}" }) { onMain { vm.currentProjectId == reused.id && vm.lyrics == windowBWords && !vm.editorHeld } }
+            instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = vm.lyricsFieldValue.copy(selection = androidx.compose.ui.text.TextRange(7, 9))
+                vm.rememberEditorPosition()
+            }
+            waitUntil({ "${notebook(reused.id)}" }) { notebook(reused.id).let { it.selectionStart == 7 && it.selectionEnd == 9 } }
+            assertTrue("${notebook(reused.id)}", hasLine(reused.id, "window B line"))
         } finally {
             BackupTestHooks.beforeHoldListRefresh = null
             resetOpenSong()
@@ -2551,6 +2565,7 @@ class BackupFlowInstrumentedTest {
             DraftSaveTestHooks.beforeWrite = flushGate
             instrumentation.runOnMainSync { vm.restoreFromBackup() }
             waitUntil({ "held ${vm.editorHeld}" }) { onMain { vm.editorHeld } }
+            val bTuple = runBlocking { repo.currentProjectIdFlow.first() to repo.editorStateFlow().first() }
             scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             flushGate.complete(Unit)
             waitUntil({ "held ${vm.editorHeld} attempts ${attempts.get()}" }) { attempts.get() >= 1 && !onMain { vm.editorHeld } }
@@ -2569,6 +2584,9 @@ class BackupFlowInstrumentedTest {
             assertEquals(w4, kept.single().lyrics)
             assertEquals(windowBWords, songs().single { it.id == copyId }.lyrics)
             assertEquals("the dropped STOP ran", 0, continuations.get())
+            // Window B's selection and raw words differ from what the commit wrote for A: the recovery leaves them.
+            assertEquals(copyId to Triple("Open Song", windowBWords, ""), bTuple)
+            assertEquals(bTuple, runBlocking { repo.currentProjectIdFlow.first() to repo.editorStateFlow().first() })
             scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         } finally {
             RecoveryTestHooks.onQueuedNavigationRun = null
@@ -2584,7 +2602,9 @@ class BackupFlowInstrumentedTest {
 
     /**
      * K12: an earlier Keep for an unconfirmed adoption is parked at its notebook write; the next Keep settles only after
-     * joining it, and another window's line added after the join survives both.
+     * joining it, and another window's line added after the join survives both. A guarded Keep never takes the
+     * whole-entry path, so the join is the later Keep awaiting the earlier one's decision; the order check is what a
+     * missing join breaks.
      */
     @Test fun aSettlingKeepJoinsAnEarlierParkedKeepAndKeepsAnotherWindowsLine() {
         val reused = SongProject("reuse-x", "Untitled Song", heldEdits, "", 100L)
@@ -2601,7 +2621,8 @@ class BackupFlowInstrumentedTest {
                 if (id == reused.id && !parked.isCompleted) { parked.complete(Unit); release.await() }
             }
             NotebookTestHooks.onJoinWait = { id -> if (id == reused.id) joining.set(true) }
-            NotebookTestHooks.afterJoinBeforeSettle = { id -> if (id == reused.id) { addWindowBLine(id); bAdded.set(true) } }
+            // Only the settling Keep's: the earlier one passes this seam before it parks.
+            NotebookTestHooks.afterJoinBeforeSettle = { id -> if (id == reused.id && parked.isCompleted && !bAdded.get()) { addWindowBLine(id); bAdded.set(true) } }
             instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
             waitUntil({ "earlier Keep parked" }) { parked.isCompleted }
             instrumentation.runOnMainSync { vm.keepAlternate("settling line") }
@@ -2612,11 +2633,305 @@ class BackupFlowInstrumentedTest {
             instrumentation.waitForIdleSync()
             assertTrue("${notebook(reused.id)}", hasLine(reused.id, "window B line"))
             assertTrue("${notebook(reused.id)}", hasLine(reused.id, "kept line") && hasLine(reused.id, "settling line"))
+            // Written in the order they were made (a kept line goes first in the list): the earlier Keep committed first.
+            val order = notebook(reused.id).alternates.map { it.text }
+            assertTrue("$order", order.indexOf("settling line") < order.indexOf("kept line"))
         } finally {
             release.complete(Unit)
             NotebookTestHooks.beforeLoadedNotebookWrite = null
             NotebookTestHooks.onJoinWait = null
             NotebookTestHooks.afterJoinBeforeSettle = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    private val songY = SongProject("song-y", "Song Y", "y words", "", 100L)
+    private fun storedKeys() = runBlocking { repo.currentProjectIdFlow.first() to repo.editorStateFlow().first() }
+    /** The one song holding the held words other than [except], present as soon as the hold released the editor. */
+    private fun recovered(vararg except: String): SongProject {
+        val kept = songs().filter { it.lyrics == heldEdits && it.id !in except }
+        assertEquals("${songs()}", 1, kept.size)
+        return kept.single()
+    }
+
+    /** K2: the shared selection and raw words at release, after the refresh found A's receipt gone. */
+    private fun keysLeg(raw: String? = null, during: suspend (copy: SongProject) -> Unit, expected: (copy: SongProject, n: SongProject) -> Pair<String?, Triple<String, String, String>>) {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songY))
+        if (raw != null) instrumentation.runOnMainSync { vm.title = raw }
+        var copy: SongProject? = null
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            copy = repo.projectsFlow.first().single { it.id != openSong.id && it.id != songY.id }
+            during(copy!!)
+        }
+        try {
+            editAndRestore(vm)
+            val n = recovered(copy!!.id)
+            assertEquals(n.id, vm.currentProjectId)
+            assertEquals(expected(copy!!, n), storedKeys())
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K2(a): Y selected elsewhere with its raw words. */
+    @Test fun aRecoveryLeavesAnotherSongSelectedElsewhereAndItsRawWords() = keysLeg(during = {
+        editCopyInPlaceInWindowB(); repo.selectProject(songY.id); repo.saveEditorState("", "y raw", "y theme")
+    }) { _, _ -> songY.id to Triple("", "y raw", "y theme") }
+
+    /** K2(b): the selected copy went to the Trash, which cleared the selection. */
+    @Test fun aRecoveryLeavesTheSelectionClearedByMovingTheCopyToTheTrash() = keysLeg(during = {
+        repo.moveProjectToTrash(it.id, System.currentTimeMillis())
+    }) { _, _ -> null to Triple("", "", "") }
+
+    /** K2(c): the copy still selected, with window B's raw words. */
+    @Test fun aRecoveryLeavesTheCopySelectedWithAnotherWindowsRawWords() = keysLeg(during = {
+        editCopyInPlaceInWindowB()
+    }) { copy, _ -> copy.id to Triple(copy.title, windowBWords, copy.theme) }
+
+    /** K2(d): what the commit itself wrote for A is still stored, so the recovery selects the new song with A's raw words. */
+    @Test fun aRecoveryAfterTheCommitsOwnSelectionSelectsTheNewSongWithTheRawWords() = keysLeg(raw = "", during = {
+        // A whole-list write keeps every row's words but ends every receipt; the shared keys are not touched.
+        repo.saveProjects(repo.projectsFlow.first())
+    }) { _, n ->
+        assertEquals("Untitled Song", n.title)
+        n.id to Triple("", heldEdits, "")
+    }
+
+    /** K2(e): B selected the reuse target before the commit, so the commit wrote no selection for A and the recovery writes none. */
+    @Test fun aRecoveryLeavesAReuseTargetSelectedBeforeTheCommit() {
+        val reused = SongProject("reuse-x", "Untitled Song", heldEdits, "", 100L)
+        driveWithReused(reused)
+        val vm = openSongInEditor(otherSongs = listOf(reused))
+        BackupTestHooks.beforeHeldOperation = { repo.selectProject(reused.id) }
+        BackupTestHooks.beforeHoldListRefresh = { BackupTestHooks.beforeHoldListRefresh = null; repo.saveProjects(repo.projectsFlow.first()) }
+        try {
+            instrumentation.runOnMainSync {
+                vm.onTitleChanged("")
+                vm.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue(heldEdits))
+            }
+            firstSongIdIs(reused.id) {
+                instrumentation.runOnMainSync { vm.restoreFromBackup() }
+                waitUntil({ "status ${vm.backupStatus} held ${vm.editorHeld}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+                instrumentation.waitForIdleSync()
+            }
+            assertEquals(heldEdits, songs().single { it.id == reused.id }.lyrics)
+            val n = recovered(reused.id)
+            assertEquals(n.id, vm.currentProjectId)
+            assertEquals(reused.id to Triple(reused.title, reused.lyrics, reused.theme), storedKeys())
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K1: the copy changed and changed back during the refresh: its words match, but the receipt is gone. */
+    @Test fun aCopyChangedAndChangedBackDuringTheRefreshIsNotAdoptedAgain() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        var copyId = ""
+        BackupTestHooks.beforeHoldListRefresh = {
+            BackupTestHooks.beforeHoldListRefresh = null
+            val copy = repo.projectsFlow.first().single { it.id != openSong.id }
+            copyId = copy.id
+            editCopyInPlaceInWindowB()
+            repo.saveActiveState(copy, null, copy.title, copy.lyrics, copy.theme)
+        }
+        try {
+            editAndRestore(vm)
+            assertEquals(heldEdits, songs().single { it.id == copyId }.lyrics)
+            val n = recovered(copyId)
+            assertEquals(n.id, vm.currentProjectId)
+            val typed = "W3 typed after the hold"
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(typed) }
+            saveNow(vm)
+            assertEquals(mapOf(openSong.id to newerWords, copyId to heldEdits, n.id to typed), songs().associate { it.id to it.lyrics })
+            assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line"))
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K3(a): unconfirmed, B keeps a line; A's first save is valid and its checkpoint is added to X's stored notebook. */
+    @Test fun aValidFirstSaveOfAnUnconfirmedAdoptionAddsItsCheckpointToTheStoredNotebook() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        failingRefresh { addWindowBLine(repo.projectsFlow.first().single { it.id != openSong.id }.id) }
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            val typed = "W3 typed on the unconfirmed copy"
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(typed) }
+            saveNow(vm)
+            waitUntil({ "${notebook(copyId)}" }) { notebook(copyId).versions.any { it.lyrics == typed } }
+            instrumentation.waitForIdleSync()
+            assertEquals(mapOf(openSong.id to newerWords, copyId to typed), songs().associate { it.id to it.lyrics })
+            assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line"))
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K3(b): unconfirmed, B keeps a line and selects Y; A's first action is Keep: X's notebook gets it, Y's keys stay. */
+    @Test fun aKeepOnAnUnconfirmedAdoptionIsItsOwnEditAndLeavesAnotherSelection() {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songY))
+        failingRefresh {
+            addWindowBLine(repo.projectsFlow.first().single { it.id != openSong.id && it.id != songY.id }.id)
+            repo.selectProject(songY.id)
+            repo.saveEditorState("", "y raw", "y theme")
+        }
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            instrumentation.runOnMainSync { vm.keepAlternate("a kept line") }
+            waitUntil({ "${notebook(copyId)}" }) { hasLine(copyId, "a kept line") }
+            instrumentation.waitForIdleSync()
+            assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line"))
+            assertEquals(songY.id to Triple("", "y raw", "y theme"), storedKeys())
+            assertEquals(setOf(openSong.id, songY.id, copyId), songs().map { it.id }.toSet())
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K4(a): a Keep on an unconfirmed adoption, with no barrier, lands next to another window's line. */
+    @Test fun aKeepStraddlingAnUnconfirmedAdoptionsDecisionKeepsAnotherWindowsLine() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        failingRefresh { addWindowBLine(repo.projectsFlow.first().single { it.id != openSong.id }.id) }
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            instrumentation.runOnMainSync { vm.keepAlternate("a line") }
+            waitUntil({ "${notebook(copyId)}" }) { hasLine(copyId, "a line") }
+            instrumentation.waitForIdleSync()
+            assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line"))
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K5: a second hold on an unconfirmed adoption another window changed: clean, or with words hidden behind Welcome. */
+    @Test fun aSecondHoldKeepsTheCleanHeldWordsAsOneNewSong() = secondHoldLeg(hidden = null)
+
+    @Test fun aSecondHoldKeepsWordsHiddenBehindWelcomeAsOneNewSong() = secondHoldLeg(hidden = "W3 typed then hidden behind Welcome")
+
+    private fun secondHoldLeg(hidden: String?) {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        var copyId = ""
+        failingRefresh {
+            copyId = repo.projectsFlow.first().single { it.id != openSong.id }.id
+            editCopyInPlaceInWindowB()
+        }
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            editAndRestore(vm)
+            if (hidden != null) instrumentation.runOnMainSync {
+                vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(hidden)
+                vm.showStartMenu = true
+            }
+            BackupTestHooks.beforeHeldOperation = { entered.complete(Unit) }
+            instrumentation.runOnMainSync { vm.restoreFromBackup() }
+            waitUntil({ "held ${vm.editorHeld} status ${vm.backupStatus}" }) { vm.backupStatus is BackupStatus.Connected && !vm.editorHeld }
+            instrumentation.waitForIdleSync()
+            val words = hidden ?: heldEdits
+            val kept = songs().filter { it.lyrics == words && it.id != copyId }
+            assertEquals("${songs()}", 1, kept.size)
+            assertEquals(windowBWords, songs().single { it.id == copyId }.lyrics)
+        } finally {
+            BackupTestHooks.beforeHeldOperation = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** K8: after the unconfirmed refresh, the copy is moved to the Trash while A's save waits: A's words go to one new song. */
+    @Test fun aSaveFindingAnUnconfirmedAdoptionGoneKeepsTheWordsAsANewSong() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        failingRefresh()
+        val w3 = "W3 saved after the copy left"
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            instrumentation.runOnMainSync { vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(w3) }
+            DraftSaveTestHooks.beforeWrite = gate
+            instrumentation.runOnMainSync { vm.flushCurrentDraft() }
+            waitUntil({ "gate taken" }) { DraftSaveTestHooks.beforeWrite == null }
+            runBlocking { repo.moveProjectToTrash(copyId, System.currentTimeMillis()) }
+            gate.complete(Unit)
+            waitUntil({ "stored ${songs()}" }) { songs().any { it.lyrics == w3 } }
+            instrumentation.waitForIdleSync()
+            val n = songs().single { it.lyrics == w3 }
+            assertEquals(Triple("Open Song", w3, ""), Triple(n.title, n.lyrics, n.theme))
+            assertTrue(songs().none { it.id == copyId })
+            // The Trash move cleared the selection the commit wrote for A; that is no tuple of A's, so it stays.
+            assertEquals(null to Triple("", "", ""), storedKeys())
+        } finally {
+            gate.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** A Keep on an unconfirmed adoption shows as saving until its own write commits, and as not saved when that fails. */
+    @Test fun aNotebookActionOnAnUnconfirmedAdoptionShowsSavingUntilItsWriteCommits() {
+        newerOpenSong()
+        val vm = openSongInEditor(activity = true)
+        failingRefresh()
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            NotebookTestHooks.beforeLoadedNotebookWrite = { id -> if (id == copyId && !parked.isCompleted) { parked.complete(Unit); release.await() } }
+            instrumentation.runOnMainSync { vm.showSongNotebook = true }
+            instrumentation.runOnMainSync { vm.keepAlternate("a pending line") }
+            waitUntil({ "parked" }) { parked.isCompleted }
+            waitForText("Saving…")
+            release.complete(Unit)
+            waitUntil({ "${notebook(copyId)}" }) { hasLine(copyId, "a pending line") }
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("Saving…").fetchSemanticsNodes().isEmpty() }
+        } finally {
+            release.complete(Unit)
+            NotebookTestHooks.beforeLoadedNotebookWrite = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aNotebookActionWhoseRecoveryFailsShowsNotSavedAndItsRetryKeepsIt() {
+        newerOpenSong()
+        val vm = openSongInEditor(activity = true)
+        failingRefresh { editCopyInPlaceInWindowB() }
+        try {
+            editAndRestore(vm)
+            val copyId = checkNotNull(vm.currentProjectId)
+            instrumentation.runOnMainSync { vm.showSongNotebook = true }
+            RecoveryTestHooks.failNextRecovery.set(true)
+            instrumentation.runOnMainSync { vm.keepAlternate("a refused line") }
+            waitForText("Not saved – Retry")
+            assertTrue(songs().none { it.lyrics == heldEdits })
+            assertTrue("${notebook(copyId)}", !hasLine(copyId, "a refused line"))
+            compose.onNodeWithText("Not saved – Retry").performClick()
+            waitUntil({ "stored ${songs()}" }) { songs().any { it.lyrics == heldEdits } }
+            val n = songs().single { it.lyrics == heldEdits }
+            waitUntil({ "${notebook(n.id)}" }) { hasLine(n.id, "a refused line") }
+            assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line") && !hasLine(copyId, "a refused line"))
+        } finally {
+            RecoveryTestHooks.failNextRecovery.set(false)
             BackupTestHooks.beforeHoldListRefresh = null
             resetOpenSong()
         }
