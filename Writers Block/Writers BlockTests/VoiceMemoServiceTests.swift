@@ -127,6 +127,28 @@ struct VoiceMemoServiceTests {
         #expect(!service.isPlayingMemo(at: url))
     }
 
+    @Test(arguments: [true, false])
+    @MainActor func playbackActivationOrOpenFailureShowsError(activationFails: Bool) async {
+        struct ActivationFailed: Error {}
+        let transitions = VoiceMemoAudioSessionTransitions(
+            activateRecording: {},
+            activatePlayback: { if activationFails { throw ActivationFailed() } },
+            deactivate: {}
+        )
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let service = VoiceMemoService(sessionTransitions: transitions, stagingRoot: root)
+        let missingFile = root.appendingPathComponent("missing.m4a")
+        service.togglePlayback(url: missingFile)
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while service.lastError == nil && ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(service.lastError == "Couldn't start playback. Try again.")
+        #expect(!service.isPlaying)
+        #expect(service.playbackPosition(at: missingFile) == nil)
+    }
+
     // MARK: - File Naming
 
     @Test func newMemoURLHasMp4aExtension() async {

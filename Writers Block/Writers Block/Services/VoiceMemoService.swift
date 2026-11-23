@@ -685,6 +685,7 @@ final class VoiceMemoService {
                 isPlaying = true
             } else {
                 stopPlayback()
+                lastError = "Couldn't resume playback. Try again."
             }
             return
         }
@@ -721,19 +722,17 @@ final class VoiceMemoService {
         do {
             try result.get()
         } catch {
-            pendingPlayURL = nil
+            failToStartPlayback()
             return
         }
-        pendingPlayURL = nil
         // Checked again as the player starts: removed meanwhile, it does not play.
         guard playbackAllowed?(url) ?? true, playbackIdentity?(url) == playingIdentity else {
-            playingIdentity = nil
-            sessionTransitions.deactivate()
+            stopPlayback()
             return
         }
 
         guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            sessionTransitions.deactivate()
+            failToStartPlayback()
             return
         }
 
@@ -741,13 +740,19 @@ final class VoiceMemoService {
         delegateForwarder = forwarder
         player.delegate = forwarder
         guard player.play() else {
-            sessionTransitions.deactivate()
+            failToStartPlayback()
             return
         }
 
+        pendingPlayURL = nil
         audioPlayer = player
         activePlayURL = url
         isPlaying = true
+    }
+
+    private func failToStartPlayback() {
+        stopPlayback()
+        lastError = "Couldn't start playback. Try again."
     }
 
     /// Stops playback (or a pending start) of any of these recordings, by id, or of
