@@ -289,6 +289,8 @@ internal object RecoveryTestHooks {
     @Volatile var onQueuedNavigationRun: ((MainViewModel) -> Unit)? = null
     /** Called each time a navigation is queued behind a save or a held editor. */
     @Volatile var onNavigationQueued: ((MainViewModel) -> Unit)? = null
+    /** Runs when a revoked adoption's notebook is reread for its recovery, before the read. */
+    @Volatile var onRevokeRead: (suspend () -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -1181,6 +1183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun revokeAdoption(h: AdoptedCopy): Boolean {
         if (adoptedCopy === h) adoptedCopy = null
         if (h.decision.complete(false)) {
+            RecoveryTestHooks.onRevokeRead?.invoke()
             // The copy's cached notebook may hold this window's view of it; show it as stored.
             try { workspaces = repo.workspacesFlow.first()[h.id]?.let { workspaces + (h.id to it) } ?: (workspaces - h.id) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
         }

@@ -110,6 +110,8 @@ internal sealed interface HoldResult {
 internal object RepositoryTestHooks {
     /** Runs once inside the next new song's insert, after its checks passed and before it is stored. */
     @Volatile var afterInsertCheck: (suspend () -> Unit)? = null
+    /** Runs once inside the next update of a stored song, after its checks passed and before it is stored. */
+    @Volatile var afterUpdateCheck: (suspend () -> Unit)? = null
 }
 
 /** Every draw for a new song id in one edit was taken: the edit writes nothing. */
@@ -433,6 +435,7 @@ class ProjectRepository internal constructor(
                         throw CreationIdTakenException(project.id)
                     }
                     if (adoptedFrom != null && heldRow(prefs, active, adoptedFrom, project.id) == null) throw HeldCopyChangedException(project.id)
+                    RepositoryTestHooks.afterUpdateCheck?.let { RepositoryTestHooks.afterUpdateCheck = null; it() }
                     active.map { current ->
                         if (current.id != project.id) current else current.copy(
                             title = project.title,
