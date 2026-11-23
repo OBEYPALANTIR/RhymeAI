@@ -1315,8 +1315,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Another song is a new document even when its words match: its position, history and title are its own.
         if (row.id == id && row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
         dismissRewrite()
-        // The adopted copy holds this editor's words: an empty raw title stays raw, not its stored "Untitled Song".
-        title = if (result is HoldResult.Adopted && row.title == title.ifEmpty { "Untitled Song" }) title else row.title
+        // A copy the commit appended for this editor's words keeps its raw empty title, not the stored "Untitled Song";
+        // a reused row is another song and shows its stored title.
+        title = if (result is HoldResult.Adopted && result.appended && row.title == title.ifEmpty { "Untitled Song" }) title else row.title
         loadWords(row.lyrics)
         theme = row.theme
         completeDraftTransition()
