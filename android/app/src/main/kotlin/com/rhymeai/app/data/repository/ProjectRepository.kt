@@ -49,8 +49,19 @@ internal class CorruptLibraryException(
     cause: Throwable
 ) : IllegalStateException("Stored $area data could not be read", cause)
 
-internal class MissingActiveProjectException(id: String) :
+internal open class MissingActiveProjectException(id: String) :
     IllegalStateException("Song $id is no longer active")
+
+/** A new song's id is held by another row, Trash or a song tombstone: nothing was written. */
+internal class CreationIdTakenException(id: String) : MissingActiveProjectException(id)
+
+/**
+ * One new song's creation. Its insert writes [token] as the row's generation; once that insert has committed the
+ * creation may only update that same row, never insert again.
+ */
+class SongCreation(val token: String = java.util.UUID.randomUUID().toString()) {
+    @Volatile internal var inserted = false
+}
 
 /** Every draw for a new song id in one edit was taken: the edit writes nothing. */
 internal class SongIdUnavailableException : IllegalStateException("No free song id could be drawn")
@@ -141,6 +152,8 @@ class ProjectRepository internal constructor(
         private val CURRENT_TITLE_KEY = stringPreferencesKey("current_title")
         /** Song id to kept-copy id, one per song a held flush just wrote edits for: a sync commit that replaces the song keeps them. */
         private val PRESERVED_SONGS_KEY = stringPreferencesKey("preserved_songs_json")
+        /** Song id to a local generation naming one continuous active row; only tracked ids (creations, kept copies) have one. */
+        private val ROW_GENERATIONS_KEY = stringPreferencesKey("row_generations_json")
         private val CURRENT_LYRICS_KEY = stringPreferencesKey("current_lyrics")
         private val CURRENT_THEME_KEY = stringPreferencesKey("current_theme")
         internal val APP_APPEARANCE_KEY = stringPreferencesKey("app_appearance")
@@ -317,29 +330,37 @@ class ProjectRepository internal constructor(
      * Persist only the intended editor entry against the latest library snapshot.
      * A caller's in-memory list may predate a Trash transition; it must never
      * replace membership committed by that transition.
+     *
+     * A [creation] inserts the song only at a free id (not active, in Trash or named by a song tombstone) and
+     * afterwards updates only the one row its insert made; without one an absent song is refused, as always.
      */
     suspend fun saveActiveState(
         project: SongProject?,
-        createIfMissing: Boolean,
+        creation: SongCreation?,
         title: String,
         lyrics: String,
         theme: String,
         preserveAs: String? = null
     ): List<SongProject> = projectSaveMutex.withLock {
         var committed: List<SongProject>? = null
+        var inserted = false
         dataStore.edit { prefs ->
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             val next = if (project == null) {
                 active
             } else {
-                val stored = active.firstOrNull { it.id == project.id }
-                if (stored == null) {
-                    if (!createIfMissing ||
-                        trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]")
-                            .any { it.project.id == project.id }
-                    ) throw MissingActiveProjectException(project.id)
+                val stored = active.count { it.id == project.id }
+                if (stored == 0) {
+                    if (creation == null || creation.inserted) throw MissingActiveProjectException(project.id)
+                    if (trashedProjectsStore.decode(prefs[TRASHED_PROJECTS_KEY] ?: "[]").any { it.project.id == project.id } ||
+                        deletionsStore.decode(prefs[SYNC_DELETIONS_KEY] ?: "[]").any { it.isSongTombstone && it.projectId == project.id }
+                    ) throw CreationIdTakenException(project.id)
+                    inserted = true
                     listOf(project) + active
                 } else {
+                    if (creation != null && (stored > 1 || rowGenerations(prefs)[project.id] != creation.token)) {
+                        throw CreationIdTakenException(project.id)
+                    }
                     active.map { current ->
                         if (current.id != project.id) current else current.copy(
                             title = project.title,
@@ -355,8 +376,12 @@ class ProjectRepository internal constructor(
                     }
                 }
             }
-            if (project != null) prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
-            if (project != null && createIfMissing) {
+            if (project != null) {
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
+                prefs.retireGenerations(active, next)
+                if (inserted) prefs.setRowGenerations(rowGenerations(prefs) + (project.id to creation!!.token))
+            }
+            if (project != null && creation != null) {
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =
                     (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - project.id
             }
@@ -368,7 +393,26 @@ class ProjectRepository internal constructor(
             if (preserveAs != null && project != null) prefs.setPreservedSongs(preservedSongs(prefs) + (project.id to preserveAs))
             committed = next
         }
+        // Set only once the insert is stored: a failed write leaves the creation free to insert on retry.
+        if (inserted) creation!!.inserted = true
         checkNotNull(committed)
+    }
+
+    private fun rowGenerations(prefs: Preferences): Map<String, String> =
+        prefs[ROW_GENERATIONS_KEY]?.let { runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrNull() }.orEmpty()
+
+    private fun MutablePreferences.setRowGenerations(generations: Map<String, String>) {
+        if (generations.isEmpty()) remove(ROW_GENERATIONS_KEY) else this[ROW_GENERATIONS_KEY] = json.encodeToString(generations)
+    }
+
+    /**
+     * Run by every edit that writes the active list: a tracked row keeps its generation only while its id is the one
+     * active row with it before and after. Leaving, an insertion or reintroduction, and a repeated id end it.
+     */
+    private fun MutablePreferences.retireGenerations(before: List<SongProject>, after: List<SongProject>) {
+        val generations = rowGenerations(this)
+        val kept = generations.filterKeys { id -> before.count { it.id == id } == 1 && after.count { it.id == id } == 1 }
+        if (kept != generations) setRowGenerations(kept)
     }
 
     private fun preservedSongs(prefs: Preferences): Map<String, String> =
@@ -410,6 +454,7 @@ class ProjectRepository internal constructor(
         dataStore.edit { prefs ->
             projectsStore.requireWritable(prefs[PROJECTS_KEY] ?: "[]")
             prefs[PROJECTS_KEY] = encoded
+            prefs.setRowGenerations(emptyMap())
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - projects.map { it.id }.toSet()
         }
@@ -422,6 +467,7 @@ class ProjectRepository internal constructor(
             val stored = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             require(stored.none { held -> added.any { it.id == held.id } }) { "A recovered song id is already in use" }
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(stored + added)
+            prefs.retireGenerations(stored, stored + added)
         }
     }
 
@@ -459,6 +505,7 @@ class ProjectRepository internal constructor(
                 trash.filterNot { it.project.id == id }
             val wasCurrent = prefs[CURRENT_PROJECT_ID_KEY] == id
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
+            prefs.retireGenerations(active, nextActive)
             prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
@@ -503,6 +550,7 @@ class ProjectRepository internal constructor(
                     retained
             }
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(nextActive)
+            prefs.retireGenerations(active, nextActive)
             prefs[PENDING_RECORDING_DELETIONS_KEY] =
                 (prefs[PENDING_RECORDING_DELETIONS_KEY] ?: emptySet()) - id
             prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
@@ -536,6 +584,7 @@ class ProjectRepository internal constructor(
             val next = active.map { if (it.id == id) updated else it }
             inSameWrite(prefs)
             prefs[PROJECTS_KEY] = explicitJson.encodeToString(next)
+            prefs.retireGenerations(active, next)
             // The editor's saved draft of this song follows, so reopening it shows the line.
             if (prefs[CURRENT_PROJECT_ID_KEY] == id) prefs[CURRENT_LYRICS_KEY] = updated.lyrics
             committed = next
@@ -957,7 +1006,9 @@ class ProjectRepository internal constructor(
                     prefs[CURRENT_LYRICS_KEY] = shown?.lyrics ?: ""
                     prefs[CURRENT_THEME_KEY] = shown?.theme ?: ""
                 }
-                prefs[PROJECTS_KEY] = explicitJson.encodeToString(listOfNotNull(editorCopy) + appended + nextProjects)
+                val written = listOfNotNull(editorCopy) + appended + nextProjects
+                prefs[PROJECTS_KEY] = explicitJson.encodeToString(written)
+                prefs.retireGenerations(current.projects, written)
                 prefs[TRASHED_PROJECTS_KEY] = explicitJson.encodeToString(nextTrash)
                 prefs[SYNC_DELETIONS_KEY] = json.encodeToString(resolved.deletions)
                 prefs[PENDING_RECORDING_DELETIONS_KEY] =

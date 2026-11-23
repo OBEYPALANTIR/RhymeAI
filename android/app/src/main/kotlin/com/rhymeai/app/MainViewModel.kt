@@ -29,6 +29,7 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.repository.SongCreation
 import com.rhymeai.app.data.repository.SameIdTrashCopiesException
 import com.rhymeai.app.data.repository.SameIdActiveCopiesException
 import com.rhymeai.app.data.repository.TrashCopyOutranksActiveException
@@ -493,7 +494,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var trashedProjects by mutableStateOf<List<TrashedSongProject>>(emptyList())
     var currentProjectId by mutableStateOf<String?>(null)
     private var positionSaveJob: Job? = null
-    private val pendingProjectCreationIds = mutableSetOf<String>()
+    /** New songs not yet known to be stored, each with the creation its saves carry (captured before they suspend). */
+    private val pendingCreations = mutableMapOf<String, SongCreation>()
     private var workspaces by mutableStateOf<Map<String, SongWorkspace>>(emptyMap())
     val songWorkspace: SongWorkspace get() = workspaces[currentProjectId] ?: SongWorkspace()
     var editorScrollOffset by mutableStateOf(0f)
@@ -577,6 +579,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!showStartMenu && currentProjectId == project.id) {
                 val notSaved = "Couldn't add the line to the open song. Try again in a moment."
                 val stored = projects.firstOrNull { it.id == project.id } ?: return notSaved
+                val creation = pendingCreations[project.id]
                 // The marker is saved first: if that fails, nothing went into the song.
                 oneLinersStore.markUsed(line.id, project.id) ?: return "This line is no longer in One Liners."
                 if (!insertSuggestion(text)) {
@@ -603,7 +606,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     persistActiveProjectSnapshot(
                         stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
                             updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
-                        savedTitle, savedLyrics, savedTheme, ++saveAttempts
+                        savedTitle, savedLyrics, savedTheme, ++saveAttempts, creation
                     )
                     markEditorSaved(savedAt)
                     saved = true
@@ -660,12 +663,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun saveWorkspaceForActiveIdentity(id: String, workspace: SongWorkspace) {
-        if (id in pendingProjectCreationIds) {
+        val creation = pendingCreations[id]
+        if (creation != null) {
             val project = projects.firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
             val savedAt = editRevision
             persistActiveProjectSnapshot(
                 project.copy(title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme),
-                title, lyrics, theme, ++saveAttempts
+                title, lyrics, theme, ++saveAttempts, creation
             )
             markEditorSaved(savedAt)
         }
@@ -779,7 +783,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun detachMissingActiveProject(id: String) {
-        pendingProjectCreationIds.remove(id)
+        pendingCreations.remove(id)
         currentProjectId = null
         positionSaveJob?.cancel()
         saveStatus = SaveFailureRules.restingStatus(saveFailed)
@@ -821,7 +825,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Edits the flush is about to write over the stored song are marked in that same write: a commit that
             // replaces them keeps them as a new song, also when the app dies in between.
             val songId = currentProjectId
-            val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingProjectCreationIds }
+            val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingCreations }
             // Only words edited here since the song was loaded or saved are written: a buffer another window's save
             // left behind is no edit, writes nothing and reloads after the operation.
             val dirty = editorDirty
@@ -870,7 +874,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val stored = repo.projectsFlow.first()
             if (currentProjectId != id) return
-            projects = projects.filter { it.id in pendingProjectCreationIds && stored.none { s -> s.id == it.id } } + stored
+            projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
             if (keptId != null && stored.any { it.id == keptId }) {
                 id = keptId
                 currentProjectId = keptId
@@ -879,7 +883,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val row = stored.firstOrNull { it.id == id }
             if (row == null) {
                 // Its words were saved before the operation; it removed or trashed them.
-                if (id !in pendingProjectCreationIds) clearEditorAfterProjectDelete()
+                if (id !in pendingCreations) clearEditorAfterProjectDelete()
                 return
             }
             if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
@@ -922,8 +926,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme,
             updatedAt = if (existing.lyrics == lyrics && existing.title == title.ifEmpty { "Untitled Song" } && existing.theme == theme) existing.updatedAt else now
         ) ?: createUntitledProjectSnapshot().also {
-            pendingProjectCreationIds.add(it.id)
+            pendingCreations[it.id] = SongCreation()
         }
+        val creation = pendingCreations[project.id]
         currentProjectId = project.id
         if (existing == null) projects = listOf(project) + projects
         rememberEditorPosition()
@@ -936,7 +941,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         return viewModelScope.async {
             try {
-                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, preserveAs)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, preserveAs)
                 markEditorSaved(savedAt)
                 if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
                     if (missingId != null) reportRecoveredDraft()
@@ -1831,7 +1836,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     false
                 }
                 // Load projects; a song created while this loaded (its identity reserved) stays listed.
-                val pendingAtLoad = projects.filter { it.id in pendingProjectCreationIds }
+                val pendingAtLoad = projects.filter { it.id in pendingCreations }
                 projects = if (!established) emptyList() else try {
                     pendingAtLoad + repo.projectsFlow.first().filterNot { stored -> pendingAtLoad.any { it.id == stored.id } }
                 } catch (cancelled: CancellationException) {
@@ -1907,7 +1912,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 try {
                     repo.projectsFlow.collect { stored ->
-                        val pending = projects.filter { it.id in pendingProjectCreationIds &&
+                        val pending = projects.filter { it.id in pendingCreations &&
                             stored.none { saved -> saved.id == it.id } }
                         projects = pending + stored
                     }
@@ -2568,9 +2573,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Typing (or another song opened) since the editor cleared owns the stored
                     // selection now; the empty new song's selection is stored only if untouched.
                     val untouched = currentProjectId == null && title.isEmpty() && lyrics.isEmpty() && theme.isEmpty()
-                    val committed = if (untouched) repo.saveActiveState(null, false, "", "", "") else repo.projectsFlow.first()
+                    val committed = if (untouched) repo.saveActiveState(null, null, "", "", "") else repo.projectsFlow.first()
                     // A song started (or opened) meanwhile keeps its place in the list.
-                    projects = projects.filter { it.id in pendingProjectCreationIds && committed.none { saved -> saved.id == it.id } } + committed
+                    projects = projects.filter { it.id in pendingCreations && committed.none { saved -> saved.id == it.id } } + committed
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
@@ -2663,7 +2668,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onCommitted(false)
                     return@launch
                 }
-                pendingProjectCreationIds.remove(id)
+                pendingCreations.remove(id)
                 projects = committed.projects
                 trashedProjects = committed.trashedProjects
                 if (currentProjectId == id) clearEditorAfterProjectDelete()
@@ -2716,7 +2721,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ?: return@launch reportMissingTrashProject()
                 trashedProjects = committed.trashedProjects
                 if (id in committed.purgedIds) { // (c); on (b) the active song keeps its notebook, creation mark and recordings
-                    pendingProjectCreationIds.remove(id)
+                    pendingCreations.remove(id)
                     workspaces = workspaces - id
                     if (!retryPendingRecordingDeletions(id)) {
                         persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
@@ -2765,7 +2770,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val committed = repo.purgeExpiredTrashedProjects(now, adopt = ::adoptRecordings)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
-                for (id in committed.purgedIds) pendingProjectCreationIds.remove(id)
+                for (id in committed.purgedIds) pendingCreations.remove(id)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -2892,7 +2897,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     title = imported.title.ifBlank { "Imported Song" },
                     updatedAt = System.currentTimeMillis()
                 )
-                pendingProjectCreationIds.add(project.id)
+                val creation = SongCreation().also { pendingCreations[project.id] = it }
                 projects = listOf(project) + projects
                 title = project.title
                 lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -2908,7 +2913,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val savedAt = editRevision
                 viewModelScope.launch {
                     try {
-                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme, attempt)
+                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme, attempt, creation)
                         markEditorSaved(savedAt)
                         onReady()
                     } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
@@ -2959,6 +2964,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorLyrics: String,
         editorTheme: String,
         attempt: Long,
+        creation: SongCreation?,
         preserveAs: String? = null
     ): List<SongProject> {
         if (currentProjectId != project.id) throw CancellationException("Song changed")
@@ -2966,9 +2972,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val committed = try {
             DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
             if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
-            repo.saveActiveState(project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme, preserveAs)
+            repo.saveActiveState(project, creation, editorTitle, editorLyrics, editorTheme, preserveAs)
         } finally { draftWritesInFlight-- }
-        pendingProjectCreationIds.remove(project.id)
+        pendingCreations.remove(project.id)
         if (currentProjectId == project.id) projects = committed
         val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
         if (currentProjectId == project.id && wordsMatch) committedAttempt = maxOf(committedAttempt, attempt)
@@ -2987,8 +2993,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** [storedBefore] is the song's row as read before the write: with it a vanished unedited song is told from lost edits. */
     private suspend fun reconcileFailedProjectSave(project: SongProject, error: Exception, attempt: Long, storedBefore: SongProject? = null) {
         val missing = error is MissingActiveProjectException
-        val known = storedBefore?.takeIf { it.id !in pendingProjectCreationIds }
-        if (missing) pendingProjectCreationIds.remove(project.id)
+        val known = storedBefore?.takeIf { it.id !in pendingCreations }
+        if (missing) pendingCreations.remove(project.id)
         val unedited = known != null && known.title == title.ifEmpty { "Untitled Song" } &&
             known.lyrics == lyrics && known.theme == theme
         // Marked before the reread, so a reread that fails cannot leave the draft unmarked.
@@ -3010,7 +3016,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (DraftSaveTestHooks.failNextReread.compareAndSet(true, false)) throw java.io.IOException("injected reread failure")
             val stored = repo.projectsFlow.first()
             projects = if (!missing && currentProjectId == project.id &&
-                project.id in pendingProjectCreationIds && stored.none { it.id == project.id }
+                project.id in pendingCreations && stored.none { it.id == project.id }
             ) listOf(project) + stored else stored
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -3061,7 +3067,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun reserveProjectIdentity(): String = currentProjectId ?: createUntitledProjectSnapshot().let { project ->
-        pendingProjectCreationIds.add(project.id)
+        pendingCreations[project.id] = SongCreation()
         projects = listOf(project) + projects
         currentProjectId = project.id
         showStartMenu = false
@@ -3072,6 +3078,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentProjectId?.let { return it }
         val projectId = reserveProjectIdentity()
         val project = projects.first { it.id == projectId }
+        val creation = pendingCreations[projectId]
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
@@ -3079,7 +3086,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         viewModelScope.launch {
             try {
-                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation)
                 markEditorSaved(savedAt)
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                 reconcileFailedProjectSave(project, error, attempt)
@@ -3093,6 +3100,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun ensureProjectForRecording(): String {
         if (editorHeld) throw CancellationException("Song changed")
         val projectId = reserveProjectIdentity()
+        val creation = pendingCreations[projectId]
         val project = (projects.firstOrNull { it.id == projectId }
             ?: createUntitledProjectSnapshot(title, lyrics, theme, id = projectId)).copy(
             title = title.ifEmpty { "Untitled Song" },
@@ -3103,7 +3111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         val savedAt = editRevision
         try {
-            persistActiveProjectSnapshot(project, title, lyrics, theme, attempt)
+            persistActiveProjectSnapshot(project, title, lyrics, theme, attempt, creation)
             markEditorSaved(savedAt)
         } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
             // The caller reports the recording; the open words are still unsaved.
@@ -3124,6 +3132,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTheme = theme
             val revisionAtTrigger = editRevision
             val projectIdAtTrigger = currentProjectId
+            val creationAtTrigger = projectIdAtTrigger?.let(pendingCreations::get)
             val holdsSong = projects.any { it.id == projectIdAtTrigger }
 
             if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty() &&
@@ -3146,11 +3155,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             saveStatus = SaveStatus.SAVING
             val storedBefore = projects.firstOrNull { it.id == projectIdAtTrigger && missingId == null }
+            var creation = creationAtTrigger
             val project = if (projectIdAtTrigger == null || missingId != null) {
                 createUntitledProjectSnapshot(
                     title = currentTitle, lyrics = currentLyrics, theme = currentTheme
                 ).also {
-                    pendingProjectCreationIds.add(it.id)
+                    creation = SongCreation().also { attempt -> pendingCreations[it.id] = attempt }
                     projects = listOf(it) + projects
                     currentProjectId = it.id
                 }
@@ -3164,13 +3174,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val attempt = ++saveAttempts
             try {
-                projects.firstOrNull { it.id == project.id && it.id !in pendingProjectCreationIds }?.let { previous ->
+                projects.firstOrNull { it.id == project.id && it.id !in pendingCreations }?.let { previous ->
                     if (previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme) {
                         updateWorkspace(project.id) { it.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) }
                     }
                 }
                 rememberEditorPosition()
-                persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt)
+                persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt, creation)
                 markEditorSaved(revisionAtTrigger)
                 if (missingId != null) reportRecoveredDraft()
                 DraftSaveTestHooks.afterAutosaveCommit?.let { DraftSaveTestHooks.afterAutosaveCommit = null; it.await() }

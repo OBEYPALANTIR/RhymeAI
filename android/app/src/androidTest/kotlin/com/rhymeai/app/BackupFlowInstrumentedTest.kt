@@ -30,6 +30,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.data.repository.SongCreation
 import com.rhymeai.app.data.sync.BackupManifest
 import com.rhymeai.app.data.sync.BackupStatus
 import com.rhymeai.app.data.sync.DriveAuthorization
@@ -638,7 +639,7 @@ class BackupFlowInstrumentedTest {
             savedTrash = repo.trashedProjectsFlow.first()
             repo.saveProjects(emptyList())
             repo.saveTrashedProjects(emptyList())
-            repo.saveActiveState(openSong, true, openSong.title, openSong.lyrics, openSong.theme)
+            repo.saveActiveState(openSong, SongCreation(), openSong.title, openSong.lyrics, openSong.theme)
             // After the save: a same-id Trash entry makes saveActiveState refuse to create the song.
             repo.saveTrashedProjects(trash)
             if (otherSongs.isNotEmpty()) repo.saveProjects(repo.projectsFlow.first() + otherSongs)
@@ -734,7 +735,7 @@ class BackupFlowInstrumentedTest {
             // The import starts at once, whether or not this view model has seen the other window's save yet.
             // What another window's save writes: the row and the saved editor state. Off the main thread: a store write
             // blocking it can wait forever behind a view-model write whose edit runs on the main thread.
-            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
+            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), null, openSong.title, newerWords, openSong.theme) }
             instrumentation.runOnMainSync {
                 assertEquals("precondition: the editor still shows W1", openSong.lyrics, vm.lyrics)
                 vm.importBackup(android.net.Uri.fromFile(zip))
@@ -792,7 +793,7 @@ class BackupFlowInstrumentedTest {
             runBlocking { kotlinx.coroutines.withTimeout(10_000) { sent.await() } }
             assertTrue(storedOpenSong().lyrics.contains("a sent line"))
             // What another window's save writes, off the main thread as above.
-            runBlocking { repo.saveActiveState(storedOpenSong().copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()), false, openSong.title, newerWords, openSong.theme) }
+            runBlocking { repo.saveActiveState(storedOpenSong().copy(lyrics = newerWords, updatedAt = System.currentTimeMillis()), null, openSong.title, newerWords, openSong.theme) }
             instrumentation.runOnMainSync { vm.importBackup(android.net.Uri.fromFile(zip)) }
             waitUntil({ "notice ${vm.backupNotice}" }) { vm.backupNotice?.startsWith("Imported") == true }
             waitUntil({ "held ${vm.editorHeld} editor ${vm.lyrics}" }) { !vm.editorHeld && vm.lyrics == newerWords }
@@ -906,7 +907,7 @@ class BackupFlowInstrumentedTest {
         val sent = kotlinx.coroutines.CompletableDeferred<String>()
         try {
             // Another window saved W2, so the open loads words the editor does not show yet. Off the main thread, as above.
-            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), false, openSong.title, newerWords, openSong.theme) }
+            runBlocking { repo.saveActiveState(openSong.copy(lyrics = newerWords, updatedAt = 200L), null, openSong.title, newerWords, openSong.theme) }
             val song = storedOpenSong()
             instrumentation.runOnMainSync {
                 vm.showStartMenu = true

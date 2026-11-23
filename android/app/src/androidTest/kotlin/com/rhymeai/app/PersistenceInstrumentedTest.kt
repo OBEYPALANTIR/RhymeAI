@@ -9,6 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.rhymeai.app.data.model.SongProject
 import com.rhymeai.app.data.model.SavedLocalModel
 import com.rhymeai.app.data.repository.ProjectRepository
+import com.rhymeai.app.data.repository.SongCreation
 import com.rhymeai.app.service.AIProvider
 import com.rhymeai.app.service.AIModel
 import kotlinx.coroutines.CompletableDeferred
@@ -141,7 +142,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun remoteTrashWhileOpenSavesDraftUnderNewIdentityBeforeNavigation() {
         val original = SongProject("remote-trashed", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -166,7 +167,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun remoteTrashWhileOpenAutosavesNextEditUnderNewIdentity() {
         val original = SongProject("remote-autosave", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -195,7 +196,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun remoteTrashDuringSaveKeepsFailureAndRetrySavesDraftUnderNewIdentity() {
         val original = SongProject("remote-race", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -231,7 +232,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun remoteTrashDuringSaveOfUneditedSongLeavesNoFailure() {
         val original = SongProject("remote-race-unedited", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -254,7 +255,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun retryOfAFailedEraseStoresTheEmptySong() {
         val original = SongProject("erase-retry", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -289,7 +290,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun aFailureDuringTheSavedBeatKeepsTheRetry() {
         val original = SongProject("saved-beat", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -322,7 +323,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun anOlderWriteFailingAfterANewerCommitLeavesNoFailure() {
         val original = SongProject("older-write", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -355,7 +356,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun aNewerCommitDuringAFailedWritesRereadLeavesNoFailure() {
         val original = SongProject("held-reread", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -387,7 +388,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun wordsTypedWhileAMissingSongsRereadIsHeldAreSavedAsANewSong() {
         val original = SongProject("held-missing", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -424,7 +425,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun anOlderWriteFindingTheRowGoneAfterANewerCommitKeepsTheDraftAttached() {
         val original = SongProject("older-missing", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -457,7 +458,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun aRereadFailureAfterAFailedSaveStillMarksTheDraft() {
         val original = SongProject("reread-fails", "Original", "old lyric", "old theme", 100L)
-        runBlocking { repo.saveActiveState(original, true, original.title, original.lyrics, original.theme) }
+        runBlocking { repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme) }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.currentProjectId == original.id && viewModel.title == original.title }
 
@@ -484,7 +485,7 @@ class PersistenceInstrumentedTest {
     fun aRelaunchRightAfterARestoreCommitShowsTheCommittedWords() {
         val original = SongProject("changed-under-editor", "Original", "old lyric", "old theme", 100L)
         runBlocking {
-            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme)
             // The process ends after this commit, before any editor reloads.
             repo.applySyncResult(
                 com.rhymeai.app.data.sync.SyncBlob(projects = listOf(original.copy(lyrics = "restored lyric", updatedAt = 200L))),
@@ -500,7 +501,7 @@ class PersistenceInstrumentedTest {
     fun aRelaunchRightAfterARestoreTrashedTheSongShowsAnEmptyEditor() {
         val original = SongProject("trashed-under-editor", "Original", "old lyric", "old theme", 100L)
         runBlocking {
-            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme)
             repo.applySyncResult(
                 com.rhymeai.app.data.sync.SyncBlob(trashed = listOf(com.rhymeai.app.data.model.TrashedSongProject(original, 200L))),
                 repo.snapshotLocalSyncBase()
@@ -515,7 +516,7 @@ class PersistenceInstrumentedTest {
     fun startupStillShowsEditorWordsSavedApartFromTheSong() {
         val original = SongProject("legacy-editor-words", "Original", "stored lyric", "", 100L)
         runBlocking {
-            repo.saveActiveState(original, true, original.title, original.lyrics, original.theme)
+            repo.saveActiveState(original, SongCreation(), original.title, original.lyrics, original.theme)
             repo.saveEditorState(original.title, "draft words saved apart", original.theme)
         }
         val viewModel = MainViewModel(app).also(handBuilt::add)
@@ -526,7 +527,7 @@ class PersistenceInstrumentedTest {
     @Test
     fun startupKeepsTheBlankTitleOfAnUnchangedSong() {
         val untitled = SongProject("blank-title", "Untitled Song", "some words", "", 100L)
-        runBlocking { repo.saveActiveState(untitled, true, "", untitled.lyrics, "") }
+        runBlocking { repo.saveActiveState(untitled, SongCreation(), "", untitled.lyrics, "") }
         val viewModel = MainViewModel(app).also(handBuilt::add)
         waitUntil { viewModel.initialized }
         assertEquals(Triple<String?, String, String>(untitled.id, "", "some words"), Triple(viewModel.currentProjectId, viewModel.title, viewModel.lyrics))
@@ -629,6 +630,51 @@ class PersistenceInstrumentedTest {
             }
         }
         assertTrue("the seeded One Liner was not deleted", deleted)
+    }
+
+    @Test
+    fun legacyRestartSecondWindowImportAndTemplateUseTheRightSaveMode() {
+        // A song stored before creations carried tokens, open in the editor at relaunch.
+        val legacy = SongProject("legacy-song", "Legacy", "legacy words", "", 100L)
+        runBlocking {
+            repo.saveProjects(listOf(legacy))
+            repo.saveActiveState(legacy, null, legacy.title, legacy.lyrics, legacy.theme)
+        }
+        fun stored() = runBlocking { repo.projectsFlow.first() }
+        fun editorSaved() = runBlocking { repo.editorStateFlow().first() }
+        val first = MainViewModel(app).also(handBuilt::add)
+        waitUntil { first.currentProjectId == legacy.id && first.title == legacy.title }
+        onMain { first.showStartMenu = false; first.onLyricsChanged(TextFieldValue("first window words")) }
+        waitUntil { stored().singleOrNull()?.lyrics == "first window words" }
+
+        // A second window opens the same song and saves it the ordinary way.
+        val second = MainViewModel(app).also(handBuilt::add)
+        waitUntil { second.currentProjectId == legacy.id && second.lyrics == "first window words" }
+        onMain { second.showStartMenu = false; second.onLyricsChanged(TextFieldValue("second window words")) }
+        waitUntil { stored().singleOrNull()?.lyrics == "second window words" }
+        assertEquals(legacy.id, stored().single().id)
+
+        // An import is a new song beside it, and its next save updates that one row.
+        onMain { second.importProject(SongProject(legacy.id, "Imported", "imported words", "", 1L)) }
+        waitUntil { stored().size == 2 && editorSaved().second == "imported words" }
+        val imported = stored().first { it.lyrics == "imported words" }
+        assertNotEquals(legacy.id, imported.id)
+        assertEquals(imported.id, runBlocking { repo.currentProjectIdFlow.first() })
+        onMain { second.onLyricsChanged(TextFieldValue("imported edited")) }
+        waitUntil { stored().any { it.id == imported.id && it.lyrics == "imported edited" } }
+        assertEquals(2, stored().size)
+
+        // A template is another new song, saved by its first autosave, then updated in place.
+        onMain { second.applyTemplate("Blues", "blue theme", "template words") }
+        waitUntil { stored().size == 3 && editorSaved().second == "template words" }
+        val template = stored().first { it.lyrics == "template words" }
+        assertEquals(template.id, runBlocking { repo.currentProjectIdFlow.first() })
+        assertEquals(Triple("Untitled Blues", "template words", "blue theme"), editorSaved())
+        onMain { second.onLyricsChanged(TextFieldValue("template edited")) }
+        waitUntil { stored().any { it.id == template.id && it.lyrics == "template edited" } }
+        assertEquals(setOf(legacy.id, imported.id, template.id), stored().map { it.id }.toSet())
+        assertEquals("second window words", stored().single { it.id == legacy.id }.lyrics)
+        assertEquals(Triple("Untitled Blues", "template edited", "blue theme"), editorSaved())
     }
 
     private fun resetRepository() {
