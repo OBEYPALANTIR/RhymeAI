@@ -24,6 +24,7 @@ import androidx.datastore.preferences.core.edit
 import com.rhymeai.app.data.repository.dataStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -286,6 +287,15 @@ class BackupFlowInstrumentedTest {
             BackupTestHooks.beforeHoldTicketRead = null
             RecoveryTestHooks.onRevokeRead = null
             com.rhymeai.app.data.repository.RepositoryTestHooks.afterUpdateCheck = null
+            com.rhymeai.app.data.repository.RepositoryTestHooks.afterInsertCheck = null
+            RecoveryTestHooks.beforeRecoveryInsert = null
+            RecoveryTestHooks.failNextRecovery.set(false)
+            NotebookTestHooks.afterJoinBeforeSettle = null
+            NotebookTestHooks.onJoinWait = null
+            NotebookTestHooks.beforeLoadedNotebookWrite = null
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.beforeReread = null
+            BackupTestHooks.beforeMenuSend = null
             prefs().edit().clear().commit()
             if (::repo.isInitialized) runBlocking {
                 repo.saveProjects(savedProjects)
@@ -3220,6 +3230,461 @@ class BackupFlowInstrumentedTest {
             assertTrue("${notebook(copyId)}", hasLine(copyId, "window B line") && !hasLine(copyId, "a refused line"))
         } finally {
             RecoveryTestHooks.failNextRecovery.set(false)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    // S0a round 6: the recovery song N's first commit bounds every writer, N stays the editor's song until it is stored,
+    // and a notebook action counts as saved only by its own write. X = the copy window B changed, N = the draft's new song.
+
+    /** Lets the editor's saves and notebook writes go quiet without failing, so the assertions after it report what is on disk. */
+    private fun quiesce(vm: MainViewModel) {
+        SystemClock.sleep(1_500)
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (SystemClock.uptimeMillis() < deadline &&
+            onMain { vm.savingBeforeNavigation || vm.notebookSaving > 0 || vm.editorHeld || vm.saveStatus == SaveStatus.SAVING }
+        ) SystemClock.sleep(25)
+        instrumentation.waitForIdleSync()
+    }
+
+    /** Stored songs other than the fixture's own and [copyId]. */
+    private fun others(copyId: String) = songs().filter { it.id != openSong.id && it.id != copyId && it.id != songY.id }
+
+    /** A Keep at [copyId] holds the copy's lock, parked before its write; complete the result to let it write. */
+    private fun parkKeepAt(vm: MainViewModel, copyId: String, text: String = "kept line"): kotlinx.coroutines.CompletableDeferred<Unit> {
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        NotebookTestHooks.afterJoinBeforeSettle = { id -> if (id == copyId && !parked.isCompleted) { parked.complete(Unit); release.await() } }
+        instrumentation.runOnMainSync { vm.keepAlternate(text) }
+        waitUntil({ "Keep parked at the copy's lock" }) { parked.isCompleted }
+        return release
+    }
+
+    private fun <T> withOneLiner(vm: MainViewModel, block: (com.rhymeai.app.data.model.OneLiner) -> T): T {
+        val line = runBlocking { vm.oneLinersStore.add("a sent line") }
+        try {
+            return block(line)
+        } finally {
+            runBlocking { vm.oneLinersStore.trash(line.id); vm.oneLinersStore.permanentlyDelete(line.id) }
+        }
+    }
+
+    private fun marker(vm: MainViewModel, lineId: String) = runBlocking { vm.oneLinersStore.all() }.single { it.id == lineId }.usedInProjectId
+
+    private fun send(vm: MainViewModel, line: com.rhymeai.app.data.model.OneLiner, to: SongProject): kotlinx.coroutines.CompletableDeferred<String> {
+        val sent = kotlinx.coroutines.CompletableDeferred<String>()
+        instrumentation.runOnMainSync { vm.sendOneLinerToSong(line, to) { sent.complete(it) } }
+        return sent
+    }
+
+    private fun <T> result(of: kotlinx.coroutines.Deferred<T>): T = runBlocking { withTimeout(10_000) { of.await() } }
+    private fun type(vm: MainViewModel, words: String) =
+        instrumentation.runOnMainSync { vm.onLyricsChanged(androidx.compose.ui.text.input.TextFieldValue(words)) }
+
+    /**
+     * T7: a Keep made on the copy before A's typed save is refused there folds its line into the draft's recovery. The next
+     * writer after the refusal (a typed edit, or STOP) must not take the draft away from that line: one new song holds A's
+     * newest words and the line; X keeps B's words and line.
+     */
+    private fun aKeptLineStaysWithTheDraftThroughTheNextWriter(stop: Boolean) {
+        newerOpenSong()
+        val vm = openSongInEditor(activity = stop)
+        val revokeParked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val revokeRelease = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val w3 = "W3 typed while a Keep waits"
+        val w4 = "W4 typed after the refusal"
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            val release = parkKeepAt(vm, copyId)
+            // The typed save passes its ownership check and queues behind the Keep at the copy's lock.
+            DraftSaveTestHooks.beforeWrite = kotlinx.coroutines.CompletableDeferred(Unit)
+            type(vm, w3)
+            waitUntil({ "word save queued" }) { DraftSaveTestHooks.beforeWrite == null }
+            // Where a recovery starts with a read, it is held there while the refused save leaves the copy.
+            RecoveryTestHooks.onRevokeRead = { if (!revokeParked.isCompleted) { revokeParked.complete(Unit); revokeRelease.await() } }
+            release.complete(Unit)
+            waitUntil({ "editor on ${vm.currentProjectId}" }) { onMain { vm.currentProjectId } != copyId }
+            if (stop) scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED) else type(vm, w4)
+            SystemClock.sleep(1_000)
+            revokeRelease.complete(Unit)
+            quiesce(vm)
+            val n = others(copyId)
+            assertEquals("${songs()}", listOf(if (stop) w3 else w4), n.map { it.lyrics })
+            assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "kept line"))
+            assertWindowBKeptTheCopy(copyId, w3)
+            assertFalse("${notebook(copyId)}", hasLine(copyId, "kept line"))
+        } finally {
+            revokeRelease.complete(Unit)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aKeptLineRefusedAtAChangedCopyStaysWithTheDraftThroughATypedEdit() = aKeptLineStaysWithTheDraftThroughTheNextWriter(stop = false)
+
+    @Test fun aKeptLineRefusedAtAChangedCopyStaysWithTheDraftThroughAStop() = aKeptLineStaysWithTheDraftThroughTheNextWriter(stop = true)
+
+    /** The gone-copy fixture: B trashed X and selected Y with raw words; A's list dropped X while A is still on it. */
+    private fun goneCopy(vm: MainViewModel): String {
+        var copyId = ""
+        failingRefresh {
+            copyId = repo.projectsFlow.first().single { it.id != openSong.id && it.id != songY.id }.id
+            repo.moveProjectToTrash(copyId, System.currentTimeMillis())
+            repo.selectProject(songY.id)
+            repo.saveEditorState("", "y raw", "y theme")
+        }
+        editAndRestore(vm)
+        waitUntil({ "on ${vm.currentProjectId} list ${vm.projects.map { it.id }}" }) {
+            onMain { vm.currentProjectId == copyId && vm.projects.none { it.id == copyId } }
+        }
+        return copyId
+    }
+
+    /** T8a: Open Y's flush starts the gone copy's recovery; W4 typed while it inserts is stored, not dropped by the open. */
+    @Test fun anOpenWhoseFlushRecoversAGoneCopyKeepsWordsTypedDuringTheInsert() {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songY))
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val w4 = "W4 typed while the recovery inserts"
+        try {
+            val copyId = goneCopy(vm)
+            RecoveryTestHooks.beforeRecoveryInsert = { if (!parked.isCompleted) { parked.complete(Unit); release.await() } }
+            instrumentation.runOnMainSync { vm.loadProject(songY) }
+            waitUntil({ "recovery parked" }) { parked.isCompleted }
+            type(vm, w4)
+            SystemClock.sleep(1_000)
+            release.complete(Unit)
+            quiesce(vm)
+            assertEquals("${songs()}", listOf(w4), others(copyId).map { it.lyrics })
+        } finally {
+            release.complete(Unit)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T8b: W3's recovery snapshot is inserting; W4 is typed and Open Y joins it. W4 is stored before Y replaces the editor. */
+    @Test fun anOpenJoiningARecoveryInsertOfOlderWordsStoresTheNewerOnesFirst() {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songY))
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val w3 = "W3 typed after the copy left"
+        val w4 = "W4 typed during the insert"
+        try {
+            val copyId = goneCopy(vm)
+            com.rhymeai.app.data.repository.RepositoryTestHooks.afterInsertCheck = { parked.complete(Unit); release.await() }
+            type(vm, w3)
+            waitUntil({ "insert parked" }) { parked.isCompleted }
+            type(vm, w4)
+            instrumentation.runOnMainSync { vm.loadProject(songY) }
+            SystemClock.sleep(500)
+            release.complete(Unit)
+            quiesce(vm)
+            assertEquals("${songs()}", listOf(w4), others(copyId).map { it.lyrics })
+        } finally {
+            release.complete(Unit)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T8c: behind Welcome, Open Y while the recovery's first write is parked: the draft is stored before Y opens. */
+    @Test fun aWelcomeOpenWhileTheRecoveryIsParkedWaitsForItsFirstWrite() {
+        newerOpenSong()
+        val vm = openSongInEditor(otherSongs = listOf(songY))
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val w3 = "W3 typed after the copy left"
+        try {
+            val copyId = goneCopy(vm)
+            RecoveryTestHooks.beforeRecoveryInsert = { if (!parked.isCompleted) { parked.complete(Unit); release.await() } }
+            type(vm, w3)
+            waitUntil({ "recovery parked" }) { parked.isCompleted }
+            instrumentation.runOnMainSync {
+                vm.showStartMenu = true
+                vm.loadProject(songY)
+            }
+            SystemClock.sleep(500)
+            release.complete(Unit)
+            quiesce(vm)
+            assertEquals("${songs()}", listOf(w3), others(copyId).map { it.lyrics })
+        } finally {
+            release.complete(Unit)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T9(i): once the draft left the refused copy, a new send to that copy is an ordinary append there. */
+    @Test fun aFreshSendToTheRefusedCopyAppendsThere() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            saveNow(vm)
+            quiesce(vm)
+            val n = others(copyId).single()
+            withOneLiner(vm) { line ->
+                val message = result(send(vm, line, songs().single { it.id == copyId }))
+                quiesce(vm)
+                assertTrue("$message ${songs()}", songs().single { it.id == copyId }.lyrics.contains("a sent line"))
+                assertEquals(copyId, marker(vm, line.id))
+                assertEquals(heldEdits, songs().single { it.id == n.id }.lyrics)
+                assertEquals(heldEdits, onMain { vm.lyrics })
+            }
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T9(ii): behind Welcome a Keep is refused and the draft's new song is parked; a send to the copy appends there. */
+    @Test fun aSendToTheRefusedCopyWhileItsRecoveryIsParkedAppendsThere() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val parked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            RecoveryTestHooks.beforeRecoveryInsert = { if (!parked.isCompleted) { parked.complete(Unit); release.await() } }
+            instrumentation.runOnMainSync { vm.showStartMenu = true }
+            instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
+            waitUntil({ "recovery parked" }) { parked.isCompleted }
+            withOneLiner(vm) { line ->
+                val sent = send(vm, line, songs().single { it.id == copyId })
+                SystemClock.sleep(500)
+                release.complete(Unit)
+                val message = result(sent)
+                quiesce(vm)
+                assertTrue("$message ${songs()}", songs().single { it.id == copyId }.lyrics.contains("a sent line"))
+                assertEquals(copyId, marker(vm, line.id))
+                val n = others(copyId)
+                assertEquals("${songs()}", listOf(heldEdits), n.map { it.lyrics })
+                assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "kept line"))
+                assertEquals(heldEdits, onMain { vm.lyrics })
+            }
+        } finally {
+            release.complete(Unit)
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T9(iii): a send that was waiting when the copy was refused is refused once, marker unchanged; sending again appends once. */
+    @Test fun aSendCapturedBeforeTheRefusalIsRefusedOnceAndThenAppends() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            instrumentation.runOnMainSync { vm.showStartMenu = true }
+            withOneLiner(vm) { line ->
+                val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+                BackupTestHooks.beforeMenuSend = gate
+                val waiting = send(vm, line, songs().single { it.id == copyId })
+                waitUntil({ "send waiting" }) { BackupTestHooks.beforeMenuSend == null }
+                instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
+                waitUntil({ "editor on ${vm.currentProjectId}" }) { onMain { vm.currentProjectId } != copyId }
+                gate.complete(Unit)
+                val first = result(waiting)
+                assertTrue(first, first.contains("Try again"))
+                assertEquals(windowBWords, songs().single { it.id == copyId }.lyrics)
+                assertEquals(null, marker(vm, line.id))
+                val again = result(send(vm, line, songs().single { it.id == copyId }))
+                quiesce(vm)
+                assertEquals("$again ${songs()}", 1, songs().single { it.id == copyId }.lyrics.split("a sent line").size - 1)
+                assertEquals(copyId, marker(vm, line.id))
+            }
+        } finally {
+            BackupTestHooks.beforeMenuSend = null
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T10(a), the review bot's case: all three fields cleared, then a Keep refused at the changed copy. The line is kept. */
+    @Test fun aKeepOnAnEmptiedDraftRefusedAtAChangedCopyIsKeptInANewSong() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            val bTuple = storedKeys()
+            blankDraft(vm, "")
+            instrumentation.runOnMainSync { vm.keepAlternate("kept line") }
+            quiesce(vm)
+            val n = others(copyId)
+            assertEquals("${songs()}", 1, n.size)
+            assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "kept line"))
+            assertWindowBKeptTheCopy(copyId, heldEdits)
+            assertFalse(hasLine(copyId, "kept line"))
+            assertEquals(bTuple, storedKeys())
+            assertEquals(0, onMain { vm.notebookSaving })
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T10(b): fields cleared; a second Keep waits at the lock while the first is refused. Both lines are kept in one new song. */
+    @Test fun aKeepQueuedBehindARefusedKeepOnAnEmptiedDraftIsKeptToo() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val waiting = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            val bTuple = storedKeys()
+            blankDraft(vm, "")
+            val release = parkKeepAt(vm, copyId, "first kept line")
+            NotebookTestHooks.onJoinWait = { id -> if (id == copyId) waiting.set(true) }
+            instrumentation.runOnMainSync { vm.keepAlternate("second kept line") }
+            waitUntil({ "second Keep waiting" }) { waiting.get() }
+            release.complete(Unit)
+            quiesce(vm)
+            val n = others(copyId)
+            assertEquals("${songs()}", 1, n.size)
+            assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "first kept line") && hasLine(n.single().id, "second kept line"))
+            assertWindowBKeptTheCopy(copyId, heldEdits)
+            assertEquals(bTuple, storedKeys())
+            assertEquals(0, onMain { vm.notebookSaving })
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /**
+     * T11a: an open-song send whose write queued at the copy behind a refusing Keep, with STOP between its insertion and
+     * rollback. The send fails and is undone everywhere: marker, both rows and N's stored versions hold no sent line.
+     */
+    @Test fun anOpenSongSendQueuedBehindARefusalIsUndoneEverywhere() {
+        newerOpenSong()
+        val vm = openSongInEditor(activity = true)
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            withOneLiner(vm) { line ->
+                val release = parkKeepAt(vm, copyId)
+                DraftSaveTestHooks.beforeWrite = kotlinx.coroutines.CompletableDeferred(Unit)
+                val sent = send(vm, line, songs().single { it.id == copyId })
+                waitUntil({ "send queued" }) { DraftSaveTestHooks.beforeWrite == null }
+                scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                instrumentation.waitForIdleSync()
+                release.complete(Unit)
+                val message = result(sent)
+                quiesce(vm)
+                assertTrue(message, message.startsWith("Couldn't add the line"))
+                assertEquals(null, marker(vm, line.id))
+                assertWindowBKeptTheCopy(copyId, heldEdits)
+                val n = others(copyId)
+                assertEquals("${songs()}", listOf(heldEdits), n.map { it.lyrics })
+                assertTrue("${notebook(n.single().id)}", notebook(n.single().id).versions.none { it.lyrics.contains("a sent line") })
+                assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "kept line"))
+            }
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T12: recording admission queued at the copy behind a refusing Keep is refused without writing X; the next one gets N. */
+    @Test fun aRecordingAdmissionQueuedBehindARefusalWritesNothingAtTheCopy() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        fun admit(): kotlinx.coroutines.CompletableDeferred<Result<String>> = kotlinx.coroutines.CompletableDeferred<Result<String>>().also { done ->
+            instrumentation.runOnMainSync { vm.viewModelScope.launch { done.complete(runCatching { vm.ensureProjectForRecording() }) } }
+        }
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            val release = parkKeepAt(vm, copyId)
+            DraftSaveTestHooks.beforeWrite = kotlinx.coroutines.CompletableDeferred(Unit)
+            val admitted = admit()
+            waitUntil({ "admission queued" }) { DraftSaveTestHooks.beforeWrite == null }
+            release.complete(Unit)
+            val first = result(admitted)
+            quiesce(vm)
+            assertTrue("$first", first.isFailure)
+            assertWindowBKeptTheCopy(copyId, heldEdits)
+            val id = result(admit()).getOrThrow()
+            assertTrue(id != copyId)
+            assertEquals(heldEdits, songs().single { it.id == id }.lyrics)
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    /** T13: Restore Version queued behind a refusing Keep: the draft's checkpoint, the line and the restored words go to N. */
+    private fun aRestoreQueuedBehindARefusalIsAppliedToTheNewSong(empty: Boolean) {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val waiting = java.util.concurrent.atomic.AtomicBoolean(false)
+        val v1 = com.rhymeai.app.data.model.DraftVersion(title = "Untitled Song", lyrics = "version words", theme = "", createdAt = 50L)
+        try {
+            val copyId = unconfirmedChangedCopy(vm)
+            if (empty) blankDraft(vm, "")
+            val release = parkKeepAt(vm, copyId)
+            NotebookTestHooks.onJoinWait = { id -> if (id == copyId) waiting.set(true) }
+            instrumentation.runOnMainSync { vm.restoreDraftVersion(v1) }
+            waitUntil({ "restore waiting" }) { waiting.get() }
+            release.complete(Unit)
+            quiesce(vm)
+            val n = others(copyId)
+            assertEquals("${songs()}", listOf("version words"), n.map { it.lyrics })
+            assertTrue("${notebook(n.single().id)}", hasLine(n.single().id, "kept line"))
+            if (!empty) assertTrue("${notebook(n.single().id)}", notebook(n.single().id).versions.any { it.lyrics == heldEdits })
+            assertEquals("version words", onMain { vm.lyrics })
+            assertWindowBKeptTheCopy(copyId, heldEdits)
+        } finally {
+            BackupTestHooks.beforeHoldListRefresh = null
+            resetOpenSong()
+        }
+    }
+
+    @Test fun aRestoreQueuedBehindARefusalIsAppliedToTheNewSong() = aRestoreQueuedBehindARefusalIsAppliedToTheNewSong(empty = false)
+
+    @Test fun aRestoreOnAnEmptiedDraftQueuedBehindARefusalIsAppliedToTheNewSong() = aRestoreQueuedBehindARefusalIsAppliedToTheNewSong(empty = true)
+
+    /**
+     * T14: a menu send admitted before the hold appends to the copy (confirming it) while the hold's own read is parked;
+     * that read then finds the copy changed. The confirmation stands: no new song, the line is on the copy.
+     */
+    @Test fun aMenuSendConfirmingTheCopyDuringTheHoldsReadMakesNoNewSong() {
+        newerOpenSong()
+        val vm = openSongInEditor()
+        val readParked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val readRelease = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val copy = SongProject("copy-x", "Open Song", heldEdits, "", 0L)
+        try {
+            withOneLiner(vm) { line ->
+                val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+                BackupTestHooks.beforeMenuSend = gate
+                val sent = send(vm, line, copy)
+                waitUntil({ "send admitted" }) { BackupTestHooks.beforeMenuSend == null }
+                BackupTestHooks.beforeHoldListRefresh = {
+                    BackupTestHooks.beforeHoldListRefresh = null
+                    readParked.complete(Unit)
+                    readRelease.await()
+                }
+                firstSongIdIs(copy.id) {
+                    instrumentation.runOnMainSync {
+                        vm.lyricsFieldValue = androidx.compose.ui.text.input.TextFieldValue(heldEdits)
+                        vm.restoreFromBackup()
+                    }
+                    waitUntil({ "hold read parked" }) { readParked.isCompleted }
+                }
+                assertEquals(copy.id, onMain { vm.currentProjectId })
+                gate.complete(Unit)
+                val message = result(sent)
+                readRelease.complete(Unit)
+                quiesce(vm)
+                assertEquals("$message ${songs()}", setOf(openSong.id, copy.id), songs().map { it.id }.toSet())
+                assertTrue("${songs()}", songs().single { it.id == copy.id }.lyrics.contains("a sent line"))
+                assertEquals(copy.id, marker(vm, line.id))
+            }
+        } finally {
+            readRelease.complete(Unit)
+            BackupTestHooks.beforeMenuSend = null
             BackupTestHooks.beforeHoldListRefresh = null
             resetOpenSong()
         }
