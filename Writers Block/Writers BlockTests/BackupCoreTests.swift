@@ -2595,6 +2595,8 @@ struct BackupCoreTests {
         #expect(try harness.context.fetch(FetchDescriptor<Recording>()).isEmpty)
         #expect(quarantined(harness) == [audio])
         #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["edited words"])
+        #expect(drive.uploads(named: RecordingBackupManifest.driveName(recordingId: id)) == 0)
+        #expect(drive.objects(named: RecordingBackupManifest.driveName(recordingId: id)) == 0)
     }
 
     /// Files F1, F2 (oldest first) record a take at 100 and 300, so the first look writes
