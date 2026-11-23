@@ -360,14 +360,20 @@ class ProjectRepository internal constructor(
         }
     }
 
-    /** A new song's notebook change: applied to the stored notebook only of the one row [creation] made; nothing else is written. */
-    suspend fun saveWorkspace(id: String, creation: SongCreation, change: (SongWorkspace) -> SongWorkspace) {
+    /**
+     * A new song's notebook change: applied to the stored notebook only of the one row [creation] made; nothing else is
+     * written. Returns the notebook as committed, with any other window's entries.
+     */
+    suspend fun saveWorkspace(id: String, creation: SongCreation, change: (SongWorkspace) -> SongWorkspace): SongWorkspace {
+        lateinit var committed: SongWorkspace
         dataStore.edit { prefs ->
             val active = projectsStore.decode(prefs[PROJECTS_KEY] ?: "[]")
             if (active.count { it.id == id } != 1 || rowGenerations(prefs)[id] != creation.token) throw CreationIdTakenException(id)
             val current = workspacesStore.decode(prefs[WORKSPACES_KEY] ?: "{}")
-            prefs[WORKSPACES_KEY] = json.encodeToString(current + (id to change(current[id] ?: SongWorkspace())))
+            committed = change(current[id] ?: SongWorkspace())
+            prefs[WORKSPACES_KEY] = json.encodeToString(current + (id to committed))
         }
+        return committed
     }
 
     /**

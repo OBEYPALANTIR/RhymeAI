@@ -198,6 +198,8 @@ internal object DraftSaveTestHooks {
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Holds the next delayed editor-position save before it writes. */
     @Volatile var beforePositionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Runs before each new song's notebook change is written, after its song is stored; the test clears it. */
+    @Volatile var beforeCreationNotebookWrite: (suspend () -> Unit)? = null
 }
 
 private const val NOTEBOOK_NOT_SAVED = "A Song Notebook change was not saved because the song could not be saved."
@@ -692,18 +694,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * A loaded song stores [workspace]. A new song's [change] waits for the save that stores the song and is then applied
-     * to the notebook of the row its creation made; false when that save did not store it, and nothing is written.
+     * to the notebook of the row its creation made; null when that save did not store it, and nothing is written.
+     * Returns the notebook as stored.
      */
     private suspend fun saveWorkspaceForActiveIdentity(
         id: String, creation: CreationAttempt?, workspace: SongWorkspace, openedAt: Int, change: (SongWorkspace) -> SongWorkspace
-    ): Boolean {
+    ): SongWorkspace? {
         if (creation == null) {
             repo.saveWorkspace(id, workspace)
-            return true
+            return workspace
         }
-        if (!creation.creation.inserted && !creation.outcome.await() && !creation.creation.inserted) return false
+        if (!creation.creation.inserted && !creation.outcome.await() && !creation.creation.inserted) return null
+        DraftSaveTestHooks.beforeCreationNotebookWrite?.invoke()
         try {
-            repo.saveWorkspace(id, creation.creation, change)
+            return repo.saveWorkspace(id, creation.creation, change)
         } catch (refused: CreationIdTakenException) {
             // The id now names another song: an editor still on this creation's open keeps its words for a new song
             // instead of saving them over that one. A later open of the id is the user's and stays.
@@ -715,7 +719,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             throw refused
         }
-        return true
     }
 
     /** [reported]: the writer asked for this change, so one that could not be saved is reported. */
@@ -727,7 +730,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val openedAt = openRevision
         viewModelScope.launch {
             try {
-                if (!saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform) && creation != null && !creation.retired) {
+                if (saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform) == null && creation != null && !creation.retired) {
                     // The song's save failed: the change leaves the notebook shown, so a later save cannot show it as kept.
                     creation.changes -= transform
                     val shown = creation.workspace ?: SongWorkspace()
@@ -829,11 +832,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val openedAt = openRevision
         viewModelScope.launch {
             try {
-                if (!saveWorkspaceForActiveIdentity(id, creation, preserved, openedAt) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }) return@launch
+                // The notebook as stored: a new song's may hold another window's entries that [preserved] never saw.
+                val committed = saveWorkspaceForActiveIdentity(id, creation, preserved, openedAt) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }
+                    ?: return@launch
                 // The song may have started leaving for another one while the checkpoint saved.
                 if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
-                workspaces = workspaces + (id to preserved)
+                workspaces = workspaces + (id to committed)
                 dismissRewrite()
                 title = version.title
                 theme = version.theme

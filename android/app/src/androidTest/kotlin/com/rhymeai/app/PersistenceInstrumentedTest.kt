@@ -1091,6 +1091,61 @@ class PersistenceInstrumentedTest {
     }
 
     @Test
+    fun aPendingVersionRestoreKeepsAnotherWindowsNotebookEntries() {
+        fun storedWorkspace(id: String) = runBlocking { repo.workspacesFlow.first()[id] }
+        val version = com.rhymeai.app.data.model.DraftVersion(title = "V", lyrics = "version words", theme = "", createdAt = 1L)
+        val viewModel = MainViewModel(app).also(handBuilt::add)
+        waitUntil { viewModel.initialized }
+        val insert = CompletableDeferred<Unit>()
+        val position = CompletableDeferred<Unit>()
+        try {
+            // A restore is asked for while the new song X is still being inserted.
+            onMain { viewModel.showStartMenu = false; viewModel.lyricsFieldValue = TextFieldValue("a words") }
+            DraftSaveTestHooks.beforeWrite = insert
+            onMain { viewModel.keepAlternate("a line") }
+            waitUntil { DraftSaveTestHooks.beforeWrite == null && viewModel.currentProjectId != null }
+            val x = viewModel.currentProjectId!!
+            onMain { viewModel.restoreDraftVersion(version) }
+            assertTrue(viewModel.restoringDraft)
+            // Once X is stored, another window keeps a line and a version in its notebook before A's changes are written.
+            val bWritten = CompletableDeferred<Unit>()
+            val first = java.util.concurrent.atomic.AtomicBoolean(true)
+            DraftSaveTestHooks.beforeCreationNotebookWrite = {
+                if (first.compareAndSet(true, false)) {
+                    val current = repo.workspacesFlow.first()[x] ?: com.rhymeai.app.data.model.SongWorkspace()
+                    repo.saveWorkspace(x, current.keep("b line", 2L).checkpoint("B", "b version words", "", 2L, force = true))
+                    bWritten.complete(Unit)
+                } else {
+                    // The restore's checkpoint follows A's earlier keep, as the queue orders them without this hook.
+                    bWritten.await()
+                    while (repo.workspacesFlow.first()[x]?.alternates?.any { it.text == "a line" } != true) kotlinx.coroutines.delay(20)
+                }
+            }
+            DraftSaveTestHooks.beforePositionSave = position
+            insert.complete(Unit)
+            waitUntil { !viewModel.restoringDraft && viewModel.lyrics == "version words" }
+            assertTrue(viewModel.songWorkspace.alternates.any { it.text == "b line" })
+            assertTrue(viewModel.songWorkspace.versions.any { it.lyrics == "b version words" })
+
+            // The restore's own position write, and the autosave of the restored words, keep B's entries.
+            waitUntil { DraftSaveTestHooks.beforePositionSave == null }
+            position.complete(Unit)
+            SystemClock.sleep(1_000)
+            instrumentation.waitForIdleSync()
+            val notebook = storedWorkspace(x)!!
+            assertEquals(listOf("a line", "b line"), notebook.alternates.map { it.text }.sorted())
+            assertTrue(notebook.versions.map { it.lyrics }.toString(), notebook.versions.any { it.lyrics == "b version words" })
+            assertTrue(notebook.versions.map { it.lyrics }.toString(), notebook.versions.any { it.lyrics == "a words" })
+        } finally {
+            insert.complete(Unit)
+            position.complete(Unit)
+            DraftSaveTestHooks.beforeWrite = null
+            DraftSaveTestHooks.beforePositionSave = null
+            DraftSaveTestHooks.beforeCreationNotebookWrite = null
+        }
+    }
+
+    @Test
     fun aRefusedTokenKeepsAnEditAlreadyWaitingToAutosave() {
         fun stored() = runBlocking { repo.projectsFlow.first() }
         val viewModel = MainViewModel(app).also(handBuilt::add)
