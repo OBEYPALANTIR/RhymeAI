@@ -102,24 +102,53 @@ final class MacWorkspaceModel: ObservableObject {
         viewModel.getSuggestions()
     }
 
+    func importDroppedFiles(_ urls: [URL], into viewModel: EditorViewModel) -> Bool {
+        switch MacDropRoute.route(urls, songOpen: songOpen(in: viewModel)) {
+        case .songs(let songs):
+            let routed = Set(songs)
+            importSongs(songs, into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            return true
+        case .recordings(let audio):
+            let routed = Set(audio)
+            importRecordings(audio, into: viewModel, skippedDropFiles: urls.filter { !routed.contains($0) })
+            return true
+        case .none:
+            return false
+        }
+    }
+
+    private func reportUnimportedDropFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let names = urls.map(\.lastPathComponent).joined(separator: "\n")
+        importError = "Could not import:\n\(names)"
+    }
+
     /// Copies dropped or picked audio into the open song's recordings and
-    /// shows them.
-    func importRecordings(_ urls: [URL], into viewModel: EditorViewModel) {
-        guard let projectId = viewModel.ensureProjectForRecording() else { return }
+    /// shows them after a complete import. A non-nil `skippedDropFiles` identifies a Finder drop.
+    func importRecordings(_ urls: [URL], into viewModel: EditorViewModel, skippedDropFiles: [URL]? = nil) {
+        guard let projectId = viewModel.ensureProjectForRecording() else {
+            if let skippedDropFiles { reportUnimportedDropFiles(urls + skippedDropFiles) }
+            return
+        }
         Task {
-            for url in urls {
+            for (index, url) in urls.enumerated() {
                 do {
                     try await viewModel.importRecording(at: url, projectId: projectId)
-                } catch is CancellationError {
-                    return
                 } catch {
-                    importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again."
+                    if let skippedDropFiles {
+                        reportUnimportedDropFiles(Array(urls[index...]) + skippedDropFiles)
+                    } else if !(error is CancellationError) {
+                        importError = "Couldn't import this recording. Choose a playable M4A, MP3, WAV, or AAC file and try again."
+                    }
                     return
                 }
             }
-            // Only if that song is still open: another song's recordings, or a
-            // blank song saved to hold them, would be the wrong result.
-            if viewModel.currentProjectId == projectId { showRecordings(for: viewModel) }
+            if let skippedDropFiles, !skippedDropFiles.isEmpty {
+                reportUnimportedDropFiles(skippedDropFiles)
+            } else if viewModel.currentProjectId == projectId {
+                // Another song's recordings would be the wrong result.
+                showRecordings(for: viewModel)
+            }
         }
     }
 
@@ -131,8 +160,8 @@ final class MacWorkspaceModel: ObservableObject {
 
     /// Opens song JSON exports, as the drawer's Import From File does; the last
     /// one imported is open. Files that fail are named, with how many imported.
-    func importSongs(_ urls: [URL], into viewModel: EditorViewModel) {
-        var failed: [String] = []
+    func importSongs(_ urls: [URL], into viewModel: EditorViewModel, skippedDropFiles: [URL]? = nil) {
+        var failed: [URL] = []
         var reason = ""
         for url in urls {
             do {
@@ -145,12 +174,16 @@ final class MacWorkspaceModel: ObservableObject {
             } catch {
                 reason = "Could not import this file. Pick a RhymeAI project JSON."
             }
-            failed.append(url.lastPathComponent)
+            failed.append(url)
+        }
+        if let skippedDropFiles {
+            reportUnimportedDropFiles(failed + skippedDropFiles)
+            return
         }
         guard !failed.isEmpty else { return }
         importError = urls.count == 1
             ? reason
-            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.joined(separator: ", ")). Pick RhymeAI project JSON files."
+            : "Imported \(urls.count - failed.count) of \(urls.count) songs. Could not import: \(failed.map(\.lastPathComponent).joined(separator: ", ")). Pick RhymeAI project JSON files."
     }
 }
 

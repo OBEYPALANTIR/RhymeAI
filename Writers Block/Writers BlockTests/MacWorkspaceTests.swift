@@ -540,6 +540,72 @@ struct MacDropRouteTests {
     }
 }
 
+@MainActor
+struct MacDropImportTests {
+    @Test
+    func mixedSongDropNamesEveryFileThatWasNotImported() throws {
+        let (viewModel, container) = try MacWorkspaceLibraryTests.library()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let song = folder.appendingPathComponent("Paper Moon.json")
+        let project = SongProject(id: "p", title: "Paper Moon", lyrics: "tide", theme: "")
+        try LyricsExporter.data(for: project, format: .json).write(to: song)
+        let invalid = folder.appendingPathComponent("notes.json")
+        try Data("not a song".utf8).write(to: invalid)
+        let audio = folder.appendingPathComponent("take.wav")
+        let image = folder.appendingPathComponent("cover.png")
+        let workspace = MacWorkspaceModel()
+
+        #expect(workspace.importDroppedFiles([audio, song, invalid, image], into: viewModel))
+
+        #expect(try container.mainContext.fetch(FetchDescriptor<SongProject>()).map(\.title) == ["Paper Moon"])
+        let report = try #require(workspace.importError)
+        #expect(report.contains("take.wav"))
+        #expect(report.contains("cover.png"))
+        #expect(report.contains("notes.json"))
+        #expect(!report.contains("Paper Moon.json"))
+    }
+
+    @Test
+    func droppedRecordingsAreNamedIfTheirSongCannotBeSaved() throws {
+        let viewModel = EditorViewModel()
+        viewModel.newProject()
+        let workspace = MacWorkspaceModel()
+        workspace.windowOpen = true
+        let audio = URL(fileURLWithPath: "/tmp/take.wav")
+        let image = URL(fileURLWithPath: "/tmp/cover.png")
+
+        #expect(workspace.importDroppedFiles([audio, image], into: viewModel))
+        let report = try #require(workspace.importError)
+        #expect(report.contains("take.wav"))
+        #expect(report.contains("cover.png"))
+    }
+
+    @Test
+    func failedAudioDropNamesTheFailedFileAndTheFilesItSkipped() async throws {
+        let (viewModel, container) = try MacWorkspaceLibraryTests.library()
+        defer { _ = container }
+        viewModel.newProject()
+        let workspace = MacWorkspaceModel()
+        workspace.windowOpen = true
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let unavailable = folder.appendingPathComponent("unavailable.wav")
+        let later = folder.appendingPathComponent("later.m4a")
+        let image = folder.appendingPathComponent("cover.png")
+
+        #expect(workspace.importDroppedFiles([unavailable, image, later], into: viewModel))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while workspace.importError == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let report = try #require(workspace.importError)
+        #expect(report.contains("unavailable.wav"))
+        #expect(report.contains("later.m4a"))
+        #expect(report.contains("cover.png"))
+    }
+}
+
 /// Edit › Undo is AppKit's responder-chain item: the lyric editor answers it
 /// with the lyric history, any other field with its own undo.
 @MainActor
