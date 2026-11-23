@@ -481,6 +481,29 @@ enum RecordingFiles {
                 let bytes: Int64
                 let precedenceTime: Date
                 let precedenceRepaired: Bool
+
+                /// The restore service writes cascade take tombstones with the song's
+                /// timestamp. Those remove the source, while the recovered song owns its copy.
+                func isSourceSongCascade(_ deletion: SyncDeletion, among deletions: [SyncDeletion]) -> Bool {
+                    sourceProjectId != projectId && deletion.projectId == sourceProjectId
+                        && deletions.contains { $0.isSongTombstone && $0.projectId == sourceProjectId && $0.deletedAt == deletion.deletedAt }
+                }
+
+                @MainActor func owner(in context: ModelContext) throws -> SongProject? {
+                    let id = projectId
+                    let songs = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+                    guard songs.count == 1, let song = songs.first, song.persistentModelID == row,
+                          try context.fetchCount(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == id })) == 0 else { return nil }
+                    return song
+                }
+
+                func deletionWins(_ deletion: SyncDeletion, among deletions: [SyncDeletion], id: String, sha256: String) -> Bool {
+                    guard !deletion.isSongTombstone, !isSourceSongCascade(deletion, among: deletions) else { return false }
+                    return [(sourceProjectId, sourceRecordingId), (projectId, originalId), (projectId, id)].contains { project, id in
+                        deletion.covers(projectId: project, recordingId: id, sha256: sha256,
+                                        at: precedenceTime, repaired: precedenceRepaired)
+                    }
+                }
             }
 
             var path: String

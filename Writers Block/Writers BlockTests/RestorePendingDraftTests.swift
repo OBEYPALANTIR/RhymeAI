@@ -91,6 +91,99 @@ struct RestorePendingDraftTests {
         #expect(reopened.audios(later.id) == [fixture.audio])
     }
 
+    @Test func restoringASongDeletionKeepsTheTakeOnTheSeparateDraft() async throws {
+        let fixture = try await makePendingDraft()
+        let harness = fixture.harness
+        let originalTake = try #require(try harness.context.fetch(FetchDescriptor<Recording>()).first)
+        let originalTakeID = originalTake.id
+        let deletion = SyncDeletion(projectId: "song-a", deletedAt: Date().addingTimeInterval(3_600).epochMilliseconds)
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try SyncBlob(deletions: [deletion]).encodedManifest())
+        harness.drive.beforeManifestWrite = {
+            fixture.editor.lyrics = "typed while the remote deletion waited"
+            fixture.editor.triggerAutoSave()
+        }
+
+        await fixture.editor.restoreBackupNow()
+
+        let reopened = try await harness.reopened()
+        let songs = try reopened.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!songs.contains { $0.id == "song-a" })
+        let recovered = try #require(songs.first { $0.lyrics == "typed while the remote deletion waited" })
+        let storedDeletions = try DeletionStore.all(in: reopened.context)
+        #expect(storedDeletions.contains { $0.projectId == "song-a" && $0.recordingId == originalTakeID && $0.deletedAt == deletion.deletedAt })
+        let playable = try reopened.service.library.liveRecordings(projectId: recovered.id, in: reopened.context)
+        #expect(try playable.map { try Data(contentsOf: $0.url) } == [fixture.audio])
+        #expect(try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == recovered.id }.map(\.audio) == [fixture.audio])
+    }
+
+    @Test(arguments: [false, true])
+    func publishedRecoveryDistinguishesACascadeFromATakeDeletion(cascade: Bool) async throws {
+        let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
+        try FileManager.default.removeItem(at: snapshot.appendingPathComponent(take.fileName))
+        let first = try await reopenEditor(harness, recovery: recovery)
+        try seedPublishedRecovery(take, bytes: bytes, projectId: "reserved", harness: first, recovery: recovery)
+        let sourceRecordingId = URL(fileURLWithPath: take.fileName).deletingPathExtension().lastPathComponent
+        let deletedAt = Date().addingTimeInterval(120).epochMilliseconds
+        if cascade {
+            let original = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "original" })
+            first.context.delete(original)
+            try DeletionStore.upsert(SyncDeletion(projectId: "original", deletedAt: deletedAt), in: first.context)
+        }
+        try DeletionStore.upsert(SyncDeletion(projectId: "original", recordingId: sourceRecordingId, deletedAt: deletedAt),
+                                in: first.context)
+        try first.context.save()
+
+        let reopened = try await reopenEditor(first, recovery: recovery)
+
+        let rows = try reopened.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == "reserved" }
+        #expect(rows.map(\.audio) == (cascade ? [bytes] : []))
+        #expect(reopened.audios("reserved") == (cascade ? [bytes] : []))
+        #expect(try retryJournals(beside: recovery).isEmpty)
+    }
+
+    @Test func aFailedReceiptWriteKeepsTheCommittedEditorDraftOwned() async throws {
+        var recovery: URL?
+        var frozen: Data?
+        let words = "editor words after the service saved its copy"
+        let fixture = try await makePendingDraft(save: { context in
+            try context.save()
+            guard let recovery, frozen == nil,
+                  try context.fetch(FetchDescriptor<SongProject>()).contains(where: { $0.lyrics == words }) else { return }
+            frozen = try Data(contentsOf: recovery)
+            try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: recovery.path)
+        })
+        let harness = fixture.harness
+        let journal = recoveryURL(harness)
+        recovery = journal
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path) }
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try fixture.remote.encodedManifest())
+        harness.drive.seed(name: BackupCoreTests.lateTake.entry.driveName, content: BackupCoreTests.lateTake.audio)
+        harness.drive.afterManifestWrite = {
+            fixture.editor.lyrics = words
+            fixture.editor.triggerAutoSave()
+        }
+
+        await fixture.editor.restoreBackupNow()
+
+        let preSeal = try #require(frozen)
+        #expect(try Data(contentsOf: journal) == preSeal)
+        #expect(fixture.editor.cloudBackupLastResultIsError)
+        let stored = try #require(try harness.context.fetch(FetchDescriptor<SongProject>()).first { $0.lyrics == words })
+        let owner = try durableRowID(stored)
+        #expect(fixture.editor.currentProjectId == stored.id)
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: journal.path)
+        fixture.editor.lyrics = "new words after the failed receipt"
+        #expect(fixture.editor.flushCurrentDraft())
+
+        let reopened = try await harness.reopened()
+        let songs = try reopened.context.fetch(FetchDescriptor<SongProject>())
+        let updated = try #require(songs.first { $0.lyrics == "new words after the failed receipt" })
+        #expect(try durableRowID(updated) == owner)
+        #expect(songs.count == 3)
+        #expect(!songs.contains { $0.lyrics == words })
+        #expect(try Data(contentsOf: journal) == preSeal)
+    }
+
     @Test func aCollidingDraftReservationIsUpdatedInTheJournalBeforeRestoreCommits() async throws {
         let fixture = try await makePendingDraft()
         let draftFile = fixture.harness.memosRoot.deletingLastPathComponent().appendingPathComponent("draft-recovery.json")
@@ -474,7 +567,7 @@ struct RestorePendingDraftTests {
         #expect(try retryJournals(beside: recovery).isEmpty == !historyUnavailable)
     }
 
-    @Test(arguments: ["replacement", "trash", "published"])
+    @Test(arguments: ["replacement", "trash", "published", "publishedOccupied"])
     func audioRetryRefusesASameIDReplacement(_ path: String) async throws {
         let (harness, recovery, snapshot, take, bytes) = try await singleTakeRecovery()
         let staged = snapshot.appendingPathComponent(take.fileName)
@@ -483,8 +576,17 @@ struct RestorePendingDraftTests {
         let saved = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "reserved" })
         let id = saved.id
         let row = try durableRowID(saved)
-        if path == "published" {
-            try seedPublishedRecovery(take, bytes: bytes, projectId: id, harness: first, recovery: recovery)
+        var occupantID: String?
+        let otherAudio = Data([0x31, 0x64, 0x66])
+        if path.hasPrefix("published") {
+            let alias = try seedPublishedRecovery(take, bytes: bytes, projectId: id, harness: first, recovery: recovery)
+            if path == "publishedOccupied" {
+                occupantID = alias
+                try first.writeFile(otherAudio, projectId: "original", fileName: "\(alias).m4a")
+                first.context.insert(Recording(id: alias, projectId: "original", displayName: "Unrelated.m4a",
+                                               audio: otherAudio, recordedAt: Date()))
+                try first.context.save()
+            }
         }
         if path == "trash" {
             #expect(editor.moveProjectToTrash(saved))
@@ -503,8 +605,56 @@ struct RestorePendingDraftTests {
         #expect(songs.filter { $0.lyrics == "pending local words" }.map(\.id) == [id])
         #expect(try songs.first { $0.id == id }.map(durableRowID) != row)
         #expect(try !second.context.fetch(FetchDescriptor<Recording>()).contains { $0.projectId == id })
-        if path != "published" { #expect(second.audios(id).isEmpty) }
+        if !path.hasPrefix("published") { #expect(second.audios(id).isEmpty) }
+        if let occupantID {
+            #expect(second.audios("original") == [otherAudio])
+            #expect(try RecordingFiles.readPendingMoves(for: second.memosRoot).adopt.contains { $0.recordingId == occupantID })
+            #expect(try second.service.library.liveRecordings(projectId: id, in: second.context).isEmpty)
+        }
         #expect(try retryJournals(beside: recovery).count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func interruptedOversizedPublicationChecksTheOriginalOwner(replaceOwner: Bool) async throws {
+        let (harness, recovery, snapshot, ordinary, _) = try await singleTakeRecovery()
+        let bytes = Data(repeating: 0x6c, count: Int(SyncRecording.maxBytes) + 1)
+        let take = OpenRecordingSnapshot.Take(fileName: ordinary.fileName, displayName: "Long take.m4a",
+            bytes: Int64(bytes.count), sha256: RecordingBackupManifest.sha256Hex(bytes))
+        try bytes.write(to: snapshot.appendingPathComponent(take.fileName))
+        var journal = try journalObject(Data(contentsOf: recovery))
+        journal["recordingTakes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([take]))
+        try JSONSerialization.data(withJSONObject: journal).write(to: recovery, options: .atomic)
+        let id = take.recordingID(for: "reserved")
+        let target = RecordingFiles.canonicalPath(harness.file(id, "reserved"))
+        let hook = RecordingFiles.BoundaryHooks.install { point, _, destination in
+            if point == .afterPrimitive, destination.map(RecordingFiles.canonicalPath) == target {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        let first: BackupHarness
+        do {
+            defer { RecordingFiles.BoundaryHooks.remove(hook) }
+            first = try await reopenEditor(harness, recovery: recovery)
+        }
+        #expect(try OversizedRecordings.read(for: first.memosRoot)[id]?.completed == false)
+        #expect(try retryJournals(beside: recovery).count == 1)
+        let owner = try #require(try first.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "reserved" })
+        let previous = try durableRowID(owner)
+        if replaceOwner {
+            let replacement = SongProject(id: owner.id, title: owner.title, lyrics: owner.lyrics, theme: owner.theme)
+            first.context.delete(owner)
+            try first.context.save()
+            first.context.insert(replacement)
+            try first.context.save()
+            #expect(try durableRowID(replacement) != previous)
+        }
+
+        let reopened = try await reopenEditor(first, recovery: recovery)
+        let entry = try #require(try OversizedRecordings.read(for: reopened.memosRoot)[id])
+        #expect(entry.completed == !replaceOwner)
+        let playable = try reopened.service.library.liveRecordings(projectId: "reserved", in: reopened.context)
+        #expect(try playable.map { try Data(contentsOf: $0.url) } == (replaceOwner ? [] : [bytes]))
+        #expect(try retryJournals(beside: recovery).count == (replaceOwner ? 1 : 0))
     }
 
     @Test(arguments: ["alias", "intent", "blockedAdoption", "adopted"])
@@ -594,8 +744,9 @@ struct RestorePendingDraftTests {
 
     /// Simulates a crash after the verified alias reached the memo folder and before
     /// the recording library adopted it. Write the on-disk intent format directly.
+    @discardableResult
     private func seedPublishedRecovery(_ take: OpenRecordingSnapshot.Take, bytes: Data, projectId: String,
-                                       harness: BackupHarness, recovery: URL) throws {
+                                       harness: BackupHarness, recovery: URL) throws -> String {
         let name = try #require(try retryJournals(beside: recovery).first)
         let retry = recovery.deletingLastPathComponent().appendingPathComponent(name)
         var journal = try journalObject(Data(contentsOf: retry))
@@ -623,6 +774,7 @@ struct RestorePendingDraftTests {
         try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: moves)
             .write(to: quarantine.appendingPathComponent("pending-moves.json"), options: .atomic)
+        return alias
     }
 
     @Test func overlappingRecoveryJournalsShareAnAliasWithoutDroppingDrafts() async throws {
@@ -783,7 +935,7 @@ struct RestorePendingDraftTests {
 
     private typealias PendingFixture = (harness: BackupHarness, editor: EditorViewModel, remote: SyncBlob, audio: Data)
 
-    private func makePendingDraft() async throws -> PendingFixture {
+    private func makePendingDraft(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) async throws -> PendingFixture {
         let harness = try await BackupCoreTests().makeHarness()
         let original = SongProject(id: "song-a", title: "Local A", lyrics: "saved local words", theme: "calm")
         let audio = Data([0x31, 0x32, 0x33, 0x34])
@@ -793,7 +945,7 @@ struct RestorePendingDraftTests {
         let editor = EditorViewModel(
             keychainStore: InMemoryKeychainStore(), backupService: harness.service,
             recordingLibrary: harness.service.library, defaults: harness.defaults,
-            draftRecoveryURL: harness.memosRoot.deletingLastPathComponent().appendingPathComponent("draft-recovery.json")
+            draftRecoveryURL: recoveryURL(harness), saveModelContext: save
         )
         editor.modelContext = harness.context
         await editor.recordingsLaunchTask?.value

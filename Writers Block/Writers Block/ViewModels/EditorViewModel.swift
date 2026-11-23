@@ -3596,10 +3596,11 @@ final class EditorViewModel: ObservableObject {
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
         guard let context = modelContext else { return false }
+        var committed: SongProject?
         do {
             let row = loadedProjectRow
-            let committed = try committedCopy(for: draft, row: row, operation: operation, in: context)
-            _ = try keepCloudDraft(draft, row: row, committed: committed, operation: operation, in: context)
+            committed = try committedCopy(for: draft, row: row, operation: operation, in: context)
+            _ = try keepCloudDraft(draft, row: row, committed: &committed, operation: operation, in: context)
             operation.savedSeparateOutgoingDraft = true
             operation.separateDraftID = UUID().uuidString
             if pendingRecordingRecovery === operation.recordingSnapshot {
@@ -3610,7 +3611,20 @@ final class EditorViewModel: ObservableObject {
             return true
         } catch {
             context.rollback()
-            errorMessage = "Could not save this draft before switching songs. Your edits remain open."
+            if let committed {
+                updateDraftRecoveryCopy(committedCopy: committed)
+                deferDraftRecoveryCopy()
+                bindEditor(to: committed)
+                operation.currentBaseline = openDraft
+                operation.currentHadPendingEdit = false
+                operation.recordingProjectId = committed.id
+                operation.recordingSnapshot = nil
+                operation.savedSeparateOutgoingDraft = true
+                saveStatus = .saved
+                errorMessage = "Your draft was saved. Its recordings are still in recovery."
+            } else {
+                errorMessage = "Could not save this draft before switching songs. Your edits remain open."
+            }
             return false
         }
     }
@@ -3627,7 +3641,7 @@ final class EditorViewModel: ObservableObject {
         return saved
     }
 
-    private func keepCloudDraft(_ draft: OpenDraft, row: PersistentIdentifier?, committed: SongProject?,
+    private func keepCloudDraft(_ draft: OpenDraft, row: PersistentIdentifier?, committed: inout SongProject?,
                                 operation: CloudEditorOperation, in context: ModelContext) throws -> SongProject {
         if committed == nil, operation.draftHandoff.outcome?.copies.contains(where: {
             $0.destination == .song(operation.separateDraftID)
@@ -3661,10 +3675,11 @@ final class EditorViewModel: ObservableObject {
                 context.insert(recovered)
                 try saveModelContext(context)
             }
-            if attempt != nil { _ = try parkCommittedDraft(recovered) }
+            committed = recovered
             if let row {
                 operation.draftHandoff.savedDrafts.append(draft.reservation(row: row, id: recovered.id))
             }
+            if attempt != nil { _ = try parkCommittedDraft(recovered) }
             return recovered
         } catch {
             operation.recordingSnapshot?.removeCopy(for: id)
@@ -4237,12 +4252,20 @@ final class EditorViewModel: ObservableObject {
                 guard aliases.count <= 1 else { throw RecordingLibraryError.notVerified }
                 var id = aliases.first ?? key
                 let original = take.origin?.id ?? URL(fileURLWithPath: take.fileName).deletingPathExtension().lastPathComponent
+                let sourceProjectId = record.projectId ?? projectId
+                let sourceRecordingId = UUID(uuidString: original) != nil ? original : take.recordingID(for: sourceProjectId)
+                let binding = RecordingFiles.PendingMoves.Adopt.DraftBinding(
+                    projectId: projectId, row: owner.row, sourceProjectId: sourceProjectId,
+                    sourceRecordingId: sourceRecordingId, originalId: key, bytes: take.bytes,
+                    precedenceTime: take.origin?.uploadedAt ?? record.savedAt,
+                    precedenceRepaired: take.origin?.precedenceRepaired ?? true
+                )
                 let rows = try context.fetch(FetchDescriptor<Recording>())
 
                 if deletions.contains(where: { deletion in
-                    guard !deletion.isSongTombstone else { return false }
+                    guard !deletion.isSongTombstone, !binding.isSourceSongCascade(deletion, among: deletions) else { return false }
                     if let origin = take.origin, deletion.covers(origin) { return true }
-                    let addresses = [(projectId, id), (projectId, key), (record.projectId ?? projectId, original)]
+                    let addresses = [(projectId, id), (projectId, key), (sourceProjectId, sourceRecordingId)]
                     return addresses.contains { project, recording in
                         let row = rows.first { $0.projectId == project && $0.id == recording && $0.sha256 == take.sha256 }
                         return deletion.covers(projectId: project, recordingId: recording, sha256: take.sha256,
@@ -4282,7 +4305,8 @@ final class EditorViewModel: ObservableObject {
                 let planned = moves.adopt.first {
                     $0.recordingId == id && $0.sha256 == take.sha256 && $0.path == RecordingFiles.canonicalPath(target)
                 }
-                if try RecordingFiles.exists(target), planned != nil, (try? take.matches(target)) == true {
+                let idOccupied = rows.contains { $0.id == id }
+                if try RecordingFiles.exists(target), planned != nil, !idOccupied, (try? take.matches(target)) == true {
                     try await library.reconcile(context: context)
                 } else {
                     guard let folder, take.fileName == URL(fileURLWithPath: take.fileName).lastPathComponent else {
@@ -4291,7 +4315,7 @@ final class EditorViewModel: ObservableObject {
                     let source = folder.appendingPathComponent(take.fileName)
                     guard RecordingFiles.isRecordingFile(source, in: [staging]),
                           (try? take.matches(source)) == true else { throw RecordingLibraryError.takeMissing }
-                    if try rows.contains(where: { $0.id == id }) || oversizedOccupant != nil || RecordingFiles.exists(target) {
+                    if try idOccupied || oversizedOccupant != nil || RecordingFiles.exists(target) {
                         id = UUID().uuidString.lowercased()
                         target = try RecordingFiles.localURL(projectId: projectId,
                             fileName: RecordingFiles.storedName(id: id, displayName: take.displayName), memosRoot: root)
@@ -4303,16 +4327,8 @@ final class EditorViewModel: ObservableObject {
                     if take.bytes > SyncRecording.maxBytes {
                         guard try take.matches(temporary) else { throw RecordingLibraryError.notVerified }
                         _ = try library.publishFinished(temporary, projectId: projectId, preferredName: take.displayName,
-                            origin: .recorded, id: id, finishedAt: take.origin?.uploadedAt)
+                            origin: .recorded, id: id, finishedAt: take.origin?.uploadedAt, draftBinding: binding)
                     } else {
-                        let sourceProjectId = record.projectId ?? projectId
-                        let sourceRecordingId = UUID(uuidString: original) != nil ? original : take.recordingID(for: sourceProjectId)
-                        let binding = RecordingFiles.PendingMoves.Adopt.DraftBinding(
-                            projectId: projectId, row: owner.row, sourceProjectId: sourceProjectId,
-                            sourceRecordingId: sourceRecordingId, originalId: key, bytes: take.bytes,
-                            precedenceTime: take.origin?.uploadedAt ?? record.savedAt,
-                            precedenceRepaired: take.origin?.precedenceRepaired ?? true
-                        )
                         if planned?.draftBinding != binding || id != (aliases.first ?? key) {
                             try library.expectCopies([(target, id, take.displayName, take.sha256)], draftBinding: binding)
                         }
@@ -4431,7 +4447,7 @@ final class EditorViewModel: ObservableObject {
                     return operation.savedSeparateOutgoingDraft
                 }
                 committedRecovery = try committedCopy(for: draft, row: boundRow, operation: operation, in: context)
-                let recovered = try keepCloudDraft(draft, row: boundRow, committed: committedRecovery, operation: operation, in: context)
+                let recovered = try keepCloudDraft(draft, row: boundRow, committed: &committedRecovery, operation: operation, in: context)
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()

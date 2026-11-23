@@ -1139,32 +1139,29 @@ final class RecordingLibrary: RecordingPublishing {
             }
             if let id = file.storedId {
                 // Copies written for a draft, taken in under the identity recorded for them.
-                if let entry = adoptByPath[file.path], entry.sha256 == sha, rowsById[entry.recordingId] == nil {
+                if let entry = adoptByPath[file.path], entry.sha256 == sha {
                     if let binding = entry.draftBinding {
                         let projectId = binding.projectId
                         guard file.projectId == projectId, file.size == binding.bytes else { continue }
-                        let owners = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId }))
+                        let owner = try binding.owner(in: context)
                         if deletions.contains(where: { deletion in
                             if deletion.isSongTombstone {
-                                return deletion.projectId == projectId && owners.contains {
-                                    $0.persistentModelID == binding.row && deletion.wins(over: $0.updatedAt, repaired: $0.precedenceRepaired)
-                                }
+                                return deletion.projectId == projectId && owner.map {
+                                    deletion.wins(over: $0.updatedAt, repaired: $0.precedenceRepaired)
+                                } == true
                             }
-                            let ids = [(binding.sourceProjectId, binding.sourceRecordingId), (projectId, binding.originalId),
-                                       (projectId, entry.recordingId)]
-                            return ids.contains { project, id in
-                                deletion.covers(projectId: project, recordingId: id, sha256: sha,
-                                                at: binding.precedenceTime, repaired: binding.precedenceRepaired)
-                            }
+                            return binding.deletionWins(deletion, among: deletions, id: entry.recordingId, sha256: sha)
                         }) {
                             toQuarantine.append((file.url, sha, entry.recordingId))
                             continue
                         }
-                        let trash = try context.fetchCount(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == projectId }))
-                        guard owners.count == 1, owners.first?.persistentModelID == binding.row, trash == 0 else { continue }
+                        // A bound alias cannot be reclassified as a new legacy recording.
+                        guard owner != nil, rowsById[entry.recordingId] == nil else { continue }
                     }
-                    candidates.append(candidate(id: entry.recordingId, displayName: entry.displayName, trashedAt: nil, time: file.modified, file: file))
-                    continue
+                    if rowsById[entry.recordingId] == nil {
+                        candidates.append(candidate(id: entry.recordingId, displayName: entry.displayName, trashedAt: nil, time: file.modified, file: file))
+                        continue
+                    }
                 }
                 if !file.trashed, allowRemovals, let mirror = known[id], mirror.sha256 == sha {
                     if rowsById[id] != nil {
@@ -1386,13 +1383,13 @@ final class RecordingLibrary: RecordingPublishing {
         // Files over the cap from before A36: journalled, then moved to their ids.
         for migration in oversizedMigrations {
             try OversizedRecordings.record(id: migration.id, entry: migration.entry, for: memosRoot)
-            if (try? finishOversized(id: migration.id, entry: migration.entry)) == nil { result.needsAttention.append(migration.file.url) }
+            if (try? finishOversized(id: migration.id, entry: migration.entry, in: context)) == nil { result.needsAttention.append(migration.file.url) }
         }
         // Interrupted oversized moves (publication, migration, Trash, restore) are
         // finished from their journal before anything is pruned; one that cannot be
         // finished yet stays recorded and is reported.
         for (id, entry) in try OversizedRecordings.read(for: memosRoot) where entry.completed == false || entry.unresolved == true {
-            if entry.unresolved != true, (try? finishOversized(id: id, entry: entry)) != nil { continue }
+            if entry.unresolved != true, (try? finishOversized(id: id, entry: entry, in: context)) != nil { continue }
             // Blocked (other bytes at its place, its source changed, or no proof): both
             // files are kept and reported; neither is listed or expired as this recording.
             let place = oversizedURL(id: id, entry: entry)
@@ -1551,7 +1548,15 @@ final class RecordingLibrary: RecordingPublishing {
         }
         let ids = Set(rows.map(\.id))
         moves.adopt = moves.adopt.filter { entry in
-            !ids.contains(entry.recordingId) && (try? RecordingFiles.exists(URL(fileURLWithPath: entry.path))) != false
+            guard (try? RecordingFiles.exists(URL(fileURLWithPath: entry.path))) != false else { return false }
+            guard let binding = entry.draftBinding else { return !ids.contains(entry.recordingId) }
+            guard let digest = try? digestNow(entry.path) else { return true }
+            if digest != entry.sha256 { return false }
+            guard (try? binding.owner(in: context)) != nil else { return true }
+            return !rows.contains { row in
+                row.id == entry.recordingId && row.projectId == binding.projectId && row.sha256 == digest
+                    && row.bytes == binding.bytes && url(of: row).map(RecordingFiles.canonicalPath) == entry.path
+            }
         }
         try? RecordingFiles.writePendingMoves(moves, for: memosRoot)
     }
@@ -1807,6 +1812,12 @@ final class RecordingLibrary: RecordingPublishing {
     // MARK: Changes that record the row before the file moves
 
     func publishFinished(_ staged: URL, projectId: String, preferredName: String, origin: Recording.Origin, id: String?, finishedAt: Date?) throws -> URL {
+        try publishFinished(staged, projectId: projectId, preferredName: preferredName, origin: origin, id: id,
+                            finishedAt: finishedAt, draftBinding: nil)
+    }
+
+    func publishFinished(_ staged: URL, projectId: String, preferredName: String, origin: Recording.Origin, id: String?, finishedAt: Date?,
+                         draftBinding: RecordingFiles.PendingMoves.Adopt.DraftBinding?) throws -> URL {
         guard let context else { throw RecordingLibraryError.unavailable }
         try requireChecked(context)
         if let id, let existing = try context.fetch(FetchDescriptor<Recording>()).first(where: { $0.id == id }) {
@@ -1821,7 +1832,7 @@ final class RecordingLibrary: RecordingPublishing {
             return published
         }
         if let id, let entry = try OversizedRecordings.read(for: memosRoot)[id] {
-            return try finishOversized(id: id, entry: entry)
+            return try finishOversized(id: id, entry: entry, in: context)
         }
         if id != nil, try !RecordingFiles.exists(staged) { throw RecordingLibraryError.takeMissing }
         try SyncIdentity.validateProjectId(projectId)
@@ -1833,9 +1844,9 @@ final class RecordingLibrary: RecordingPublishing {
             // and move are journalled before it moves, and marked done after.
             let entry = OversizedRecordings.Entry(projectId: projectId, fileName: preferredName, finishedAt: finished.epochMilliseconds,
                                                   source: staged.path, completed: false, sha256: try RecordingFiles.sha256(of: staged),
-                                                  bytes: try RecordingFiles.facts(staged).size)
+                                                  bytes: try RecordingFiles.facts(staged).size, draftBinding: draftBinding)
             try OversizedRecordings.record(id: recordingId, entry: entry, for: memosRoot)
-            return try finishOversized(id: recordingId, entry: entry)
+            return try finishOversized(id: recordingId, entry: entry, in: context)
         }
         let audio = try Data(contentsOf: staged)
         let row = Recording(id: recordingId, projectId: projectId, displayName: preferredName, audio: audio,
@@ -1876,7 +1887,7 @@ final class RecordingLibrary: RecordingPublishing {
 
     nonisolated private static func positive(_ milliseconds: Int64) -> Int64? { milliseconds > 0 ? milliseconds : nil }
 
-    private func finishOversized(id: String, entry: OversizedRecordings.Entry) throws -> URL {
+    private func finishOversized(id: String, entry: OversizedRecordings.Entry, in context: ModelContext? = nil) throws -> URL {
         var entry = entry
         let target = oversizedURL(id: id, entry: entry)
         // Without its digest and length nothing can be shown to be this recording (T1.17).
@@ -1886,6 +1897,21 @@ final class RecordingLibrary: RecordingPublishing {
             return try RecordingFiles.sha256(of: url) == proofSha
         }
         if entry.completed == false {
+            if let binding = entry.draftBinding {
+                guard let context = context ?? self.context, entry.projectId == binding.projectId,
+                      proofBytes == binding.bytes, let owner = try binding.owner(in: context),
+                      try context.fetchCount(FetchDescriptor<Recording>(predicate: #Predicate { $0.id == id })) == 0 else {
+                    throw RecordingLibraryError.notVerified
+                }
+                let deletions = try DeletionStore.all(in: context)
+                if deletions.contains(where: { deletion in
+                    if deletion.isSongTombstone {
+                        return deletion.projectId == binding.projectId
+                            && deletion.wins(over: owner.updatedAt, repaired: owner.precedenceRepaired)
+                    }
+                    return binding.deletionWins(deletion, among: deletions, id: id, sha256: proofSha)
+                }) { throw RecordingLibraryError.notVerified }
+            }
             if try !holdsTake(target) {
                 guard try !RecordingFiles.exists(target) else { throw RecordingLibraryError.notVerified }
                 guard let source = entry.source.map({ URL(fileURLWithPath: $0) }), try RecordingFiles.exists(source) else {
@@ -1901,6 +1927,7 @@ final class RecordingLibrary: RecordingPublishing {
             }
             entry.completed = true
             entry.source = nil
+            entry.draftBinding = nil
             try OversizedRecordings.record(id: id, entry: entry, for: memosRoot)
         }
         guard try holdsTake(target) else { throw RecordingLibraryError.takeMissing }
@@ -2298,6 +2325,7 @@ enum OversizedRecordings {
         var repaired: Bool?
         /// A38: `trashedAt` is a repaired time.
         var trashedAtRepaired: Bool?
+        var draftBinding: RecordingFiles.PendingMoves.Adopt.DraftBinding? = nil
     }
 
     private static func url(for memosRoot: URL) -> URL {
