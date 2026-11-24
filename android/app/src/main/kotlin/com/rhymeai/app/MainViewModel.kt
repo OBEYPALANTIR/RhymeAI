@@ -29,6 +29,12 @@ import android.app.PendingIntent
 import com.rhymeai.app.data.repository.ProjectRepository
 import com.rhymeai.app.data.repository.CorruptLibraryException
 import com.rhymeai.app.data.repository.MissingActiveProjectException
+import com.rhymeai.app.data.repository.HoldResult
+import com.rhymeai.app.data.repository.RecoveryInsert
+import com.rhymeai.app.data.repository.PreservationTicket
+import com.rhymeai.app.data.repository.SongCreation
+import com.rhymeai.app.data.repository.CreationIdTakenException
+import com.rhymeai.app.data.repository.HeldCopyChangedException
 import com.rhymeai.app.data.repository.SameIdTrashCopiesException
 import com.rhymeai.app.data.repository.SameIdActiveCopiesException
 import com.rhymeai.app.data.repository.TrashCopyOutranksActiveException
@@ -76,6 +82,7 @@ import com.rhymeai.app.util.SectionMap
 import com.rhymeai.app.util.SectionRef
 import com.rhymeai.app.util.WordProsody
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
@@ -83,6 +90,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -191,6 +199,20 @@ internal object DraftSaveTestHooks {
     @Volatile var afterAutosaveCommit: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     /** Holds the next draft write before it runs, so a test can order it against another save. */
     @Volatile var beforeWrite: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Holds the next delayed editor-position save before it writes. */
+    @Volatile var beforePositionSave: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Runs before each new song's notebook change is written, after its song is stored; the test clears it. */
+    @Volatile var beforeCreationNotebookWrite: (suspend () -> Unit)? = null
+    /** Runs once in the next save at an adopted copy, holding the copy's lock before its receipt check. */
+    @Volatile var insideCopyLock: (suspend () -> Unit)? = null
+}
+
+private const val NOTEBOOK_NOT_SAVED = "A Song Notebook change was not saved because the song could not be saved."
+private const val HELD_COPY_CHANGED = "This song was changed elsewhere while it was being restored. Your draft stays open and will be saved as a new song."
+
+/** Draws every generated song id; tests replace [next] to force a clash. */
+internal object SongIdAllocator {
+    @Volatile var next: () -> String = { java.util.UUID.randomUUID().toString() }
 }
 
 internal object NewSongTestHooks {
@@ -229,6 +251,54 @@ internal object BackupTestHooks {
     @Volatile var beforeHeldOperation: (suspend () -> Unit)? = null
     /** Holds the next one-liner send to a song behind the start menu before its write (a test runs a restore meanwhile). */
     @Volatile var beforeMenuSend: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    /** Runs in a hold after its operation, before its result is read (a test changes the store there, or fails the read). */
+    @Volatile var beforeHoldResolve: (suspend () -> Unit)? = null
+    /** Runs before a held editor's song-list refresh, after its result was read (a test makes the refresh fail). */
+    @Volatile var beforeHoldListRefresh: (suspend () -> Unit)? = null
+    /** Runs as an unedited hold reads its song's stored ticket, before the operation (a test makes that read fail). */
+    @Volatile var beforeHoldTicketRead: (suspend () -> Unit)? = null
+    /** Runs once in a send to the open song after its marker is saved, before the line is inserted. */
+    @Volatile var afterSendMarked: (suspend () -> Unit)? = null
+    /** Runs once in a hold after its read of an adopted copy, before that read decides the copy. */
+    @Volatile var afterHoldCopyRead: (suspend () -> Unit)? = null
+    /** Runs once in a hold before its read of an undecided adopted copy. */
+    @Volatile var beforeHoldCopyRead: (suspend () -> Unit)? = null
+}
+
+/** Observes editor-position work per view model and open revision (null in the app). */
+internal object PositionTestHooks {
+    /** [event]: "reached" (rememberEditorPosition entered), "scheduled", "wrote" (its stored write finished), "settled" (its job ended). */
+    @Volatile var onEvent: ((vm: MainViewModel, revision: Int, event: String) -> Unit)? = null
+}
+
+/** Observes recording admission (null in the app). */
+internal object RecordingTestHooks {
+    /** Called on entry to ensureProjectForRecording, before any check. */
+    @Volatile var onSaveGate: ((MainViewModel) -> Unit)? = null
+}
+
+/** Notebook seams for the held-copy settlement tests (null in the app). */
+internal object NotebookTestHooks {
+    /** Runs before a loaded song's notebook write, with the song id. */
+    @Volatile var beforeLoadedNotebookWrite: (suspend (id: String) -> Unit)? = null
+    /** Runs after a settling notebook action joined earlier writes, before its edit; only the settlement code runs it. */
+    @Volatile var afterJoinBeforeSettle: (suspend (id: String) -> Unit)? = null
+    /** Called when a settling notebook action starts waiting on earlier writes; only the settlement code calls it. */
+    @Volatile var onJoinWait: ((id: String) -> Unit)? = null
+}
+
+/** Seams for a held draft's recovery insert (null or false in the app). */
+internal object RecoveryTestHooks {
+    /** Fails the next recovery insert; only the recovery code reads it. */
+    val failNextRecovery = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Runs in a recovery attempt before its insert; only the recovery code runs it. */
+    @Volatile var beforeRecoveryInsert: (suspend () -> Unit)? = null
+    /** Called each time a queued navigation runs. */
+    @Volatile var onQueuedNavigationRun: ((MainViewModel) -> Unit)? = null
+    /** Called each time a navigation is queued behind a save or a held editor. */
+    @Volatile var onNavigationQueued: ((MainViewModel) -> Unit)? = null
+    /** Runs when a revoked adoption's notebook is reread for its recovery, before the read. */
+    @Volatile var onRevokeRead: (suspend () -> Unit)? = null
 }
 
 /** What the launch check of the recordings kept rather than changed, as one notice's sentences (T5.3, T5.12, T5.13, T5.22). */
@@ -488,9 +558,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var trashedProjects by mutableStateOf<List<TrashedSongProject>>(emptyList())
     var currentProjectId by mutableStateOf<String?>(null)
     private var positionSaveJob: Job? = null
-    private val pendingProjectCreationIds = mutableSetOf<String>()
+    /** One new song's creation in this window; [retired] once it is refused or detached, after which it never writes. */
+    private class CreationAttempt(
+        val creation: SongCreation = SongCreation(), val recovery: AdoptedCopy? = null,
+        /** A recovery's first-commit boundary, shared with the reservation that replaces a taken one. */
+        val first: RecoveryFirst? = recovery?.let { RecoveryFirst() }
+    ) {
+        var retired = false
+        /** The id and attempt that took over this reservation after its id was taken; its waiters follow it. */
+        var replacedBy: Pair<String, CreationAttempt>? = null
+        /** Whether the save that queued notebook changes wait on stored the song; a Retry after a failure gets a fresh one. */
+        var outcome = CompletableDeferred<Boolean>()
+        /** Notebook changes made before the song is stored, kept apart from [workspaces] (which may cache another song at this id). */
+        var workspace by mutableStateOf<SongWorkspace?>(null)
+        /** The notebook changes [workspace] shows, in order; one whose save fails is taken out and the rest reapplied. */
+        val changes = mutableListOf<(SongWorkspace) -> SongWorkspace>()
+        /** Saves of this song writing now: the outcome fails only when the last of them ends without storing it. */
+        var producers = 0
+        var notebookDropped = false
+        fun retire() { retired = true; creation.withdrawn = true; outcome.complete(false) }
+    }
+
+    /** What a recovery song's commit stored: its destination, the editor's raw words and the edit revision they were. */
+    private class Committed(val id: String, val title: String, val lyrics: String, val theme: String, val revision: Long)
+
+    /**
+     * Rule 1: a recovery song's first commit is the boundary for every save of it. [first] is published with the
+     * reservation; every other producer waits for it, and a producer after a failed one becomes the new first.
+     */
+    private class RecoveryFirst {
+        var first = CompletableDeferred<Committed?>()
+        /** The attempt that writes [first] (-1 until one took the snapshot). */
+        var firstBy = -1L
+        /** The newest commit of the song, compared under the copy's lock by each later producer. */
+        var latest: Committed? = null
+    }
+
+    /** A save whose words a newer commit of its recovery song replaced: nothing of it counts as saved. */
+    private class SupersededSave : CancellationException("Superseded by a newer save")
+
+    /** New songs not yet known to be stored, each with the attempt its saves carry (captured before they suspend). */
+    private val pendingCreations = mutableMapOf<String, CreationAttempt>()
+    /** A One Liner inserted into the open song (its id) whose save has not yet committed or been undone. */
+    private var openSendSettle: Pair<String, CompletableDeferred<Unit>>? = null
     private var workspaces by mutableStateOf<Map<String, SongWorkspace>>(emptyMap())
-    val songWorkspace: SongWorkspace get() = workspaces[currentProjectId] ?: SongWorkspace()
+    val songWorkspace: SongWorkspace get() =
+        currentProjectId?.let(pendingCreations::get)?.let { it.workspace ?: SongWorkspace() } ?: workspaces[currentProjectId] ?: SongWorkspace()
     var editorScrollOffset by mutableStateOf(0f)
         private set
     var editorPositionRevision by mutableStateOf(0)
@@ -504,6 +617,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var notebookError by mutableStateOf<String?>(null)
         private set
+    /** Notebook changes on an adopted copy whose write has not yet committed. */
+    var notebookSaving by mutableStateOf(0)
+        private set
+    /** A notebook change waits for a recovered draft whose save failed; the save's Retry stores both. */
+    var notebookNotSaved by mutableStateOf(false)
+        private set
+    /** Notebook writes per song made outside an adoption; a settlement on that song joins them first. */
+    private val notebookJobs = mutableMapOf<String, MutableList<Job>>()
     var restoringDraft by mutableStateOf(false)
         private set
     /** Welcome's Continue: the song last open in the editor (persisted as the current song). */
@@ -572,12 +693,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!showStartMenu && currentProjectId == project.id) {
                 val notSaved = "Couldn't add the line to the open song. Try again in a moment."
                 val stored = projects.firstOrNull { it.id == project.id } ?: return notSaved
+                val creation = pendingCreations[project.id]
                 // The marker is saved first: if that fails, nothing went into the song.
                 oneLinersStore.markUsed(line.id, project.id) ?: return "This line is no longer in One Liners."
-                if (!insertSuggestion(text)) {
+                BackupTestHooks.afterSendMarked?.let { BackupTestHooks.afterSendMarked = null; it() }
+                // The editor may have left the song while the marker was saved (a refusal moved the draft to a new song).
+                val settled = CompletableDeferred<Unit>()
+                if (showStartMenu || currentProjectId != project.id || !insertSuggestion(text)) {
                     oneLinersStore.markUsed(line.id, line.usedInProjectId)
                     return notSaved
                 }
+                // A recovery song started meanwhile snapshots the editor only once this insertion is saved or undone.
+                openSendSettle = project.id to settled
+                val openedAt = openRevision
                 val insertion = lyricsHistory.revision
                 // Saved right away and awaited: on failure or cancellation the insertion and the
                 // marker are put back, and the edits the cancelled autosave held are saved again.
@@ -588,39 +716,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val savedAt = editRevision
                 var saved = false
                 suspend fun putBack() = withContext(kotlinx.coroutines.NonCancellable) {
-                    // Only this insertion is undone, and only while it is the latest edit.
-                    if (currentProjectId == project.id && !openingSong) {
+                    // Only this insertion is undone, and only while it is the latest edit of the same open document
+                    // (a refusal that moved the draft to a new song keeps the document open).
+                    if (openRevision == openedAt && !openingSong) {
                         lyricsHistory.undoIfLatest(insertion, lyricsFieldValue)?.let(::applyHistoryState)
                     }
+                    settled.complete(Unit)
                     runCatching { oneLinersStore.markUsed(line.id, line.usedInProjectId) }
                 }
+                val snapshot = stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
+                    updatedAt = System.currentTimeMillis(), precedenceRepaired = false)
+                val attempt = ++saveAttempts
                 try {
-                    persistActiveProjectSnapshot(
-                        stored.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme,
-                            updatedAt = System.currentTimeMillis(), precedenceRepaired = false),
-                        savedTitle, savedLyrics, savedTheme, ++saveAttempts
-                    )
+                    persistActiveProjectSnapshot(snapshot, savedTitle, savedLyrics, savedTheme, attempt, creation, revision = savedAt)
                     markEditorSaved(savedAt)
                     saved = true
+                    settled.complete(Unit)
+                } catch (superseded: SupersededSave) {
+                    putBack()
+                    return notSaved
                 } catch (cancelled: CancellationException) {
                     putBack()
                     throw cancelled
-                } catch (_: Exception) {
+                } catch (error: Exception) {
                     putBack()
+                    if (error is CreationIdTakenException || error is HeldCopyChangedException) reconcileFailedProjectSave(snapshot, error, attempt, creation)
                     return notSaved
                 } finally {
+                    settled.complete(Unit)
+                    if (openSendSettle?.second === settled) openSendSettle = null
                     if (!saved) triggerAutoSave()
                 }
             } else {
                 val wordsRevisionAtSend = lyricsRevision
+                // A recovery song not yet stored (listed behind Welcome) takes the line where its first commit stored it.
+                val target = pendingCreations[project.id]?.first?.let { boundary ->
+                    (boundary.first.await() ?: return "Couldn't send this line. Try again.").id
+                } ?: project.id
+                // Captured before the send waits: a refusal meanwhile refuses this send once (the line is not added).
+                val captured = adoptedCopyFor(target)
                 BackupTestHooks.beforeMenuSend?.let { BackupTestHooks.beforeMenuSend = null; it.await() }
-                val songs = oneLinersStore.sendToSong(line.id, project.id, repo)
-                    ?: return "That song is no longer in your library."
+                val held = captured ?: adoptedCopyFor(target)
+                val songs = try {
+                    // The append is this copy's own write: undecided, it decides the copy, as a first save does.
+                    if (held == null) oneLinersStore.sendToSong(line.id, target, repo)
+                    else held.lock.withLock { writeAsDecided(held) { receipt -> oneLinersStore.sendToSong(line.id, target, repo, adoptedFrom = receipt) } }
+                } catch (refused: HeldCopyChangedException) {
+                    if (held == null) throw refused
+                    // The refusal already moved the draft to its new song (or had nothing to keep).
+                    persistenceError = HELD_COPY_CHANGED
+                    return "Couldn't send this line. Try again."
+                } ?: return "That song is no longer in your library."
                 // The song is the editor's (behind the start menu): its words follow the stored song, unless they changed
                 // meanwhile. Changed words stay unsaved and their next save wins over the appended line, as before.
                 // Only the words are loaded here, so a title or theme edit stays unsaved too: the editor is not marked saved.
-                if (currentProjectId == project.id && lyricsRevision == wordsRevisionAtSend) {
-                    songs.firstOrNull { it.id == project.id }?.let {
+                if (currentProjectId == target && lyricsRevision == wordsRevisionAtSend) {
+                    songs.firstOrNull { it.id == target }?.let {
                         loadWords(it.lyrics)
                         resetLyricsHistory()
                     }
@@ -654,26 +805,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else -> "Choose a model"
     }
 
-    private suspend fun saveWorkspaceForActiveIdentity(id: String, workspace: SongWorkspace) {
-        if (id in pendingProjectCreationIds) {
-            val project = projects.firstOrNull { it.id == id } ?: throw MissingActiveProjectException(id)
-            val savedAt = editRevision
-            persistActiveProjectSnapshot(
-                project.copy(title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme),
-                title, lyrics, theme, ++saveAttempts
-            )
-            markEditorSaved(savedAt)
+    /**
+     * A loaded song stores [workspace]. A new song's [change] waits for the save that stores the song and is then applied
+     * to the notebook of the row its creation made; null when that save did not store it, and nothing is written.
+     * Returns the notebook as stored.
+     */
+    private suspend fun saveWorkspaceForActiveIdentity(
+        id: String, creation: CreationAttempt?, workspace: SongWorkspace, openedAt: Int, change: (SongWorkspace) -> SongWorkspace
+    ): SongWorkspace? {
+        if (creation == null) {
+            NotebookTestHooks.beforeLoadedNotebookWrite?.invoke(id)
+            repo.saveWorkspace(id, workspace)
+            return workspace
         }
-        repo.saveWorkspace(id, workspace)
+        // A recovery reservation whose id was taken hands its notebook changes to the one that replaced it.
+        var target = id
+        var owner: CreationAttempt = creation
+        while (!owner.creation.inserted && !owner.outcome.await() && !owner.creation.inserted) {
+            owner = (owner.replacedBy ?: return null).also { target = it.first }.second
+        }
+        DraftSaveTestHooks.beforeCreationNotebookWrite?.invoke()
+        try {
+            return repo.saveWorkspace(target, owner.creation, change)
+        } catch (refused: CreationIdTakenException) {
+            // The id now names another song: an editor still on this creation's open keeps its words for a new song
+            // instead of saving them over that one. A later open of the id is the user's and stays.
+            if (currentProjectId == target && openRevision == openedAt && !editorHeld) {
+                detachMissingActiveProject(target, owner)
+                persistenceError = "This song is no longer active. Notebook changes were not saved. The draft stays open and will be saved as a new song."
+                // An edit whose autosave was armed for this id would now be dropped: save it as the new song instead.
+                if (editorDirty) triggerAutoSave()
+            }
+            throw refused
+        }
     }
 
-    private fun updateWorkspace(id: String, transform: (SongWorkspace) -> SongWorkspace) {
+    /** [reported]: the writer asked for this change, so one that could not be saved is reported. */
+    /** [after]: a save this change belongs to; the change is not written unless that save stored its song. */
+    /** [held]: the adoption this change belongs to, when its caller read it before a save that may have confirmed it. */
+    private fun updateWorkspace(
+        id: String, reported: Boolean = true, after: Deferred<Boolean>? = null, held: AdoptedCopy? = adoptedCopyFor(id),
+        transform: (SongWorkspace) -> SongWorkspace
+    ) {
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
-        val next = transform(workspaces[id] ?: SongWorkspace())
-        workspaces = workspaces + (id to next)
-        viewModelScope.launch {
+        val creation = pendingCreations[id]
+        held?.takeIf { creation == null }?.let { h -> updateHeldWorkspace(h, reported, after, transform); return }
+        val next = transform(creation?.let { it.workspace ?: SongWorkspace() } ?: workspaces[id] ?: SongWorkspace())
+        if (creation != null) { creation.changes += transform; creation.workspace = next } else workspaces = workspaces + (id to next)
+        val openedAt = openRevision
+        val job = viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, next)
+                // A save superseded by a newer commit (a cancellation of that save, not of this job) stored nothing of its own.
+                val afterSaved = after == null || try { after.await() } catch (cancelled: CancellationException) { if (coroutineContext[Job]?.isCancelled == true) throw cancelled; false }
+                if ((!afterSaved || saveWorkspaceForActiveIdentity(id, creation, next, openedAt, transform) == null) && creation != null && !creation.retired) {
+                    // The song's save failed: the change leaves the notebook shown, so a later save cannot show it as kept.
+                    creation.changes -= transform
+                    val shown = creation.workspace ?: SongWorkspace()
+                    creation.workspace = creation.changes.fold(SongWorkspace()) { workspace, change -> change(workspace) }
+                        .copy(selectionStart = shown.selectionStart, selectionEnd = shown.selectionEnd, scrollOffset = shown.scrollOffset)
+                    if (reported && afterSaved) {
+                        creation.notebookDropped = true
+                        if (persistenceError?.contains(NOTEBOOK_NOT_SAVED) != true) persistenceError = listOfNotNull(persistenceError, NOTEBOOK_NOT_SAVED).joinToString("\n")
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -682,19 +876,126 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
             }
         }
+        if (creation == null) notebookJobs.getOrPut(id) { mutableListOf() }.apply { removeAll { !it.isActive }; add(job) }
+    }
+
+    /**
+     * A change on an adopted copy [h]: never published to the cached notebook before it commits. An explicit one
+     * ([reported]) decides an undecided copy with a write guarded by its receipt; an automatic one (a save's checkpoint)
+     * waits for that save's verdict. Once decided it goes where the notebook now lives (X, or the recovered song).
+     */
+    private fun updateHeldWorkspace(h: AdoptedCopy, reported: Boolean, after: Deferred<Boolean>?, transform: (SongWorkspace) -> SongWorkspace) {
+        val earlier = notebookJobs[h.id].orEmpty().filter { it.isActive }
+        notebookSaving++
+        // Registered before anything suspends: a refusal meanwhile owes this action a recovery song, also for an empty
+        // draft. A save's checkpoint owes nothing of its own.
+        if (reported) h.registered++
+        viewModelScope.launch {
+            try {
+                if (!reported) {
+                    // A save whose words were not kept (failed, or refused and not what the recovery stored) drops its checkpoint.
+                    if (after != null && !after.await()) return@launch
+                    h.decision.await()
+                }
+                settleHeldWorkspace(h, earlier, transform)
+            } finally {
+                if (reported) h.registered--
+                notebookSaving--
+            }
+        }
+    }
+
+    /** Writes [transform] for [h] after the writes it must follow; the id it was written to, or null when it was not (yet). */
+    private suspend fun settleHeldWorkspace(h: AdoptedCopy, earlier: List<Job>, transform: (SongWorkspace) -> SongWorkspace): String? {
+        if (h.lock.isLocked || earlier.any { it.isActive }) NotebookTestHooks.onJoinWait?.invoke(h.id)
+        earlier.joinAll()
+        var refused = false
+        var folded = false
+        val written = h.lock.withLock {
+            NotebookTestHooks.afterJoinBeforeSettle?.invoke(h.id)
+            NotebookTestHooks.beforeLoadedNotebookWrite?.invoke(h.id)
+            try {
+                when {
+                    h.inserted -> checkNotNull(h.recoveryId).also { n -> workspaces = workspaces + (n to repo.updateWorkspace(n, null, transform)) }
+                    // Kept for the recovery's insert: acknowledged only by that insert's outcome.
+                    h.decision.isCompleted && !h.decision.getCompleted() -> { foldIntoRecovery(h, transform); folded = h.recoveryCreation != null; null }
+                    else -> try {
+                        workspaces = workspaces + (h.id to writeAsDecided(h) { receipt -> repo.updateWorkspace(h.id, receipt, transform) })
+                        h.id
+                    } catch (_: HeldCopyChangedException) {
+                        foldIntoRecovery(h, transform)
+                        refused = true
+                        null
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: MissingActiveProjectException) {
+                if (!editorHeld) persistenceError = "This song is no longer active. Notebook changes were not saved."
+                null
+            } catch (_: Exception) {
+                notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
+                null
+            }
+        }
+        if (refused) persistenceError = HELD_COPY_CHANGED
+        if ((refused || folded) && recoveryStored(h)) return h.recoveryId
+        return written
+    }
+
+    /** Kept for the recovered song's insert, which applies it in the same edit. */
+    private fun foldIntoRecovery(h: AdoptedCopy, transform: (SongWorkspace) -> SongWorkspace) {
+        val before = h.debt.notebook
+        h.debt.notebook = if (before == null) transform else { workspace: SongWorkspace -> transform(before(workspace)) }
+        if (h.recoveryCreation?.first?.first?.let { it.isCompleted && it.getCompleted() == null } == true) notebookNotSaved = true
     }
 
     fun rememberEditorPosition(scrollOffset: Float = editorScrollOffset) {
+        PositionTestHooks.onEvent?.invoke(this, openRevision, "reached")
+        // The adopted copy's position as restored, echoed back rounded through pixels: nothing changed, nothing is written.
+        positionSeed?.let { seed ->
+            if (seed.revision == openRevision && seed.selection == lyricsFieldValue.selection && kotlin.math.abs(scrollOffset - seed.offset) <= 1f) {
+                editorScrollOffset = seed.offset
+                return
+            }
+            positionSeed = null
+        }
         editorScrollOffset = scrollOffset.coerceAtLeast(0f)
         if (notebookError != null || restoringDraft || (editorHeld && !flushingHeldDraft)) return
         val id = currentProjectId ?: return
         val range = lyricsFieldValue.selection
-        workspaces = workspaces + (id to songWorkspace.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = editorScrollOffset))
+        val scrollOffset = editorScrollOffset
+        val position: (SongWorkspace) -> SongWorkspace = { it.copy(selectionStart = range.start, selectionEnd = range.end, scrollOffset = scrollOffset) }
+        val creation = pendingCreations[id]
+        if (creation != null) creation.workspace = position(creation.workspace ?: SongWorkspace())
+        else workspaces = workspaces + (id to position(songWorkspace))
         positionSaveJob?.cancel()
+        val openedAt = openRevision
+        // On the copy a hold adopted the position is stored as its own change: the cached notebook may predate another window's.
+        val adoptedDocument = creation == null && adoptedDoc == id to openedAt
+        val held = adoptedCopyFor(id)
+        PositionTestHooks.onEvent?.invoke(this, openedAt, "scheduled")
         positionSaveJob = viewModelScope.launch {
+          try {
             delay(250)
+            DraftSaveTestHooks.beforePositionSave?.let { DraftSaveTestHooks.beforePositionSave = null; it.await() }
+            if (adoptedDocument) {
+                try {
+                    // Undecided: written once a save confirms the copy; a refused copy gets nothing.
+                    if (held != null && !held.decision.await()) return@launch
+                    workspaces = workspaces + (id to repo.updateWorkspace(id, null, position))
+                    PositionTestHooks.onEvent?.invoke(this@MainViewModel, openedAt, "wrote")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: MissingActiveProjectException) {
+                } catch (_: Exception) {
+                    notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
+                }
+                return@launch
+            }
             try {
-                workspaces[id]?.let { saveWorkspaceForActiveIdentity(id, it) }
+                (if (creation != null) SongWorkspace() else workspaces[id])?.let { saveWorkspaceForActiveIdentity(id, creation, it, openedAt, position) }
+                    ?.also { PositionTestHooks.onEvent?.invoke(this@MainViewModel, openedAt, "wrote") }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: MissingActiveProjectException) {
@@ -702,10 +1003,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) {
                 notebookError = "Song Notebook could not be saved. Your lyrics are still available. Restart the app to try again."
             }
+          } finally {
+            PositionTestHooks.onEvent?.invoke(this@MainViewModel, openedAt, "settled")
+          }
         }
     }
 
     private fun restoreEditorPosition() {
+        positionSeed = null
         val saved = songWorkspace
         lyricsFieldValue = lyricsFieldValue.copy(selection = TextRange(
             saved.selectionStart.coerceIn(0, lyrics.length), saved.selectionEnd.coerceIn(0, lyrics.length)
@@ -717,7 +1022,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun keepAlternate(text: String) {
         if (text.isBlank() || notebookError != null || restoringDraft || editorHeld) return
         val id = ensureProjectForNotebook()
-        updateWorkspace(id) { it.keep(text, System.currentTimeMillis()) }
+        val now = System.currentTimeMillis()
+        // One kept line has one id, in the notebook shown now and in the one stored after a new song's insert.
+        val lineId = java.util.UUID.randomUUID().toString()
+        updateWorkspace(id) { it.keep(text, now, lineId) }
     }
 
     fun keepSelectedLyrics() {
@@ -732,8 +1040,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveDraftVersion() {
         if (notebookError != null || restoringDraft || editorHeld) return
         val id = ensureProjectForNotebook()
-        updateWorkspace(id) { it.checkpoint(title, lyrics, theme, System.currentTimeMillis(), force = true) }
-        triggerAutoSave()
+        val (savedTitle, savedLyrics, savedTheme) = Triple(title, lyrics, theme)
+        val now = System.currentTimeMillis()
+        val versionId = java.util.UUID.randomUUID().toString()
+        val held = adoptedCopyFor(id) != null
+        updateWorkspace(id) { it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId) }
+        if (!held) triggerAutoSave()
     }
 
     fun restoreDraftVersion(version: DraftVersion, onRestored: () -> Unit = {}) {
@@ -743,17 +1055,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentTitle = title
         val currentLyrics = lyrics
         val currentTheme = theme
-        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, System.currentTimeMillis(), force = true)
+        val now = System.currentTimeMillis()
+        val creation = pendingCreations[id]
+        val versionId = java.util.UUID.randomUUID().toString()
+        val preserved = songWorkspace.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId)
         positionSaveJob?.cancel()
         restoringDraft = true
         var restored = false
+        val openedAt = openRevision
+        val held = adoptedCopyFor(id)?.takeIf { creation == null }
+        val earlier = notebookJobs[id].orEmpty().filter { it.isActive }
+        // Registered before anything suspends: a refusal meanwhile owes this checkpoint a recovery song.
+        held?.let { it.registered++ }
         viewModelScope.launch {
             try {
-                saveWorkspaceForActiveIdentity(id, preserved)
+                if (held != null) {
+                    // The checkpoint decides the copy: kept there, or with the draft in the song a refusal recovers it to.
+                    val target = settleHeldWorkspace(held, earlier) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }
+                        ?: return@launch
+                    if (openingSong || currentProjectId != target || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
+                    dismissRewrite()
+                    title = version.title
+                    theme = version.theme
+                    applyAtomicLyricsEdit(TextFieldValue(version.lyrics))
+                    editorScrollOffset = 0f
+                    editorPositionRevision++
+                    restored = true
+                    triggerAutoSave()
+                    onRestored()
+                    return@launch
+                }
+                // The notebook as stored: a new song's may hold another window's entries that [preserved] never saw.
+                val committed = saveWorkspaceForActiveIdentity(id, creation, preserved, openedAt) { it.checkpoint(currentTitle, currentLyrics, currentTheme, now, force = true, id = versionId) }
+                    ?: return@launch
                 // The song may have started leaving for another one while the checkpoint saved.
                 if (openingSong) return@launch
                 if (currentProjectId != id || projects.none { it.id == id } || title != currentTitle || lyrics != currentLyrics || theme != currentTheme) return@launch
-                workspaces = workspaces + (id to preserved)
+                workspaces = workspaces + (id to committed)
                 dismissRewrite()
                 title = version.title
                 theme = version.theme
@@ -763,9 +1101,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 restored = true
                 triggerAutoSave()
                 onRestored()
-            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: MissingActiveProjectException) {
+                // Nothing was restored; the notebook stays usable.
+                if (currentProjectId == id && !editorHeld) persistenceError = "This song is no longer active. Notebook changes were not saved."
+            } catch (_: Exception) {
                 notebookError = "Your current draft could not be preserved, so nothing was restored. Restart the app to try again."
             } finally {
+                held?.let { it.registered-- }
                 restoringDraft = false
                 if (restored) rememberEditorPosition()
                 purgeExpiredTrashedProjects()
@@ -773,8 +1117,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun detachMissingActiveProject(id: String) {
-        pendingProjectCreationIds.remove(id)
+    private fun detachMissingActiveProject(id: String, creation: CreationAttempt? = pendingCreations[id]) {
+        if (creation != null && pendingCreations[id] === creation) pendingCreations.remove(id)?.retire()
         currentProjectId = null
         positionSaveJob?.cancel()
         saveStatus = SaveFailureRules.restingStatus(saveFailed)
@@ -791,7 +1135,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (editorHeld && onSaved === justSave && queuedNavigation != null) return
         // A navigation asked for while a draft is being saved, or while the editor is held, runs once
         // that is done (the latest one wins); it then saves whatever the editor holds by then, first.
-        if (savingBeforeNavigation || editorHeld) { queuedNavigation = { flushCurrentDraft(onSaved) }; return }
+        if (savingBeforeNavigation || editorHeld) {
+            queuedNavigation = { flushCurrentDraft(onSaved) }
+            RecoveryTestHooks.onNavigationQueued?.invoke(this)
+            return
+        }
         if (restoringDraft) return
         startDraftFlush(onSaved)
     }
@@ -808,26 +1156,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun holdEditorFor(operation: suspend () -> Unit): Boolean {
         // A draft save, song open or draft-version restore already running finishes first; nothing captured before is replayed.
-        while (restoringDraft || savingBeforeNavigation || editorHeld || opensInFlight > 0 || draftWritesInFlight > 0) delay(20)
+        // A recovery song not yet stored is written first too (its first commit bounds this hold).
+        while (restoringDraft || savingBeforeNavigation || editorHeld || opensInFlight > 0 || draftWritesInFlight > 0 ||
+            recoveryFirstPending()) delay(20)
+        // A recovery song whose first commit failed is stored nowhere: nothing runs until its Retry stores it.
+        if (currentProjectId?.let(pendingCreations::get)?.first?.first?.let { it.isCompleted && it.getCompleted() == null } == true) return false
         editorHeld = true
         try {
             autoSaveJob?.cancelAndJoin()
             positionSaveJob?.cancelAndJoin()
+            // An undecided adoption is decided first, so this hold saves where the words belong now.
+            currentProjectId?.let(::adoptedCopyFor)?.let { held ->
+                val valid = if (held.decision.isCompleted) held.decision.getCompleted()
+                    else try { BackupTestHooks.beforeHoldCopyRead?.let { BackupTestHooks.beforeHoldCopyRead = null; it() }; repo.refreshHold(held.receipt, held.id).second } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return false }
+                BackupTestHooks.afterHoldCopyRead?.let { BackupTestHooks.afterHoldCopyRead = null; it() }
+                // A decision another writer completed meanwhile stands.
+                held.lock.withLock { decide(held, valid) }
+                if (!held.decision.getCompleted()) {
+                    persistenceError = HELD_COPY_CHANGED
+                    if (!recoveryStored(held)) return false
+                }
+            }
             // Edits the flush is about to write over the stored song are marked in that same write: a commit that
             // replaces them keeps them as a new song, also when the app dies in between.
             val songId = currentProjectId
-            val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingProjectCreationIds }
+            val stored = projects.firstOrNull { it.id == songId }?.takeIf { it.id !in pendingCreations }
             // Only words edited here since the song was loaded or saved are written: a buffer another window's save
             // left behind is no edit, writes nothing and reloads after the operation.
             val dirty = editorDirty
             val edited = dirty && stored != null
-            // The id the commit gives this song's kept copy: new for edits this flush writes, else one a flush stored
+            // The ticket for this song's kept copy: new for edits this flush writes, else one a flush stored
             // before the app died. The reload takes it from here, never from the shared selection another window moves.
-            val keptId = if (edited) java.util.UUID.randomUUID().toString()
-                else songId?.let { try { repo.preservedCopyId(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
+            val ticket = if (edited) PreservationTicket(SongIdAllocator.next())
+                else songId?.let { try { BackupTestHooks.beforeHoldTicketRead?.invoke(); repo.preservedTicket(it) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null } }
             // A failed save keeps its failed state and Retry, as today; nothing is restored over it.
             flushingHeldDraft = true
-            val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = keptId.takeIf { edited }) } finally { flushingHeldDraft = false }
+            val flush = try { if (!dirty) null else startDraftFlush({}, preserveAs = ticket.takeIf { edited }) } finally { flushingHeldDraft = false }
             if (flush?.await() == false) return false
             // The flush re-armed the delayed position save; it must not write while the operation runs.
             positionSaveJob?.cancel()
@@ -839,73 +1203,340 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 withContext(NonCancellable) {
                     // Only the mark this operation wrote goes; one it read (written before the app died) stays until a commit uses it.
-                    if (songId != null && edited && keptId != null) try { repo.clearPreservedSong(songId, keptId) } catch (_: Exception) {}
-                    showStoredOpenSong(keptId, untouchedRow = stored.takeIf { !dirty })
+                    if (songId != null && edited && ticket != null) try { repo.clearPreservedSong(songId, ticket) } catch (_: Exception) {}
+                    showStoredOpenSong(songId, ticket, untouchedRow = stored.takeIf { !dirty })
                 }
             }
             return true
         } finally {
             restoringDraft = false
             editorHeld = false
-            queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
+            queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
         }
     }
 
     private var flushingHeldDraft = false
+    /**
+     * The copy a hold adopted whose words its own refresh did not confirm, until a write under its receipt decides it:
+     * one that passes confirms it, one refused revokes it and the editor's draft is recovered as a new song.
+     * [baseline] is the shared selection and editor words the commit itself wrote for this editor (null when none).
+     * It stays the editor's adoption until confirmed: a revoked one is how every writer at the copy finds its recovery.
+     * [ticket] is null only for a copy revoked from the start (the hold could not read where its words went).
+     */
+    private class AdoptedCopy(val source: String, val ticket: PreservationTicket?, val id: String, val openedAt: Int, baseline: List<String?>?) {
+        /** Read only while undecided, which a copy without a ticket never is. */
+        val receipt get() = source to checkNotNull(ticket)
+        /** True once confirmed; false once revoked, or left with the decision still open. */
+        val decision = CompletableDeferred<Boolean>()
+        /** Orders this copy's notebook settlements and its recovery insert. */
+        val lock = Mutex()
+        /** What the recovery insert writes besides the draft: the keys it may replace, and notebook changes kept for it. */
+        val debt = RecoveryInsert(baseline)
+        /** The recovery song's reservation every refusal waits on; a failed first commit is retried only by a later save. */
+        var recoveryCreation: CreationAttempt? = null
+        var recoveryId: String? = null
+        var inserted = false
+        /** Notebook actions on this copy not yet settled: a refusal owes them a recovery song even for an empty draft. */
+        var registered = 0
+    }
+    private var adoptedCopy: AdoptedCopy? = null
+    private fun adoptedCopyFor(id: String) = adoptedCopy?.takeIf { it.id == id && it.openedAt == openRevision }
+    /** The newest recovered song; a clean flush of it writes nothing (its insert stored these words). */
+    private var recoveredSongId: String? = null
+    private class PositionSeed(val revision: Int, val selection: TextRange, val offset: Float)
+    /** The adopted copy's restored position, which the editor echoes back rounded; an echo writes nothing. */
+    private var positionSeed: PositionSeed? = null
+    /** The adopted copy's open (id, revision): its later positions are stored as their own change. */
+    private var adoptedDoc: Pair<String, Int>? = null
+
+    /** A new adoption replaces the last; one left undecided is not written to again. */
+    private fun replaceAdoption(next: AdoptedCopy?) {
+        adoptedCopy?.takeIf { it !== next }?.decision?.complete(false)
+        adoptedCopy = next
+    }
+
+    private fun confirmAdoption(h: AdoptedCopy) {
+        h.decision.complete(true)
+        if (h.decision.getCompleted() && adoptedCopy === h) adoptedCopy = null
+    }
+
+    /**
+     * The one first-decision boundary of [h], entered under [AdoptedCopy.lock]: undecided, [write] carries the receipt
+     * and its outcome decides the copy (null: nothing was written); confirmed, it writes as to any song; revoked,
+     * nothing is written at the copy.
+     */
+    private suspend fun <T> writeAsDecided(h: AdoptedCopy, write: suspend (receipt: Pair<String, PreservationTicket>?) -> T): T {
+        if (h.decision.isCompleted) {
+            if (!h.decision.getCompleted()) throw HeldCopyChangedException(h.id)
+            return write(null)
+        }
+        return try {
+            write(h.receipt).also { if (it != null) confirmAdoption(h) }
+        } catch (refused: HeldCopyChangedException) {
+            decide(h, false)
+            throw refused
+        }
+    }
+
+    /**
+     * Decides [h], entered under [AdoptedCopy.lock] (or for a copy no one else can reach). A completed decision stands.
+     * Refused while the editor is still on the copy's open, the draft moves to its recovery song in this same step.
+     */
+    private fun decide(h: AdoptedCopy, valid: Boolean) {
+        if (h.decision.isCompleted) return
+        if (valid) { confirmAdoption(h); return }
+        h.decision.complete(false)
+        if (openRevision == h.openedAt && currentProjectId == h.id) install(h)
+    }
+
+    /**
+     * Rule 2: reserves the recovery song N for the refused copy [h] without suspending, publishing its first-commit
+     * boundary with the reservation, and makes N the editor's song; only a draft that owes nothing (empty words, no
+     * notebook change kept or pending) detaches to no song. N stays listed and current until it is stored.
+     */
+    private fun install(h: AdoptedCopy) {
+        if (adoptedCopy === h) adoptedCopy = null
+        if (title.isEmpty() && lyrics.isEmpty() && theme.isEmpty() && h.debt.notebook == null && h.registered == 0) {
+            detachMissingActiveProject(h.id)
+            return
+        }
+        val project = createUntitledProjectSnapshot(title, lyrics, theme)
+        val creation = CreationAttempt(recovery = h)
+        pendingCreations[project.id] = creation
+        projects = listOf(project) + projects
+        currentProjectId = project.id
+        h.recoveryId = project.id
+        h.recoveryCreation = creation
+        startFirstCommit(h, project.id, creation)
+    }
+
+    /**
+     * N's one first producer: after an open-song insertion into the copy settles, it snapshots the editor and stores
+     * N with what the copy owes it. Every other save of N waits for this commit ([persistActiveProjectSnapshot]).
+     */
+    private fun startFirstCommit(h: AdoptedCopy, id: String, creation: CreationAttempt) {
+        val first = checkNotNull(creation.first)
+        viewModelScope.launch {
+            var attempt = -1L
+            var project: SongProject? = null
+            try {
+                RecoveryTestHooks.onRevokeRead?.invoke()
+                // The copy's cached notebook may hold this window's view of it; show it as stored.
+                try {
+                    val before = workspaces[h.id]
+                    val read = repo.workspacesFlow.first()[h.id]
+                    // A write that cached the copy's notebook meanwhile is newer than this read: the read is skipped.
+                    if (workspaces[h.id] === before) workspaces = read?.let { workspaces + (h.id to it) } ?: (workspaces - h.id)
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
+                openSendSettle?.takeIf { it.first == h.id }?.second?.await()
+                RecoveryTestHooks.beforeRecoveryInsert?.invoke()
+                if (pendingCreations[id] !== creation || first.firstBy != -1L) return@launch
+                val (draftTitle, draftLyrics, draftTheme) = Triple(title, lyrics, theme)
+                val savedAt = editRevision
+                attempt = ++saveAttempts
+                first.firstBy = attempt
+                project = createUntitledProjectSnapshot(draftTitle, draftLyrics, draftTheme, id = id)
+                persistActiveProjectSnapshot(project, draftTitle, draftLyrics, draftTheme, attempt, creation, revision = savedAt)
+                markEditorSaved(savedAt)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                reconcileFailedProjectSave(project ?: return@launch, error, attempt, creation)
+                // A taken id moved the draft to a replacement reservation, whose own first producer now runs.
+                if (creation.replacedBy != null) return@launch
+                // The draft stays failed with its Retry.
+                if (h.debt.notebook != null) notebookNotSaved = true
+            } finally {
+                // Waiters never hang on a producer that did not reach its write; nothing queued behind it continues.
+                if (creation.replacedBy == null && (first.firstBy == -1L || first.firstBy == attempt) && !first.first.isCompleted) {
+                    queuedNavigation = null
+                    first.first.complete(null)
+                }
+            }
+        }
+    }
+
+    /** True once [h]'s recovery song is stored, or when the refusal owed nothing (or the editor had left the copy). */
+    private suspend fun recoveryStored(h: AdoptedCopy): Boolean {
+        val creation = h.recoveryCreation ?: return true
+        return checkNotNull(creation.first).first.await() != null
+    }
+
+    /** The editor's song is a recovery whose first commit has not yet completed. */
+    private fun recoveryFirstPending(): Boolean =
+        currentProjectId?.let(pendingCreations::get)?.first?.first?.isCompleted == false
+
+    /** [id]'s adoption when the editor's next save must recover its draft rather than write: revoked, or undecided and gone. */
+    private fun recoveryOwner(id: String) = adoptedCopyFor(id)?.takeIf { h ->
+        if (h.decision.isCompleted) !h.decision.getCompleted() else projects.none { it.id == id }
+    }
+
     private var opensInFlight = 0
     private var draftWritesInFlight = 0
 
     /**
-     * The editor shows the open song as stored (its selection written with it), or clears when the song is gone.
-     * When the commit kept this operation's edits as [keptId], the editor moves to that copy. [untouchedRow] is the
-     * song's row before an operation that wrote nothing for this editor.
+     * The held editor shows where the store says its words are, in memory only: the copy the commit made for its
+     * [ticket] when [source] is still open, else the open song as stored, or nothing when the song is gone.
+     * [untouchedRow] is the song's row before an operation that wrote nothing for this editor.
      */
-    private suspend fun showStoredOpenSong(keptId: String? = null, untouchedRow: SongProject? = null) {
-        var id = currentProjectId ?: return
+    private suspend fun showStoredOpenSong(source: String?, ticket: PreservationTicket?, untouchedRow: SongProject? = null) {
+        val id = currentProjectId ?: return
         try {
-            val stored = repo.projectsFlow.first()
-            if (currentProjectId != id) return
-            projects = projects.filter { it.id in pendingProjectCreationIds && stored.none { s -> s.id == it.id } } + stored
-            if (keptId != null && stored.any { it.id == keptId }) {
-                id = keptId
-                currentProjectId = keptId
-                persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
-            }
-            val row = stored.firstOrNull { it.id == id }
-            if (row == null) {
-                // Its words were saved before the operation; it removed or trashed them.
-                if (id !in pendingProjectCreationIds) clearEditorAfterProjectDelete()
-                return
-            }
-            if (row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
-            // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen and stored.
-            if (row == untouchedRow && repo.editorStateFlow().first() == Triple(title, lyrics, theme)) return
-            val selected = repo.selectProject(id)
-            if (currentProjectId != id) return
-            dismissRewrite()
-            title = selected.title
-            loadWords(selected.lyrics)
-            theme = selected.theme
-            completeDraftTransition()
-            restoreEditorPosition()
-            resetLyricsHistory()
-            markEditorSaved()
-            openRevision++
+            BackupTestHooks.beforeHoldResolve?.invoke()
+            val held = ticket.takeIf { source == id }
+            showHeldResult(id, held, repo.resolveHold(id, held), untouchedRow)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            // Unread: the editor's words are kept as a new song rather than written over the stored one.
-            detachMissingActiveProject(id)
+            // Unread: the editor's words are kept as a new song rather than written over the stored one. Nothing says
+            // the shared selection and editor words are still this editor's, so that insert leaves them (no baseline).
+            // Decided before anything detaches: what the draft owes goes to a new song; an empty one detaches.
             persistenceError = "Your songs could not be reread. The open draft will be saved as a new song."
+            val unread = AdoptedCopy(id, null, id, openRevision, baseline = null).also(::replaceAdoption)
+            unread.lock.withLock { decide(unread, false) }
+            recoveryStored(unread)
+        }
+    }
+
+    /**
+     * A held editor still on [id] shows [result]: the row its words went to, or the source as stored now. Nothing is
+     * selected or written, so another window's selection and saved draft stay as they are.
+     */
+    private suspend fun showHeldResult(id: String, ticket: PreservationTicket?, result: HoldResult, untouchedRow: SongProject?) {
+        if (currentProjectId != id) return
+        // The result is installed before anything suspends, so a list read taken later cannot be overwritten by it.
+        showHeldRow(id, result, untouchedRow)
+        val held = if (result is HoldResult.Adopted && ticket != null) {
+            val row = result.row
+            AdoptedCopy(id, ticket, row.id, openRevision, baseline = listOf(row.id, row.title, row.lyrics, row.theme).takeIf { result.editorWritten })
+        } else null
+        replaceAdoption(held)
+        val shown = currentProjectId
+        // A separate read: its failure leaves the adoption undecided, for the copy's first write to decide.
+        val refreshed = try {
+            BackupTestHooks.beforeHoldListRefresh?.invoke()
+            if (held != null) repo.refreshHold(held.receipt, held.id) else repo.projectsFlow.first() to false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        if (currentProjectId != shown) return
+        val (stored, valid) = refreshed
+        projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
+        // Still the copy the commit made: a later change to it is another window's, as for any open song (S1).
+        // Its receipt gone, the draft is kept as a new song before the editor is released.
+        if (held != null) {
+            // A decision another writer completed meanwhile stands.
+            held.lock.withLock { decide(held, valid) }
+            if (!held.decision.getCompleted()) {
+                persistenceError = HELD_COPY_CHANGED
+                recoveryStored(held)
+            }
+        }
+    }
+
+    private fun showHeldRow(id: String, result: HoldResult, untouchedRow: SongProject?) {
+        // Only the occurrence the result names (the first): other rows at an id stored twice keep their own words.
+        fun install(row: SongProject) {
+            val at = projects.indexOfFirst { it.id == row.id }
+            projects = if (at < 0) projects + row else projects.toMutableList().also { it[at] = row }
+        }
+        val row = when (result) {
+            is HoldResult.Adopted -> result.row.also { row ->
+                install(row)
+                currentProjectId = row.id
+                if (result.appended) {
+                    persistenceError = listOfNotNull(persistenceError, "This song was replaced from a backup, so your latest edits were saved as a new song.").joinToString("\n")
+                }
+            }
+            is HoldResult.Miss -> {
+                val source = result.source
+                if (source == null) {
+                    // Its words were saved before the operation; it removed or trashed them.
+                    if (id !in pendingCreations) {
+                        projects = projects.filter { it.id != id }
+                        clearEditorAfterProjectDelete()
+                    }
+                    return
+                }
+                install(source)
+                // A row the operation left as it was keeps a separately saved draft (an interrupted save's) on screen.
+                if (source == untouchedRow && result.editor == Triple(title, lyrics, theme)) return
+                source
+            }
+        }
+        // Another song is a new document even when its words match: its position, history and title are its own.
+        if (row.id == id && row.title == title.ifEmpty { "Untitled Song" } && row.lyrics == lyrics && row.theme == theme) return
+        dismissRewrite()
+        // A copy the commit appended for this editor's words keeps its raw empty title, not the stored "Untitled Song";
+        // a reused row is another song and shows its stored title.
+        title = if (result is HoldResult.Adopted && result.appended && row.title == title.ifEmpty { "Untitled Song" }) title else row.title
+        loadWords(row.lyrics)
+        theme = row.theme
+        completeDraftTransition()
+        restoreEditorPosition()
+        resetLyricsHistory()
+        markEditorSaved()
+        openRevision++
+        if (result is HoldResult.Adopted) {
+            positionSeed = PositionSeed(openRevision, lyricsFieldValue.selection, editorScrollOffset)
+            adoptedDoc = row.id to openRevision
         }
     }
 
     /** Null when there was nothing to save; otherwise true once the editor's words committed. */
-    private fun startDraftFlush(onSaved: () -> Unit, preserveAs: String? = null): Deferred<Boolean>? {
-        if (!appearanceLoaded || showStartMenu) { onSaved(); return null }
+    private fun startDraftFlush(onSaved: () -> Unit, preserveAs: PreservationTicket? = null): Deferred<Boolean>? {
+        if (!appearanceLoaded || showStartMenu) {
+            // Behind Welcome a recovery song not yet stored still bounds the navigation: it continues once N committed.
+            val first = currentProjectId?.let(pendingCreations::get)?.first?.first ?: run { onSaved(); return null }
+            val id = currentProjectId
+            savingBeforeNavigation = true
+            return viewModelScope.async {
+                try {
+                    val done = first.await() ?: return@async false
+                    // A taken id moved the draft: the navigation was for the song it left, as for an open editor's flush.
+                    if (currentProjectId != id) return@async true
+                    // Words newer than the first commit are written to its destination before the navigation continues.
+                    if (title != done.title || lyrics != done.lyrics || theme != done.theme) {
+                        val row = projects.firstOrNull { it.id == done.id } ?: return@async false
+                        val (savedTitle, savedLyrics, savedTheme) = Triple(title, lyrics, theme)
+                        val savedAt = editRevision
+                        val attempt = ++saveAttempts
+                        val creation = pendingCreations[done.id]
+                        val project = row.copy(title = savedTitle.ifEmpty { "Untitled Song" }, lyrics = savedLyrics, theme = savedTheme, updatedAt = System.currentTimeMillis())
+                        try {
+                            persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, revision = savedAt)
+                            markEditorSaved(savedAt)
+                        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
+                            reconcileFailedProjectSave(project, error, attempt, creation)
+                            return@async false
+                        }
+                        if (currentProjectId != done.id || title != savedTitle || lyrics != savedLyrics || theme != savedTheme) return@async true
+                    }
+                    onSaved()
+                    true
+                } finally {
+                    savingBeforeNavigation = false
+                    queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
+                }
+            }
+        }
+        // A recovered song's insert stored these words: an unedited flush of it writes nothing more.
+        if (!editorDirty && currentProjectId != null && currentProjectId == recoveredSongId) { onSaved(); return null }
         autoSaveJob?.cancel()
         positionSaveJob?.cancel()
         if (title.isBlank() && lyrics.isBlank() && theme.isBlank() && currentProjectId == null) { onSaved(); return null }
+        // A revoked copy, or an undecided one that is gone, is not written to: the draft joins its one recovery.
+        currentProjectId?.let(::recoveryOwner)?.let { h ->
+            persistenceError = HELD_COPY_CHANGED
+            // Decided under the copy's lock, then an ordinary flush of the recovery song (or of the detached draft).
+            return viewModelScope.async {
+                h.lock.withLock { decide(h, false) }
+                if (currentProjectId == h.id && openRevision == h.openedAt) false
+                else startDraftFlush(onSaved, preserveAs)?.await() ?: true
+            }
+        }
         val now = System.currentTimeMillis()
         val existing = projects.firstOrNull { it.id == currentProjectId }
         val missingId = currentProjectId?.takeIf { existing == null }
@@ -917,21 +1548,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             title = title.ifEmpty { "Untitled Song" }, lyrics = lyrics, theme = theme,
             updatedAt = if (existing.lyrics == lyrics && existing.title == title.ifEmpty { "Untitled Song" } && existing.theme == theme) existing.updatedAt else now
         ) ?: createUntitledProjectSnapshot().also {
-            pendingProjectCreationIds.add(it.id)
+            pendingCreations[it.id] = CreationAttempt()
         }
+        val creation = pendingCreations[project.id]
         currentProjectId = project.id
         if (existing == null) projects = listOf(project) + projects
         rememberEditorPosition()
-        updateWorkspace(project.id) { it.checkpoint(title, lyrics, theme, now, force = true) }
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
         val savedAt = editRevision
         savingBeforeNavigation = true
         val attempt = ++saveAttempts
-        return viewModelScope.async {
+        val flush = viewModelScope.async {
             try {
-                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, preserveAs)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, preserveAs, revision = savedAt)
                 markEditorSaved(savedAt)
                 if (currentProjectId == project.id && title == savedTitle && lyrics == savedLyrics && theme == savedTheme) {
                     if (missingId != null) reportRecoveredDraft()
@@ -939,13 +1570,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 true
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                reconcileFailedProjectSave(project, error, attempt, storedBefore = existing)
+                reconcileFailedProjectSave(project, error, attempt, creation, storedBefore = existing)
                 false
             } finally {
                 savingBeforeNavigation = false
-                queuedNavigation?.let { queued -> queuedNavigation = null; queued() }
+                queuedNavigation?.let { queued -> queuedNavigation = null; RecoveryTestHooks.onQueuedNavigationRun?.invoke(this@MainViewModel); queued() }
             }
         }
+        // Queued once this flush's save has taken its outcome, so the checkpoint waits on the save that carries its words;
+        // the words are this flush's, not the editor's when a new song's queued copy is applied.
+        val versionId = java.util.UUID.randomUUID().toString()
+        // A recovery song's flush that a newer commit supersedes writes no version either.
+        val held = adoptedCopyFor(project.id)
+        val checkpointAfter = when {
+            // Refused at the copy, the flush's words are kept only if its recovery song's first commit stored exactly them.
+            held != null -> viewModelScope.async {
+                flush.await() || (held.decision.isCompleted && !held.decision.getCompleted() &&
+                    held.recoveryCreation?.first?.first?.await()?.let {
+                        it.title == savedTitle && it.lyrics == savedLyrics && it.theme == savedTheme && it.revision >= savedAt
+                    } == true)
+            }
+            creation?.first != null -> flush
+            else -> null
+        }
+        updateWorkspace(project.id, reported = false, after = checkpointAfter, held = held) {
+            it.checkpoint(savedTitle, savedLyrics, savedTheme, now, force = true, id = versionId)
+        }
+        return flush
     }
 
     var saveStatus by mutableStateOf(SaveStatus.IDLE)
@@ -1826,7 +2477,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     false
                 }
                 // Load projects; a song created while this loaded (its identity reserved) stays listed.
-                val pendingAtLoad = projects.filter { it.id in pendingProjectCreationIds }
+                val pendingAtLoad = projects.filter { it.id in pendingCreations }
                 projects = if (!established) emptyList() else try {
                     pendingAtLoad + repo.projectsFlow.first().filterNot { stored -> pendingAtLoad.any { it.id == stored.id } }
                 } catch (cancelled: CancellationException) {
@@ -1902,7 +2553,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             launch {
                 try {
                     repo.projectsFlow.collect { stored ->
-                        val pending = projects.filter { it.id in pendingProjectCreationIds &&
+                        val pending = projects.filter { it.id in pendingCreations &&
                             stored.none { saved -> saved.id == it.id } }
                         projects = pending + stored
                     }
@@ -2563,9 +3214,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Typing (or another song opened) since the editor cleared owns the stored
                     // selection now; the empty new song's selection is stored only if untouched.
                     val untouched = currentProjectId == null && title.isEmpty() && lyrics.isEmpty() && theme.isEmpty()
-                    val committed = if (untouched) repo.saveActiveState(null, false, "", "", "") else repo.projectsFlow.first()
+                    val committed = if (untouched) repo.saveActiveState(null, null, "", "", "") else repo.projectsFlow.first()
                     // A song started (or opened) meanwhile keeps its place in the list.
-                    projects = projects.filter { it.id in pendingProjectCreationIds && committed.none { saved -> saved.id == it.id } } + committed
+                    projects = projects.filter { it.id in pendingCreations && committed.none { saved -> saved.id == it.id } } + committed
                     onReady()
                 } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
                     persistenceError = trashFailureMessage("open a new song", error)
@@ -2658,8 +3309,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onCommitted(false)
                     return@launch
                 }
-                pendingProjectCreationIds.remove(id)
-                projects = committed.projects
+                pendingCreations.remove(id)?.retire()
+                // A new song this window is still storing is not in the committed list yet; it stays, so its save is not lost or made twice.
+                projects = projects.filter { it.id in pendingCreations && committed.projects.none { saved -> saved.id == it.id } } + committed.projects
                 trashedProjects = committed.trashedProjects
                 if (currentProjectId == id) clearEditorAfterProjectDelete()
                 scheduleTrashPurge()
@@ -2679,7 +3331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val committed = repo.restoreTrashedProject(id, System.currentTimeMillis())
                     ?: return@launch reportMissingTrashProject()
-                projects = committed.projects
+                projects = projects.filter { it.id in pendingCreations && committed.projects.none { saved -> saved.id == it.id } } + committed.projects
                 trashedProjects = committed.trashedProjects
                 restored = true
                 // The active song with this id is never changed; only a Trash copy with other words returns, as a new song.
@@ -2711,7 +3363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ?: return@launch reportMissingTrashProject()
                 trashedProjects = committed.trashedProjects
                 if (id in committed.purgedIds) { // (c); on (b) the active song keeps its notebook, creation mark and recordings
-                    pendingProjectCreationIds.remove(id)
+                    pendingCreations.remove(id)?.retire()
                     workspaces = workspaces - id
                     if (!retryPendingRecordingDeletions(id)) {
                         persistenceError = "The song was removed, but some recording files could not be deleted. Deletion is incomplete; cleanup will be retried on the next launch or Trash purge."
@@ -2760,7 +3412,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val committed = repo.purgeExpiredTrashedProjects(now, adopt = ::adoptRecordings)
                 trashedProjects = committed.trashedProjects
                 workspaces = workspaces - committed.purgedIds.toSet()
-                for (id in committed.purgedIds) pendingProjectCreationIds.remove(id)
+                for (id in committed.purgedIds) pendingCreations.remove(id)?.retire()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -2883,11 +3535,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!owned) return@launch
                 dismissRewrite()
                 val project = imported.copy(
-                    id = java.util.UUID.randomUUID().toString(),
+                    id = SongIdAllocator.next(),
                     title = imported.title.ifBlank { "Imported Song" },
                     updatedAt = System.currentTimeMillis()
                 )
-                pendingProjectCreationIds.add(project.id)
+                val creation = CreationAttempt().also { pendingCreations[project.id] = it }
                 projects = listOf(project) + projects
                 title = project.title
                 lyricsFieldValue = TextFieldValue(project.lyrics)
@@ -2903,11 +3555,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val savedAt = editRevision
                 viewModelScope.launch {
                     try {
-                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme, attempt)
+                        persistActiveProjectSnapshot(project, project.title, project.lyrics, project.theme, attempt, creation, revision = savedAt)
                         markEditorSaved(savedAt)
                         onReady()
                     } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                        reconcileFailedProjectSave(project, error, attempt)
+                        reconcileFailedProjectSave(project, error, attempt, creation)
                     }
                 }
             }.invokeOnCompletion { opensInFlight-- }
@@ -2936,7 +3588,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         title: String,
         lyrics: String,
         theme: String,
-        id: String = java.util.UUID.randomUUID().toString(),
+        id: String = SongIdAllocator.next(),
         updatedAt: Long = System.currentTimeMillis()
     ): SongProject {
         return SongProject(
@@ -2954,21 +3606,136 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         editorLyrics: String,
         editorTheme: String,
         attempt: Long,
-        preserveAs: String? = null
+        creation: CreationAttempt?,
+        preserveAs: PreservationTicket? = null,
+        /** The edit revision of the editor words this save carries. */
+        revision: Long
     ): List<SongProject> {
-        if (currentProjectId != project.id) throw CancellationException("Song changed")
-        draftWritesInFlight++ // a hold waits for it
-        val committed = try {
-            DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
-            if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
-            repo.saveActiveState(project, project.id in pendingProjectCreationIds, editorTitle, editorLyrics, editorTheme, preserveAs)
-        } finally { draftWritesInFlight-- }
-        pendingProjectCreationIds.remove(project.id)
-        if (currentProjectId == project.id) projects = committed
-        val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
-        if (currentProjectId == project.id && wordsMatch) committedAttempt = maxOf(committedAttempt, attempt)
-        if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
-        return committed
+        // Notebook changes queued on a new song wait on this save; after a failure, a Retry's save gets a fresh outcome.
+        val outcome = creation?.let {
+            if (!it.retired && !it.creation.inserted && it.outcome.isCompleted) CompletableDeferred<Boolean>().also { fresh -> it.outcome = fresh }
+            else it.outcome
+        }
+        creation?.let { it.producers++ }
+        var stored = false
+        val adopted = adoptedCopyFor(project.id)
+        val boundary = creation?.first
+        val recovering = creation?.recovery
+        try {
+            if (currentProjectId != project.id || creation?.retired == true) throw CancellationException("Song changed")
+            // Rule 1, the one choke point: a recovery song's saves other than its first producer wait for its first commit.
+            if (boundary != null && boundary.firstBy != attempt) {
+                val first = boundary.first
+                if (first.isCompleted && first.getCompleted() == null) {
+                    // The first commit failed before this save started: this one is the new first producer.
+                    boundary.first = CompletableDeferred()
+                    boundary.firstBy = attempt
+                    // A newer save that cancels this one's job waits for this commit; it must not end it.
+                    return withContext(kotlinx.coroutines.NonCancellable) {
+                        persistActiveProjectSnapshot(project, editorTitle, editorLyrics, editorTheme, attempt, creation, preserveAs, revision)
+                    }
+                } else if (first.await() == null) {
+                    // It failed while this save waited: this save shares the failure and keeps the Retry.
+                    throw java.io.IOException("The recovered draft could not be saved")
+                }
+                // A taken id moved the reservation: this save counts only against the replacement's commit.
+                creation.replacedBy?.let { (nextId, next) ->
+                    return persistActiveProjectSnapshot(project.copy(id = nextId), editorTitle, editorLyrics, editorTheme, attempt, next, preserveAs, revision)
+                }
+                if (currentProjectId != project.id || creation.retired) throw CancellationException("Song changed")
+            }
+            draftWritesInFlight++ // a hold waits for it
+            var insertedNow = false
+            val committed = try {
+                DraftSaveTestHooks.beforeWrite?.let { DraftSaveTestHooks.beforeWrite = null; it.await() }
+                if (DraftSaveTestHooks.failNext.compareAndSet(true, false)) throw java.io.IOException("injected draft save failure")
+                if (recovering != null) recovering.lock.withLock {
+                    // A save whose words are not newer than the song's latest commit writes nothing: it counts as saved only
+                    // when that commit stored exactly its words at the destination the editor is still on.
+                    boundary?.latest?.takeIf { it.revision >= revision }?.let { done ->
+                        if (done.id == project.id && currentProjectId == done.id &&
+                            done.title == editorTitle && done.lyrics == editorLyrics && done.theme == editorTheme) return projects
+                        throw SupersededSave()
+                    }
+                    val inserting = !checkNotNull(creation).creation.inserted
+                    // Notebook changes kept for the recovery are read in the insert's edit; none can be folded in meanwhile.
+                    if (inserting && RecoveryTestHooks.failNextRecovery.compareAndSet(true, false)) throw java.io.IOException("injected recovery failure")
+                    repo.saveActiveState(project, creation.creation, editorTitle, editorLyrics, editorTheme, recovery = recovering.debt.takeIf { inserting })
+                        .also {
+                            recovering.inserted = true
+                            insertedNow = inserting
+                            boundary?.latest = Committed(project.id, editorTitle, editorLyrics, editorTheme, revision)
+                        }
+                } else if (adopted != null) adopted.lock.withLock {
+                    DraftSaveTestHooks.insideCopyLock?.let { DraftSaveTestHooks.insideCopyLock = null; it() }
+                    writeAsDecided(adopted) { receipt ->
+                        try {
+                            repo.saveActiveState(project, creation?.creation, editorTitle, editorLyrics, editorTheme, preserveAs, receipt)
+                        } catch (gone: MissingActiveProjectException) {
+                            // An undecided copy that is gone was not this editor's to recreate: as for a changed copy, the draft is recovered.
+                            if (receipt != null && gone !is HeldCopyChangedException && gone !is CreationIdTakenException) throw HeldCopyChangedException(project.id)
+                            throw gone
+                        }
+                    }
+                } else repo.saveActiveState(project, creation?.creation, editorTitle, editorLyrics, editorTheme, preserveAs)
+            } finally { draftWritesInFlight-- }
+            stored = true
+            if (insertedNow) {
+                recoveredSongId = project.id
+                notebookNotSaved = false
+                // The notebook changes it was given are now stored with it: show them as stored.
+                if (recovering?.debt?.notebook != null) try {
+                    repo.workspacesFlow.first()[project.id]?.let { checkNotNull(creation).workspace = it }
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
+            }
+            // The stored song's notebook changes made while it was new now join the loaded notebooks.
+            // A save without a creation never owns one: an attempt at its id now is a newer song's.
+            if (creation != null && pendingCreations[project.id] === creation) {
+                pendingCreations.remove(project.id)?.workspace?.let { workspaces = workspaces + (project.id to it) }
+            }
+            outcome?.complete(true)
+            if (boundary != null && boundary.firstBy == attempt) boundary.first.complete(boundary.latest)
+            if (currentProjectId == project.id) projects = committed
+            val wordsMatch = title == editorTitle && lyrics == editorLyrics && theme == editorTheme
+            if (currentProjectId == project.id && wordsMatch) committedAttempt = maxOf(committedAttempt, attempt)
+            if (!SaveFailureRules.failedAfterCommit(saveFailed, project.id, currentProjectId, wordsMatch)) setSaveFailed(false)
+            // Words typed while the recovered draft was being stored are saved to it next.
+            if (insertedNow && currentProjectId == project.id && !wordsMatch) viewModelScope.launch { triggerAutoSave() }
+            return committed
+        } catch (taken: CreationIdTakenException) {
+            // Rule 2: a recovery song's id taken at its first insert is replaced before anything suspends; the
+            // replacement carries the draft's notebook debt, changes and waiters.
+            if (boundary != null && boundary.firstBy == attempt && recovering != null && !creation.creation.inserted &&
+                currentProjectId == project.id) replaceTakenRecovery(recovering, project.id, creation, boundary)
+            throw taken
+        } finally {
+            creation?.let { it.producers-- }
+            // Another save of this new song still writing reports for both: the waiters learn its result instead.
+            if (!stored && (creation == null || creation.producers == 0)) outcome?.complete(false)
+            // A first producer that stored nothing releases its waiters, unless a replacement took its reservation over.
+            // Nothing queued behind it continues: the navigation is dropped before any waiter wakes.
+            if (!stored && boundary != null && boundary.firstBy == attempt && creation.replacedBy == null && !boundary.first.isCompleted) {
+                queuedNavigation = null
+                boundary.first.complete(null)
+            }
+        }
+    }
+
+    private fun replaceTakenRecovery(h: AdoptedCopy, id: String, taken: CreationAttempt, boundary: RecoveryFirst) {
+        val project = createUntitledProjectSnapshot(title, lyrics, theme)
+        val next = CreationAttempt(recovery = h, first = boundary)
+        next.changes += taken.changes
+        next.workspace = taken.workspace
+        taken.replacedBy = project.id to next
+        taken.retire()
+        pendingCreations.remove(id)
+        pendingCreations[project.id] = next
+        projects = listOf(project) + projects.filter { it.id != id }
+        currentProjectId = project.id
+        h.recoveryId = project.id
+        h.recoveryCreation = next
+        boundary.firstBy = -1L
+        startFirstCommit(h, project.id, next)
     }
 
     /** Marks the open draft failed, unless the failed write belongs to a draft no longer open or a newer commit of its words. */
@@ -2980,17 +3747,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** [storedBefore] is the song's row as read before the write: with it a vanished unedited song is told from lost edits. */
-    private suspend fun reconcileFailedProjectSave(project: SongProject, error: Exception, attempt: Long, storedBefore: SongProject? = null) {
+    private suspend fun reconcileFailedProjectSave(
+        project: SongProject, error: Exception, attempt: Long, creation: CreationAttempt?, storedBefore: SongProject? = null
+    ) {
         val missing = error is MissingActiveProjectException
-        val known = storedBefore?.takeIf { it.id !in pendingProjectCreationIds }
-        if (missing) pendingProjectCreationIds.remove(project.id)
+        // An attempt already refused or detached, or one a newer creation at this id replaced, has nothing here to mark or detach.
+        if (creation?.retired == true) return
+        if (missing) creation?.retire()
+        if (pendingCreations[project.id].let { it != null && it !== creation }) return
+        val known = storedBefore?.takeIf { it.id !in pendingCreations }
+        if (missing) pendingCreations.remove(project.id)?.retire()
         val unedited = known != null && known.title == title.ifEmpty { "Untitled Song" } &&
             known.lyrics == lyrics && known.theme == theme
         // Marked before the reread, so a reread that fails cannot leave the draft unmarked.
         markFailedSave(
             project.id, attempt,
             if (missing) SaveFailureRules.WriteFailure.MISSING_ROW else SaveFailureRules.WriteFailure.WRITE_ERROR,
-            wordsEdited = !unedited
+            // A refused adopted copy's draft is in this editor only, also when it matches what this window last read.
+            wordsEdited = !unedited || error is HeldCopyChangedException
         )
         // Detached with the mark, before the reread suspends: edits made meanwhile autosave under a new song.
         // A write older than a commit of the open words under this id leaves the draft where it is.
@@ -3004,9 +3778,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             DraftSaveTestHooks.beforeReread?.let { DraftSaveTestHooks.beforeReread = null; it.await() }
             if (DraftSaveTestHooks.failNextReread.compareAndSet(true, false)) throw java.io.IOException("injected reread failure")
             val stored = repo.projectsFlow.first()
-            projects = if (!missing && currentProjectId == project.id &&
-                project.id in pendingProjectCreationIds && stored.none { it.id == project.id }
-            ) listOf(project) + stored else stored
+            // Every new song not yet stored stays listed (a recovery song a refusal made current among them).
+            projects = projects.filter { it.id in pendingCreations && stored.none { s -> s.id == it.id } } + stored
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (corrupt: CorruptLibraryException) {
@@ -3020,9 +3793,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val stale = !detached && attempt < committedAttempt
         persistenceError = when (error) {
             is CorruptLibraryException -> corruptLibraryMessage(error)
-            else -> if (stale) persistenceError else if (missing) {
+            else -> if (stale) persistenceError else if (error is HeldCopyChangedException) HELD_COPY_CHANGED else if (missing) {
                 "This song is no longer active. The unsaved draft remains in the editor; no deleted song was restored."
-            } else "Your draft could not be saved. It is still open. Try again."
+            } else "Your draft could not be saved. It is still open. Try again." +
+                (if (creation?.notebookDropped == true) "\n$NOTEBOOK_NOT_SAVED" else "")
         }
     }
 
@@ -3056,7 +3830,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun reserveProjectIdentity(): String = currentProjectId ?: createUntitledProjectSnapshot().let { project ->
-        pendingProjectCreationIds.add(project.id)
+        pendingCreations[project.id] = CreationAttempt()
         projects = listOf(project) + projects
         currentProjectId = project.id
         showStartMenu = false
@@ -3067,6 +3841,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentProjectId?.let { return it }
         val projectId = reserveProjectIdentity()
         val project = projects.first { it.id == projectId }
+        val creation = pendingCreations[projectId]
         val savedTitle = title
         val savedLyrics = lyrics
         val savedTheme = theme
@@ -3074,10 +3849,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         viewModelScope.launch {
             try {
-                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt)
+                persistActiveProjectSnapshot(project, savedTitle, savedLyrics, savedTheme, attempt, creation, revision = savedAt)
                 markEditorSaved(savedAt)
             } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-                reconcileFailedProjectSave(project, error, attempt)
+                reconcileFailedProjectSave(project, error, attempt, creation)
             }
         }
         return projectId
@@ -3086,8 +3861,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Reserve identity before suspending so edits keep the same autosave target.
     // Persist retries too: a failed save must not admit an orphaned recording.
     suspend fun ensureProjectForRecording(): String {
+        RecordingTestHooks.onSaveGate?.invoke(this)
         if (editorHeld) throw CancellationException("Song changed")
         val projectId = reserveProjectIdentity()
+        val creation = pendingCreations[projectId]
         val project = (projects.firstOrNull { it.id == projectId }
             ?: createUntitledProjectSnapshot(title, lyrics, theme, id = projectId)).copy(
             title = title.ifEmpty { "Untitled Song" },
@@ -3098,11 +3875,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val attempt = ++saveAttempts
         val savedAt = editRevision
         try {
-            persistActiveProjectSnapshot(project, title, lyrics, theme, attempt)
+            persistActiveProjectSnapshot(project, title, lyrics, theme, attempt, creation, revision = savedAt)
             markEditorSaved(savedAt)
         } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) {
-            // The caller reports the recording; the open words are still unsaved.
-            markFailedSave(project.id, attempt, SaveFailureRules.WriteFailure.WRITE_ERROR)
+            // The caller reports the recording; the open words are still unsaved. A refused new song is detached first.
+            if (error is CreationIdTakenException || error is HeldCopyChangedException) reconcileFailedProjectSave(project, error, attempt, creation)
+            else markFailedSave(project.id, attempt, SaveFailureRules.WriteFailure.WRITE_ERROR)
             throw error
         }
         if (currentProjectId != projectId) throw CancellationException("Song changed")
@@ -3119,9 +3897,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val currentTheme = theme
             val revisionAtTrigger = editRevision
             val projectIdAtTrigger = currentProjectId
+            val creationAtTrigger = projectIdAtTrigger?.let(pendingCreations::get)
             val holdsSong = projects.any { it.id == projectIdAtTrigger }
 
-            if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty() &&
+            // A recovery song not yet stored that holds kept notebook changes is written also with empty words.
+            val owesNotebook = creationAtTrigger?.recovery?.debt?.notebook != null
+            if (currentTitle.isEmpty() && currentLyrics.isEmpty() && currentTheme.isEmpty() && !owesNotebook &&
                 !SaveFailureRules.emptyDraftNeedsWrite(saveFailed, holdsSong, retry)
             ) {
                 // An autosave never stores empty words over a song; a failure on the held song stays.
@@ -3136,16 +3917,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // debounce; saving the stale snapshot now would clobber the newly
             // loaded project or resurrect a deleted one.
             if (currentProjectId != projectIdAtTrigger) return@launch
+            projectIdAtTrigger?.let(::recoveryOwner)?.let { h ->
+                // Decided under the copy's lock: the recovery song's first producer stores these words.
+                persistenceError = HELD_COPY_CHANGED
+                h.lock.withLock { decide(h, false) }
+                return@launch
+            }
             val missingId = projectIdAtTrigger?.takeIf { projects.none { project -> project.id == it } }
-            if (missingId != null) detachMissingActiveProject(missingId)
+            if (missingId != null) detachMissingActiveProject(missingId, creationAtTrigger)
 
             saveStatus = SaveStatus.SAVING
             val storedBefore = projects.firstOrNull { it.id == projectIdAtTrigger && missingId == null }
+            var creation = creationAtTrigger
             val project = if (projectIdAtTrigger == null || missingId != null) {
                 createUntitledProjectSnapshot(
                     title = currentTitle, lyrics = currentLyrics, theme = currentTheme
                 ).also {
-                    pendingProjectCreationIds.add(it.id)
+                    creation = CreationAttempt().also { attempt -> pendingCreations[it.id] = attempt }
                     projects = listOf(it) + projects
                     currentProjectId = it.id
                 }
@@ -3159,13 +3947,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val attempt = ++saveAttempts
             try {
-                projects.firstOrNull { it.id == project.id && it.id !in pendingProjectCreationIds }?.let { previous ->
-                    if (previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme) {
-                        updateWorkspace(project.id) { it.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) }
-                    }
-                }
+                val checkpoint = projects.firstOrNull { it.id == project.id && it.id !in pendingCreations }?.takeIf { previous ->
+                    previous.lyrics != currentLyrics || previous.title != currentTitle || previous.theme != currentTheme
+                }?.let { previous -> { s: SongWorkspace -> s.checkpoint(previous.title, previous.lyrics, previous.theme, System.currentTimeMillis(), force = false) } }
+                // An adopted copy's notebook is written only after the save found the copy still its own, through that
+                // same adoption (the save may have just confirmed it), as a change to the stored notebook.
+                val held = adoptedCopyFor(project.id)
+                if (held == null) checkpoint?.let { updateWorkspace(project.id, transform = it) }
                 rememberEditorPosition()
-                persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt)
+                persistActiveProjectSnapshot(project, currentTitle, currentLyrics, currentTheme, attempt, creation, revision = revisionAtTrigger)
+                if (held != null) checkpoint?.let { updateWorkspace(project.id, held = held, transform = it) }
                 markEditorSaved(revisionAtTrigger)
                 if (missingId != null) reportRecoveredDraft()
                 DraftSaveTestHooks.afterAutosaveCommit?.let { DraftSaveTestHooks.afterAutosaveCommit = null; it.await() }
@@ -3177,7 +3968,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                reconcileFailedProjectSave(project, error, attempt, storedBefore)
+                reconcileFailedProjectSave(project, error, attempt, creation, storedBefore)
             } finally {
                 // Cancellation mid-save would otherwise leave the indicator stuck on SAVING; an unresolved failure stays FAILED.
                 if (saveStatus == SaveStatus.SAVING) saveStatus = SaveFailureRules.restingStatus(saveFailed)

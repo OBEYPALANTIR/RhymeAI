@@ -24,17 +24,18 @@ data class SongWorkspace(
     val versions: List<DraftVersion> = emptyList(),
     val checkpointAt: Long = 0L
 ) {
-    fun keep(text: String, now: Long): SongWorkspace {
+    /** [id] is fixed by the caller when one action is applied more than once (shown, then stored). */
+    fun keep(text: String, now: Long, id: String = UUID.randomUUID().toString()): SongWorkspace {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || alternates.any { it.text == trimmed }) return this
-        return copy(alternates = (listOf(LyricAlternate(text = trimmed, createdAt = now)) + alternates).take(50))
+        return copy(alternates = (listOf(LyricAlternate(id, trimmed, now)) + alternates).take(50))
     }
 
-    fun checkpoint(title: String, lyrics: String, theme: String, now: Long, force: Boolean): SongWorkspace {
+    fun checkpoint(title: String, lyrics: String, theme: String, now: Long, force: Boolean, id: String = UUID.randomUUID().toString()): SongWorkspace {
         if (lyrics.isBlank() && title.isBlank() && theme.isBlank()) return this
         if (!force && now - checkpointAt < 5 * 60 * 1000L) return this
         val existing = versions.firstOrNull { it.lyrics == lyrics && it.title == title && it.theme == theme }
-        val version = existing ?: DraftVersion(title = title, lyrics = lyrics, theme = theme, createdAt = now)
+        val version = existing ?: DraftVersion(id, title, lyrics, theme, now)
         return copy(versions = (listOf(version) + versions.filter { it.id != version.id }).take(20), checkpointAt = now)
     }
 }

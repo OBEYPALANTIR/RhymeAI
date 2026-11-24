@@ -57,6 +57,9 @@ fun SongNotebookSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 Tab(selected = versionsSelected, onClick = { versionsSelected = true }, text = { Text("Draft History") })
             }
             viewModel.notebookError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            // A change on a copy whose save is not yet decided: shown pending, and failed with a Retry when its draft's save failed.
+            if (viewModel.notebookNotSaved) TextButton(onClick = viewModel::retrySave) { Text("Not saved – Retry", color = MaterialTheme.colorScheme.error) }
+            else if (viewModel.notebookSaving > 0) Text(androidx.compose.ui.res.stringResource(com.rhymeai.app.R.string.editor_saving), style = MaterialTheme.typography.bodySmall)
             if (versionsSelected) {
                 TextButton(onClick = viewModel::saveDraftVersion, enabled = viewModel.notebookError == null && !viewModel.restoringDraft) { Text("Save version") }
             } else {

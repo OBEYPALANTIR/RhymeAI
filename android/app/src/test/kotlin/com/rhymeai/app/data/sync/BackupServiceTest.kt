@@ -2208,7 +2208,7 @@ class BackupServiceTest {
         val trashed = repository.trashedProjectsFlow.first().single()
         assertEquals(Triple(1_000L, 1_000L + com.rhymeai.app.data.model.TRASH_RETENTION_MILLIS, true), Triple(trashed.deletedAt, trashed.deleteAfter, trashed.deletedAtRepaired))
         val stored = repository.projectsFlow.first().single()
-        repository.saveActiveState(stored.copy(lyrics = "edited", updatedAt = 2_000L), false, stored.title, "edited", stored.theme)
+        repository.saveActiveState(stored.copy(lyrics = "edited", updatedAt = 2_000L), null, stored.title, "edited", stored.theme)
         assertEquals(2_000L to false, repository.projectsFlow.first().single().let { it.updatedAt to it.precedenceRepaired })
     }
 
