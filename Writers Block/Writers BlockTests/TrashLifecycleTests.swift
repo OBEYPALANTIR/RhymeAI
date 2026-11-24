@@ -886,6 +886,44 @@ extension TrashLifecycleTests {
         #expect(viewModel.currentProjectId == "s" && viewModel.lyrics == "typed at launch")
     }
 
+    @MainActor
+    @Test(arguments: [true, false])
+    func aConvergedLocalEditStillOutranksALaunchTombstone(editedBeforeLaunch: Bool) async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("LaunchConvergedEdit")
+        _ = container
+        let id = UUID().uuidString
+        let song = SongProject(id: id, title: "Song", lyrics: "old line", theme: "old theme",
+                               updatedAt: Date(timeIntervalSince1970: 1_000))
+        let tombstone = SyncDeletionRecord(projectId: id, deletedAt: 3_000_000)
+        context.insert(song)
+        context.insert(tombstone)
+        try context.save()
+
+        viewModel.modelContext = context
+        viewModel.loadProject(song)
+        song.lyrics = "shared line"
+        song.theme = "peer theme"
+        song.updatedAt = Date(timeIntervalSince1970: 2_000)
+        try context.save()
+
+        if editedBeforeLaunch {
+            viewModel.onLyricsChanged("shared line")
+            viewModel.triggerAutoSave()
+        }
+        await viewModel.recordingsLaunchTask?.value
+
+        let remaining = try context.fetch(FetchDescriptor<SongProject>())
+        if editedBeforeLaunch {
+            let kept = try #require(remaining.first)
+            #expect(kept.persistentModelID == song.persistentModelID)
+            #expect(kept.lyrics == "shared line")
+            #expect(kept.theme == "peer theme")
+            #expect(kept.updatedAt.epochMilliseconds > 3_000_000)
+        } else {
+            #expect(remaining.isEmpty)
+        }
+    }
+
     /// A41: a song a stored tombstone removes at launch while its time is a repair is
     /// kept in the song recovery folder first.
     @MainActor
