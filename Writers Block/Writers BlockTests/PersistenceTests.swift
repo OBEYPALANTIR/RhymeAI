@@ -713,20 +713,24 @@ struct PersistenceTests {
 /// nothing is written, so a change that reached the library meanwhile is never overwritten.
 @MainActor
 struct PendingEditSaveTests {
-    private static func library(companionStore: WritingCompanionStore? = nil) throws -> (EditorViewModel, ModelContainer) {
+    private static func library(
+        companionStore: WritingCompanionStore? = nil,
+        saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) throws -> (EditorViewModel, ModelContainer) {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let viewModel = EditorViewModel(companionStore: companionStore)
+        let viewModel = EditorViewModel(companionStore: companionStore, saveModelContext: saveModelContext)
         viewModel.modelContext = container.mainContext
         return (viewModel, container)
     }
 
     private static func openSong(
         title: String = "Harbour Lights",
-        companionStore: WritingCompanionStore? = nil
+        companionStore: WritingCompanionStore? = nil,
+        saveModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> (EditorViewModel, SongProject, ModelContainer) {
-        let (viewModel, container) = try library(companionStore: companionStore)
+        let (viewModel, container) = try library(companionStore: companionStore, saveModelContext: saveModelContext)
         let song = SongProject(id: "s", title: title, lyrics: "ropes", theme: "", updatedAt: Date(timeIntervalSince1970: 1_000))
         container.mainContext.insert(song)
         try container.mainContext.save()
@@ -839,6 +843,49 @@ struct PendingEditSaveTests {
         #expect(viewModel.title == version.title)
         #expect(viewModel.lyrics == version.lyrics)
         #expect(viewModel.theme == version.theme)
+    }
+
+    @Test(arguments: [false, true])
+    func failedVersionRestoreRetriesUnlessTheWriterEdits(editBeforeRetry: Bool) async throws {
+        let version = DraftVersion(title: "Earlier", lyrics: "ropes", theme: "")
+        var failRestore = true
+        let (viewModel, song, container) = try Self.openSong(companionStore: WritingCompanionStore(inMemory: true)) { context in
+            // Let the outgoing checkpoint save, then fail the selected version's write once.
+            if failRestore, context.changedModelsArray.contains(where: { ($0 as? SongProject)?.title == version.title }) {
+                failRestore = false
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try context.save()
+        }
+        func storedSong() throws -> SongProject {
+            let reader = ModelContext(container)
+            return try #require(try reader.fetch(FetchDescriptor<SongProject>()).first)
+        }
+        song.lyrics = "synced lyrics"
+        song.theme = "synced theme"
+        try container.mainContext.save()
+
+        viewModel.restoreVersion(version)
+        try #require(viewModel.saveStatus == .failed)
+        try #require(try storedSong().title == "Harbour Lights")
+        try #require(try storedSong().lyrics == "synced lyrics")
+
+        if editBeforeRetry { viewModel.title = "Writer's title" }
+        viewModel.triggerAutoSave()
+        await viewModel.waitForPendingAutoSaveForTesting()
+        try #require(viewModel.saveStatus == .saved)
+        let retried = try storedSong()
+        #expect(retried.title == (editBeforeRetry ? "Writer's title" : version.title))
+        #expect(retried.lyrics == (editBeforeRetry ? "synced lyrics" : version.lyrics))
+        #expect(retried.theme == (editBeforeRetry ? "synced theme" : version.theme))
+
+        song.lyrics = "newer synced lyrics"
+        try container.mainContext.save()
+        viewModel.theme = "Writer's theme"
+        await viewModel.waitForPendingAutoSaveForTesting()
+        let edited = try storedSong()
+        #expect(edited.theme == "Writer's theme")
+        #expect(edited.lyrics == "newer synced lyrics")
     }
 
     @Test func aPendingEditIsWrittenNow() throws {

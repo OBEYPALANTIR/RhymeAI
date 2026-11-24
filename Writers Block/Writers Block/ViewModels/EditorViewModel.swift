@@ -463,10 +463,13 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
 
-    @Published var title: String = ""
+    @Published var title: String = "" {
+        didSet { if title != oldValue { versionRestorePending = false } }
+    }
     @Published var lyrics: String = "" {
         didSet {
             if lyrics != oldValue {
+                versionRestorePending = false
                 clearInsertionFeedback()
                 // A request answers the lyrics and cursor it was built from
                 // (Android cancels on text and selection changes too).
@@ -479,6 +482,7 @@ final class EditorViewModel: ObservableObject {
     @Published var theme: String = "" {
         didSet {
             guard theme != oldValue else { return }
+            versionRestorePending = false
             // The theme field stays editable while a request runs, so a theme edit
             // drops in-flight AI work and its results, as Android onThemeChanged does.
             cancelEditorAIWork()
@@ -654,7 +658,10 @@ final class EditorViewModel: ObservableObject {
 
     @Published var currentProjectId: String? {
         // Every other way the editor's song changes leaves it not loaded from a known row.
-        didSet { loadedProjectRow = nil }
+        didSet {
+            loadedProjectRow = nil
+            versionRestorePending = false
+        }
     }
     /// The stored row whose words the editor holds (loaded, created or last saved to), so two
     /// rows sharing one song id (a restore on two devices, then sync) are told apart.
@@ -663,12 +670,15 @@ final class EditorViewModel: ObservableObject {
 
     /// Binds the editor to a stored row. Assigns only changed IDs, so saving the same row publishes nothing.
     private func bindEditor(to project: SongProject, editorWords: OpenDraft? = nil) {
+        versionRestorePending = false
         if currentProjectId != project.id { currentProjectId = project.id }
         if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
         loadedProjectWords = editorWords ?? OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
     }
     /// The editor's baseline for the bound row, used to distinguish edits from stored changes.
     private var loadedProjectWords: OpenDraft?
+    /// Retry the whole selected version until it is saved, edited, or the editor changes songs.
+    private var versionRestorePending = false
 
     /// The stored row the open song's words belong to: the bound one; else the first with the
     /// song's id when none is bound, or when `adoptingAnother` (a restore reconcile, which reads
@@ -2604,7 +2614,7 @@ final class EditorViewModel: ObservableObject {
     /// An emptied editor has nothing to save, unless it holds a stored song whose row a lookup
     /// does not find: erasing that song is a refused edit, which Close and Quit must see.
     private var emptiedDraftNeedsNoSave: Bool {
-        guard title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
+        guard !versionRestorePending, title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
         guard let id = currentProjectId, let context = modelContext else { return true }
         return (try? storedProject(id: id, in: context, adoptingAnother: false)) != nil
     }
@@ -2613,7 +2623,7 @@ final class EditorViewModel: ObservableObject {
     /// row is confirmed gone and it holds that row's words unchanged, so there is nothing to keep.
     /// A failed lookup proves nothing. Saves also read it, only to report such a refusal as idle.
     private func openRowVanishedUnedited() -> Bool {
-        guard activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
+        guard !versionRestorePending, activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
               let words = loadedProjectWords, let context = modelContext,
               let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
               !rows.contains(where: { $0.persistentModelID == row }) else { return false }
@@ -2638,15 +2648,15 @@ final class EditorViewModel: ObservableObject {
     }
 
     @discardableResult
-    func flushCurrentDraft(checkpoint: Bool = false, restoringVersion: Bool = false) -> Bool {
+    func flushCurrentDraft(checkpoint: Bool = false) -> Bool {
         guard activeCloudEditorOperation == nil else { return false }
         autoSaveTask?.cancel()
         positionSaveTask?.cancel()
         guard !showWelcome || currentProjectId != nil else { return true }
-        return persistCurrentDraft(checkpoint: checkpoint, restoringVersion: restoringVersion)
+        return persistCurrentDraft(checkpoint: checkpoint)
     }
 
-    private func persistCurrentDraft(checkpoint: Bool, restoringVersion: Bool = false) -> Bool {
+    private func persistCurrentDraft(checkpoint: Bool) -> Bool {
         guard activeCloudEditorOperation == nil else { return false }
         guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
         guard let context = modelContext else {
@@ -2671,10 +2681,10 @@ final class EditorViewModel: ObservableObject {
                     return false
                 }
                 let baseline = loadedProjectRow == project.persistentModelID ? loadedProjectWords : nil
-                let savedTitle = restoringVersion ? draft.title : normalizedProjectTitle()
-                let writeTitle = (restoringVersion || draft.title != baseline?.title) && savedTitle != project.title
-                let writeLyrics = (restoringVersion || draft.lyrics != baseline?.lyrics) && draft.lyrics != project.lyrics
-                let writeTheme = (restoringVersion || draft.theme != baseline?.theme) && draft.theme != project.theme
+                let savedTitle = versionRestorePending ? draft.title : normalizedProjectTitle()
+                let writeTitle = (versionRestorePending || draft.title != baseline?.title) && savedTitle != project.title
+                let writeLyrics = (versionRestorePending || draft.lyrics != baseline?.lyrics) && draft.lyrics != project.lyrics
+                let writeTheme = (versionRestorePending || draft.theme != baseline?.theme) && draft.theme != project.theme
                 if writeTitle { project.title = savedTitle }
                 if writeLyrics { project.lyrics = draft.lyrics }
                 if writeTheme { project.theme = draft.theme }
@@ -2805,7 +2815,8 @@ final class EditorViewModel: ObservableObject {
         applyAtomicLyricsEdit(text: version.lyrics, cursorPosition: 0)
         editorScrollY = 0
         positionRestoreID = UUID()
-        flushCurrentDraft(restoringVersion: true)
+        versionRestorePending = true
+        flushCurrentDraft()
     }
 
     private func normalizedProjectTitle() -> String {
