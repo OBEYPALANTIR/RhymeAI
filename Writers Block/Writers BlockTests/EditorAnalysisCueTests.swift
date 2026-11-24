@@ -31,24 +31,24 @@ struct EditorAnalysisCueTests {
             (SyllableCounter.lyricWordCount(text), text.utf16.count)
         }
         let (countStarts, countStarted) = AsyncStream.makeStream(of: String.self)
-        let gates = HookBox<[String: DispatchSemaphore]>([:])
+        let gates = HookBox<[String: (semaphore: DispatchSemaphore, deadline: DispatchTime)]>([:])
         let expiredHolds = HookBox<Set<String>>([])
         viewModel.countLyrics = { text in
             countStarted.yield(text)
             // The timeout only keeps a failed test from pinning a pool thread for good.
-            if let gate = gates.value[text], gate.wait(timeout: .now() + 120) == .timedOut {
+            if let gate = gates.value[text], gate.semaphore.wait(timeout: gate.deadline) == .timedOut {
                 expiredHolds.value.insert(text) // one worker at a time: edits are serial
             }
             return count(text)
         }
         var beforeCounting: [(words: Int, syllables: Int)] = []
         var whileCounting: [(words: Int, syllables: Int)] = []
-        // Waits on this edit's own events, not a clock poll. 120 s is a hang guard far
-        // above CI stalls seen so far (~40 s) and far below the 3,600 s debounce.
+        // The gate and all observations share one hang guard for this edit.
         func edit(to text: String) async throws {
             editUnderTest.value = text
             let gate = DispatchSemaphore(value: 0)
-            gates.value[text] = gate
+            let deadline = DispatchTime.now() + 120
+            gates.value[text] = (gate, deadline)
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
             let countTask = try #require(viewModel.countTask)
             // On any early exit, cancel the count first so a late result is discarded,
@@ -62,13 +62,13 @@ struct EditorAnalysisCueTests {
             }
             beforeCounting.append((viewModel.wordCount, viewModel.syllableCount))
 
-            let started = await observed(within: .seconds(120), onGiveUp: { countTask.cancel() }) {
+            let started = await observed(until: deadline, onGiveUp: { countTask.cancel() }) {
                 for await started in countStarts where started == text { return true }
                 return false
             }
             try #require(started, "the count for \"\(text)\" never started")
             whileCounting.append((viewModel.wordCount, viewModel.syllableCount))
-            let held = await observed(within: .seconds(120)) {
+            let held = await observed(until: deadline) {
                 for await entered in debounceEntries where entered == text { return true }
                 return false
             }
@@ -76,7 +76,7 @@ struct EditorAnalysisCueTests {
             gateOpened = true
             gate.signal()
 
-            let landed = await observed(within: .seconds(120), onGiveUp: { countTask.cancel() }) {
+            let landed = await observed(until: deadline, onGiveUp: { countTask.cancel() }) {
                 await countTask.value
                 return true
             }
@@ -198,23 +198,22 @@ struct EditorAnalysisCueTests {
     }
 }
 
-/// True only if `observe` reports its event before `limit` passes and the caller is
+/// True only if `observe` reports its event before the deadline and the caller is
 /// still running. On a miss `onGiveUp` runs and `observe` is cancelled and abandoned,
 /// not awaited (a task group or timeout race would still await it at scope exit).
 /// The deadline is fixed up front, but a starved scheduler can deliver it late.
 private func observed(
-    within limit: Duration,
+    until deadline: DispatchTime,
     onGiveUp: @escaping @Sendable () -> Void = {},
     _ observe: @escaping @Sendable () async -> Bool
 ) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: limit)
     let (outcomes, outcome) = AsyncStream.makeStream(of: Bool.self)
     // Judged when the observation completes, so a late one fails even if delivered first.
-    let work = Task { outcome.yield(await observe() && ContinuousClock.now <= deadline) }
-    let timer = Task {
-        do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
-        outcome.yield(false)
-    }
+    let work = Task { outcome.yield(await observe() && DispatchTime.now() < deadline) }
+    let timer = DispatchSource.makeTimerSource(queue: .global())
+    timer.setEventHandler { outcome.yield(false) }
+    timer.schedule(deadline: deadline)
+    timer.activate()
     defer { work.cancel(); timer.cancel(); outcome.finish() }
     var outcomeIterator = outcomes.makeAsyncIterator()
     let saw = await outcomeIterator.next() ?? false
