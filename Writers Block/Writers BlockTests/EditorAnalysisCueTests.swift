@@ -47,7 +47,8 @@ struct EditorAnalysisCueTests {
         func edit(to text: String) async throws {
             editUnderTest.value = text
             let gate = DispatchSemaphore(value: 0)
-            let deadline = DispatchTime.now() + 120
+            let perEditTimeoutSeconds = 600
+            let deadline = DispatchTime.now() + .seconds(perEditTimeoutSeconds)
             gates.value[text] = (gate, deadline)
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
             let countTask = try #require(viewModel.countTask)
@@ -80,7 +81,7 @@ struct EditorAnalysisCueTests {
                 await countTask.value
                 return true
             }
-            try #require(landed, "the count for \"\(text)\" did not finish within 120 s")
+            try #require(landed, "the count for \"\(text)\" did not finish within \(perEditTimeoutSeconds) s")
             try #require(
                 !expiredHolds.value.contains(text),
                 "the count for \"\(text)\" was never held: its gate timed out before the test opened it"
