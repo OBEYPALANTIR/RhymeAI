@@ -67,6 +67,15 @@ struct SongProjectExport: Codable, Sendable {
 
 /// Owns the source ZIP until the system exporter finishes copying it.
 nonisolated final class BackupExportFile: Transferable {
+    // Launch and every export share this once-per-process initialization.
+    static let temporaryRoot = prepareTemporaryRoot(in: FileManager.default.temporaryDirectory)
+
+    static func prepareTemporaryRoot(in temporaryDirectory: URL) -> URL {
+        let root = temporaryDirectory.appendingPathComponent("writersblock-export", isDirectory: true)
+        try? FileManager.default.removeItem(at: root)
+        return root
+    }
+
     let url: URL
     var fileName: String { url.lastPathComponent }
 
@@ -74,8 +83,8 @@ nonisolated final class BackupExportFile: Transferable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let directory = Self.temporaryRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         url = directory.appendingPathComponent("WritersBlock-backup-\(formatter.string(from: now)).zip")
     }
 
