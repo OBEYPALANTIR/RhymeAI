@@ -990,7 +990,7 @@ struct RestorePendingDraftTests {
         }
     }
 
-    private func singleTakeRecovery(inPlace: Bool = false) async throws
+    func singleTakeRecovery(inPlace: Bool = false) async throws
         -> (BackupHarness, URL, URL, OpenRecordingSnapshot.Take, Data) {
         let harness = try await BackupCoreTests().makeHarness()
         let original = SongProject(id: "original", title: "Original", lyrics: inPlace ? "baseline" : "remote words")
@@ -1037,7 +1037,7 @@ struct RestorePendingDraftTests {
             .filter { $0.hasPrefix("unrecovered-") }
     }
 
-    private func reopenEditor(_ harness: BackupHarness, recovery: URL) async throws -> BackupHarness {
+    func reopenEditor(_ harness: BackupHarness, recovery: URL) async throws -> BackupHarness {
         try await reopenRecoveryEditor(harness, recovery: recovery).0
     }
 

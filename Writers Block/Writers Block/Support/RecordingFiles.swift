@@ -694,12 +694,29 @@ enum RecordingFiles {
     /// Keep exact locally generated take-deletion events across song tombstone
     /// replacement. A later take deletion at any other time still stands on its own.
     nonisolated static func rememberDraftSourceCascades(_ deletions: [SyncDeletion], for memosRoot: URL) throws {
-        guard !deletions.isEmpty else { return }
-        var times = try draftSourceCascadeTimes(for: memosRoot)
+        try rememberDraftSourceCascades(deletions, for: memosRoot, saving: {})
+    }
+
+    nonisolated static func rememberDraftSourceCascades(_ deletions: [SyncDeletion], for memosRoot: URL,
+                                                         saving save: () throws -> Void) throws {
+        guard !deletions.isEmpty else { return try save() }
+        let previous = try draftSourceCascadeTimes(for: memosRoot)
+        var times = previous
         for deletion in deletions { times[deletion.identity, default: []].insert(deletion.deletedAt) }
+        guard times != previous else { return try save() }
         let file = draftSourceCascadeURL(for: memosRoot)
+        func write(_ times: [String: Set<Int64>]) throws {
+            try JSONEncoder().encode(times).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(times).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try write(times)
+        do {
+            try save()
+        } catch {
+            if previous.isEmpty { try FileManager.default.removeItem(at: file) }
+            else { try write(previous) }
+            throw error
+        }
     }
 
     /// For listings and playback: nil when the record cannot be read, so nothing is listed.
