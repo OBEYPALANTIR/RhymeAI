@@ -77,6 +77,31 @@ extension BackupCoreTests {
 struct FileBackedBackupArchiveWriterTests {
     private let mebibyte = 1024 * 1024
 
+    @Test func liveExportUsesTheDedicatedTemporaryRoot() throws {
+        let export = try BackupExportFile(now: Date())
+        try Data([1]).write(to: export.url)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("writersblock-export", isDirectory: true)
+        #expect(export.url.deletingLastPathComponent().deletingLastPathComponent() == root)
+        // Access the launch hook's root again while the save sheet owns the file.
+        #expect(BackupExportFile.temporaryRoot == root)
+        #expect(try export.data == Data([1]))
+    }
+
+    @Test func launchRemovesAbandonedExportsAndPreservesOtherTemporaryFolders() throws {
+        let temporaryDirectory = try scratch()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let root = temporaryDirectory.appendingPathComponent("writersblock-export", isDirectory: true)
+        let abandoned = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: abandoned, withIntermediateDirectories: true)
+        try Data([1]).write(to: abandoned.appendingPathComponent("WritersBlock-backup-2026-11-23.zip"))
+        let unrelated = temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: false)
+
+        #expect(BackupExportFile.prepareTemporaryRoot(in: temporaryDirectory) == root)
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
     @Test func releasingAnExportRemovesOnlyItsOwnDirectory() throws {
         let now = Date()
         let other = try BackupExportFile(now: now)

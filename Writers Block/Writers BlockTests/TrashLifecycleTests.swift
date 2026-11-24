@@ -295,9 +295,255 @@ struct TrashLifecycleTests {
 
         #expect(harness.viewModel.permanentlyDeleteTrashedProject(trashed))
         #expect(try Self.fetchTrash(harness.context).isEmpty)
+        #expect(try Self.fetchProjects(harness.context).isEmpty)
         let tombstone = try #require(Self.fetchDeletions(harness.context).first)
         #expect(tombstone.projectId == "gone")
         #expect(tombstone.fileName == nil)
+    }
+
+    @MainActor
+    @Test func permanentDeleteRemovesOnlyTheBeatenActiveTwin() throws {
+        var saves = 0
+        let harness = try Self.makeHarness(viewModel: EditorViewModel(saveModelContext: { context in
+            try context.save()
+            saves += 1
+        }))
+        let context = harness.context
+        let past = Date(timeIntervalSince1970: 100)
+        let trash = TrashedSongProject(id: "gone", title: "Trash", lyrics: "private", theme: "", updatedAt: past)
+        context.insert(trash)
+        context.insert(SongProject(id: "gone", title: "Active", lyrics: "private", updatedAt: past))
+        context.insert(SongProject(id: "other", title: "Other", lyrics: "keep these words", updatedAt: past))
+        context.insert(TrashedSongProject(id: "other-trash", title: "Other Trash", lyrics: "", theme: "", updatedAt: past))
+        // Applying all persisted deletions would also remove this unrelated song.
+        context.insert(SyncDeletionRecord(projectId: "other", deletedAt: 200_000))
+        try context.save()
+        let beforeDelete = saves
+
+        #expect(harness.viewModel.permanentlyDeleteTrashedProject(trash))
+        #expect(saves == beforeDelete + 1)
+
+        let saved = ModelContext(harness.container)
+        let active = try Self.fetchProjects(saved)
+        #expect(active.map(\.id) == ["other"])
+        #expect(active.first { $0.id == "other" }?.lyrics == "keep these words")
+        #expect(try Self.fetchTrash(saved).map(\.id) == ["other-trash"])
+        #expect(try Self.fetchDeletions(saved).map(\.projectId) == ["gone", "other"])
+    }
+
+    @MainActor
+    @Test func permanentDeleteKeepsAnActiveTwinEditedAfterDeletion() throws {
+        let harness = try Self.makeHarness()
+        let future = Date().addingTimeInterval(86_400)
+        let trash = TrashedSongProject(id: "back", title: "Trash", lyrics: "", theme: "", updatedAt: Date())
+        harness.context.insert(trash)
+        harness.context.insert(SongProject(id: "back", title: "Later edit", lyrics: "kept", updatedAt: future))
+        try harness.context.save()
+
+        #expect(harness.viewModel.permanentlyDeleteTrashedProject(trash))
+
+        let saved = ModelContext(harness.container)
+        let active = try Self.fetchProjects(saved)
+        #expect(active.map(\.id) == ["back"])
+        #expect(active.first?.lyrics == "kept")
+        #expect(try Self.fetchTrash(saved).isEmpty)
+        let tombstone = try #require(Self.fetchDeletions(saved).first)
+        #expect(tombstone.projectId == "back" && tombstone.deletedAt < future.epochMilliseconds)
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func permanentDeleteFlushesAnOpenTwinBeforeComparingTimes(edited: Bool) throws {
+        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+        let harness = try Self.makeHarness(viewModel: viewModel)
+        let song = SongProject(id: "open-twin", title: "Open", lyrics: "original", updatedAt: Date(timeIntervalSince1970: 100))
+        let trash = TrashedSongProject(project: song)
+        harness.context.insert(song)
+        harness.context.insert(trash)
+        try harness.context.save()
+        viewModel.loadProject(song)
+        if edited { viewModel.lyrics = "unsaved words" }
+
+        #expect(viewModel.permanentlyDeleteTrashedProject(trash))
+
+        let saved = ModelContext(harness.container)
+        #expect(try Self.fetchProjects(saved).map(\.lyrics) == (edited ? ["unsaved words"] : []))
+        #expect(viewModel.currentProjectId == (edited ? "open-twin" : nil))
+        #expect(viewModel.lyrics == (edited ? "unsaved words" : ""))
+        #expect(try Self.fetchTrash(saved).isEmpty)
+        #expect(try Self.fetchDeletions(saved).map(\.projectId) == ["open-twin"])
+    }
+
+    @MainActor
+    @Test func permanentDeleteClearsStaleOpenBindingWhenNewerActiveTwinSurvives() throws {
+        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+        let harness = try Self.makeHarness(viewModel: viewModel)
+        let older = SongProject(
+            id: "bound-twin",
+            title: "Older Open",
+            lyrics: "older lyrics",
+            theme: "older theme",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let newer = SongProject(
+            id: "bound-twin",
+            title: "Newer Survivor",
+            lyrics: "newer lyrics",
+            theme: "newer theme",
+            updatedAt: Date().addingTimeInterval(86_400)
+        )
+        let trash = TrashedSongProject(project: older)
+        harness.context.insert(older)
+        harness.context.insert(newer)
+        harness.context.insert(trash)
+        try harness.context.save()
+        let newerRow = newer.persistentModelID
+
+        viewModel.loadProject(older)
+        #expect(viewModel.currentProjectId == "bound-twin")
+        #expect(viewModel.loadedProjectRow == older.persistentModelID)
+
+        #expect(viewModel.permanentlyDeleteTrashedProject(trash))
+
+        #expect(viewModel.currentProjectId == nil)
+        #expect(viewModel.loadedProjectRow == nil)
+        #expect(viewModel.title.isEmpty)
+        #expect(viewModel.lyrics.isEmpty)
+        #expect(viewModel.theme.isEmpty)
+
+        let saved = ModelContext(harness.container)
+        let active = try Self.fetchProjects(saved)
+        #expect(active.count == 1)
+        #expect(active.first?.persistentModelID == newerRow)
+        #expect(active.first?.id == "bound-twin")
+        #expect(active.first?.title == "Newer Survivor")
+        #expect(active.first?.lyrics == "newer lyrics")
+        #expect(active.first?.theme == "newer theme")
+        #expect(try Self.fetchTrash(saved).isEmpty)
+        #expect(try Self.fetchDeletions(saved).map(\.projectId) == ["bound-twin"])
+    }
+
+    @MainActor
+    @Test func permanentDeletePreservesSurvivingBoundRowWhenOlderTwinIsRemoved() throws {
+        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+        let harness = try Self.makeHarness(viewModel: viewModel)
+        let older = SongProject(
+            id: "bound-twin",
+            title: "Older Twin",
+            lyrics: "older lyrics",
+            theme: "older theme",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let newer = SongProject(
+            id: "bound-twin",
+            title: "Newer Open",
+            lyrics: "newer lyrics",
+            theme: "keep theme",
+            updatedAt: Date().addingTimeInterval(86_400)
+        )
+        let trash = TrashedSongProject(project: older)
+        harness.context.insert(older)
+        harness.context.insert(newer)
+        harness.context.insert(trash)
+        try harness.context.save()
+        let newerRow = newer.persistentModelID
+
+        viewModel.loadProject(newer)
+        #expect(viewModel.currentProjectId == "bound-twin")
+        #expect(viewModel.loadedProjectRow == newerRow)
+
+        #expect(viewModel.permanentlyDeleteTrashedProject(trash))
+
+        #expect(viewModel.currentProjectId == "bound-twin")
+        #expect(viewModel.loadedProjectRow == newerRow)
+        #expect(viewModel.title == "Newer Open")
+        #expect(viewModel.lyrics == "newer lyrics")
+        #expect(viewModel.theme == "keep theme")
+
+        let saved = ModelContext(harness.container)
+        let active = try Self.fetchProjects(saved)
+        #expect(active.count == 1)
+        #expect(active.first?.persistentModelID == newerRow)
+        #expect(active.first?.lyrics == "newer lyrics")
+        #expect(try Self.fetchTrash(saved).isEmpty)
+        #expect(try Self.fetchDeletions(saved).map(\.projectId) == ["bound-twin"])
+    }
+
+    @MainActor
+    @Test func permanentDeletePreservesOpenBindingAndRowsWhenDeleteSaveFails() throws {
+        var failDeleteSave = false
+        var saveAttempts = 0
+        let viewModel = EditorViewModel(
+            companionStore: WritingCompanionStore(inMemory: true),
+            saveModelContext: { context in
+                if failDeleteSave {
+                    saveAttempts += 1
+                    if saveAttempts == 2 {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                }
+                try context.save()
+            }
+        )
+        let harness = try Self.makeHarness(viewModel: viewModel)
+        let older = SongProject(
+            id: "bound-twin",
+            title: "Older Open",
+            lyrics: "older lyrics",
+            theme: "older theme",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let newer = SongProject(
+            id: "bound-twin",
+            title: "Newer Survivor",
+            lyrics: "newer lyrics",
+            theme: "newer theme",
+            updatedAt: Date().addingTimeInterval(86_400)
+        )
+        let trash = TrashedSongProject(project: older)
+        harness.context.insert(older)
+        harness.context.insert(newer)
+        harness.context.insert(trash)
+        try harness.context.save()
+        let olderRow = older.persistentModelID
+
+        viewModel.loadProject(older)
+        failDeleteSave = true
+
+        #expect(!viewModel.permanentlyDeleteTrashedProject(trash))
+        #expect(saveAttempts == 2)
+        #expect(viewModel.currentProjectId == "bound-twin")
+        #expect(viewModel.loadedProjectRow == olderRow)
+        #expect(viewModel.title == "Older Open")
+        #expect(viewModel.lyrics == "older lyrics")
+        #expect(viewModel.theme == "older theme")
+        #expect(viewModel.errorMessage == "Couldn't permanently delete this song. It remains in Trash.")
+
+        let saved = ModelContext(harness.container)
+        let active = try Self.fetchProjects(saved)
+        #expect(active.map(\.title) == ["Newer Survivor", "Older Open"])
+        #expect(active.map(\.lyrics) == ["newer lyrics", "older lyrics"])
+        #expect(try Self.fetchTrash(saved).map(\.id) == ["bound-twin"])
+        #expect(try Self.fetchDeletions(saved).isEmpty)
+    }
+
+    @MainActor
+    @Test func permanentDeleteRecoversATwinDeliveredWithoutAnEditTime() async throws {
+        let (viewModel, library, context, container) = try await Self.libraryViewModel("DeleteRepairedTwin")
+        viewModel.modelContext = context
+        await viewModel.recordingsLaunchTask?.value
+        let song = SongProject(id: "timeless-twin", title: "Timeless", lyrics: "keep a recovery copy", updatedAt: Date(timeIntervalSince1970: 0))
+        let trash = TrashedSongProject(id: song.id, title: "Trash", lyrics: "", theme: "", updatedAt: Date())
+        context.insert(song)
+        context.insert(trash)
+        try context.save()
+
+        #expect(viewModel.permanentlyDeleteTrashedProject(trash))
+
+        #expect(try Self.fetchProjects(ModelContext(container)).isEmpty)
+        let recovered = try #require(SongRecoveryStore.all(memosRoot: library.memosRoot).first?.project)
+        #expect(recovered.lyrics == "keep a recovery copy" && recovered.precedenceRepaired)
+        #expect(recovered.updatedAt.epochMilliseconds > 0)
     }
 
     @MainActor
@@ -703,11 +949,10 @@ struct TrashLifecycleTests {
     }
 
     @MainActor
-    private static func makeHarness() throws -> Harness {
+    private static func makeHarness(viewModel: EditorViewModel = EditorViewModel()) throws -> Harness {
         let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let viewModel = EditorViewModel()
         viewModel.modelContext = container.mainContext
         return Harness(viewModel: viewModel, container: container)
     }
