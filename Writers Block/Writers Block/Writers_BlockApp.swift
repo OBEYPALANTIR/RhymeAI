@@ -155,6 +155,7 @@ struct Writers_BlockApp: App {
 
     init() {
         RetiredPreferences.remove()
+        _ = BackupExportFile.temporaryRoot
         #if DEBUG
         CloudKitSchemaInitializer.runIfRequested()
         #endif
