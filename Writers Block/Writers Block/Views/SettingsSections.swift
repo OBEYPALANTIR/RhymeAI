@@ -546,7 +546,7 @@ struct SettingsCloudBackupSection: View {
     @State private var migratePassphrase = ""
     @State private var importerShown = false
     @State private var exporterShown = false
-    @State private var pendingExport: (fileName: String, document: ExportDocument)?
+    @State private var pendingExport: BackupExportFile?
     @State private var earlierBackupsShown = false
 
     var body: some View {
@@ -633,15 +633,22 @@ struct SettingsCloudBackupSection: View {
         }
         .fileExporter(
             isPresented: $exporterShown,
-            document: pendingExport?.document,
-            contentType: .zip,
+            item: pendingExport,
+            contentTypes: [.zip],
             defaultFilename: pendingExport?.fileName
         ) { result in
-            pendingExport = nil
+            finishExport()
             if case .failure(let error) = result {
                 viewModel.reportBackupFileFailure("Export failed: the file couldn't be saved.", error)
             }
+        } onCancellation: {
+            finishExport()
         }
+    }
+
+    private func finishExport() {
+        pendingExport?.removeTemporaryFiles()
+        pendingExport = nil
     }
 
     // The Mac keeps its 32pt preference-row pitch; iOS keeps 12pt between touch rows.
@@ -685,7 +692,7 @@ struct SettingsCloudBackupSection: View {
             }
             row("Export all songs…", systemImage: "square.and.arrow.up", id: "exportAllSongs", enabled: !viewModel.cloudBackupIsWorking) {
                 if let archive = viewModel.exportAllSongs() {
-                    pendingExport = (archive.fileName, ExportDocument(data: archive.data))
+                    pendingExport = archive
                     exporterShown = true
                 }
             }
