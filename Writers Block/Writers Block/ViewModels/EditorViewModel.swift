@@ -1995,25 +1995,30 @@ final class EditorViewModel: ObservableObject {
         guard recordingsChecked() else { return false }
         let projectId = trashedProject.id
         let plan: [RecordingFiles.DeletionPlan.Item]
-        var removedOpenTwin = false
+        var removedBoundRow = false
         do {
             // Every file of the song is one the check verified, each with its digest and
             // length, before anything changes (T1.1).
             plan = try recordingLibrary?.songDeletionPlan(projectId, in: context) ?? []
             let deletedAt = Date()
             let twins = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId }))
+            let boundRow: PersistentIdentifier?
             if !twins.isEmpty, currentProjectId == projectId {
                 // Capture deletion time first so a pending edit saved now can win.
                 guard flushCurrentDraft() else {
                     errorMessage = "Couldn't save the open song before permanently deleting it. It remains in Trash."
                     return false
                 }
-                removedOpenTwin = true
+                boundRow = loadedProjectRow
+            } else {
+                boundRow = nil
             }
             for twin in twins {
+                let twinRow = twin.persistentModelID
                 repairMissingEditTime(of: twin)
-                if try !removeTombstonedProject(twin, deletedAt: deletedAt.epochMilliseconds, in: context) {
-                    removedOpenTwin = false
+                if try removeTombstonedProject(twin, deletedAt: deletedAt.epochMilliseconds, in: context),
+                   twinRow == boundRow {
+                    removedBoundRow = true
                 }
             }
             try upsertPermanentDeletion(projectId: projectId, deletedAt: deletedAt, in: context)
@@ -2026,7 +2031,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't permanently delete this song. It remains in Trash."
             return false
         }
-        if removedOpenTwin { clearEditorAfterProjectDelete() }
+        if removedBoundRow { clearEditorAfterProjectDelete() }
         stopPlaybackOfSong(projectId)
         removeSongFiles(projectId, plan: plan, message: "This song was permanently deleted, but some of its local recordings were kept because they changed. Writers Block will retry.")
         do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
