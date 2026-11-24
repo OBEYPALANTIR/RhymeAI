@@ -931,6 +931,8 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Init
 
     private let persistModelContext: (ModelContext) throws -> Void
+    /// Runs before Move to Trash / Restore from Trash read the other side's rows (tests can inject a failed fetch).
+    var willFetchTrashCounterparts: (any PersistentModel.Type) throws -> Void = { _ in }
 
     /// Every library save goes through here, so a saved change starts the backup countdown.
     private func saveModelContext(_ context: ModelContext) throws {
@@ -1940,11 +1942,12 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return false }
 
         let trashedProject = TrashedSongProject(project: project)
-        removeExistingTrashEntries(id: project.id, in: context)
-        context.insert(trashedProject)
         let clearsCurrentEditor = currentProjectId == project.id
-        removeExistingProjects(id: project.id, in: context)
         do {
+            // A row that cannot be read is not removed, so nothing is saved beside it.
+            try removeExistingTrashEntries(id: project.id, in: context)
+            context.insert(trashedProject)
+            try removeExistingProjects(id: project.id, in: context)
             try saveModelContext(context)
         } catch {
             context.rollback()
@@ -1962,10 +1965,10 @@ final class EditorViewModel: ObservableObject {
     func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> SongProject? {
         guard let context = modelContext else { return nil }
         let restoredProject = trashedProject.restoredProject()
-        removeExistingProjects(id: restoredProject.id, in: context)
-        context.insert(restoredProject)
-        removeExistingTrashEntries(id: restoredProject.id, in: context)
         do {
+            try removeExistingProjects(id: restoredProject.id, in: context)
+            context.insert(restoredProject)
+            try removeExistingTrashEntries(id: restoredProject.id, in: context)
             try saveModelContext(context)
         } catch {
             context.rollback()
@@ -2349,24 +2352,24 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
-    private func removeExistingProjects(id: String, in context: ModelContext) {
+    private func removeExistingProjects(id: String, in context: ModelContext) throws {
         let projectId = id
         let descriptor = FetchDescriptor<SongProject>(
             predicate: #Predicate<SongProject> { $0.id == projectId }
         )
-        guard let existingProjects = try? context.fetch(descriptor) else { return }
-        for existing in existingProjects {
+        try willFetchTrashCounterparts(SongProject.self)
+        for existing in try context.fetch(descriptor) {
             context.delete(existing)
         }
     }
 
-    private func removeExistingTrashEntries(id: String, in context: ModelContext) {
+    private func removeExistingTrashEntries(id: String, in context: ModelContext) throws {
         let projectId = id
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.id == projectId }
         )
-        guard let existingProjects = try? context.fetch(descriptor) else { return }
-        for existing in existingProjects {
+        try willFetchTrashCounterparts(TrashedSongProject.self)
+        for existing in try context.fetch(descriptor) {
             context.delete(existing)
         }
     }

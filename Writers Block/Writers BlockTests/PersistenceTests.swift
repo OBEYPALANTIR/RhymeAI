@@ -207,6 +207,44 @@ struct PersistenceTests {
         #expect(viewModel.errorMessage?.contains("was not imported") == true)
     }
 
+    /// A failed read of the song's active rows must not save a Trash row beside them.
+    @MainActor
+    @Test func moveToTrashFailsWithoutATwinWhenTheActiveRowsCannotBeRead() throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let project = SongProject(id: "song-a", title: "A", lyrics: "words")
+        harness.context.insert(project)
+        try harness.context.save()
+        viewModel.willFetchTrashCounterparts = { type in
+            if type == SongProject.self { throw CocoaError(.fileReadUnknown) }
+        }
+
+        #expect(!viewModel.moveProjectToTrash(project))
+
+        #expect(try Self.fetchProjects(harness.context).map(\.id) == ["song-a"])
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        #expect(viewModel.errorMessage == "Couldn't move this song to Trash. Your song was kept.")
+    }
+
+    /// A failed read of the song's Trash rows must not save an active row beside them.
+    @MainActor
+    @Test func restoreFromTrashFailsWithoutATwinWhenTheTrashRowsCannotBeRead() throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let trashed = TrashedSongProject(project: SongProject(id: "song-a", title: "A", lyrics: "words"))
+        harness.context.insert(trashed)
+        try harness.context.save()
+        viewModel.willFetchTrashCounterparts = { type in
+            if type == TrashedSongProject.self { throw CocoaError(.fileReadUnknown) }
+        }
+
+        #expect(viewModel.restoreTrashedProject(trashed) == nil)
+
+        #expect(try Self.fetchProjects(harness.context).isEmpty)
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id) == ["song-a"])
+        #expect(viewModel.errorMessage == "Couldn't restore this song. It remains in Trash.")
+    }
+
 
     @MainActor
     @Test func connectingGoogleDriveEnablesManualActions() async throws {
