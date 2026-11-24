@@ -1995,11 +1995,27 @@ final class EditorViewModel: ObservableObject {
         guard recordingsChecked() else { return false }
         let projectId = trashedProject.id
         let plan: [RecordingFiles.DeletionPlan.Item]
+        var removedOpenTwin = false
         do {
             // Every file of the song is one the check verified, each with its digest and
             // length, before anything changes (T1.1).
             plan = try recordingLibrary?.songDeletionPlan(projectId, in: context) ?? []
             let deletedAt = Date()
+            let twins = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId }))
+            if !twins.isEmpty, currentProjectId == projectId {
+                // Capture deletion time first so a pending edit saved now can win.
+                guard flushCurrentDraft() else {
+                    errorMessage = "Couldn't save the open song before permanently deleting it. It remains in Trash."
+                    return false
+                }
+                removedOpenTwin = true
+            }
+            for twin in twins {
+                repairMissingEditTime(of: twin)
+                if try !removeTombstonedProject(twin, deletedAt: deletedAt.epochMilliseconds, in: context) {
+                    removedOpenTwin = false
+                }
+            }
             try upsertPermanentDeletion(projectId: projectId, deletedAt: deletedAt, in: context)
             // Each recording gets its own tombstone in the same save (A21).
             _ = try recordingLibrary?.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt.epochMilliseconds, in: context)
@@ -2010,6 +2026,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't permanently delete this song. It remains in Trash."
             return false
         }
+        if removedOpenTwin { clearEditorAfterProjectDelete() }
         stopPlaybackOfSong(projectId)
         removeSongFiles(projectId, plan: plan, message: "This song was permanently deleted, but some of its local recordings were kept because they changed. Writers Block will retry.")
         do { try companionStore.remove(projectId) } catch { companionError = "Could not remove this song’s local notebook." }
@@ -2182,9 +2199,7 @@ final class EditorViewModel: ObservableObject {
     private func repairSongTimes(in context: ModelContext) throws -> Bool {
         var repaired = false
         // A37: each repair is marked, and the Trash deadline follows a repaired deletion time.
-        for project in try context.fetch(FetchDescriptor<SongProject>()) where project.updatedAt.epochMilliseconds <= 0 {
-            project.updatedAt = firstSeenTime("project:\(project.id)")
-            project.precedenceRepaired = true
+        for project in try context.fetch(FetchDescriptor<SongProject>()) where repairMissingEditTime(of: project) {
             repaired = true
         }
         for project in try context.fetch(FetchDescriptor<TrashedSongProject>()) {
@@ -2208,6 +2223,14 @@ final class EditorViewModel: ObservableObject {
         return repaired
     }
 
+    @discardableResult
+    private func repairMissingEditTime(of project: SongProject) -> Bool {
+        guard project.updatedAt.epochMilliseconds <= 0 else { return false }
+        project.updatedAt = firstSeenTime("project:\(project.id)")
+        project.precedenceRepaired = true
+        return true
+    }
+
     /// Fixes the song times iCloud may have delivered since launch, before anything
     /// is expired or scheduled (T2.50).
     private func normalizeTrashDeadlines(in context: ModelContext) {
@@ -2224,6 +2247,16 @@ final class EditorViewModel: ObservableObject {
     private static func tombstoneRemoves(_ project: SongProject, _ deletedAt: Int64?) -> Bool {
         guard let deletedAt else { return false }
         return project.precedenceRepaired || deletedAt > project.updatedAt.epochMilliseconds
+    }
+
+    private func removeTombstonedProject(_ project: SongProject, deletedAt: Int64, in context: ModelContext) throws -> Bool {
+        guard Self.tombstoneRemoves(project, deletedAt) else { return false }
+        // A41: a song removed against a repaired time is kept first.
+        if project.precedenceRepaired {
+            try SongRecoveryStore.keep(.init(project: SyncSongProject(project: project)), memosRoot: recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot())
+        }
+        context.delete(project)
+        return true
     }
 
     private func applyPersistedDeletions() {
@@ -2251,12 +2284,8 @@ final class EditorViewModel: ObservableObject {
             }
             var deletedProjects = Set(tombstones.keys)
             let memosRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
-            for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
-                if Self.tombstoneRemoves(project, tombstones[project.id]) {
-                    // A41: a song removed against a repaired time is kept first.
-                    if project.precedenceRepaired { try SongRecoveryStore.keep(.init(project: SyncSongProject(project: project)), memosRoot: memosRoot) }
-                    context.delete(project)
-                } else {
+            for project in try context.fetch(FetchDescriptor<SongProject>()) {
+                if let deletedAt = tombstones[project.id], try !removeTombstonedProject(project, deletedAt: deletedAt, in: context) {
                     deletedProjects.remove(project.id)
                 }
             }
