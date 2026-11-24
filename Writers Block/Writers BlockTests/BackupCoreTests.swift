@@ -3932,6 +3932,49 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test(arguments: [false, true])
+    func recoveredDraftHonoursOnlyCommittedTakeCascades(saveSucceeds: Bool) async throws {
+        let fixture = RestorePendingDraftTests()
+        let (harness, journal, _, take, audio) = try await fixture.singleTakeRecovery()
+        let id = URL(fileURLWithPath: take.fileName).deletingPathExtension().lastPathComponent
+        let entry = SyncRecording(id: id, projectId: "original", fileName: take.displayName,
+                                  bytes: take.bytes, sha256: take.sha256, uploadedAt: Date())
+        let time = Date().addingTimeInterval(3_600).epochMilliseconds
+        func cascade(at time: Int64) throws -> Data {
+            try SyncBlob(recordings: [entry], deletions: [SyncDeletion(projectId: "original", deletedAt: time)]).encodedManifest()
+        }
+        try await harness.service.importArchive(try cascade(at: time - 1), modelContext: harness.context)
+        let manifest = try cascade(at: time)
+        if saveSucceeds {
+            try await harness.service.importArchive(manifest, modelContext: harness.context)
+            // Advance the song tombstone so only the sidecar can identify the committed cascade.
+            let newer = try SyncBlob(deletions: [SyncDeletion(projectId: "original", deletedAt: time + 1)]).encodedManifest()
+            try await harness.service.importArchive(newer, modelContext: harness.context)
+        } else {
+            harness.service.saveAppliedChanges = { _ in throw CocoaError(.fileWriteOutOfSpace) }
+            await #expect(throws: CocoaError(.fileWriteOutOfSpace)) {
+                try await harness.service.importArchive(manifest, modelContext: harness.context)
+            }
+        }
+
+        let replay = try await harness.reopened()
+        let deletion = SyncDeletion(projectId: "original", recordingId: id, fileName: take.displayName, deletedAt: time)
+        let takeOnly = try SyncBlob(deletions: [deletion]).encodedManifest()
+        try await replay.service.importArchive(takeOnly, modelContext: replay.context)
+        let stored = try DeletionStore.all(in: replay.context)
+        #expect(stored.contains(deletion))
+        #expect(!stored.contains { $0.isSongTombstone && $0.deletedAt == time })
+        #expect(try RecordingFiles.draftSourceCascadeTimes(for: replay.memosRoot)[deletion.identity]?.contains(time - 1) == true)
+
+        let recovered = try await fixture.reopenEditor(replay, recovery: journal)
+        let draft = try #require(recovered.context.fetch(FetchDescriptor<SongProject>()).first { $0.lyrics == "pending local words" })
+        #expect(draft.id == "reserved")
+        let rows = try recovered.context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == draft.id }
+        #expect(rows.map(\.audio) == (saveSucceeds ? [audio] : []))
+        #expect(recovered.audios(draft.id) == (saveSucceeds ? [audio] : []))
+    }
+
+    @MainActor
     @Test func restoreClearsSavingStateWhenAwaitedEditIsReverted() async throws {
         let harness = try await makeHarness()
         let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")

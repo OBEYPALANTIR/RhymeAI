@@ -2148,7 +2148,8 @@ final class RecordingLibrary: RecordingPublishing {
     /// gets its own tombstone by id, in the caller's transaction, and its row goes;
     /// a row whose audio is on no disk here has it written to quarantine first
     /// (T1.42). Returns the rows, whose files the caller sends to quarantine.
-    func tombstoneRecordings(ofProject projectId: String, deletedAt: Int64, in context: ModelContext) throws -> [Recording] {
+    func tombstoneRecordings(ofProject projectId: String, deletedAt: Int64, in context: ModelContext,
+                             rememberCascades: ([SyncDeletion], URL) throws -> Void = RecordingFiles.rememberDraftSourceCascades) throws -> [Recording] {
         let rows = try context.fetch(FetchDescriptor<Recording>()).filter { $0.projectId == projectId }.filter {
             establishTimes($0)
             return $0.precedenceIsRepair || $0.precedenceTime.epochMilliseconds < deletedAt
@@ -2166,7 +2167,7 @@ final class RecordingLibrary: RecordingPublishing {
         }
         // The active draft journal may be unavailable. Record the cause before
         // the caller commits the tombstones so it is still available on reopen.
-        try RecordingFiles.rememberDraftSourceCascades(cascades, for: memosRoot)
+        try rememberCascades(cascades, memosRoot)
         return rows
     }
 
