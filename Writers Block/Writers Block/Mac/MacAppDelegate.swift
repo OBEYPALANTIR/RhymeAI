@@ -15,6 +15,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    func applicationDidResignActive(_ notification: Notification) {
+        _ = viewModel?.savePendingEdit()
+    }
+
+    @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let reply = Self.terminateReply(viewModel: viewModel, ask: Self.askAfterFailedSave)
         if reply == .terminateNow { Self.isTerminating = true }
