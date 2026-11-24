@@ -3828,6 +3828,31 @@ struct BackupCoreTests {
         #expect(try DeletionStore.undated(in: harness.context).map(\.projectId) == ["song-a"])
     }
 
+    /// A tombstone learned earlier stays stored after the song is revived. Words
+    /// written later on a slower clock are kept when that deletion arrives again.
+    @MainActor
+    @Test func aReimportedDeletionKeepsWordsWrittenAfterARevival() async throws {
+        let harness = try await makeHarness()
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let deletion = try SyncBlob(deletions: [SyncDeletion(projectId: "song-a", deletedAt: base.addingTimeInterval(300).epochMilliseconds)])
+            .encodedManifest()
+        try await harness.service.importArchive(deletion, modelContext: harness.context)
+        let revived = SyncSongProject(id: "song-a", title: "Revived", lyrics: "revived words", theme: "", updatedAt: base.addingTimeInterval(400))
+        try await harness.service.importArchive(try SyncBlob(projects: [revived]).encodedManifest(), modelContext: harness.context)
+        let song = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "song-a" })
+        #expect(try DeletionStore.all(in: harness.context).contains { $0.isSongTombstone && $0.projectId == "song-a" })
+        song.lyrics = "words written after the revival"
+        song.updatedAt = base.addingTimeInterval(250)
+        song.precedenceRepaired = false
+        try harness.context.save()
+
+        try await harness.service.importArchive(deletion, modelContext: harness.context)
+
+        let songs = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!songs.contains { $0.id == "song-a" })
+        #expect(songs.map(\.lyrics) == ["words written after the revival"])
+    }
+
     @MainActor
     @Test(arguments: [false, true])
     func restoreOrImportReportsTheSavedCopyBeforeALaterRecordingFailure(useDrive: Bool) async throws {

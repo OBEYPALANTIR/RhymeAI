@@ -2412,7 +2412,7 @@ final class BackupService {
         // A song a tombstone without a time still names (none with a time superseded
         // it above) is left exactly as it is here: not changed, removed or brought back (T5.24).
         let held = try library.held(in: modelContext)
-        let copies = try keepDisplacedLyrics(snapshots, before: before, merged: blob, held: held.songs,
+        let copies = try keepDisplacedLyrics(snapshots, before: before, incoming: inputs, merged: blob, held: held.songs,
                                         deleted: deletedProjectIds, repaired: repaired, draftHandoff: draftHandoff, in: modelContext)
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
@@ -2517,7 +2517,7 @@ final class BackupService {
     /// nonblank local lyric it would displace, preferring active metadata over Trash.
     private func keepDisplacedLyrics(
         _ snapshots: [(SongRecoveryStore.Song, PersistentIdentifier)],
-        before: SyncBlob, merged: SyncBlob, held: Set<String>, deleted: Set<String>,
+        before: SyncBlob, incoming: [SyncBlob], merged: SyncBlob, held: Set<String>, deleted: Set<String>,
         repaired: [SongRecoveryStore.Song], draftHandoff: BackupDraftHandoff?, in context: ModelContext
     ) throws -> [BackupApplyOutcome.Copy] {
         let winners = Dictionary(merged.projects.map { ($0.id, $0.lyrics) } + merged.trashed.map { ($0.id, $0.lyrics) },
@@ -2527,17 +2527,18 @@ final class BackupService {
         usedIDs.formUnion(held)
         let pendingDraft = draftHandoff?.pendingDraft()
         let savedDrafts = draftHandoff?.savedDrafts ?? []
-        func newestTombstones(_ deletions: [SyncDeletion]) -> [String: Int64] {
-            Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
-        }
-        let localTombstones = newestTombstones(before.deletions)
-        let mergedTombstones = newestTombstones(merged.deletions)
+        let incomingTombstones = incoming.flatMap(\.deletions).filter(\.isSongTombstone)
         var considered: [String: Set<String>] = [:]
         var copies: [BackupApplyOutcome.Copy] = []
         for (source, rowID) in snapshots {
-            // A song removed by this device's own tombstone was deleted here, not displaced by the merge.
-            if deleted.contains(source.id), let local = localTombstones[source.id],
-               local >= mergedTombstones[source.id] ?? .min { continue }
+            // Removed only by a tombstone this device already held: the local library had
+            // already deleted these words, so the merge displaces nothing. A stored tombstone
+            // can outlive a revival, so an incoming one that beats the row still keeps a copy.
+            if deleted.contains(source.id), !incomingTombstones.contains(where: { deletion in
+                guard deletion.projectId == source.id else { return false }
+                if let project = source.project { return deletion.wins(over: project.updatedAt, repaired: project.precedenceRepaired) }
+                return source.trashed.map { deletion.wins(over: $0.deletedAt, repaired: $0.trashedAtRepaired) } ?? false
+            }) { continue }
             guard deleted.contains(source.id) || (!held.contains(source.id) && winners[source.id] != nil),
                   let lyrics = source.project?.lyrics ?? source.trashed?.lyrics,
                   !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, lyrics != winners[source.id],
