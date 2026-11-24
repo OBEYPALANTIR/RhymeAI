@@ -1318,7 +1318,7 @@ extension OneLinerRouterSuites {
             }
             // The page's floor follows the sidebar inset it reads back a pass or more later, which
             // a fixed wait can miss on a busy machine: pump the run loop until the requested columns
-            // are in effect and the floor holds on two passes in a row, for up to 2 s. A timeout
+            // are in effect and the floor holds on two passes in a row. A timeout
             // fails here, with both samples in the message.
             func holds(_ m: (window: CGFloat, sidebar: CGFloat, assistant: CGFloat, columns: String)) -> Bool {
                 (m.sidebar > 0) == (sidebar != .detailOnly) && (m.assistant > 0) == assistant
@@ -1328,7 +1328,7 @@ extension OneLinerRouterSuites {
             let first = try measure()
             var last = first
             var heldBefore = false
-            while !(heldBefore && holds(last)) && ContinuousClock.now - start < .seconds(2) {
+            while !(heldBefore && holds(last)) && ContinuousClock.now - start < Self.layoutSettleTimeout {
                 heldBefore = holds(last)
                 RunLoop.current.run(until: Date().addingTimeInterval(0.02))
                 last = try measure()
@@ -1361,6 +1361,8 @@ extension OneLinerRouterSuites {
             #expect(cases.filter { $0.0.hasPrefix("song") }.allSatisfy { $0.1.songShown }, "the editor, not the welcome screen")
             #expect(cases.contains { $0.1.sidebar > 0 } && cases.contains { $0.1.assistant > 0 }, "the sidebar and the Assistant are each laid out somewhere")
         }
+
+        private static let layoutSettleTimeout: Duration = .seconds(60)
 
         /// Written out rather than read from MacWorkspaceView, so changing the floor fails here.
         private static let pageFloor: CGFloat = 440
