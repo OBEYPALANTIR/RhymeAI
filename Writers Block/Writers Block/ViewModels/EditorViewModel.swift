@@ -3788,7 +3788,9 @@ final class EditorViewModel: ObservableObject {
                 try parkDraftRecovery(at: url)
                 previous = nil
             }
-            var takes = try operation.recordingSnapshot?.takesForRecovery()
+            // Only a library adopts inventoried takes (recoverDraftAudio). Without one the
+            // journal stays the legacy kind, whose recovery copies the snapshot itself.
+            var takes = recordingLibrary == nil ? nil : try operation.recordingSnapshot?.takesForRecovery()
             if takes != nil, let context = modelContext, let projectId = operation.recordingProjectId {
                 let rows = try context.fetch(FetchDescriptor<Recording>(predicate: #Predicate { $0.projectId == projectId }))
                 takes = takes?.map { take in

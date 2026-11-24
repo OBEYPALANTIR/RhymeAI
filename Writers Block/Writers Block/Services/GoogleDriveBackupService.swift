@@ -2527,9 +2527,17 @@ final class BackupService {
         usedIDs.formUnion(held)
         let pendingDraft = draftHandoff?.pendingDraft()
         let savedDrafts = draftHandoff?.savedDrafts ?? []
+        func newestTombstones(_ deletions: [SyncDeletion]) -> [String: Int64] {
+            Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+        }
+        let localTombstones = newestTombstones(before.deletions)
+        let mergedTombstones = newestTombstones(merged.deletions)
         var considered: [String: Set<String>] = [:]
         var copies: [BackupApplyOutcome.Copy] = []
         for (source, rowID) in snapshots {
+            // A song removed by this device's own tombstone was deleted here, not displaced by the merge.
+            if deleted.contains(source.id), let local = localTombstones[source.id],
+               local >= mergedTombstones[source.id] ?? .min { continue }
             guard deleted.contains(source.id) || (!held.contains(source.id) && winners[source.id] != nil),
                   let lyrics = source.project?.lyrics ?? source.trashed?.lyrics,
                   !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, lyrics != winners[source.id],
