@@ -2419,7 +2419,11 @@ final class BackupService {
         var removedFiles: [(url: URL, sha256: String, recordingId: String)] = []
         for projectId in deletedProjectIds {
             let deletedAt = blob.deletions.filter { $0.isSongTombstone && $0.projectId == projectId }.map(\.deletedAt).max() ?? 0
-            for row in try library.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
+            // Commit local and manifest cascades together so a failed save can undo both.
+            let rows = try library.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
+                cascades, _ in winningCascades += cascades
+            }
+            for row in rows {
                 if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.sha256, row.id)) }
             }
         }
@@ -2505,8 +2509,9 @@ final class BackupService {
                 modelContext.author = author
             }
             defer { modelContext.author = previousAuthor }
-            try RecordingFiles.rememberDraftSourceCascades(winningCascades, for: memosRoot)
-            try saveAppliedChanges(modelContext)
+            try RecordingFiles.rememberDraftSourceCascades(winningCascades, for: memosRoot) {
+                try saveAppliedChanges(modelContext)
+            }
             saved = true
             draftHandoff?.publish(BackupApplyOutcome(copies: copies))
         }
