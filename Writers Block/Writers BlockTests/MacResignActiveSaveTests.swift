@@ -45,5 +45,40 @@ struct MacResignActiveSaveTests {
             #expect(lyricsAfterResign == ["before and after"])
         }
     }
+
+    @Test func resigningActiveSavesThePendingTitleAndPreservesNewerStoredLyrics() throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let song = SongProject(id: "bound-song", title: "Draft", lyrics: "first line", theme: "",
+                               updatedAt: Date(timeIntervalSince1970: 1_000))
+        context.insert(song)
+        try context.save()
+
+        let viewModel = EditorViewModel(keychainStore: InMemoryKeychainStore())
+        viewModel.modelContext = context
+        defer { viewModel.modelContext = nil }
+        viewModel.loadProject(song)
+        viewModel.title = "Edited title"
+        viewModel.triggerAutoSave()
+
+        song.lyrics = "newer synced line"
+        song.updatedAt = Date(timeIntervalSince1970: 2_000)
+        try context.save()
+        try #require(song.title == "Draft")
+        try #require(viewModel.lyrics == "first line")
+
+        let delegate = MacAppDelegate()
+        delegate.viewModel = viewModel
+        let lifecycle: any NSApplicationDelegate = delegate
+        lifecycle.applicationDidResignActive?(Notification(name: NSApplication.didResignActiveNotification))
+
+        let reader = ModelContext(container)
+        let rows = try reader.fetch(FetchDescriptor<SongProject>())
+        #expect(rows.map(\.title) == ["Edited title"])
+        #expect(rows.map(\.lyrics) == ["newer synced line"])
+    }
 }
 #endif
