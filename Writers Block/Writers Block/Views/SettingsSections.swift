@@ -693,6 +693,15 @@ struct SettingsCloudBackupSection: View {
                 importerShown = true
             }
 
+            ForEach(viewModel.interruptedDrafts) { draft in
+                DisclosureGroup("Interrupted draft · \(draft.title)") {
+                    ShareLink(item: draft.text) { Label("Copy or share draft text", systemImage: "doc.on.doc") }
+                    ForEach(draft.recordings, id: \.self) { file in
+                        ShareLink(item: file) { Label(file.lastPathComponent, systemImage: "waveform") }
+                    }
+                }
+            }
+
             if !viewModel.cloudBackupStatusText.isEmpty {
                 Label(viewModel.cloudBackupStatusText, systemImage: viewModel.cloudBackupLastResultIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.caption)

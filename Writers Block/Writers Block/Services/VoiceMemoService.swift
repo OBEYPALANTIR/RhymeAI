@@ -76,6 +76,9 @@ nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
     }
 }
 
+typealias VoiceMemoPlaybackUpdate = @MainActor @Sendable () -> Void
+typealias VoiceMemoPlaybackDelivery = @Sendable (@escaping VoiceMemoPlaybackUpdate) -> Void
+
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
 // voice memos. One instance per EditorViewModel — its lifetime matches the
 // view model so AVAudioSession is torn down cleanly when the VM is released.
@@ -178,6 +181,9 @@ final class VoiceMemoService {
     private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
+    @ObservationIgnored private let makePlaybackPlayer: (URL) throws -> AVAudioPlayer
+    @ObservationIgnored fileprivate let deliverPlaybackUpdate: VoiceMemoPlaybackDelivery
+    @ObservationIgnored private let requestRecordingPermission: (@MainActor () async -> Bool)?
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
     /// The file a recorder is being started on, off the main thread; staging
@@ -197,9 +203,20 @@ final class VoiceMemoService {
 
     @ObservationIgnored let stagingRoot: URL
 
-    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared, stagingRoot: URL = RecordingFiles.recorderStagingRoot()) {
+    init(
+        sessionTransitions: VoiceMemoAudioSessionTransitions = .shared,
+        stagingRoot: URL = RecordingFiles.recorderStagingRoot(),
+        makePlaybackPlayer: @escaping (URL) throws -> AVAudioPlayer = { try AVAudioPlayer(contentsOf: $0) },
+        deliverPlaybackUpdate: @escaping VoiceMemoPlaybackDelivery = { update in
+            Task { @MainActor in update() }
+        },
+        requestRecordingPermission: (@MainActor () async -> Bool)? = nil
+    ) {
         self.sessionTransitions = sessionTransitions
         self.stagingRoot = stagingRoot
+        self.makePlaybackPlayer = makePlaybackPlayer
+        self.deliverPlaybackUpdate = deliverPlaybackUpdate
+        self.requestRecordingPermission = requestRecordingPermission
         refreshPendingTakes()
     }
 
@@ -472,6 +489,7 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
+        if let requestRecordingPermission { return await requestRecordingPermission() }
         if #available(iOS 17.0, macOS 14.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
@@ -685,6 +703,7 @@ final class VoiceMemoService {
                 isPlaying = true
             } else {
                 stopPlayback()
+                lastError = "Couldn't resume playback. Try again."
             }
             return
         }
@@ -707,8 +726,8 @@ final class VoiceMemoService {
         pendingPlayURL = url
         playingIdentity = identity
         let playbackRevision = audioIntentRevision
-        sessionTransitions.activatePlayback { [weak self] result in
-            Task { @MainActor [weak self] in
+        sessionTransitions.activatePlayback { [weak self, deliverPlaybackUpdate] result in
+            deliverPlaybackUpdate { [weak self] in
                 self?.finishPlaybackActivation(result, url: url, revision: playbackRevision)
             }
         }
@@ -721,19 +740,23 @@ final class VoiceMemoService {
         do {
             try result.get()
         } catch {
-            pendingPlayURL = nil
+            failToStartPlayback()
             return
         }
-        pendingPlayURL = nil
         // Checked again as the player starts: removed meanwhile, it does not play.
-        guard playbackAllowed?(url) ?? true, playbackIdentity?(url) == playingIdentity else {
-            playingIdentity = nil
-            sessionTransitions.deactivate()
+        if playbackAllowed?(url) == false {
+            stopPlayback()
+            lastError = "This recording was deleted and can't be played."
+            return
+        }
+        guard playbackIdentity?(url) == playingIdentity else {
+            stopPlayback()
+            lastError = "This recording could not be read, so it can't be played."
             return
         }
 
-        guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            sessionTransitions.deactivate()
+        guard let player = try? makePlaybackPlayer(url) else {
+            failToStartPlayback()
             return
         }
 
@@ -741,13 +764,19 @@ final class VoiceMemoService {
         delegateForwarder = forwarder
         player.delegate = forwarder
         guard player.play() else {
-            sessionTransitions.deactivate()
+            failToStartPlayback()
             return
         }
 
+        pendingPlayURL = nil
         audioPlayer = player
         activePlayURL = url
         isPlaying = true
+    }
+
+    private func failToStartPlayback() {
+        stopPlayback()
+        lastError = "Couldn't start playback. Try again."
     }
 
     /// Stops playback (or a pending start) of any of these recordings, by id, or of
@@ -778,6 +807,10 @@ final class VoiceMemoService {
 
     func stopPlayback() {
         audioIntentRevision &+= 1
+        clearPlayback()
+    }
+
+    private func clearPlayback() {
         playingIdentity = nil
         let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
@@ -952,9 +985,15 @@ final class VoiceMemoService {
         }
     }
 
-    fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
+    fileprivate func playbackDidFinish(_ player: AVAudioPlayer, successfully: Bool) {
         guard audioPlayer === player else { return }
-        stopPlayback()
+        if successfully {
+            stopPlayback()
+        } else {
+            // The failed player may predate a Record request awaiting permission.
+            clearPlayback()
+            lastError = "Couldn't finish playing this recording. Try again."
+        }
     }
 
     // MARK: - Cleanup
@@ -984,8 +1023,16 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            self?.service?.playbackDidFinish(player)
+        forwardPlaybackCompletion(player, successfully: flag)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        forwardPlaybackCompletion(player, successfully: false)
+    }
+
+    private func forwardPlaybackCompletion(_ player: AVAudioPlayer, successfully: Bool) {
+        service?.deliverPlaybackUpdate { [weak self] in
+            self?.service?.playbackDidFinish(player, successfully: successfully)
         }
     }
 }

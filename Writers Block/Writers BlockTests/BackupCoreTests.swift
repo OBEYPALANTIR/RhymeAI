@@ -3421,6 +3421,59 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test(arguments: [false, true], [false, true])
+    func importKeepsBothVersionsWhenTheIncomingLyricsWouldReplaceSavedWords(useZip: Bool, localIsNewer: Bool) async throws {
+        let source = try await makeHarness()
+        let target = try await makeHarness()
+        let older = Date(timeIntervalSince1970: 1_700_000_000)
+        let newer = older.addingTimeInterval(60)
+        source.context.insert(SongProject(id: "song-a", title: "Remote", lyrics: "incoming words", theme: "loud",
+                                          updatedAt: localIsNewer ? older : newer))
+        target.context.insert(SongProject(id: "song-a", title: "Local", lyrics: "saved words", theme: "calm",
+                                          updatedAt: localIsNewer ? newer : older))
+        try source.context.save()
+        try target.context.save()
+        let zip = try source.service.exportArchive(modelContext: source.context, now: newer).data
+        let data = useZip ? zip : try #require(BackupArchive.unzip(zip)["manifest.json"])
+
+        try await target.service.importArchive(data, modelContext: target.context)
+        try await target.service.importArchive(data, modelContext: target.context)
+
+        let songs = try target.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.first { $0.id == "song-a" }?.lyrics == (localIsNewer ? "saved words" : "incoming words"))
+        let copies = songs.filter { $0.id != "song-a" }
+        #expect(copies.map(\.lyrics) == (localIsNewer ? [] : ["saved words"]))
+        #expect(copies.map(\.title) == (localIsNewer ? [] : ["Local (before restore)"]))
+    }
+
+    @MainActor
+    @Test(arguments: [false, true], [false, true])
+    func importKeepsDisplacedLocalLyricsAcrossTrashTransitions(localInTrash: Bool, winnerInTrash: Bool) async throws {
+        let harness = try await makeHarness()
+        let older = Date(timeIntervalSince1970: 1_700_000_000)
+        let newer = older.addingTimeInterval(60)
+        if localInTrash {
+            harness.context.insert(TrashedSongProject(id: "song-a", title: "Local Trash", lyrics: "saved words", theme: "calm",
+                                                     updatedAt: older, deletedAt: older))
+        } else {
+            harness.context.insert(SongProject(id: "song-a", title: "Local", lyrics: "saved words", theme: "calm", updatedAt: older))
+        }
+        try harness.context.save()
+        let winner = winnerInTrash
+            ? SyncBlob(trashed: [SyncTrashedSongProject(id: "song-a", title: "Remote", lyrics: "incoming words", theme: "",
+                                                      updatedAt: newer, deletedAt: newer, deleteAfter: newer.addingTimeInterval(trashRetentionInterval))])
+            : SyncBlob(projects: [SyncSongProject(id: "song-a", title: "Remote", lyrics: "incoming words", theme: "", updatedAt: newer)])
+
+        try await harness.service.importArchive(winner.encodedManifest(), modelContext: harness.context)
+
+        let active = try harness.context.fetch(FetchDescriptor<SongProject>())
+        let trashed = try harness.context.fetch(FetchDescriptor<TrashedSongProject>())
+        #expect(active.filter { $0.id == "song-a" }.map(\.lyrics) == (winnerInTrash ? [] : ["incoming words"]))
+        #expect(trashed.filter { $0.id == "song-a" }.map(\.lyrics) == (winnerInTrash ? ["incoming words"] : []))
+        #expect(active.filter { $0.id != "song-a" }.map(\.lyrics) == ["saved words"])
+    }
+
+    @MainActor
     @Test func importRefusesADamagedManifestAndMergesABareOne() async throws {
         let harness = try await makeHarness()
         harness.context.insert(SongProject(id: "local", title: "Local"))
@@ -3490,22 +3543,23 @@ struct BackupCoreTests {
         #expect(try harness.context.fetchCount(FetchDescriptor<SyncRecordingDeletion>()) == 0)
     }
 
-    /// One active and one Trash row with one id never trapped; the merge still picks one.
-    /// The expected result is what main gives for this seed.
+    /// The active row wins the original id. Only distinct lyrics in the Trash row need a copy.
     @MainActor
-    @Test func importStillMergesAnActiveAndATrashedSongSharingAnId() async throws {
+    @Test(arguments: [false, true])
+    func importStillMergesAnActiveAndATrashedSongSharingAnId(sameLyrics: Bool) async throws {
         let harness = try await makeHarness()
         harness.context.insert(SongProject(id: "same", title: "Active", lyrics: "active words", updatedAt: Date(timeIntervalSince1970: 1_700_002_000)))
-        harness.context.insert(TrashedSongProject(id: "same", title: "Trashed", lyrics: "trashed words", theme: "",
+        harness.context.insert(TrashedSongProject(id: "same", title: "Trashed", lyrics: sameLyrics ? "active words" : "trashed words", theme: "",
                                                   updatedAt: Date(timeIntervalSince1970: 1_700_000_000), deletedAt: Date(timeIntervalSince1970: 1_700_001_000)))
         try harness.context.save()
 
         try await harness.service.importArchive(try Self.incomingArchive(), modelContext: harness.context)
 
         // The active row was edited after the Trash row was deleted, so it wins.
-        let active = try harness.context.fetch(FetchDescriptor<SongProject>()).sorted { $0.id < $1.id }
-        #expect(active.map(\.id) == ["incoming", "same"])
-        #expect(active.last?.lyrics == "active words")
+        let active = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(active.first { $0.id == "same" }?.lyrics == "active words")
+        #expect(active.first { $0.id == "incoming" }?.lyrics == "x")
+        #expect(active.filter { $0.id != "same" && $0.id != "incoming" }.map(\.lyrics) == (sameLyrics ? [] : ["trashed words"]))
         #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
     }
 
@@ -3697,6 +3751,187 @@ struct BackupCoreTests {
     }
 
     @MainActor
+    @Test func restoreKeepsTheDisplacedSavedLyricsInTheSameCommit() async throws {
+        let harness = try await makeHarness()
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let local = SongProject(id: "song-a", title: "Local", lyrics: "saved line", theme: "calm", updatedAt: savedAt)
+        harness.context.insert(local)
+        try harness.context.save()
+        let remote = SyncBlob(projects: [
+            SyncSongProject(id: local.id, title: "Remote", lyrics: "remote line", theme: "loud",
+                            updatedAt: savedAt.addingTimeInterval(60))
+        ])
+        harness.drive.seed(name: SyncBlob.driveFileName, content: try remote.encodedManifest())
+
+        try await harness.service.restoreNow(modelContext: harness.context)
+
+        let reopened = try await harness.reopened()
+        let songs = try reopened.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.first { $0.id == local.id }?.lyrics == "remote line")
+        let copies = songs.filter { $0.id != local.id }
+        #expect(copies.map(\.lyrics) == ["saved line"])
+        #expect(copies.map(\.theme) == ["calm"])
+        let firstManifest = try SyncBlob.decodeManifest(try #require(harness.drive.content(named: SyncBlob.driveFileName)))
+        #expect(firstManifest.projects.map(\.lyrics) == ["remote line"])
+
+        try await reopened.service.restoreNow(modelContext: reopened.context)
+        #expect(try reopened.context.fetch(FetchDescriptor<SongProject>()).filter { $0.id != local.id }.map(\.id) == copies.map(\.id))
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func aTimedDeletionKeepsDisplacedWordsBesideAnExactRepairedRecovery(editedSongInTrash: Bool) async throws {
+        let harness = try await makeHarness()
+        let earlier = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = SongProject(id: "same", title: "Active", lyrics: editedSongInTrash ? "repaired words" : "real words",
+                                  theme: "", updatedAt: earlier)
+        let trash = TrashedSongProject(id: "same", title: "Trash", lyrics: editedSongInTrash ? "real words" : "repaired words",
+                                       theme: "", updatedAt: earlier, deletedAt: earlier.addingTimeInterval(60))
+        project.precedenceRepaired = editedSongInTrash
+        trash.trashedAtRepaired = !editedSongInTrash
+        harness.context.insert(project)
+        harness.context.insert(trash)
+        try harness.context.save()
+        let time = earlier.addingTimeInterval(120).epochMilliseconds
+        let manifest = try SyncBlob(deletions: [SyncDeletion(projectId: "same", deletedAt: time)]).encodedManifest()
+        var committed: BackupApplyOutcome?
+
+        try await harness.service.importArchive(manifest, modelContext: harness.context) { committed = $0 }
+
+        let songs = try harness.context.fetch(FetchDescriptor<SongProject>())
+        let copy = try #require(songs.first)
+        #expect(songs.count == 1 && copy.id != "same" && copy.lyrics == "real words")
+        #expect(try harness.context.fetch(FetchDescriptor<TrashedSongProject>()).isEmpty)
+        #expect(try DeletionStore.all(in: harness.context).contains(SyncDeletion(projectId: "same", deletedAt: time)))
+        let kept = try SongRecoveryStore.all(memosRoot: harness.memosRoot)
+        #expect(kept.count == 1 && (kept.first?.project?.lyrics ?? kept.first?.trashed?.lyrics) == "repaired words")
+        #expect(committed?.copies.count == 2)
+        #expect(committed?.copies.contains { $0.destination == .repairedSongRecovery } == true)
+        #expect(committed?.copies.contains { $0.destination == .song(copy.id) } == true)
+    }
+
+    @MainActor
+    @Test func anUndatedDeletionHoldLeavesLocalWordsInPlaceWithoutMakingACopy() async throws {
+        let harness = try await makeHarness()
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        harness.context.insert(SongProject(id: "song-a", title: "Local", lyrics: "saved words", theme: "", updatedAt: savedAt))
+        harness.context.insert(SyncDeletionRecord(projectId: "song-a", deletedAt: 0))
+        try harness.context.save()
+        let remote = SyncSongProject(id: "song-a", title: "Remote", lyrics: "newer words", theme: "", updatedAt: savedAt.addingTimeInterval(60))
+        let manifest = try SyncBlob(projects: [remote]).encodedManifest()
+        var committed: BackupApplyOutcome?
+
+        try await harness.service.importArchive(manifest, modelContext: harness.context) { committed = $0 }
+
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["saved words"])
+        #expect(committed?.copies.isEmpty == true)
+        #expect(try DeletionStore.undated(in: harness.context).map(\.projectId) == ["song-a"])
+    }
+
+    /// A tombstone learned earlier stays stored after the song is revived. Words
+    /// written later on a slower clock are kept when that deletion arrives again.
+    @MainActor
+    @Test func aReimportedDeletionKeepsWordsWrittenAfterARevival() async throws {
+        let harness = try await makeHarness()
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let deletion = try SyncBlob(deletions: [SyncDeletion(projectId: "song-a", deletedAt: base.addingTimeInterval(300).epochMilliseconds)])
+            .encodedManifest()
+        try await harness.service.importArchive(deletion, modelContext: harness.context)
+        let revived = SyncSongProject(id: "song-a", title: "Revived", lyrics: "revived words", theme: "", updatedAt: base.addingTimeInterval(400))
+        try await harness.service.importArchive(try SyncBlob(projects: [revived]).encodedManifest(), modelContext: harness.context)
+        let song = try #require(harness.context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "song-a" })
+        #expect(try DeletionStore.all(in: harness.context).contains { $0.isSongTombstone && $0.projectId == "song-a" })
+        song.lyrics = "words written after the revival"
+        song.updatedAt = base.addingTimeInterval(250)
+        song.precedenceRepaired = false
+        try harness.context.save()
+
+        try await harness.service.importArchive(deletion, modelContext: harness.context)
+
+        let songs = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(!songs.contains { $0.id == "song-a" })
+        #expect(songs.map(\.lyrics) == ["words written after the revival"])
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func restoreOrImportReportsTheSavedCopyBeforeALaterRecordingFailure(useDrive: Bool) async throws {
+        let harness = try await makeHarness()
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let local = SongProject(id: "song-a", title: "Local", lyrics: "saved words", theme: "calm", updatedAt: savedAt)
+        harness.context.insert(local)
+        try harness.context.save()
+        let remote = SyncSongProject(id: local.id, title: "Remote", lyrics: "incoming words", theme: "", updatedAt: savedAt.addingTimeInterval(60))
+        let blob = SyncBlob(projects: [remote], recordings: [Self.lateTake.entry])
+        let manifest = try blob.encodedManifest()
+        let pending = BackupPendingDraft(sourceRowID: local.persistentModelID, title: local.title, lyrics: local.lyrics,
+                                         theme: local.theme, copyID: "reserved-draft")
+        var committed: BackupApplyOutcome?
+        if useDrive {
+            harness.drive.seed(name: SyncBlob.driveFileName, content: manifest)
+            harness.drive.seed(name: Self.lateTake.entry.driveName, content: Self.lateTake.audio)
+            harness.drive.afterManifestWrite = {
+                #expect(committed?.copies.map(\.destination) == [.song("reserved-draft")])
+                throw BackupError.network("Synthetic failure after apply")
+            }
+            await #expect(throws: BackupError.network("Synthetic failure after apply")) {
+                try await harness.service.restoreNow(modelContext: harness.context, pendingDraft: pending) { committed = $0 }
+            }
+        } else {
+            let archive = try BackupArchive.zip([
+                ("manifest.json", manifest),
+                ("recordings/song-a/late.m4a", Self.lateTake.audio)
+            ])
+            let staging = RecordingFiles.canonicalPath(RecordingFiles.stagingRoot(for: harness.memosRoot))
+            let memos = RecordingFiles.canonicalPath(harness.memosRoot)
+            let hook = RecordingFiles.BoundaryHooks.install { point, source, destination in
+                guard point == .beforeCheck, let destination,
+                      RecordingFiles.canonicalPath(source.deletingLastPathComponent()) == staging,
+                      RecordingFiles.canonicalPath(destination).hasPrefix(memos + "/") else { return }
+                throw BackupError.network("Synthetic failure after apply")
+            }
+            defer { RecordingFiles.BoundaryHooks.remove(hook) }
+            await #expect(throws: BackupError.network("Synthetic failure after apply")) {
+                try await harness.service.importArchive(archive, modelContext: harness.context, pendingDraft: pending) { committed = $0 }
+            }
+        }
+        let copy = try #require(committed?.copies.first)
+        #expect(committed?.copies.count == 1)
+        #expect(copy.sourceRowID == local.persistentModelID && copy.source.project?.title == "Local")
+        #expect(copy.source.project?.lyrics == "saved words" && copy.source.project?.theme == "calm")
+        #expect(copy.destination == .song("reserved-draft"))
+        let reopened = try await harness.reopened()
+        let songs = try reopened.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.first { $0.id == "song-a" }?.lyrics == "incoming words")
+        #expect(songs.first { $0.id == "reserved-draft" }?.lyrics == "saved words")
+        #expect(songs.first { $0.id == "reserved-draft" }?.title == "Local")
+    }
+
+    @MainActor
+    @Test func aFailedLocalApplySaveRollsBackTheCopyAndTheMergeWithoutReportingCommit() async throws {
+        let harness = try await makeHarness()
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        harness.context.insert(SongProject(id: "song-a", title: "Local", lyrics: "saved words", theme: "", updatedAt: savedAt))
+        try harness.context.save()
+        let remote = SyncSongProject(id: "song-a", title: "Remote", lyrics: "newer words", theme: "", updatedAt: savedAt.addingTimeInterval(60))
+        let manifest = try SyncBlob(projects: [remote]).encodedManifest()
+        harness.service.saveAppliedChanges = { context in
+            #expect(try context.fetch(FetchDescriptor<SongProject>()).count == 2)
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+        var committed = false
+
+        await #expect(throws: CocoaError.self) {
+            try await harness.service.importArchive(manifest, modelContext: harness.context) { _ in committed = true }
+        }
+
+        #expect(!committed)
+        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["saved words"])
+        let reopened = try await harness.reopened()
+        #expect(try reopened.context.fetch(FetchDescriptor<SongProject>()).map(\.lyrics) == ["saved words"])
+    }
+
+    @MainActor
     @Test func restoreClearsSavingStateWhenAwaitedEditIsReverted() async throws {
         let harness = try await makeHarness()
         let project = SongProject(id: "open-song", title: "Local", lyrics: "saved line", theme: "calm")
@@ -3813,7 +4048,8 @@ struct BackupCoreTests {
         await viewModel.restoreBackupNow()
 
         #expect(!viewModel.cloudBackupLastResultIsError, "\(viewModel.cloudBackupStatusText)")
-        #expect(try harness.context.fetch(FetchDescriptor<SongProject>()).isEmpty)
+        let songs = try harness.context.fetch(FetchDescriptor<SongProject>())
+        #expect(songs.count == 1 && songs.first?.id != project.id && songs.first?.lyrics == "saved line")
         #expect(viewModel.currentProjectId == nil)
         #expect(viewModel.lyrics.isEmpty)
         #expect(viewModel.showWelcome)
@@ -4128,7 +4364,12 @@ struct BackupCoreTests {
         viewModel.modelContext = harness.context
         viewModel.loadProject(project)
         saveAttempts = 0
-        viewModel.lyrics = "pending local A"
+        // A draft typed after the initial flush still needs the editor's own
+        // save. The service can only commit the earlier stored words.
+        harness.drive.beforeManifestWrite = {
+            viewModel.lyrics = "pending local A"
+            viewModel.triggerAutoSave()
+        }
         let remote: SyncBlob
         if mode == "restoreTombstone" {
             remote = SyncBlob(deletions: [
@@ -4399,7 +4640,7 @@ struct BackupCoreTests {
     }
 
     @MainActor
-    private func makeHarness() async throws -> BackupHarness {
+    func makeHarness() async throws -> BackupHarness {
         try await makeHarness(oauthProvider: FakeOAuthProvider())
     }
 
@@ -4429,10 +4670,10 @@ struct BackupCoreTests {
 }
 
 @MainActor
-private struct BackupHarness {
+struct BackupHarness {
     let container: ModelContainer
     let drive: FakeDriveClient
-    let secrets: FakeBackupSecretStore
+    fileprivate let secrets: FakeBackupSecretStore
     let service: BackupService
     let memosRoot: URL
     let defaults: UserDefaults
@@ -4648,7 +4889,7 @@ private final class PagingURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated override func stopLoading() {}
 }
 
-private final class FakeDriveClient: DriveAppDataClient {
+final class FakeDriveClient: DriveAppDataClient {
     private struct StoredFile {
         var file: DriveAppDataFile
         var content: Data
