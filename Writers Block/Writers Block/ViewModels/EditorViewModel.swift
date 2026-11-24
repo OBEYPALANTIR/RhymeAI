@@ -463,10 +463,13 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
 
-    @Published var title: String = ""
+    @Published var title: String = "" {
+        didSet { if title != oldValue { versionRestorePending = false } }
+    }
     @Published var lyrics: String = "" {
         didSet {
             if lyrics != oldValue {
+                versionRestorePending = false
                 clearInsertionFeedback()
                 // A request answers the lyrics and cursor it was built from
                 // (Android cancels on text and selection changes too).
@@ -479,6 +482,7 @@ final class EditorViewModel: ObservableObject {
     @Published var theme: String = "" {
         didSet {
             guard theme != oldValue else { return }
+            versionRestorePending = false
             // The theme field stays editable while a request runs, so a theme edit
             // drops in-flight AI work and its results, as Android onThemeChanged does.
             cancelEditorAIWork()
@@ -654,22 +658,27 @@ final class EditorViewModel: ObservableObject {
 
     @Published var currentProjectId: String? {
         // Every other way the editor's song changes leaves it not loaded from a known row.
-        didSet { loadedProjectRow = nil }
+        didSet {
+            loadedProjectRow = nil
+            versionRestorePending = false
+        }
     }
     /// The stored row whose words the editor holds (loaded, created or last saved to), so two
     /// rows sharing one song id (a restore on two devices, then sync) are told apart.
     /// Read by the Mac sidebar.
     @Published private(set) var loadedProjectRow: PersistentIdentifier?
 
-    /// The editor now holds this stored row's words.
-    /// Assigns only what changed, so a save that keeps the same row publishes nothing.
-    private func bindEditor(to project: SongProject) {
+    /// Binds the editor to a stored row. Assigns only changed IDs, so saving the same row publishes nothing.
+    private func bindEditor(to project: SongProject, editorWords: OpenDraft? = nil) {
+        versionRestorePending = false
         if currentProjectId != project.id { currentProjectId = project.id }
         if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
-        loadedProjectWords = OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+        loadedProjectWords = editorWords ?? OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
     }
-    /// The bound row's words when it was bound, to tell edits apart once that row is gone.
+    /// The editor's baseline for the bound row, used to distinguish edits from stored changes.
     private var loadedProjectWords: OpenDraft?
+    /// Retry the whole selected version until it is saved, edited, or the editor changes songs.
+    private var versionRestorePending = false
 
     /// The stored row the open song's words belong to: the bound one; else the first with the
     /// song's id when none is bound, or when `adoptingAnother` (a restore reconcile, which reads
@@ -2554,7 +2563,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't create a song for this recording."
             return nil
         }
-        bindEditor(to: project)
+        bindEditor(to: project, editorWords: rawEditorWords)
         showWelcome = false
         return project.id
     }
@@ -2605,7 +2614,7 @@ final class EditorViewModel: ObservableObject {
     /// An emptied editor has nothing to save, unless it holds a stored song whose row a lookup
     /// does not find: erasing that song is a refused edit, which Close and Quit must see.
     private var emptiedDraftNeedsNoSave: Bool {
-        guard title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
+        guard !versionRestorePending, title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
         guard let id = currentProjectId, let context = modelContext else { return true }
         return (try? storedProject(id: id, in: context, adoptingAnother: false)) != nil
     }
@@ -2614,12 +2623,11 @@ final class EditorViewModel: ObservableObject {
     /// row is confirmed gone and it holds that row's words unchanged, so there is nothing to keep.
     /// A failed lookup proves nothing. Saves also read it, only to report such a refusal as idle.
     private func openRowVanishedUnedited() -> Bool {
-        guard activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
+        guard !versionRestorePending, activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
               let words = loadedProjectWords, let context = modelContext,
               let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
               !rows.contains(where: { $0.persistentModelID == row }) else { return false }
-        let title = words.title.isEmpty ? Self.untitledProjectTitle : words.title
-        return OpenDraft(title: title, lyrics: words.lyrics, theme: words.theme) == openDraft
+        return words == rawEditorWords
     }
 
     /// A backup or restore holds the library; saves wait for it to finish and the
@@ -2656,6 +2664,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
+        let draft = rawEditorWords
         var createdProjectID: String?
         let saved: SongProject
         do {
@@ -2671,10 +2680,16 @@ final class EditorViewModel: ObservableObject {
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
                 }
-                if project.title != normalizedProjectTitle() || project.lyrics != lyrics || project.theme != theme {
-                    project.title = normalizedProjectTitle()
-                    project.lyrics = lyrics
-                    project.theme = theme
+                let baseline = loadedProjectRow == project.persistentModelID ? loadedProjectWords : nil
+                let savedTitle = versionRestorePending ? draft.title : normalizedProjectTitle()
+                let writeTitle = (versionRestorePending || draft.title != baseline?.title) && savedTitle != project.title
+                let writeLyrics = (versionRestorePending || draft.lyrics != baseline?.lyrics) && draft.lyrics != project.lyrics
+                let writeTheme = (versionRestorePending || draft.theme != baseline?.theme) && draft.theme != project.theme
+                if writeTitle { project.title = savedTitle }
+                if writeLyrics { project.lyrics = draft.lyrics }
+                if writeTheme { project.theme = draft.theme }
+                // Even when a peer already wrote the same words, a local edit counts against a tombstone.
+                if writeTitle || writeLyrics || writeTheme || (baseline != nil && baseline != draft) {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
@@ -2687,8 +2702,8 @@ final class EditorViewModel: ObservableObject {
                 saved = project
             }
             try saveModelContext(context)
-            // After the save, so a new row's identity is its stored one.
-            bindEditor(to: saved)
+            // Keep the editor's baseline when the row also contains changes it has not seen.
+            bindEditor(to: saved, editorWords: draft)
             if createdProjectID != nil {
                 discardSnapshot(pendingRecordingRecovery)
                 pendingRecordingRecovery = nil
@@ -2800,6 +2815,7 @@ final class EditorViewModel: ObservableObject {
         applyAtomicLyricsEdit(text: version.lyrics, cursorPosition: 0)
         editorScrollY = 0
         positionRestoreID = UUID()
+        versionRestorePending = true
         flushCurrentDraft()
     }
 
@@ -3556,6 +3572,10 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    private var rawEditorWords: OpenDraft {
+        OpenDraft(title: title, lyrics: lyrics, theme: theme)
+    }
+
     private var openDraft: OpenDraft {
         OpenDraft(title: normalizedProjectTitle(), lyrics: lyrics, theme: theme)
     }
@@ -3653,7 +3673,7 @@ final class EditorViewModel: ObservableObject {
                 updateDraftRecoveryCopy(committedCopy: committed)
                 deferDraftRecoveryCopy()
                 operation.separateDraftID = UUID().uuidString
-                bindEditor(to: committed)
+                bindEditor(to: committed, editorWords: rawEditorWords)
                 operation.currentBaseline = openDraft
                 operation.currentHadPendingEdit = false
                 operation.recordingProjectId = committed.id
@@ -4462,7 +4482,7 @@ final class EditorViewModel: ObservableObject {
             // Edits go into the row they were made on; if that one is gone they are recovered separately.
             let originalKept = boundRow != nil && stored?.0.persistentModelID == boundRow
             // Every branch below leaves the editor with this row's words, or a new row's.
-            if let stored { bindEditor(to: stored.0) }
+            if let stored { bindEditor(to: stored.0, editorWords: stored.1 == draft ? rawEditorWords : nil) }
             if edited {
                 if originalKept, let stored, stored.1 == draft {
                     committedRecovery = stored.0
@@ -4485,7 +4505,7 @@ final class EditorViewModel: ObservableObject {
                     }
                     committedRecovery = stored.0
                     if attempt != nil { _ = try parkCommittedDraft(stored.0) }
-                    bindEditor(to: stored.0)
+                    bindEditor(to: stored.0, editorWords: rawEditorWords)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
@@ -4494,8 +4514,8 @@ final class EditorViewModel: ObservableObject {
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()
-                bindEditor(to: recovered)
                 title = recovered.title
+                bindEditor(to: recovered, editorWords: rawEditorWords)
                 saveStatus = .saved
                 showWelcome = false
                 return true
@@ -4526,7 +4546,7 @@ final class EditorViewModel: ObservableObject {
             if let committedRecovery {
                 // The text already belongs to this song. Keep the audio recovery file
                 // separate from ordinary saves so they cannot discard the retry.
-                bindEditor(to: committedRecovery)
+                bindEditor(to: committedRecovery, editorWords: rawEditorWords)
                 updateDraftRecoveryCopy(committedCopy: committedRecovery)
                 deferDraftRecoveryCopy()
                 operation.recordingSnapshot = nil
