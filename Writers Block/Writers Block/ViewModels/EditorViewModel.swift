@@ -2367,7 +2367,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't create a song for this recording."
             return nil
         }
-        bindEditor(to: project)
+        bindEditor(to: project, editorWords: rawEditorWords)
         showWelcome = false
         return project.id
     }
@@ -2431,8 +2431,7 @@ final class EditorViewModel: ObservableObject {
               let words = loadedProjectWords, let context = modelContext,
               let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
               !rows.contains(where: { $0.persistentModelID == row }) else { return false }
-        let title = words.title.isEmpty ? Self.untitledProjectTitle : words.title
-        return OpenDraft(title: title, lyrics: words.lyrics, theme: words.theme) == openDraft
+        return words == rawEditorWords
     }
 
     /// A backup or restore holds the library; saves wait for it to finish and the
@@ -2453,15 +2452,15 @@ final class EditorViewModel: ObservableObject {
     }
 
     @discardableResult
-    func flushCurrentDraft(checkpoint: Bool = false) -> Bool {
+    func flushCurrentDraft(checkpoint: Bool = false, restoringVersion: Bool = false) -> Bool {
         guard activeCloudEditorOperation == nil else { return false }
         autoSaveTask?.cancel()
         positionSaveTask?.cancel()
         guard !showWelcome || currentProjectId != nil else { return true }
-        return persistCurrentDraft(checkpoint: checkpoint)
+        return persistCurrentDraft(checkpoint: checkpoint, restoringVersion: restoringVersion)
     }
 
-    private func persistCurrentDraft(checkpoint: Bool) -> Bool {
+    private func persistCurrentDraft(checkpoint: Bool, restoringVersion: Bool = false) -> Bool {
         guard activeCloudEditorOperation == nil else { return false }
         guard currentProjectId != nil || !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else { return true }
         guard let context = modelContext else {
@@ -2469,7 +2468,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
-        let draft = openDraft
+        let draft = rawEditorWords
         var createdProjectID: String?
         let saved: SongProject
         do {
@@ -2486,14 +2485,15 @@ final class EditorViewModel: ObservableObject {
                     return false
                 }
                 let baseline = loadedProjectRow == project.persistentModelID ? loadedProjectWords : nil
-                let baselineTitle = baseline?.title == "" ? Self.untitledProjectTitle : baseline?.title
-                let writeTitle = draft.title != baselineTitle && draft.title != project.title
-                let writeLyrics = draft.lyrics != baseline?.lyrics && draft.lyrics != project.lyrics
-                let writeTheme = draft.theme != baseline?.theme && draft.theme != project.theme
-                if writeTitle { project.title = draft.title }
+                let savedTitle = restoringVersion ? draft.title : normalizedProjectTitle()
+                let writeTitle = (restoringVersion || draft.title != baseline?.title) && savedTitle != project.title
+                let writeLyrics = (restoringVersion || draft.lyrics != baseline?.lyrics) && draft.lyrics != project.lyrics
+                let writeTheme = (restoringVersion || draft.theme != baseline?.theme) && draft.theme != project.theme
+                if writeTitle { project.title = savedTitle }
                 if writeLyrics { project.lyrics = draft.lyrics }
                 if writeTheme { project.theme = draft.theme }
-                if writeTitle || writeLyrics || writeTheme {
+                // Even when a peer already wrote the same words, a local edit counts against a tombstone.
+                if writeTitle || writeLyrics || writeTheme || (baseline != nil && baseline != draft) {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
@@ -2619,7 +2619,7 @@ final class EditorViewModel: ObservableObject {
         applyAtomicLyricsEdit(text: version.lyrics, cursorPosition: 0)
         editorScrollY = 0
         positionRestoreID = UUID()
-        flushCurrentDraft()
+        flushCurrentDraft(restoringVersion: true)
     }
 
     private func normalizedProjectTitle() -> String {
@@ -3347,6 +3347,10 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    private var rawEditorWords: OpenDraft {
+        OpenDraft(title: title, lyrics: lyrics, theme: theme)
+    }
+
     private var openDraft: OpenDraft {
         OpenDraft(title: normalizedProjectTitle(), lyrics: lyrics, theme: theme)
     }
@@ -3778,7 +3782,7 @@ final class EditorViewModel: ObservableObject {
             // Edits go into the row they were made on; if that one is gone they are recovered separately.
             let originalKept = boundRow != nil && stored?.0.persistentModelID == boundRow
             // Every branch below leaves the editor with this row's words, or a new row's.
-            if let stored { bindEditor(to: stored.0) }
+            if let stored { bindEditor(to: stored.0, editorWords: stored.1 == draft ? rawEditorWords : nil) }
             if edited {
                 if originalKept, stored?.1 == draft {
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
@@ -3791,7 +3795,7 @@ final class EditorViewModel: ObservableObject {
                     stored.0.updatedAt = Date()
                     stored.0.precedenceRepaired = false
                     try saveModelContext(context)
-                    bindEditor(to: stored.0)
+                    bindEditor(to: stored.0, editorWords: rawEditorWords)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
@@ -3808,7 +3812,7 @@ final class EditorViewModel: ObservableObject {
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()
-                bindEditor(to: recovered)
+                bindEditor(to: recovered, editorWords: rawEditorWords)
                 saveStatus = .saved
                 showWelcome = false
                 return true
