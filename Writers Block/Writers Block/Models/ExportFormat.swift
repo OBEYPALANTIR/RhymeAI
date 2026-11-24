@@ -65,6 +65,31 @@ struct SongProjectExport: Codable, Sendable {
     }
 }
 
+/// Owns the source ZIP until the system exporter finishes copying it.
+nonisolated final class BackupExportFile: Transferable {
+    let url: URL
+    var fileName: String { url.lastPathComponent }
+
+    init(now: Date) throws {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        url = directory.appendingPathComponent("WritersBlock-backup-\(formatter.string(from: now)).zip")
+    }
+
+    func removeTemporaryFiles() {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+    }
+
+    deinit { removeTemporaryFiles() }
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .zip) { SentTransferredFile($0.url) }
+    }
+}
+
 struct ExportDocument: FileDocument {
     static var readableContentTypes: [UTType] {
         var types: [UTType] = [.plainText, .json, .pdf, .zip]

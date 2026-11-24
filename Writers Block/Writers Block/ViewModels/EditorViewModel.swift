@@ -27,7 +27,7 @@ protocol CloudBackupServicing: AnyObject {
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
     func probeRevisions() async throws -> [BackupRevision]
     func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws
-    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> BackupExportFile
     func importArchive(_ data: Data, modelContext: ModelContext) async throws
     func importArchive(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws
 }
@@ -44,7 +44,7 @@ extension CloudBackupServicing {
     func remoteBackupSummary() async throws -> RemoteBackupSummary? { nil }
     func probeRevisions() async throws -> [BackupRevision] { [] }
     func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws {}
-    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> BackupExportFile {
         throw BackupError.notConfigured
     }
     func importArchive(_ data: Data, modelContext: ModelContext) async throws {}
@@ -3363,7 +3363,7 @@ final class EditorViewModel: ObservableObject {
     }
 
     /// The "Export all songs" zip, after saving the open song.
-    func exportAllSongs() -> (fileName: String, data: Data)? {
+    func exportAllSongs() -> BackupExportFile? {
         guard let backupService, let context = modelContext, !cloudBackupIsWorking, flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Export failed: save the open song and try again."

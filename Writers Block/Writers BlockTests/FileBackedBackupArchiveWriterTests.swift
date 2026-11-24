@@ -1,9 +1,96 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Writers_Block
 
+// Import and manifest assertions in BackupCoreTests consume the completed ZIP as Data.
+extension BackupExportFile {
+    var data: Data {
+        get throws { try withExtendedLifetime(self) { try Data(contentsOf: url) } }
+    }
+}
+
+extension BackupCoreTests {
+    @MainActor
+    @Test func exportChecksActualBodySizeWhenRecordingMetadataFits() async throws {
+        let harness = try await makeHarness()
+        let budget = BackupArchive.Budget(entryBytes: 8192, totalBytes: 32768)
+        harness.context.insert(SongProject(id: "song", title: "Session"))
+        let recording = Recording(projectId: "song", displayName: "take.m4a",
+                                  audio: Data(repeating: 1, count: budget.entryBytes + 1), recordedAt: Date())
+        recording.bytes = 1
+        harness.context.insert(recording)
+        try harness.context.save()
+        #expect(throws: BackupError.exportTooLarge) {
+            try harness.service.exportArchive(modelContext: harness.context, budget: budget)
+        }
+    }
+
+    @MainActor
+    @Test func exportStagesRecordingsWithinOneBodyOfWorkingMemory() async throws {
+        final class BodyLease: Sendable {}
+        let harness = try await makeHarness()
+        let project = SongProject(id: "song", title: "Session", lyrics: "words")
+        harness.context.insert(project)
+        let bodyBudget = 128 * 1024
+        for index in 1...3 {
+            let audio = Data(repeating: UInt8(index), count: bodyBudget)
+            harness.context.insert(Recording(id: "id-\(index)", projectId: project.id, displayName: "take-\(index).m4a",
+                                             audio: audio, recordedAt: Date(), sha256: RecordingBackupManifest.sha256Hex(audio)))
+        }
+        try harness.context.save()
+
+        weak var previousBody: BodyLease?
+        var bytesRead = 0
+        let export = try harness.service.exportArchive(modelContext: harness.context, budget: .production) { row in
+            #expect(previousBody == nil, "Reading another body would exceed the working-memory budget")
+            let lease = BodyLease()
+            previousBody = lease
+            let audio = row.audio
+            let buffer = UnsafeMutableRawPointer.allocate(byteCount: audio.count, alignment: 1)
+            audio.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self), count: audio.count)
+            bytesRead += audio.count
+            return Data(bytesNoCopy: buffer, count: audio.count, deallocator: .custom { [lease] pointer, _ in
+                withExtendedLifetime(lease) { pointer.deallocate() }
+            })
+        }
+        #expect(bytesRead == 3 * bodyBudget)
+        #expect(previousBody == nil)
+
+        let directory = export.url.deletingLastPathComponent()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [export.fileName])
+        let written = try Data(contentsOf: export.url)
+        // savedAt is assigned during export. Use those exact serialized manifest bytes.
+        let manifest = try #require(BackupArchive.unzip(written)["manifest.json"])
+        var members = [("manifest.json", manifest),
+                       ("songs/Session.txt", try LyricsExporter.data(for: project, format: .txt)),
+                       ("songs/song.json", try LyricsExporter.data(for: project, format: .json))]
+        for index in 1...3 {
+            members.append(("recordings/song/take-\(index).m4a", Data(repeating: UInt8(index), count: bodyBudget)))
+        }
+        #expect(try BackupArchive.zip(members) == written)
+        export.removeTemporaryFiles()
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+}
+
 struct FileBackedBackupArchiveWriterTests {
     private let mebibyte = 1024 * 1024
+
+    @Test func releasingAnExportRemovesOnlyItsOwnDirectory() throws {
+        let now = Date()
+        let other = try BackupExportFile(now: now)
+        let directory: URL
+        do {
+            let export = try BackupExportFile(now: now)
+            directory = export.url.deletingLastPathComponent()
+            #expect(export.fileName == other.fileName && export.url != other.url)
+            try Data([1]).write(to: export.url)
+            try FileManager.default.copyItem(at: export.url, to: other.url)
+        }
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+        #expect(try other.data == Data([1]))
+    }
 
     private func scratch() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("zip-writer-\(UUID().uuidString)", isDirectory: true)

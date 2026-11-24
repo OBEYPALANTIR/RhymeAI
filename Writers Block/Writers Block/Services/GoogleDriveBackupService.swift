@@ -2018,37 +2018,45 @@ final class BackupService {
 
     /// The "Export all songs" zip: `manifest.json` (v4), `songs/<title>.txt`,
     /// `songs/<id>.json` and `recordings/<projectId>/<fileName>`.
-    func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> (fileName: String, data: Data) {
+    func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> BackupExportFile {
         try exportArchive(modelContext: modelContext, now: now, budget: .production)
     }
 
     func exportArchive(
         modelContext: ModelContext, now: Date = Date(), budget: BackupArchive.Budget,
         readRecordingAudio: (Recording) -> Data = { $0.audio }
-    ) throws -> (fileName: String, data: Data) {
+    ) throws -> BackupExportFile {
         // Times are fixed and persisted before anything is resolved (T2.40); this
         // writes rows and settings only, never a recording file.
         try repairLocalPrecedence(modelContext)
         let blob = finalizedBlob(try SyncMerger.merge(local: fixingPrecedence(try makeSnapshot(modelContext: modelContext)), remote: SyncBlob(savedAt: .distantPast)))
-        var entries: [(path: String, data: Data)] = [("manifest.json", try blob.encodedManifest())]
-        var usedNames = Set<String>()
-        for project in try modelContext.fetch(FetchDescriptor<SongProject>()).sorted(by: { $0.id < $1.id }) {
-            var name = RecordingFiles.sanitizeName(project.title)
-            if name.isEmpty || name.hasPrefix(".") || usedNames.contains(name.lowercased()) { name = project.id }
-            usedNames.insert(name.lowercased())
-            entries.append(("songs/\(name).txt", try LyricsExporter.data(for: project, format: .txt)))
-            entries.append(("songs/\(project.id).json", try LyricsExporter.data(for: project, format: .json)))
-        }
-        let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
-        let names = RecordingBackupManifest.exportNames(blob.recordings)
+        let archive = try BackupExportFile(now: now)
+        let sources = archive.url.deletingLastPathComponent().appendingPathComponent("members", isDirectory: true)
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: false)
         var report = BackupReport()
-        let archive: Data
         do {
-            var total = 0
-            for entry in entries {
-                try budget.add(entry.data.count, to: &total)
+            var entries: [(path: String, source: URL)] = []
+            var stagedBytes = 0
+            func stage(_ path: String, _ data: Data) throws {
+                try budget.add(data.count, to: &stagedBytes)
+                let source = sources.appendingPathComponent(String(entries.count))
+                try data.write(to: source)
+                entries.append((path, source))
             }
+
+            try stage("manifest.json", blob.encodedManifest())
+            var usedNames = Set<String>()
+            for project in try modelContext.fetch(FetchDescriptor<SongProject>()).sorted(by: { $0.id < $1.id }) {
+                var name = RecordingFiles.sanitizeName(project.title)
+                if name.isEmpty || name.hasPrefix(".") || usedNames.contains(name.lowercased()) { name = project.id }
+                usedNames.insert(name.lowercased())
+                try stage("songs/\(name).txt", LyricsExporter.data(for: project, format: .txt))
+                try stage("songs/\(project.id).json", LyricsExporter.data(for: project, format: .json))
+            }
+            let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
+            let names = RecordingBackupManifest.exportNames(blob.recordings)
             // Plan the actual members from metadata before faulting in any audio.
+            var total = stagedBytes
             var audioEntries: [(path: String, row: Recording)] = []
             for entry in blob.recordings {
                 guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
@@ -2059,8 +2067,11 @@ final class BackupService {
                 try budget.add(bytes, to: &total)
                 audioEntries.append(("recordings/\(entry.projectId)/\(name)", row))
             }
-            entries.append(contentsOf: audioEntries.map { ($0.path, readRecordingAudio($0.row)) })
-            archive = try BackupArchive.zip(entries, budget: budget)
+            for entry in audioEntries {
+                try autoreleasepool { try stage(entry.path, readRecordingAudio(entry.row)) }
+            }
+            try BackupArchive.zip(entries, to: archive.url, budget: budget)
+            try FileManager.default.removeItem(at: sources)
         } catch BackupArchiveError.tooLarge {
             throw BackupError.exportTooLarge
         }
@@ -2073,10 +2084,7 @@ final class BackupService {
         report.takesWaitingNotExported = RecordingFiles.waitingTakeCount()
         report.oversizedRecordings = library.oversizedCount
         lastReport = report
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return ("WritersBlock-backup-\(formatter.string(from: now)).zip", archive)
+        return archive
     }
 
     /// Merges an exported zip, or a bare v4 `manifest.json`, into the library.
