@@ -51,6 +51,20 @@ class DevEvaluationTest(unittest.TestCase):
         self.assertEqual(audit["overlapping_lines"], 1)
         self.assertIn(str(pool / "data" / "train.jsonl"), [f["path"] for f in audit["files"]])
 
+    def test_overlap_audit_refuses_pools_whose_link_targets_are_missing(self):
+        songs = dev_songs()
+        unmounted = self.root / "unmounted"
+        pool = self.root / "2026-10-15/rhymeai-teacher-data-v4"
+        pool.mkdir(parents=True)
+        (pool / "data").symlink_to(unmounted / "data", target_is_directory=True)
+        with self.assertRaises(FileNotFoundError):
+            build.audit_overlap(songs)
+        (pool / "data").unlink()
+        (self.root / "2026-10-16").mkdir()
+        (self.root / "2026-10-16/rhymeai-teacher-data-v5").symlink_to(unmounted / "v5", target_is_directory=True)
+        with self.assertRaises(FileNotFoundError):
+            build.audit_overlap(songs)
+
     def test_dev_uses_supplied_songs_and_modes_cannot_mix(self):
         out = self.root / "dev"
         manifest = prepare_dev(out, self.source)

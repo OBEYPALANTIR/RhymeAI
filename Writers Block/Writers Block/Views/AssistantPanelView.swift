@@ -527,13 +527,24 @@ struct AssistantPanelView: View {
                     Button(recoveryAction == .openSettings ? "Open Settings" : recoveryAction == .setUpModel ? "Set up model" : "Retry") {
                         switch recoveryAction {
                         case .openSettings:
+                            #if os(macOS)
+                            // An API key or cloud provider: the Settings window opens on its tab.
+                            UserDefaults.standard.set("ai", forKey: "macSettingsTab")
+                            #endif
                             if let onOpenSettings {
                                 onOpenSettings()
                             } else {
                                 viewModel.showSettingsSheet = true
                             }
                         case .setUpModel:
+                            #if os(macOS)
+                            // As "Local model setup": the Mac's Settings tabs have no Done in a
+                            // sheet, so the Settings window opens on the tab for the model.
+                            UserDefaults.standard.set("ai", forKey: "macSettingsTab")
+                            viewModel.showSettingsSheet = true
+                            #else
                             showModelSetup = true
+                            #endif
                         case .retry:
                             viewModel.getSuggestions()
                         }

@@ -385,8 +385,9 @@ The overlap checker normalizes case, punctuation and apostrophes, then checks
 contiguous eight-word sequences **within each decoded line**. It scans every
 JSON/JSONL file and Python string pool recursively in every training pool
 (a superset of all contexts/train/val/test and package inputs), plus literals in
-`finetune/data/seed_songs.py` and `finetune/eval/cases.py`. Missing required
-directories are errors. It records every scanned file hash, the pool list and
+`finetune/data/seed_songs.py` and `finetune/eval/cases.py`. It follows
+symlinked directories. Missing required directories, and any pool or link whose
+target is missing (an unmounted volume), are errors. It records every scanned file hash, the pool list and
 all matching benchmark song/line IDs, including duplicates across files.
 
 - Required: `~/.agents/artifacts/2026-10-07/rhymeai-teacher-data-v3/` and

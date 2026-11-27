@@ -234,23 +234,28 @@ nonisolated enum GGUFModelSelection {
     ) -> URL? {
         guard let directory = modelsDirectory
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
-        // A catalog file whose size is not the catalog's is partial or stale, so it is not
-        // offered; one stat per catalog file, never a digest, as this runs on the main thread.
+        // A catalog file that is partial or a previous version left under the catalog name
+        // (the wrong size, or a marker written for exactly that file that records another
+        // SHA-256, such as the same-size E2B v2.1) is not offered, as Settings does not offer
+        // it: loading it would fail on every request. One stat per catalog file, never a
+        // digest, as this runs on the main thread.
         let listed = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         let files = listed.filter { name in
             guard let model = GGUFModelCatalog.descriptor(fileName: name) else { return true }
-            let path = directory.appendingPathComponent(name).path
-            let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value
-            return size == model.expectedBytes
+            guard let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(name).path) else {
+                return false
+            }
+            return !GGUFModelStorage.isStaleArtifact(identity, of: model, defaults: defaults)
         }
         guard let preferred = preferredFileName(
             in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
             totalRAMBytes: totalRAMBytes
         ) else { return nil }
         let current = currentFileName(defaults: defaults)
-        // A selected catalog file that is only the wrong size stays selected; the fallback is used meanwhile.
-        let selectedIsWrongSize = current.map { listed.contains($0) && !files.contains($0) } ?? false
-        if preferred != current, !selectedIsWrongSize { save(fileName: preferred, defaults: defaults) }
+        // A selected catalog file that is only unusable (the wrong size, or a previous version)
+        // stays selected; the fallback is used meanwhile.
+        let selectedIsUnusable = current.map { listed.contains($0) && !files.contains($0) } ?? false
+        if preferred != current, !selectedIsUnusable { save(fileName: preferred, defaults: defaults) }
         return directory.appendingPathComponent(preferred)
 
     }

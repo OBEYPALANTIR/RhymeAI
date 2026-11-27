@@ -260,6 +260,21 @@ struct Writers_BlockTests {
         }
     }
 
+    /// Double-tapping a contraction typed with Smart Punctuation offers the Word Inspector,
+    /// as it does on Android (`LyricTokenizer.APOSTROPHES`).
+    @MainActor
+    @Test func singleWordSelectionAcceptsCurlyApostrophes() {
+        let viewModel = EditorViewModel()
+        for spelling in ["don't", "don\u{2019}t", "don\u{02BC}t"] {
+            viewModel.lyrics = "\(spelling) stop"
+            viewModel.selectedRange = NSRange(location: 0, length: (spelling as NSString).length)
+            #expect(viewModel.singleWordSelection?.word == spelling, "\(spelling)")
+        }
+        viewModel.lyrics = "don\u{2019}t stop"
+        viewModel.selectedRange = NSRange(location: 0, length: ("don\u{2019}t stop" as NSString).length)
+        #expect(viewModel.singleWordSelection == nil)
+    }
+
     @Test func prosodyAnalyzerUsesCmuPhonesForRhymeKeys() {
         let roadKeys = ProsodyAnalyzer.rhymeKeys(for: "road", dictionary: Self.fixtureDictionary)
         let glowedKeys = ProsodyAnalyzer.rhymeKeys(for: "glowed", dictionary: Self.fixtureDictionary)
