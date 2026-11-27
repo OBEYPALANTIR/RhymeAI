@@ -6,13 +6,13 @@ The active targets are:
 
 - Android: `android/`
 - iOS: `Writers Block/`
-- Desktop: planned
+- macOS: `Writers Block/` (native target)
 
 The old React/Vite web variant has been removed. Shared pronunciation/prosody data stays in `shared/`, with generation tooling in `scripts/`, because Android and iOS both consume those assets.
 
 ## Local verification
 
-Run the default local gate from `/Users/tylermanring/Documents/RhymeAI`:
+Run the default local gate from the repository root:
 
 ```sh
 ./scripts/verify.sh
@@ -57,7 +57,7 @@ leave them unset to use the first two booted iOS simulators.
 
 ## Android
 
-Run from `/Users/tylermanring/Documents/RhymeAI/android`:
+Run from the `android/` directory:
 
 ```sh
 ./gradlew :app:assembleDebug
@@ -69,7 +69,8 @@ Run from `/Users/tylermanring/Documents/RhymeAI/android`:
 Google Drive backup uses manifest v4: a plain UTF-8 JSON file
 `rhymeai-manifest.json` in Drive's `appDataFolder` plus one raw `rec_<recordingId>`
 file per recording, with `id`, `projectId`, `fileName`, `sha256` and `bytes` in
-Drive `appProperties`. There is no passphrase. `manifestSha256` covers the
+Drive `appProperties` when they fit Drive's per-property limit. There is no
+passphrase. `manifestSha256` covers the
 canonical form of the manifest (keys sorted by code point, no whitespace, only
 `\"`, `\\`, `\n`, `\r`, `\t` and lowercase `\u00xx` escapes, integers only); a
 reader refuses a manifest whose hash does not match ("Backup file is damaged; it
@@ -81,8 +82,8 @@ recording entries carry their `id`, and recording tombstones a `recordingId`.
 `python3 scripts/generate-sync-manifest-v4-fixture.py` (stdlib only; `--check`
 fails when the file is stale), pins the canonical string and hash. iOS tests
 read a copy at `Writers Block/Writers BlockTests/sync-manifest-v4.json`;
-`BackupManifestTest` fails if that copy drifts and skips while it is absent.
-The iOS side of v4 is pending its companion PR.
+`BackupManifestTest` fails if that copy is missing or differs.
+The Apple app also implements v4 Drive backup, restore, and archive import and export.
 
 Recordings are identified by a stable UUID, not by file name: a rename changes
 only the name, a live and a Trash recording with the same name are two
@@ -148,7 +149,7 @@ resets on success. Just before writing, the manifest is checked for writes by
 another device and merged if there were; every write is then downloaded again
 and its hash compared; on a mismatch the backup merges again, keeping everything
 earlier attempts saw (up to three times, then "Backup conflict, will retry"), and
-duplicate manifests are merged and the extras removed after verification.
+duplicate manifests are merged on every run and kept, never removed.
 Restore merges both ways, uploads local-only items, then downloads recordings
 this device does not hold, applying everything in one transaction that resolves
 the incoming data with what is here at commit time: an edit saved meanwhile is
@@ -187,8 +188,9 @@ When permanent song deletion cannot remove every recording, Android keeps a
 pending cleanup record and reports that deletion is incomplete. It retries on
 the next app launch or Trash purge. Recordings for pending deletions are omitted
 from Drive uploads; Android Auto Backup retains the pending record with any
-remaining files so cleanup resumes after restore. Android does not erase
-previously uploaded recording bytes from Drive when a song is deleted.
+remaining files so cleanup resumes after restore. A verified Drive backup can
+remove raw audio whose id, hash and size match a recording covered by a
+tombstone, except when that recording's time was repaired.
 Native two-platform exchange of v4 has not been verified.
 
 The backup regressions run in `:app:testDebugUnitTest`:
@@ -197,13 +199,13 @@ The backup regressions run in `:app:testDebugUnitTest`:
 | --- | --- | --- |
 | V-1 | `BackupManifestTest.canonicalFormAndHashMatchTheSharedFixture`, `fixtureDecodesAndReEncodesByteForByte`, `canonicalEscapesOnlyTheContractCharactersAndSortsKeysByCodePoint` | Canonical JSON and `manifestSha256` match the shared fixture byte for byte. |
 | V-2 | `BackupManifestTest.hashMismatchIsRefused`, `newerVersionIsRefusedEvenWithAValidHash`; `BackupServiceTest.hashMismatchedManifestIsRefusedAndNeverOverwrittenOrMerged` | A damaged or newer manifest is neither merged nor overwritten. |
-| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawObjectWithTheSameDigestButWrongSizeIsReplacedWithTheVerifiedBytes`, `aRawObjectWithAnotherDigestOrNoneIsNeverOverwrittenAndIsReported`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, uploads each once, skips pending deletions, and leaves local data alone. |
+| V-3 | `BackupServiceTest.backupMergesIntoDriveWritesRawRecordingsAndLeavesThisDeviceAlone`, `pendingLocalDeletionIsNeverUploaded`, `aRawObjectWithTheSameDigestButAnotherLengthIsRefusedAndKept`, `aRawObjectWithAnotherDigestOrNoneIsNeverOverwrittenAndIsReported`, `backUpLeavesAnInterruptedRestoreAloneAndRestoreFinishesIt` | Backup writes v4 and raw recordings with `appProperties`, keeps conflicting raw objects, skips pending deletions, and leaves local data alone. |
 | V-4 | `BackupServiceTest.restoreMergesBothWaysAndDownloadsOnlyVerifiedMissingRecordings`, `restoreNeverReplacesALocalRecording`; `RecordingSyncTest.restoreCommitKeepsADestinationThatAppearedAfterPlanning`, `aFailedCommitKeepsEverythingAlreadyInPlace`, `recoveryRemovesOnlyTheStagingFolder`, `importPublishesWithItsRecordAndNeverReplacesAnotherRecording` | Restore merges both ways; hash-mismatched downloads are dropped; local files are never replaced, even ones that appear mid-restore. |
-| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesThenDeletesTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `anUnavailableOlderRecordingNeverStandsInForADeletedLocalOne`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingThatCannotMoveKeepsTheOlderBackup` | Migration merges into Drive only and removes the old backup only after every song and recording is verified. |
+| V-5 | `BackupServiceTest.migrationDecisionTable`, `storedPassphraseMigratesIntoDriveOnlyVerifiesAndKeepsTheOlderBackup`, `anUnmovableOlderRecordingKeepsTheOlderBackupAndThePassphrase`, `anUnavailableOlderRecordingNeverStandsInForADeletedLocalOne`, `aDeletedOlderRecordingIsPreservedRawBeforeTheOlderBackupIsRemoved`, `aDeletedOlderRecordingNeedsNoRawCopyAndTheOlderBackupIsKept` | Migration merges into Drive only and keeps the old encrypted backup. The deleted-recording test verifies that migration succeeds, the tombstoned raw copy is cleaned up, and the encrypted original remains. |
 | V-6 | `BackupServiceTest.independentIosShapedVectorsMigrateFromEveryEnvelopeVersion` | iOS-shaped RAI1, RAI2 and RAI3 backups migrate with their tombstones. |
 | V-7 | `BackupSchedulerTest` (all), `BackupScheduleTest.backoffDoublesFromOneMinuteAndCapsAtOneHour` | Debounce, coalescing, backoff, leave-app interval and consent retry. |
 | V-8 | `BackupArchiveTest.exportThenImportYieldsTheSameManifest`, `importMergesIntoTheLibraryAndAddsOnlyMissingRecordings`, `archivesWithUnsafeOrForeignEntriesAreRejected` | Export → Import yields the same manifest and merges; unsafe archives are refused. |
-| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification` | Lost-update protection and duplicate-manifest reconciliation. |
+| V-9 | `BackupServiceTest.writerThatLandsBetweenOurWriteAndReadBackIsMergedNotLost`, `contentSeenInAnEarlierAttemptSurvivesAStaleWriterInBetween`, `aConflictingReadBackIsKeptEvenWhenAnotherWriterReplacesItBeforeTheRetry`, `aRemoteTombstoneThatArrivesDuringUploadsIsMergedBeforeTheFinalWrite`, `aStaleSongTombstoneSeenOnRetryStillDeletesTheOldTakeButNotTheNewerSong`, `aWriterThatNeverStopsIsReportedAsAConflict`, `duplicateManifestsAreMergedAndKept`, `aDuplicateWrittenByAnotherDeviceAfterOurReadBackIsKeptAndItsWordsGathered` | Lost-update protection and duplicate-manifest reconciliation. |
 | V-10 | `RealDriveClientTest` | Drive listing follows every page and keeps `appProperties`; revoke posts the token. |
 | V-11 | `RecordingIdentityTest` (all); `RecordingImportInstrumentedTest.reimportingIdenticalAudioAfterDeletionIsANewRecordingAndOldTombstoneStays`, `metadataWriteFailuresFailImportRenameAndTrashRestoreWithoutMovingFiles` | Recording ids, staging, live/Trash name collisions, metadata-before-publication with failure injection, and next-launch reconciliation. |
 | V-12 | `BackupManifestTest.millisecondPrecisionSurvivesTheRoundTripSoAnOlderTombstoneCannotWin` | Millisecond precedence times survive the manifest. |
@@ -425,7 +427,7 @@ To verify CloudKit readiness before the live two-device sync matrix:
 ./scripts/ios-cloudkit-readiness.sh
 ```
 
-Then use `/Users/tylermanring/Documents/RhymeAI/docs/CLOUDKIT_SYNC_CHECKLIST.md`
+Then use `docs/CLOUDKIT_SYNC_CHECKLIST.md`
 for the iCloud-signed-in simulator/device matrix.
 
 To check Apple Foundation Models availability on a booted disposable iPhone simulator:

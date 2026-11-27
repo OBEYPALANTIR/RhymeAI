@@ -643,8 +643,8 @@ final class GGUFDownloadManager: NSObject, ObservableObject {
                 self.activeDownloadID = nil
                 self.isPausing = false
                 self.statusMessage = saved
-                    ? "Download paused. Tap Download to resume."
-                    : "Download stopped. Tap Download to restart."
+                    ? "Download paused. \(PlatformWording.tap) Download to resume."
+                    : "Download stopped. \(PlatformWording.tap) Download to restart."
             }
         }
     }

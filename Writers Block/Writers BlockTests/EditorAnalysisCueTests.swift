@@ -15,39 +15,94 @@ struct EditorAnalysisCueTests {
     @Test @MainActor func headerCountsFollowEachDeletionWithoutAnEmptyState() async throws {
         let viewModel = EditorViewModel()
         viewModel.newProject()
-        let debounceWaits = HookBox(0)
+        // Each debounce reports the edit it was started for, and only while it is
+        // still that edit's (a cancelled one never reports), then holds.
+        let editUnderTest = HookBox("")
+        let (debounceEntries, debounceEntered) = AsyncStream.makeStream(of: String.self)
         viewModel.derivedStateDebounce = { _ in
-            debounceWaits.value += 1
+            try Task.checkCancellation()
+            debounceEntered.yield(editUnderTest.value)
             try await Task.sleep(for: .seconds(3_600))
         }
-        // An instant stand-in counter (characters for syllables).
+        // An instant stand-in counter (characters for syllables), held at its edit's
+        // own gate until the test opens it, so the header can be read while the count
+        // is outstanding. A hold that times out instead is recorded and fails the edit.
         let count: @Sendable (String) -> (words: Int, syllables: Int) = { text in
             (SyllableCounter.lyricWordCount(text), text.utf16.count)
         }
-        viewModel.countLyrics = count
-        var seen: [(words: Int, syllables: Int)] = []
-        // A sanity bound only: a loaded machine can be slow, never stuck.
-        func settle(on text: String) async throws {
-            let expected = count(text)
-            let deadline = ContinuousClock.now + .seconds(30)
-            while (viewModel.wordCount, viewModel.syllableCount) != expected, ContinuousClock.now < deadline {
-                seen.append((viewModel.wordCount, viewModel.syllableCount))
-                try await Task.sleep(for: .milliseconds(1))
+        let (countStarts, countStarted) = AsyncStream.makeStream(of: String.self)
+        let gates = HookBox<[String: (semaphore: DispatchSemaphore, deadline: DispatchTime)]>([:])
+        let expiredHolds = HookBox<Set<String>>([])
+        viewModel.countLyrics = { text in
+            countStarted.yield(text)
+            // The timeout only keeps a failed test from pinning a pool thread for good.
+            if let gate = gates.value[text], gate.semaphore.wait(timeout: gate.deadline) == .timedOut {
+                expiredHolds.value.insert(text) // one worker at a time: edits are serial
             }
-            #expect((viewModel.wordCount, viewModel.syllableCount) == expected)
+            return count(text)
         }
-
-        viewModel.onLyricsChanged("yellow music", timestampMilliseconds: 0)
-        try await settle(on: "yellow music")
-        seen = []
-        for text in ["yellow musi", "yellow mus", "yellow mu", "yellow m", "yellow"] {
+        var beforeCounting: [(words: Int, syllables: Int)] = []
+        var whileCounting: [(words: Int, syllables: Int)] = []
+        // The gate and all observations share one hang guard for this edit.
+        func edit(to text: String) async throws {
+            editUnderTest.value = text
+            let gate = DispatchSemaphore(value: 0)
+            let perEditTimeoutSeconds = 600
+            let deadline = DispatchTime.now() + .seconds(perEditTimeoutSeconds)
+            gates.value[text] = (gate, deadline)
             viewModel.onLyricsChanged(text, timestampMilliseconds: 0)
-            try await settle(on: text)
+            let countTask = try #require(viewModel.countTask)
+            // On any early exit, cancel the count first so a late result is discarded,
+            // then release its worker.
+            var gateOpened = false
+            defer {
+                if !gateOpened {
+                    countTask.cancel()
+                    gate.signal()
+                }
+            }
+            beforeCounting.append((viewModel.wordCount, viewModel.syllableCount))
+
+            let started = await observed(until: deadline, onGiveUp: { countTask.cancel() }) {
+                for await started in countStarts where started == text { return true }
+                return false
+            }
+            try #require(started, "the count for \"\(text)\" never started")
+            whileCounting.append((viewModel.wordCount, viewModel.syllableCount))
+            let held = await observed(until: deadline) {
+                for await entered in debounceEntries where entered == text { return true }
+                return false
+            }
+            try #require(held, "the rhyme context's debounce never held for \"\(text)\"")
+            gateOpened = true
+            gate.signal()
+
+            let landed = await observed(until: deadline, onGiveUp: { countTask.cancel() }) {
+                await countTask.value
+                return true
+            }
+            try #require(landed, "the count for \"\(text)\" did not finish within \(perEditTimeoutSeconds) s")
+            try #require(
+                !expiredHolds.value.contains(text),
+                "the count for \"\(text)\" was never held: its gate timed out before the test opened it"
+            )
+            try #require(viewModel.lyrics == text)
+            try #require(
+                (viewModel.wordCount, viewModel.syllableCount) == count(text),
+                "header counts after \"\(text)\""
+            )
         }
 
-        #expect(seen.allSatisfy { $0.words > 0 && $0.syllables > 0 })
-        // The debounce was in force throughout, and the counts never waited on it.
-        #expect(debounceWaits.value > 0)
+        try await edit(to: "yellow music")
+        beforeCounting = []
+        whileCounting = []
+        for text in ["yellow musi", "yellow mus", "yellow mu", "yellow m", "yellow"] {
+            try await edit(to: text)
+        }
+
+        #expect(beforeCounting.count == 5 && whileCounting.count == 5)
+        #expect(beforeCounting.allSatisfy { $0.words > 0 && $0.syllables > 0 }, "empty right after an edit")
+        #expect(whileCounting.allSatisfy { $0.words > 0 && $0.syllables > 0 }, "empty while counting")
     }
 
     /// A slow count for an older text that finishes after the newer text's
@@ -142,5 +197,31 @@ struct EditorAnalysisCueTests {
         RetiredPreferences.remove(from: defaults)
         #expect(defaults.object(forKey: "analysisPresentationStyle") == nil)
     }
+}
+
+/// True only if `observe` reports its event before the deadline and the caller is
+/// still running. On a miss `onGiveUp` runs and `observe` is cancelled and abandoned,
+/// not awaited (a task group or timeout race would still await it at scope exit).
+/// The deadline is fixed up front, but a starved scheduler can deliver it late.
+private func observed(
+    until deadline: DispatchTime,
+    onGiveUp: @escaping @Sendable () -> Void = {},
+    _ observe: @escaping @Sendable () async -> Bool
+) async -> Bool {
+    let (outcomes, outcome) = AsyncStream.makeStream(of: Bool.self)
+    // Judged when the observation completes, so a late one fails even if delivered first.
+    let work = Task { outcome.yield(await observe() && DispatchTime.now() < deadline) }
+    let timer = DispatchSource.makeTimerSource(queue: .global())
+    timer.setEventHandler { outcome.yield(false) }
+    timer.schedule(deadline: deadline)
+    timer.activate()
+    defer { work.cancel(); timer.cancel(); outcome.finish() }
+    var outcomeIterator = outcomes.makeAsyncIterator()
+    let saw = await outcomeIterator.next() ?? false
+    guard saw, !Task.isCancelled else {
+        onGiveUp()
+        return false
+    }
+    return true
 }
 

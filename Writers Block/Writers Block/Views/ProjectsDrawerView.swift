@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+// The iPhone and iPad songs drawer; the Mac window has its own sidebar.
+#if !os(macOS)
 private let projectDrawerDismissDuration: TimeInterval = RhymeAITokens.Motion.feedbackDuration
 
 enum ProjectsDrawerPresentation {
@@ -155,15 +157,7 @@ struct ProjectsDrawerView: View {
     }
 
     private var filteredProjects: [SongProject] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return projects }
-
-        return projects.filter { project in
-            let title = project.title.isEmpty ? "Untitled Song" : project.title
-            return title.localizedCaseInsensitiveContains(query)
-                || project.lyrics.localizedCaseInsensitiveContains(query)
-                || project.theme.localizedCaseInsensitiveContains(query)
-        }
+        SongProject.matching(projects, searchText: searchText)
     }
 
     private var filteredRecordingFolders: [RecordingFolder] {
@@ -412,53 +406,65 @@ struct ProjectsDrawerView: View {
 
     // MARK: - Songs Tab
 
+    /// At accessibility sizes Create, One Liners and the list heading scroll with
+    /// the songs; pinned, they squeezed the list to a sliver above the bottom bar.
+    private var songsHeaderScrolls: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    @ViewBuilder
+    private var songsHeader: some View {
+        Button {
+            viewModel.newProject()
+            dismissAfterNavigation()
+        } label: {
+            HStack(spacing: RhymeAITokens.Spacing.sm) {
+                Image(systemName: "plus")
+                    .font(.body.weight(.semibold))
+                Text("Create New Song")
+                    .font(.body.weight(.semibold))
+            }
+            .foregroundStyle(appearance.palette.onAction)
+            .multilineTextAlignment(.center)
+            .padding(.vertical, RhymeAITokens.Spacing.xs)
+            .padding(.horizontal, RhymeAITokens.Spacing.sm)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: RhymeAITokens.Spacing.xxl)
+            .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
+        }
+        .buttonStyle(.rhymePress)
+        .padding(.top, RhymeAITokens.Spacing.md)
+
+        oneLinersEntry
+            .padding(.top, RhymeAITokens.Spacing.sm)
+
+        Text("Recent Songs")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(appearance.palette.secondaryInk)
+            .padding(.top, RhymeAITokens.Spacing.md)
+            .padding(.bottom, RhymeAITokens.Spacing.xs)
+    }
+
     private var songsTabContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                viewModel.newProject()
-                dismissAfterNavigation()
-            } label: {
-                HStack(spacing: RhymeAITokens.Spacing.sm) {
-                    Image(systemName: "plus")
-                        .font(.body.weight(.semibold))
-                    Text("Create New Song")
-                        .font(.body.weight(.semibold))
-                }
-                .foregroundStyle(appearance.palette.onAction)
-                .multilineTextAlignment(.center)
-                .padding(.vertical, RhymeAITokens.Spacing.xs)
-                .padding(.horizontal, RhymeAITokens.Spacing.sm)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: RhymeAITokens.Spacing.xxl)
-                .appearanceActionSurface(cornerRadius: RhymeAITokens.Radius.lg)
-            }
-            .buttonStyle(.rhymePress)
-            .padding(.top, RhymeAITokens.Spacing.md)
-
-            oneLinersEntry
-                .padding(.top, RhymeAITokens.Spacing.sm)
-
-            Text("Recent Songs")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(appearance.palette.secondaryInk)
-                .padding(.top, RhymeAITokens.Spacing.md)
-                .padding(.bottom, RhymeAITokens.Spacing.xs)
+            if !songsHeaderScrolls { songsHeader }
 
             ScrollView {
-                // Rows are slabs separated by tone, 2pt apart, not by strokes.
-                LazyVStack(spacing: 2) {
-                    if projects.isEmpty {
-                        emptyState(systemImage: "music.note", title: "No saved songs yet.", caption: "Create New Song starts a blank page.")
-                    } else if filteredProjects.isEmpty {
-                        emptyState(systemImage: "magnifyingglass", title: "No songs match your search.")
-                    } else {
-                        ForEach(filteredProjects, id: \.id) { project in
-                            projectRow(project)
+                VStack(alignment: .leading, spacing: 0) {
+                    if songsHeaderScrolls { songsHeader }
+                    // Rows are slabs separated by tone, 2pt apart, not by strokes.
+                    LazyVStack(spacing: 2) {
+                        if projects.isEmpty {
+                            emptyState(systemImage: "music.note", title: "No saved songs yet.", caption: "Create New Song starts a blank page.")
+                        } else if filteredProjects.isEmpty {
+                            emptyState(systemImage: "magnifyingglass", title: "No songs match your search.")
+                        } else {
+                            ForEach(filteredProjects, id: \.id) { project in
+                                projectRow(project)
+                            }
                         }
                     }
+                    .padding(.bottom, RhymeAITokens.Spacing.sm)
+                    .rhymeAnimation(RhymeAITokens.Motion.state, value: projects.isEmpty)
                 }
-                .padding(.bottom, RhymeAITokens.Spacing.sm)
-                .rhymeAnimation(RhymeAITokens.Motion.state, value: projects.isEmpty)
             }
 
             HStack(spacing: RhymeAITokens.Spacing.sm) {
@@ -533,7 +539,7 @@ struct ProjectsDrawerView: View {
                     Text(oneLinersSubtitle)
                         .font(.footnote)
                         .foregroundStyle(appearance.palette.secondaryInk)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                         .truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -576,7 +582,7 @@ struct ProjectsDrawerView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -831,10 +837,20 @@ struct ProjectsDrawerView: View {
         return stem
     }
 
+    /// Song IDs are not unique once CloudKit syncs two copies of a song, so the
+    /// newest copy names the folder (ties: the smaller shown title), whatever
+    /// order the rows arrive in.
+    static func recordingFolderTitles(for projects: [SongProject]) -> [String: String] {
+        let entries = projects.map { ($0.id, (date: $0.updatedAt, title: $0.title.isEmpty ? "Untitled Song" : $0.title)) }
+        return Dictionary(entries) { a, b in
+            a.date != b.date ? (a.date > b.date ? a : b) : (a.title <= b.title ? a : b)
+        }.mapValues(\.title)
+    }
+
     private func reloadRecordings() {
         // Snapshot SwiftData-backed project titles on the main actor before
         // doing file-system work in a detached task.
-        let titleMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title.isEmpty ? "Untitled Song" : $0.title) })
+        let titleMap = Self.recordingFolderTitles(for: projects)
         reloadGeneration += 1
         guard !viewModel.recordingListsSuspended else {
             recordingFolders = []
@@ -892,8 +908,13 @@ struct ProjectsDrawerView: View {
 
     private func projectRow(_ project: SongProject) -> some View {
         let isActive = viewModel.currentProjectId == project.id
+        // At accessibility sizes the trash moves under the text, which then
+        // has the row's width; beside it the date broke mid-word.
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: RhymeAITokens.Spacing.xs))
 
-        return HStack(spacing: RhymeAITokens.Spacing.xs) {
+        return layout {
             Button {
                 viewModel.loadProject(project)
                 dismissAfterNavigation()
@@ -961,7 +982,7 @@ struct ProjectsDrawerView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(appearance.palette.error.opacity(0.85))
+                    .foregroundStyle(appearance.palette.secondaryInk)
                     .frame(width: RhymeAITokens.Touch.minimum, height: RhymeAITokens.Touch.minimum)
                     .contentShape(Rectangle())
             }
@@ -1027,11 +1048,7 @@ struct ProjectsDrawerView: View {
         case .success(let urls):
             guard let url = urls.first else { return }
             do {
-                let didStart = url.startAccessingSecurityScopedResource()
-                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let exported = try LyricsExporter.decodeJsonExport(data)
-                if viewModel.importProject(exported) {
+                if try viewModel.importSongFile(at: url) {
                     dismissAfterNavigation()
                 }
             } catch {
@@ -1047,4 +1064,21 @@ struct ProjectsDrawerView: View {
     ProjectsDrawerView(isPresented: .constant(true))
         .environmentObject(EditorViewModel())
         .modelContainer(for: [SongProject.self, TrashedSongProject.self, OneLiner.self, TrashedOneLiner.self], inMemory: true)
+}
+#endif
+
+extension SongProject {
+    /// The song search of the drawer and the Mac sidebar: title (or
+    /// "Untitled Song"), lyrics and theme, ignoring case.
+    static func matching(_ projects: [SongProject], searchText: String) -> [SongProject] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return projects }
+
+        return projects.filter { project in
+            let title = project.title.isEmpty ? "Untitled Song" : project.title
+            return title.localizedCaseInsensitiveContains(query)
+                || project.lyrics.localizedCaseInsensitiveContains(query)
+                || project.theme.localizedCaseInsensitiveContains(query)
+        }
+    }
 }

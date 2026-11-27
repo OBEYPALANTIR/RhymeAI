@@ -12,18 +12,25 @@ nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
 // deactivation before the next activation, even when that stop does not wait.
 nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
     static let shared = VoiceMemoAudioSessionTransitions(
+        // macOS has no audio session; recording and playback need no activation there.
         activateRecording: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
+            #endif
         },
         activatePlayback: {
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
+            #endif
         },
         deactivate: {
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
         }
     )
 
@@ -68,6 +75,9 @@ nonisolated final class VoiceMemoAudioSessionTransitions: @unchecked Sendable {
         }
     }
 }
+
+typealias VoiceMemoPlaybackUpdate = @MainActor @Sendable () -> Void
+typealias VoiceMemoPlaybackDelivery = @Sendable (@escaping VoiceMemoPlaybackUpdate) -> Void
 
 // VoiceMemoService owns the full record/play/delete lifecycle for per-song
 // voice memos. One instance per EditorViewModel — its lifetime matches the
@@ -171,6 +181,9 @@ final class VoiceMemoService {
     private var activePlayURL: URL?
     @ObservationIgnored private var delegateForwarder: VoiceMemoDelegate?
     @ObservationIgnored private let sessionTransitions: VoiceMemoAudioSessionTransitions
+    @ObservationIgnored private let makePlaybackPlayer: (URL) throws -> AVAudioPlayer
+    @ObservationIgnored fileprivate let deliverPlaybackUpdate: VoiceMemoPlaybackDelivery
+    @ObservationIgnored private let requestRecordingPermission: (@MainActor () async -> Bool)?
     @ObservationIgnored private var audioIntentRevision: UInt64 = 0
     @ObservationIgnored private var recordingActivationRevision: UInt64?
     /// The file a recorder is being started on, off the main thread; staging
@@ -190,9 +203,20 @@ final class VoiceMemoService {
 
     @ObservationIgnored let stagingRoot: URL
 
-    init(sessionTransitions: VoiceMemoAudioSessionTransitions = .shared, stagingRoot: URL = RecordingFiles.recorderStagingRoot()) {
+    init(
+        sessionTransitions: VoiceMemoAudioSessionTransitions = .shared,
+        stagingRoot: URL = RecordingFiles.recorderStagingRoot(),
+        makePlaybackPlayer: @escaping (URL) throws -> AVAudioPlayer = { try AVAudioPlayer(contentsOf: $0) },
+        deliverPlaybackUpdate: @escaping VoiceMemoPlaybackDelivery = { update in
+            Task { @MainActor in update() }
+        },
+        requestRecordingPermission: (@MainActor () async -> Bool)? = nil
+    ) {
         self.sessionTransitions = sessionTransitions
         self.stagingRoot = stagingRoot
+        self.makePlaybackPlayer = makePlaybackPlayer
+        self.deliverPlaybackUpdate = deliverPlaybackUpdate
+        self.requestRecordingPermission = requestRecordingPermission
         refreshPendingTakes()
     }
 
@@ -233,7 +257,7 @@ final class VoiceMemoService {
             }
         } catch {
             pendingTakesUnreadable = true
-            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; tap Retry to try again."
+            lastError = "Recordings waiting to be saved could not be read. They are kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
             return
         }
         pendingTakesUnreadable = false
@@ -465,7 +489,8 @@ final class VoiceMemoService {
     // MARK: - Permission
 
     func requestPermissionIfNeeded() async -> Bool {
-        if #available(iOS 17.0, *) {
+        if let requestRecordingPermission { return await requestRecordingPermission() }
+        if #available(iOS 17.0, macOS 14.0, *) {
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return true
             case .denied:
@@ -479,6 +504,7 @@ final class VoiceMemoService {
                 return false
             }
         } else {
+            #if os(iOS)
             return await withCheckedContinuation { continuation in
                 AVAudioSession.sharedInstance().requestRecordPermission { granted in
                     DispatchQueue.main.async {
@@ -487,6 +513,9 @@ final class VoiceMemoService {
                     }
                 }
             }
+            #else
+            return false
+            #endif
         }
     }
 
@@ -674,6 +703,7 @@ final class VoiceMemoService {
                 isPlaying = true
             } else {
                 stopPlayback()
+                lastError = "Couldn't resume playback. Try again."
             }
             return
         }
@@ -696,8 +726,8 @@ final class VoiceMemoService {
         pendingPlayURL = url
         playingIdentity = identity
         let playbackRevision = audioIntentRevision
-        sessionTransitions.activatePlayback { [weak self] result in
-            Task { @MainActor [weak self] in
+        sessionTransitions.activatePlayback { [weak self, deliverPlaybackUpdate] result in
+            deliverPlaybackUpdate { [weak self] in
                 self?.finishPlaybackActivation(result, url: url, revision: playbackRevision)
             }
         }
@@ -710,19 +740,23 @@ final class VoiceMemoService {
         do {
             try result.get()
         } catch {
-            pendingPlayURL = nil
+            failToStartPlayback()
             return
         }
-        pendingPlayURL = nil
         // Checked again as the player starts: removed meanwhile, it does not play.
-        guard playbackAllowed?(url) ?? true, playbackIdentity?(url) == playingIdentity else {
-            playingIdentity = nil
-            sessionTransitions.deactivate()
+        if playbackAllowed?(url) == false {
+            stopPlayback()
+            lastError = "This recording was deleted and can't be played."
+            return
+        }
+        guard playbackIdentity?(url) == playingIdentity else {
+            stopPlayback()
+            lastError = "This recording could not be read, so it can't be played."
             return
         }
 
-        guard let player = try? AVAudioPlayer(contentsOf: url) else {
-            sessionTransitions.deactivate()
+        guard let player = try? makePlaybackPlayer(url) else {
+            failToStartPlayback()
             return
         }
 
@@ -730,13 +764,19 @@ final class VoiceMemoService {
         delegateForwarder = forwarder
         player.delegate = forwarder
         guard player.play() else {
-            sessionTransitions.deactivate()
+            failToStartPlayback()
             return
         }
 
+        pendingPlayURL = nil
         audioPlayer = player
         activePlayURL = url
         isPlaying = true
+    }
+
+    private func failToStartPlayback() {
+        stopPlayback()
+        lastError = "Couldn't start playback. Try again."
     }
 
     /// Stops playback (or a pending start) of any of these recordings, by id, or of
@@ -767,6 +807,10 @@ final class VoiceMemoService {
 
     func stopPlayback() {
         audioIntentRevision &+= 1
+        clearPlayback()
+    }
+
+    private func clearPlayback() {
         playingIdentity = nil
         let hadPlayback = audioPlayer != nil || pendingPlayURL != nil
         audioPlayer?.stop()
@@ -804,7 +848,7 @@ final class VoiceMemoService {
         do {
             try RecordingFiles.writeFinishedMarker(finishedAt, in: folder)
         } catch {
-            lastError = "Couldn't finish saving the recording. It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't finish saving the recording. It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             refreshPendingTakes()
             return
         }
@@ -843,7 +887,7 @@ final class VoiceMemoService {
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .unconfirmed:
                 guard let audio = take.audio else { continue }
@@ -854,12 +898,12 @@ final class VoiceMemoService {
                         try RecordingFiles.writeFinishedMarker(finishedAt, in: take.folder)
                         publish(PendingTake(id: take.id, projectId: take.projectId, folder: take.folder, audio: audio, state: .finished(finishedAt)))
                     } catch {
-                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                        lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                     }
                 case .invalid:
                     markFailed(take)
                 case .uninspectable:
-                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; tap Retry to try again."
+                    lastError = "A recording waiting to be saved could not be read. It is kept on this device; \(PlatformWording.tapLowercase) Retry to try again."
                 }
             case .failed:
                 break
@@ -888,7 +932,7 @@ final class VoiceMemoService {
         } catch {
             // Before or after the move, the take keeps its marker and waits; a retry
             // resolves it by id.
-            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; tap Retry to save it."
+            lastError = "Couldn't save the recording: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) It is kept on this device; \(PlatformWording.tapLowercase) Retry to save it."
             return
         }
         forget(take)
@@ -941,9 +985,15 @@ final class VoiceMemoService {
         }
     }
 
-    fileprivate func playbackDidFinish(_ player: AVAudioPlayer) {
+    fileprivate func playbackDidFinish(_ player: AVAudioPlayer, successfully: Bool) {
         guard audioPlayer === player else { return }
-        stopPlayback()
+        if successfully {
+            stopPlayback()
+        } else {
+            // The failed player may predate a Record request awaiting permission.
+            clearPlayback()
+            lastError = "Couldn't finish playing this recording. Try again."
+        }
     }
 
     // MARK: - Cleanup
@@ -973,8 +1023,16 @@ private final class VoiceMemoDelegate: NSObject, AVAudioRecorderDelegate, AVAudi
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            self?.service?.playbackDidFinish(player)
+        forwardPlaybackCompletion(player, successfully: flag)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        forwardPlaybackCompletion(player, successfully: false)
+    }
+
+    private func forwardPlaybackCompletion(_ player: AVAudioPlayer, successfully: Bool) {
+        service?.deliverPlaybackUpdate { [weak self] in
+            self?.service?.playbackDidFinish(player, successfully: successfully)
         }
     }
 }

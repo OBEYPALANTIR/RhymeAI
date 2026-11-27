@@ -1,4 +1,6 @@
+#if os(iOS)
 import ActivityKit
+#endif
 import AppIntents
 import Foundation
 import Observation
@@ -165,6 +167,7 @@ struct OpenOneLinersIntent: AppIntent {
     }
 }
 
+#if os(iOS)
 /// The Live Activity's Done. Runs in the app: a take being recorded is stopped
 /// and saved; with nothing recording (the app was not running) the activity just ends.
 struct StopOneLinerRecordingIntent: LiveActivityIntent {
@@ -181,3 +184,4 @@ struct StopOneLinerRecordingIntent: LiveActivityIntent {
         return .result()
     }
 }
+#endif

@@ -14,7 +14,10 @@ import androidx.compose.ui.unit.dp
 import com.rhymeai.app.MainViewModel
 import com.rhymeai.app.data.model.DraftVersion
 import com.rhymeai.app.data.model.LyricAlternate
+import androidx.compose.ui.graphics.Color
 import com.rhymeai.app.ui.theme.DesignTokens
+import com.rhymeai.app.ui.theme.SurfaceLevel
+import com.rhymeai.app.ui.theme.raisedSurface
 import java.text.DateFormat
 import java.util.Date
 
@@ -25,10 +28,14 @@ fun SongNotebookSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
     var preview by remember { mutableStateOf<DraftVersion?>(null) }
     var removing by remember { mutableStateOf<LyricAlternate?>(null) }
     val clipboard = LocalClipboardManager.current
+    val cardShape = CardDefaults.shape
+    val cardColors = CardDefaults.cardColors(containerColor = Color.Transparent, contentColor = MaterialTheme.colorScheme.onSurface)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         modifier = Modifier.statusBarsPadding(),
+        // The canvas, as in the Templates and Recordings sheets, so the raised cards read as slabs on it.
+        containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = {
             WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
         }
@@ -65,7 +72,7 @@ fun SongNotebookSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 if (versionsSelected) {
                     if (viewModel.songWorkspace.versions.isEmpty()) item { Text("Save a version to keep a draft you can return to. Earlier drafts are also kept as you write and leave a song.") }
                     items(viewModel.songWorkspace.versions, key = { it.id }) { version ->
-                        OutlinedCard(onClick = { preview = version }, modifier = Modifier.fillMaxWidth()) {
+                        Card(onClick = { preview = version }, modifier = Modifier.fillMaxWidth().raisedSurface(SurfaceLevel.Raised, cardShape), shape = cardShape, colors = cardColors) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(version.createdAt)), style = MaterialTheme.typography.labelLarge)
                                 Text(version.title.ifBlank { "Untitled Song" }, style = MaterialTheme.typography.titleMedium)
@@ -77,7 +84,7 @@ fun SongNotebookSheet(viewModel: MainViewModel, onDismiss: () -> Unit) {
                 } else {
                     if (viewModel.songWorkspace.alternates.isEmpty()) item { Text("Keep suggestions or selected lyrics here without changing your draft.") }
                     items(viewModel.songWorkspace.alternates, key = { it.id }) { alternate ->
-                        OutlinedCard(Modifier.fillMaxWidth()) {
+                        Card(Modifier.fillMaxWidth().raisedSurface(SurfaceLevel.Raised, cardShape), shape = cardShape, colors = cardColors) {
                             Column(Modifier.padding(16.dp)) {
                                 Text(alternate.text)
                                 FlowRow {

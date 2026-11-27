@@ -2,7 +2,11 @@ import AuthenticationServices
 import CryptoKit
 import Foundation
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 enum BackupError: Error, Equatable {
     case notConfigured
@@ -21,6 +25,7 @@ enum BackupError: Error, Equatable {
     case missingRemoteRecordings([String])
     case damagedRemoteRecordings([String])
     case archiveTooLarge
+    case exportTooLarge
     case recordingIntegrityMismatch(String)
     case keychainWriteFailed(OSStatus)
     /// Drive refused (403) or no longer has (404) a revision of the backup.
@@ -32,6 +37,8 @@ enum BackupError: Error, Equatable {
     case insufficientStorage(needed: Int64)
     /// An earlier backup that lists a song or a recording id twice.
     case damagedRevision
+    /// Two song rows here (active, or both in the Trash) share an id.
+    case sameIdSongs(String)
 }
 
 extension BackupError: LocalizedError {
@@ -67,6 +74,8 @@ extension BackupError: LocalizedError {
             return "\(names.count) \(names.count == 1 ? "recording" : "recordings") on Google Drive did not match the backup and \(names.count == 1 ? "was" : "were") not restored: \(names.joined(separator: ", "))"
         case .archiveTooLarge:
             return "This backup file is too large to import; it was not imported."
+        case .exportTooLarge:
+            return "This library is too large to export as a ZIP that Writers Block can import. Use Google Drive backup instead."
         case .unsafeArchive:
             return "This file is not a Writers Block backup; it was not imported."
         case .recordingIntegrityMismatch(let name):
@@ -81,6 +90,8 @@ extension BackupError: LocalizedError {
             return "A file in the Google Drive backup is no longer there."
         case .damagedRevision:
             return "This earlier backup is damaged and cannot be recovered."
+        case .sameIdSongs(let id):
+            return "Two songs on this device share the ID \(id). The merge into this device's song library was stopped."
         case .insufficientStorage(let needed):
             return "Not enough free space on this device to recover that backup: it needs about \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)). Free up space and try again."
         }
@@ -553,10 +564,14 @@ final class GoogleDriveOAuthService: NSObject, OAuthAccessTokenProvider, ASWebAu
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if canImport(UIKit)
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        #else
+        NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        #endif
     }
 
     private func authorize(clientID: String, redirectScheme: String) async throws -> OAuthToken {
@@ -813,18 +828,73 @@ struct BackupReport: Equatable, Sendable {
     var missingRecordings: [String] = []
 }
 
+struct BackupPendingDraft {
+    let sourceRowID: PersistentIdentifier
+    let title: String
+    let lyrics: String
+    let theme: String
+    let copyID: String
+
+    func matches(_ source: SongRecoveryStore.Song, rowID: PersistentIdentifier) -> Bool {
+        sourceRowID == rowID && source.project.map {
+            $0.title == title && $0.lyrics == lyrics && $0.theme == theme
+        } == true
+    }
+}
+
+/// Local results are delivered at the save boundary, even if a later step throws.
+struct BackupApplyOutcome {
+    struct Copy {
+        enum Destination: Equatable {
+            case song(String)
+            case repairedSongRecovery
+        }
+
+        let source: SongRecoveryStore.Song
+        let sourceRowID: PersistentIdentifier
+        let destination: Destination
+    }
+
+    let copies: [Copy]
+}
+
+/// One editor operation owns both the reservation and the copies saved while the merge waits.
+@MainActor
+final class BackupDraftHandoff {
+    var pendingDraft: () -> BackupPendingDraft?
+    var replaceReservation: (String) throws -> Void = { _ in }
+    var prepareCommit: (String, ModelContext) throws -> String? = { _, _ in nil }
+    var savedDrafts: [BackupPendingDraft] = []
+    private(set) var outcome: BackupApplyOutcome?
+    private let didCommit: ((BackupApplyOutcome) -> Void)?
+
+    init(pendingDraft: BackupPendingDraft? = nil, didCommit: ((BackupApplyOutcome) -> Void)? = nil) {
+        self.pendingDraft = { pendingDraft }
+        self.didCommit = didCommit
+    }
+
+    func publish(_ outcome: BackupApplyOutcome) {
+        self.outcome = outcome
+        didCommit?(outcome)
+    }
+}
+
 struct RemoteBackupSummary: Equatable, Sendable {
     var songs: Int
     var recordings: Int
 }
 
-/// A kept Drive revision of the manifest: "Recover an earlier backup".
-struct BackupRevision: Equatable, Sendable, Identifiable {
+/// A kept Drive revision of the manifest: "Recover an earlier backup". `id` is
+/// Drive's revision id, unique only within its file, so a row is the pair.
+struct BackupRevision: Hashable, Sendable {
     var fileId: String
     var id: String
     var modifiedAt: Date?
     var bytes: Int64?
     var keptForever: Bool
+
+    /// A row's identity, stable when the revision becomes kept forever.
+    var key: [String] { [fileId, id] }
 }
 
 /// What to do with an older encrypted backup (`rhymeai-projects.json`) at sync time.
@@ -902,6 +972,10 @@ final class BackupService {
     var freeSpace: () -> Int64? = {
         try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
     }
+    /// The time a missing precedence time is repaired to (tests substitute a clock).
+    var now: () -> Date = Date.init
+    /// The local merge's save boundary (tests can inject a failed save).
+    var saveAppliedChanges: (ModelContext) throws -> Void = { try $0.save() }
     /// Where recovery downloads takes before they enter the library; swept as each recovery starts.
     var recoveryDownloadsRoot = FileManager.default.temporaryDirectory.appendingPathComponent("writersblock-recovery", isDirectory: true)
 
@@ -969,9 +1043,20 @@ final class BackupService {
     }
 
     func restoreNow(modelContext: ModelContext) async throws {
+        try await restoreNow(modelContext: modelContext, didCommit: nil)
+    }
+
+    func restoreNow(modelContext: ModelContext, pendingDraft: BackupPendingDraft? = nil,
+                    didCommit: ((BackupApplyOutcome) -> Void)?) async throws {
+        try await restoreNow(modelContext: modelContext,
+                             draftHandoff: BackupDraftHandoff(pendingDraft: pendingDraft, didCommit: didCommit))
+    }
+
+    func restoreNow(modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
         try await recordingFailure {
             let accessToken = try await oauthProvider.accessToken(interactive: true)
-            try await sync(modelContext: modelContext, accessToken: accessToken, restore: true)
+            try await sync(modelContext: modelContext, accessToken: accessToken, restore: true,
+                           draftHandoff: draftHandoff)
         }
     }
 
@@ -1003,13 +1088,13 @@ final class BackupService {
         }
     }
 
-    /// Songs and recordings in the v4 backup, or nil when there is none.
+    /// Songs and recordings in the v4 backup, every manifest file resolved together,
+    /// or nil when there is none.
     func remoteBackupSummary() async throws -> RemoteBackupSummary? {
         guard isConnected else { return nil }
         let accessToken = try await oauthProvider.accessToken(interactive: false)
-        guard let file = try await driveClient.findFile(named: SyncBlob.driveFileName, accessToken: accessToken) else { return nil }
-        let blob = try await downloadManifest(file, accessToken: accessToken)
-        return RemoteBackupSummary(songs: blob.projects.count, recordings: blob.recordings.count)
+        guard let backup = try await resolvedRemoteManifests(accessToken: accessToken) else { return nil }
+        return RemoteBackupSummary(songs: backup.projects.count, recordings: backup.recordings.count)
     }
 
     // MARK: Earlier backups (Drive revisions)
@@ -1018,19 +1103,24 @@ final class BackupService {
     /// Google Drive keeps at most 200 revisions of a file forever.
     static let keptRevisionLimit = 200
 
-    /// The manifest's revisions newest first: the latest 50 and every one already
+    /// The revisions of every manifest file (duplicates are kept, and any of them can
+    /// become the newest) newest first: the latest 50 overall and every one already
     /// kept forever (those can always be recovered), by time and size. Their content
     /// cannot be downloaded before it is kept forever, so nothing is read here.
     func probeRevisions() async throws -> [BackupRevision] {
         guard isConnected else { return [] }
         let accessToken = try await oauthProvider.accessToken(interactive: true)
-        guard let manifest = try await manifestFiles(accessToken: accessToken).max(by: { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }) else { return [] }
-        // Drive's RFC 3339 UTC times sort as text; on a tie the later-listed one is newer.
-        let newestFirst = try await driveClient.listRevisions(fileId: manifest.id, accessToken: accessToken).enumerated()
-            .sorted { ($0.element.modifiedTime ?? "", $0.offset) > ($1.element.modifiedTime ?? "", $1.offset) }.map(\.element)
-        return newestFirst.enumerated().filter { $0.offset < Self.revisionListLimit || $0.element.keepForever == true }
-            .map { BackupRevision(fileId: manifest.id, id: $0.element.id, modifiedAt: $0.element.modifiedTime.flatMap(Self.driveDate),
-                                  bytes: $0.element.size.flatMap { Int64($0) }, keptForever: $0.element.keepForever == true) }
+        var listed: [(fileId: String, revision: DriveFileRevision)] = []
+        for file in try await manifestFiles(accessToken: accessToken) {
+            listed += try await driveClient.listRevisions(fileId: file.id, accessToken: accessToken).map { (file.id, $0) }
+        }
+        // Drive's RFC 3339 UTC times sort as text; on a tie the later-listed one is newer
+        // (files are listed oldest first, then by id, so this holds across files too).
+        let newestFirst = listed.enumerated()
+            .sorted { ($0.element.revision.modifiedTime ?? "", $0.offset) > ($1.element.revision.modifiedTime ?? "", $1.offset) }.map(\.element)
+        return newestFirst.enumerated().filter { $0.offset < Self.revisionListLimit || $0.element.revision.keepForever == true }
+            .map { BackupRevision(fileId: $0.element.fileId, id: $0.element.revision.id, modifiedAt: $0.element.revision.modifiedTime.flatMap(Self.driveDate),
+                                  bytes: $0.element.revision.size.flatMap { Int64($0) }, keptForever: $0.element.revision.keepForever == true) }
     }
 
     /// Recovers an earlier backup the user confirmed: asks Drive to keep that
@@ -1072,15 +1162,10 @@ final class BackupService {
         try? FileManager.default.removeItem(at: recoveryDownloadsRoot)
         library.clearStaging(context: modelContext)
         try await library.reconcile(context: modelContext)
-        // Every manifest under the backup's name counts (a race can leave more than one):
-        // a song or tombstone held only by an older one is still held.
-        var current = SyncBlob()
-        for file in try await manifestFiles(accessToken: accessToken) {
-            let blob = try await downloadManifest(file, accessToken: accessToken)
-            current.projects += blob.projects
-            current.trashed += blob.trashed
-            current.deletions += blob.deletions
-        }
+        // Every manifest under the backup's name counts (a race can leave more than one),
+        // resolved together: a song or tombstone held only by an older one is still held,
+        // but a copy another file's tombstone removes, or a tombstone a later edit defeated, is not.
+        let current = try await resolvedRemoteManifests(accessToken: accessToken) ?? SyncBlob()
         let remote = try await recordingFiles(accessToken: accessToken)
         let active = Set(try modelContext.fetch(FetchDescriptor<SongProject>()).map(\.id))
         let trashed = Set(try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id))
@@ -1244,17 +1329,22 @@ final class BackupService {
     /// Back up (`restore` false) merges this device into Drive and leaves local data
     /// alone; a migration is a backup. Restore merges both ways: it applies the merge
     /// here, uploads local-only items, then downloads missing recordings.
-    private func sync(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String? = nil) async throws {
+    private func sync(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String? = nil,
+                      draftHandoff: BackupDraftHandoff? = nil) async throws {
         // A restore changes recordings, so it holds the library's gate throughout (T4);
         // a backup only reads them.
         if restore {
-            try await library.withGate { try await syncHoldingGate(modelContext: modelContext, accessToken: accessToken, restore: true, enteredPassphrase: enteredPassphrase) }
+            try await library.withGate {
+                try await syncHoldingGate(modelContext: modelContext, accessToken: accessToken, restore: true,
+                                          enteredPassphrase: enteredPassphrase, draftHandoff: draftHandoff)
+            }
         } else {
             try await syncHoldingGate(modelContext: modelContext, accessToken: accessToken, restore: false, enteredPassphrase: enteredPassphrase)
         }
     }
 
-    private func syncHoldingGate(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String?) async throws {
+    private func syncHoldingGate(modelContext: ModelContext, accessToken: String, restore: Bool, enteredPassphrase: String?,
+                                 draftHandoff: BackupDraftHandoff? = nil) async throws {
         var report = BackupReport()
         // Restore recovery: drop what an interrupted restore or import left staged,
         // except what a row is waiting for (T1.7).
@@ -1271,17 +1361,42 @@ final class BackupService {
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = try await unpreservedOversizedCount(remote: remoteRecordings)
 
-        // Every remote-side input seen in this run, unresolved, in the order seen:
-        // each candidate gathers them all with the current local snapshot and
-        // resolves once (A18). Content seen once is never dropped (A14).
-        var inputs: [SyncBlob] = legacy.map { [$0.blob] } ?? []
-        var seen = Set<String>()
-        var manifests = try await manifestFiles(accessToken: accessToken)
-        if restore, manifests.isEmpty, legacy == nil { throw BackupError.noRemoteBackup }
-        for file in manifests {
-            let blob = try await downloadManifest(file, accessToken: accessToken)
-            if seen.insert(blob.manifestSha256).inserted { inputs.append(blob) }
+        // Every recording entry seen in this run, by id, as read: the audio delete must be
+        // covered for each of them whatever the input order (a missing time is a repair).
+        var observed: [String: [SyncRecording]] = [:]
+        func observe(_ blob: SyncBlob) {
+            for var entry in blob.recordings {
+                if entry.uploadedAt.epochMilliseconds <= 0 { entry.precedenceRepaired = true }
+                observed[entry.id, default: []].append(entry)
+            }
         }
+        // Whatever way the run ends, proof its observations contradict does not outlive it:
+        // judged by the verified write's deletions once there are some, conservatively before.
+        var proofDeletions: [SyncDeletion]?
+        defer { reconcileProof(observed: observed, deletions: proofDeletions) }
+        // Taken before any candidate stores a winning time on the rows.
+        observe(try makeSnapshot(modelContext: modelContext))
+        if let legacy { observe(legacy.blob) }
+        // Every manifest content read in this run, in the order read, rejected looks and
+        // read-backs included; append-only, so content seen once is never dropped (A14).
+        // Known content first seen in another file adds nothing; a file changing back to
+        // earlier content (X, Y, X) is appended again.
+        var history: [SyncBlob] = []
+        var known = Set<String>()
+        var held: [String: String] = [:]
+        func record(_ file: DriveAppDataFile, _ blob: SyncBlob) {
+            observe(blob)
+            let sha = blob.manifestSha256
+            let isNew = known.insert(sha).inserted
+            let changed = held[file.id].map { $0 != sha } ?? false
+            held[file.id] = sha
+            if isNew || changed { history.append(blob) }
+        }
+        var look = try await stableLook(accessToken: accessToken, onRead: record)
+        if restore, look.isEmpty, legacy == nil { throw BackupError.noRemoteBackup }
+        // Gathered with the local snapshot and resolved once per candidate (A18): history,
+        // then the accepted look oldest to newest, so the newest file's entries win a tie.
+        func inputs() -> [SyncBlob] { (legacy.map { [$0.blob] } ?? []) + history + look.map(\.blob) }
         let legacyAudioIds = Set(legacy?.audio.keys.map { $0 } ?? [])
         let legacyOnlyIds = Set(legacy?.allRecordings.map(\.id) ?? []).subtracting(legacyAudioIds)
         /// An old recording whose audio could not be opened is listed only when this
@@ -1295,23 +1410,19 @@ final class BackupService {
         // while this run waited is not overwritten by the written name.
         var namesAtCandidate: [String: (String, Bool)] = [:]
         func candidate() throws -> SyncBlob {
+            // This candidate's local copy, before resolve takes a gathered time onto the rows.
+            observe(try makeSnapshot(modelContext: modelContext))
             namesAtCandidate = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, ($0.displayName, $0.displayNameChanged)) }) { first, _ in first }
-            var resolved = try resolve(inputs, with: modelContext)
+            var resolved = try resolve(inputs(), with: modelContext)
             resolved.recordings = try resolved.recordings.filter(listable)
             return finalizedBlob(resolved)
         }
-        /// Folds in any manifest written since the last look; true when something new arrived.
+        /// One full stable look; true when history grew or the accepted look changed.
         func absorbFreshManifests() async throws -> Bool {
-            var changed = false
-            for file in try await manifestFiles(accessToken: accessToken) {
-                if !manifests.contains(where: { $0.id == file.id }) { manifests.append(file) }
-                let blob = try await downloadManifest(file, accessToken: accessToken)
-                if seen.insert(blob.manifestSha256).inserted {
-                    inputs.append(blob)
-                    changed = true
-                }
-            }
-            return changed
+            let grown = history.count
+            let before = look.map { [$0.file.id, $0.file.modifiedTime ?? "", $0.blob.manifestSha256] }
+            look = try await stableLook(accessToken: accessToken, onRead: record)
+            return history.count != grown || look.map { [$0.file.id, $0.file.modifiedTime ?? "", $0.blob.manifestSha256] } != before
         }
         let legacyAudio = legacy?.audio ?? [:]
         let legacyIds = Set(legacy?.allRecordings.map(\.id) ?? [])
@@ -1319,7 +1430,7 @@ final class BackupService {
         var merged = try candidate()
         var uploadConflicts = Set<String>()
         var localConflicts = Set<String>()
-        var target = manifests.max { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") }
+        var target: DriveAppDataFile?
         var verified = false
         for _ in 0..<Self.manifestWriteAttempts {
             // Upload, then look again; only a look that finds nothing new, after the
@@ -1339,11 +1450,11 @@ final class BackupService {
             // Every recording the manifest lists must be on Drive, verified or just uploaded.
             if !restore, !missing.isEmpty { throw BackupError.missingRemoteRecordings(missing) }
             // A song the manifest drops only against a repaired time is kept here first.
-            try preserveRepairedSongLosers(from: [fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs.map(fixingPrecedence),
+            try preserveRepairedSongLosers(from: [fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs().map(fixingPrecedence),
                                            merged: merged, report: &report)
             let content = try merged.encodedManifest()
-            if target == nil { target = manifests.max { ($0.modifiedTime ?? "") < ($1.modifiedTime ?? "") } }
-            if let current = target {
+            // The newest file of the accepted look; a new one when Drive has none.
+            if let current = look.last?.file {
                 target = try await driveClient.updateFile(id: current.id, mimeType: SyncBlob.driveMimeType, content: content, appProperties: nil, accessToken: accessToken)
             } else {
                 target = try await driveClient.uploadNewFile(named: SyncBlob.driveFileName, mimeType: SyncBlob.driveMimeType, content: content, appProperties: nil, accessToken: accessToken)
@@ -1354,28 +1465,51 @@ final class BackupService {
                 verified = true
                 break
             }
-            // Another device wrote in between: its manifest joins the inputs.
-            if seen.insert(readBack.manifestSha256).inserted { inputs.append(readBack) }
+            // Another device wrote in between: its manifest joins the history.
+            record(written, readBack)
         }
         guard verified, let target else { throw BackupError.backupConflict }
+        proofDeletions = merged.deletions
         try adoptWrittenNames(merged.recordings, heldBefore: namesAtCandidate, in: modelContext)
-        // Duplicates are folded into the verified manifest above; only now remove them.
-        for duplicate in manifests where duplicate.id != target.id {
-            try await driveClient.deleteFile(id: duplicate.id, accessToken: accessToken)
-        }
+        // The inputs the verified candidate was built from (the last look found nothing new).
+        let verifiedInputs = inputs()
+        // One more look: audio is deleted only while Drive still holds the look the candidate
+        // was built from, with the verified write in place. Its reads count as observations.
+        // A look that fails counts as changed; what it read still counts. A stop is rethrown at
+        // once: the deferred reconcile handles the proof those reads contradict.
+        let others = look.filter { $0.file.id != target.id }
+        var unchanged = false
+        do {
+            let after = try await stableLook(accessToken: accessToken) { _, blob in observe(blob) }
+            let afterOthers = after.filter { $0.file.id != target.id }
+            unchanged = after.contains { $0.file.id == target.id && $0.blob.manifestSha256 == merged.manifestSha256 }
+                && afterOthers.count == others.count
+                && zip(afterOthers, others).allSatisfy { $0.file == $1.file && $0.blob.manifestSha256 == $1.blob.manifestSha256 }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {}
+        // Duplicate manifests are kept and gathered on every run, never deleted: another device
+        // may write one after our listing, and Drive has no conditional delete to protect that write.
 
-        // Precedence times of every recording this run gathered, before resolution.
-        let gatheredRecordings = try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + inputs.map(fixingPrecedence)).recordings
-        let gatheredById = Dictionary(gatheredRecordings.map { ($0.id, $0) }) { first, _ in first }
         report.notUploadedConflicts = uploadConflicts.sorted()
         report.localDigestConflicts = localConflicts.sorted()
+        // The winner this run gathered for each recording, before resolution: an object whose
+        // digest differs from it is reported as a conflict.
+        let gathered = Dictionary(try SyncMerger.gather([fixingPrecedence(try makeSnapshot(modelContext: modelContext))] + verifiedInputs.map(fixingPrecedence))
+            .recordings.map { ($0.id, $0) }) { first, _ in first }
+        // What is held here now, after every wait.
+        observe(try makeSnapshot(modelContext: modelContext))
+        // The pass reads the proof, so it is reconciled with everything observed first.
+        reconcileProof(observed: observed, deletions: merged.deletions)
         try await deleteRemoteRecordingsCoveredByDeletions(merged.deletions, recordings: merged.recordings, keeping: legacyIds,
-                                                           gathered: gatheredById, remote: remoteRecordings, accessToken: accessToken, report: &report)
+                                                           gathered: gathered, observed: observed, deleting: unchanged, remote: remoteRecordings,
+                                                           accessToken: accessToken, report: &report)
         var missingOnDrive: [String] = []
         var damagedOnDrive: [String] = []
         if restore {
             // The commit resolves the current local state with the original inputs, once.
-            let applied = try apply(inputs: inputs, to: modelContext, report: &report)
+            let applied = try apply(inputs: verifiedInputs, to: modelContext, report: &report,
+                                    draftHandoff: draftHandoff)
             // Nothing a tombstone without a time names is brought back (T5.24).
             let held = try library.held(in: modelContext)
             (damagedOnDrive, missingOnDrive) = try await downloadMissingRecordings(
@@ -1387,7 +1521,7 @@ final class BackupService {
 
         if let legacy {
             report.unmovedLegacyRecordings = legacy.unmovedRecordings
-            if try await legacyBackupIsPreserved(legacy, in: merged, remote: try await recordingFiles(accessToken: accessToken), accessToken: accessToken) {
+            if try await legacyBackupIsPreserved(legacy, in: merged, written: target, remote: try await recordingFiles(accessToken: accessToken), accessToken: accessToken) {
                 let moved = Set(legacy.allRecordings.map { RecordingBackupManifest.legacyDriveName(projectId: $0.projectId, fileName: $0.fileName) })
                 report.retainedLegacyObjects = try await removeLegacyBackup(movedRecordingNames: moved, verifiedObjects: legacy.verifiedObjects,
                                                                             remoteRecordings: remoteRecordings, accessToken: accessToken)
@@ -1498,10 +1632,10 @@ final class BackupService {
     /// True only when the v4 backup on Drive holds everything the old one did:
     /// every song not deleted there, at the same or a newer version, and every
     /// recording as raw audio whose SHA-256 and size match.
-    private func legacyBackupIsPreserved(_ legacy: LegacyBackup, in merged: SyncBlob, remote: RemoteFiles, accessToken: String) async throws -> Bool {
+    private func legacyBackupIsPreserved(_ legacy: LegacyBackup, in merged: SyncBlob, written: DriveAppDataFile, remote: RemoteFiles, accessToken: String) async throws -> Bool {
+        // The file this run wrote and verified, by id: a kept duplicate may be listed first.
         guard legacy.unmovedRecordings == 0,
-              let uploaded = try await manifestFiles(accessToken: accessToken).first,
-              try await downloadManifest(uploaded, accessToken: accessToken).manifestSha256 == merged.manifestSha256 else { return false }
+              try await downloadManifest(written, accessToken: accessToken).manifestSha256 == merged.manifestSha256 else { return false }
         // Each old song or Trash entry, its times fixed and flagged like any input
         // (T2.37), is kept when v4 holds the same or a later standing version of it,
         // each time compared with its own repair flag (A38, T2.38), or a tombstone
@@ -1564,10 +1698,50 @@ final class BackupService {
 
     // MARK: Manifest and recordings on Drive
 
-    /// Every file named like the manifest; normally one.
+    /// Every file named like the manifest; normally one. Oldest first, then by id, so
+    /// in a merge (where the later input wins a tie) the newest file's entries win.
     private func manifestFiles(accessToken: String) async throws -> [DriveAppDataFile] {
         try await driveClient.listFiles(prefix: SyncBlob.driveFileName, accessToken: accessToken)
             .filter { $0.name == SyncBlob.driveFileName }
+            .sorted { ($0.modifiedTime ?? "", $0.id) < ($1.modifiedTime ?? "", $1.id) }
+    }
+
+    /// Every manifest file read and validated, oldest to newest, from a look whose listing
+    /// held across the downloads (equal file values before and after). A file rewritten
+    /// between the listing and its download would keep its old place in the order, and one
+    /// deleted before its download would read as nothing, so either starts the look again.
+    /// `onRead` sees every validated read, rejected looks included. A look that never holds
+    /// within `manifestWriteAttempts` is a conflict, never a stale order.
+    private func stableLook(accessToken: String,
+                            onRead: (DriveAppDataFile, SyncBlob) -> Void = { _, _ in }) async throws -> [(file: DriveAppDataFile, blob: SyncBlob)] {
+        for _ in 0..<Self.manifestWriteAttempts {
+            let files = try await manifestFiles(accessToken: accessToken)
+            var read: [(file: DriveAppDataFile, blob: SyncBlob)] = []
+            var vanished = false
+            for file in files {
+                let blob: SyncBlob
+                do {
+                    blob = try await downloadManifest(file, accessToken: accessToken)
+                } catch BackupError.remoteFileMissing {
+                    vanished = true
+                    break
+                }
+                onRead(file, blob)
+                read.append((file, blob))
+            }
+            if !vanished, try await manifestFiles(accessToken: accessToken) == files { return read }
+        }
+        throw BackupError.backupConflict
+    }
+
+    /// Every manifest file of one stable look gathered and resolved once, recordings
+    /// included, without this device's library; nil when there is none.
+    private func resolvedRemoteManifests(accessToken: String) async throws -> SyncBlob? {
+        let look = try await stableLook(accessToken: accessToken)
+        guard !look.isEmpty else { return nil }
+        // The precedence repair sync applies (A32/A37), so a missing time decides as it does there.
+        var seen = firstSeenTimes()
+        return try SyncMerger.resolve(try SyncMerger.gather(look.map { fixingPrecedence($0.blob, sharing: &seen) }))
     }
 
     private func downloadManifest(_ file: DriveAppDataFile, accessToken: String) async throws -> SyncBlob {
@@ -1708,8 +1882,16 @@ final class BackupService {
     /// a known id with other bytes or length (returned, to be reported). A covered
     /// entry is kept here until its objects are gone, so a retry after a failed
     /// removal still has its proof.
+    /// Every entry this run observed for the id with the object's digest and length must
+    /// be covered: one that is not vetoes the delete; the veto is reported only when a repaired
+    /// time is what keeps the object. With no observation of the id, the proof alone decides.
+    /// Proof this run's observations contradict was already cleared or replaced by
+    /// `reconcileProof`; this pass only adds proof for what it deletes (and a repaired one, for
+    /// reporting). `deleting` false (Drive changed after the write) removes nothing. Every
+    /// object is decided and the proof saved before the first delete.
     private func deleteRemoteRecordingsCoveredByDeletions(_ deletions: [SyncDeletion], recordings: [SyncRecording], keeping kept: Set<String>,
-                                                          gathered: [String: SyncRecording], remote: RemoteFiles,
+                                                          gathered: [String: SyncRecording], observed: [String: [SyncRecording]],
+                                                          deleting: Bool, remote: RemoteFiles,
                                                           accessToken: String, report: inout BackupReport) async throws {
         let live = Set(recordings.map(\.driveName) + kept.map(RecordingBackupManifest.driveName(recordingId:)))
         // Proof an earlier build kept by Drive id and version cannot show content; the
@@ -1726,31 +1908,62 @@ final class BackupService {
             return
         }
         var conflicting: [String] = []
+        var doomed: [DriveAppDataFile] = []
         for file in remote.values.joined().sorted(by: { ($0.name, $0.id) < ($1.name, $1.id) }) {
-            guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"],
-                  let known = gathered[id] ?? proven[id] else { continue }
-            guard known.sha256 == sha, String(known.bytes) == bytes else {
+            guard let id = file.appProperties?["id"], let sha = file.appProperties?["sha256"], let bytes = file.appProperties?["bytes"] else { continue }
+            func matches(_ entry: SyncRecording) -> Bool { entry.sha256 == sha && String(entry.bytes) == bytes }
+            func covered(_ entry: SyncRecording) -> Bool {
+                deletions.contains { $0.covers(projectId: entry.projectId, recordingId: id, sha256: sha, at: entry.uploadedAt, repaired: entry.precedenceRepaired) }
+            }
+            if let winner = gathered[id], !matches(winner) {
                 conflicting.append(file.name)
                 continue
             }
-            guard !live.contains(file.name),
-                  deletions.contains(where: { $0.covers(projectId: known.projectId, recordingId: id, sha256: sha, at: known.uploadedAt, repaired: known.precedenceRepaired) }) else { continue }
+            let known: SyncRecording
+            if let seen = observed[id], !seen.isEmpty {
+                let matching = seen.filter(matches)
+                guard !matching.isEmpty else {
+                    conflicting.append(file.name)
+                    continue
+                }
+                guard !live.contains(file.name) else { continue }
+                let uncovered = matching.filter { !covered($0) }
+                if !uncovered.isEmpty {
+                    // An entry no deletion covers keeps the audio (reconcileProof cleared its
+                    // proof). It is reported only when a repaired time is what keeps it.
+                    if uncovered.count < matching.count, let keeper = uncovered.first(where: \.precedenceRepaired),
+                       !report.deferredRepairedCleanup.contains(keeper.fileName) {
+                        report.deferredRepairedCleanup.append(keeper.fileName)
+                    }
+                    continue
+                }
+                known = matching.first(where: \.precedenceRepaired) ?? matching.max { $0.uploadedAt < $1.uploadedAt }!
+            } else {
+                guard let proof = proven[id] else { continue }
+                guard matches(proof) else {
+                    conflicting.append(file.name)
+                    continue
+                }
+                guard !live.contains(file.name), covered(proof) else { continue }
+                known = proof
+            }
             // A41: a recording that loses only because its time is a repair is kept on
             // Drive and reported; its bytes are not deleted on that judgement (T1.35).
-            // Its proof is kept too, so later runs keep reporting it while the object stays.
+            // Its repaired proof is stored too, so later runs keep reporting it while the
+            // object stays (reconcileProof already put it in place of any real-time proof).
             if known.precedenceRepaired {
                 if !report.deferredRepairedCleanup.contains(known.fileName) { report.deferredRepairedCleanup.append(known.fileName) }
                 proven[id] = known
-                provenCovered = proven
                 continue
             }
+            guard deleting else { continue }
             proven[id] = known
-            provenCovered = proven
-            try await driveClient.deleteFile(id: file.id, accessToken: accessToken)
+            doomed.append(file)
         }
-        // Proof is dropped once no object of that id is left.
+        // Proof is dropped once no object of that id is left, and saved before any delete.
         let remaining = Set(remote.values.joined().compactMap { $0.appProperties?["id"] })
         provenCovered = proven.filter { remaining.contains($0.key) && !live.contains(RecordingBackupManifest.driveName(recordingId: $0.key)) }
+        for file in doomed { try await driveClient.deleteFile(id: file.id, accessToken: accessToken) }
         report.conflictingDriveObjects = conflicting.sorted()
     }
 
@@ -1758,7 +1971,8 @@ final class BackupService {
     /// Trash) with a repaired time, that the written manifest leaves out under a song
     /// tombstone, is kept in the song recovery folder and read back before the
     /// manifest is written; a failure stops the run (A41, remote-only songs too).
-    private func preserveRepairedSongLosers(from blobs: [SyncBlob], merged: SyncBlob, report: inout BackupReport) throws {
+    @discardableResult
+    private func preserveRepairedSongLosers(from blobs: [SyncBlob], merged: SyncBlob, report: inout BackupReport) throws -> [SongRecoveryStore.Song] {
         let present = Set(merged.projects.map(\.id) + merged.trashed.map(\.id))
         let tombstoned = Set(merged.deletions.filter(\.isSongTombstone).map(\.projectId))
         let losers = blobs.flatMap { blob in
@@ -1769,6 +1983,7 @@ final class BackupService {
             try SongRecoveryStore.keep(song, memosRoot: memosRoot)
             if !report.recoveredRepairedSongs.contains(song.title) { report.recoveredRepairedSongs.append(song.title) }
         }
+        return losers
     }
 
     /// Covered recordings whose Drive objects a run started removing (A40); nil when
@@ -1782,33 +1997,93 @@ final class BackupService {
         set { if let newValue { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.provenCoveredKey) } }
     }
 
+    /// Brings the saved delete proof in line with what a run observed. Per id, an observed
+    /// entry with the proof's digest and length that no deletion covers clears it; otherwise
+    /// such an entry with a repaired time replaces it. With no deletions (a run that ends
+    /// before its verified write), such an entry at another recorded time or under another song clears it, which can
+    /// only keep audio. It never throws, so every exit of a run can apply it.
+    private func reconcileProof(observed: [String: [SyncRecording]], deletions: [SyncDeletion]?) {
+        guard var proven = provenCovered, !proven.isEmpty else { return }
+        for (id, proof) in proven {
+            let same = observed[id, default: []].filter { $0.sha256 == proof.sha256 && $0.bytes == proof.bytes }
+            func contradicts(_ entry: SyncRecording) -> Bool {
+                guard let deletions else {
+                    return !entry.precedenceRepaired
+                        && (entry.projectId, entry.uploadedAt.epochMilliseconds) != (proof.projectId, proof.uploadedAt.epochMilliseconds)
+                }
+                return !deletions.contains {
+                    $0.covers(projectId: entry.projectId, recordingId: id, sha256: entry.sha256, at: entry.uploadedAt, repaired: entry.precedenceRepaired)
+                }
+            }
+            if same.contains(where: contradicts) {
+                proven[id] = nil
+            } else if let repaired = same.first(where: \.precedenceRepaired) {
+                proven[id] = repaired
+            }
+        }
+        provenCovered = proven
+    }
+
     // MARK: Export and import
 
     /// The "Export all songs" zip: `manifest.json` (v4), `songs/<title>.txt`,
     /// `songs/<id>.json` and `recordings/<projectId>/<fileName>`.
-    func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> (fileName: String, data: Data) {
+    func exportArchive(modelContext: ModelContext, now: Date = Date()) throws -> BackupExportFile {
+        try exportArchive(modelContext: modelContext, now: now, budget: .production)
+    }
+
+    func exportArchive(
+        modelContext: ModelContext, now: Date = Date(), budget: BackupArchive.Budget,
+        readRecordingAudio: (Recording) -> Data = { $0.audio }
+    ) throws -> BackupExportFile {
         // Times are fixed and persisted before anything is resolved (T2.40); this
         // writes rows and settings only, never a recording file.
         try repairLocalPrecedence(modelContext)
         let blob = finalizedBlob(try SyncMerger.merge(local: fixingPrecedence(try makeSnapshot(modelContext: modelContext)), remote: SyncBlob(savedAt: .distantPast)))
-        var entries: [(path: String, data: Data)] = [("manifest.json", try blob.encodedManifest())]
-        var usedNames = Set<String>()
-        for project in try modelContext.fetch(FetchDescriptor<SongProject>()).sorted(by: { $0.id < $1.id }) {
-            var name = RecordingFiles.sanitizeName(project.title)
-            if name.isEmpty || name.hasPrefix(".") || usedNames.contains(name.lowercased()) { name = project.id }
-            usedNames.insert(name.lowercased())
-            entries.append(("songs/\(name).txt", try LyricsExporter.data(for: project, format: .txt)))
-            entries.append(("songs/\(project.id).json", try LyricsExporter.data(for: project, format: .json)))
-        }
-        let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
-        let names = RecordingBackupManifest.exportNames(blob.recordings)
+        let archive = try BackupExportFile(now: now)
+        let sources = archive.url.deletingLastPathComponent().appendingPathComponent("members", isDirectory: true)
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: false)
         var report = BackupReport()
-        for entry in blob.recordings {
-            guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
-                report.leftOutRecordings.append(entry.fileName)
-                continue
+        do {
+            var entries: [(path: String, source: URL)] = []
+            var stagedBytes = 0
+            func stage(_ path: String, _ data: Data) throws {
+                try budget.add(data.count, to: &stagedBytes)
+                let source = sources.appendingPathComponent(String(entries.count))
+                try data.write(to: source)
+                entries.append((path, source))
             }
-            entries.append(("recordings/\(entry.projectId)/\(name)", row.audio))
+
+            try stage("manifest.json", blob.encodedManifest())
+            var usedNames = Set<String>()
+            for project in try modelContext.fetch(FetchDescriptor<SongProject>()).sorted(by: { $0.id < $1.id }) {
+                var name = RecordingFiles.sanitizeName(project.title)
+                if name.isEmpty || name.hasPrefix(".") || usedNames.contains(name.lowercased()) { name = project.id }
+                usedNames.insert(name.lowercased())
+                try stage("songs/\(name).txt", LyricsExporter.data(for: project, format: .txt))
+                try stage("songs/\(project.id).json", LyricsExporter.data(for: project, format: .json))
+            }
+            let rows = Dictionary(try modelContext.fetch(FetchDescriptor<Recording>()).map { ($0.id, $0) }) { first, _ in first }
+            let names = RecordingBackupManifest.exportNames(blob.recordings)
+            // Plan the actual members from metadata before faulting in any audio.
+            var total = stagedBytes
+            var audioEntries: [(path: String, row: Recording)] = []
+            for entry in blob.recordings {
+                guard let row = rows[entry.id], row.sha256 == entry.sha256, let name = names[entry.id] else {
+                    report.leftOutRecordings.append(entry.fileName)
+                    continue
+                }
+                guard let bytes = Int(exactly: row.bytes) else { throw BackupArchiveError.tooLarge }
+                try budget.add(bytes, to: &total)
+                audioEntries.append(("recordings/\(entry.projectId)/\(name)", row))
+            }
+            for entry in audioEntries {
+                try autoreleasepool { try stage(entry.path, readRecordingAudio(entry.row)) }
+            }
+            try BackupArchive.zip(entries, to: archive.url, budget: budget)
+            try FileManager.default.removeItem(at: sources)
+        } catch BackupArchiveError.tooLarge {
+            throw BackupError.exportTooLarge
         }
         // Everything else on this device that the archive does not hold is named.
         let omitted = try library.exportOmissions(in: modelContext)
@@ -1819,19 +2094,28 @@ final class BackupService {
         report.takesWaitingNotExported = RecordingFiles.waitingTakeCount()
         report.oversizedRecordings = library.oversizedCount
         lastReport = report
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return ("WritersBlock-backup-\(formatter.string(from: now)).zip", try BackupArchive.zip(entries))
+        return archive
     }
 
     /// Merges an exported zip, or a bare v4 `manifest.json`, into the library.
-    /// Recordings in the zip that are missing here are added; nothing local is replaced.
+    /// Keeps displaced local lyrics as songs. Adds recordings missing from this device.
     func importArchive(_ data: Data, modelContext: ModelContext) async throws {
-        try await library.withGate { try await importArchiveHoldingGate(data, modelContext: modelContext) }
+        try await importArchive(data, modelContext: modelContext, didCommit: nil)
     }
 
-    private func importArchiveHoldingGate(_ data: Data, modelContext: ModelContext) async throws {
+    func importArchive(_ data: Data, modelContext: ModelContext, pendingDraft: BackupPendingDraft? = nil,
+                       didCommit: ((BackupApplyOutcome) -> Void)?) async throws {
+        try await importArchive(data, modelContext: modelContext,
+                                draftHandoff: BackupDraftHandoff(pendingDraft: pendingDraft, didCommit: didCommit))
+    }
+
+    func importArchive(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
+        try await library.withGate {
+            try await importArchiveHoldingGate(data, modelContext: modelContext, draftHandoff: draftHandoff)
+        }
+    }
+
+    private func importArchiveHoldingGate(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
         var report = BackupReport()
         library.clearStaging(context: modelContext)
         var files: [String: Data] = [:]
@@ -1863,7 +2147,8 @@ final class BackupService {
         try await library.reconcile(context: modelContext)
         try repairLocalPrecedence(modelContext)
         report.oversizedRecordings = library.oversizedCount
-        let merged = try apply(inputs: [imported], to: modelContext, report: &report)
+        let merged = try apply(inputs: [imported], to: modelContext, report: &report,
+                               draftHandoff: draftHandoff)
         // Decided by id: a recording this device lacks is written to its id; its bytes
         // must match hash and declared size. The archive holds each recording under
         // the name the export gave it (its display name, numbered where names repeat),
@@ -1913,9 +2198,10 @@ final class BackupService {
         defaults.removeObject(forKey: Self.backgroundFailureKey)
     }
 
-    private func makeSnapshot(modelContext: ModelContext) throws -> SyncBlob {
-        let projects = try modelContext.fetch(FetchDescriptor<SongProject>())
-        let trashed = try modelContext.fetch(FetchDescriptor<TrashedSongProject>())
+    private func makeSnapshot(modelContext: ModelContext, projects: [SongProject]? = nil,
+                              trashed: [TrashedSongProject]? = nil) throws -> SyncBlob {
+        let projects = try projects ?? modelContext.fetch(FetchDescriptor<SongProject>())
+        let trashed = try trashed ?? modelContext.fetch(FetchDescriptor<TrashedSongProject>())
         let deletions = try SyncMerger.mergeDeletions(DeletionStore.all(in: modelContext))
         let projectIds = Set(projects.map(\.id) + trashed.map(\.id))
         // Recordings in the recordings Trash stay on this device.
@@ -1950,7 +2236,16 @@ final class BackupService {
     /// device first saw it, kept here and written to the manifest, never changed.
     private func fixingPrecedence(_ blob: SyncBlob) -> SyncBlob {
         var seen = firstSeenTimes()
-        let now = Date().epochMilliseconds
+        let fixed = fixingPrecedence(blob, sharing: &seen)
+        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
+        return fixed
+    }
+
+    /// The repair with first-seen times kept in `seen`: a read-only look shares one
+    /// dictionary across its files, so an identity missing a time in two files gets one
+    /// time as sync gives it, and saves nothing (recording a first sighting is a backup's).
+    private func fixingPrecedence(_ blob: SyncBlob, sharing seen: inout [String: Int64]) -> SyncBlob {
+        let now = self.now().epochMilliseconds
         func time(_ key: String) -> Date {
             if seen[key] == nil { seen[key] = now }
             return Date(millisecondsSince1970: seen[key]!)
@@ -1986,7 +2281,6 @@ final class BackupService {
             trash.deleteAfter = trash.deletedAt.addingTimeInterval(trashRetentionInterval)
             return trash
         }
-        defaults.set(seen.mapValues { NSNumber(value: $0) }, forKey: Self.firstSeenKey)
         return fixed
     }
 
@@ -2062,9 +2356,10 @@ final class BackupService {
         if modelContext.hasChanges { try modelContext.save() }
     }
 
-    private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext) throws -> SyncBlob {
+    private func resolve(_ inputs: [SyncBlob], with modelContext: ModelContext, local: SyncBlob? = nil,
+                         onWinningCascades: (([SyncDeletion]) -> Void)? = nil) throws -> SyncBlob {
         // Precedence times are fixed before anything is compared (A32).
-        let snapshot = fixingPrecedence(try makeSnapshot(modelContext: modelContext))
+        let snapshot = fixingPrecedence(try local ?? makeSnapshot(modelContext: modelContext))
         let gathered = try SyncMerger.gather([snapshot] + inputs.map(fixingPrecedence))
         // A36: the display name is metadata. A rename made here and not yet written,
         // or a recording no input lists yet, carries this device's name; otherwise the
@@ -2085,7 +2380,7 @@ final class BackupService {
             if row.precedenceTime != won.uploadedAt { row.uploadedAt = won.uploadedAt }
             if row.precedenceRepaired != won.precedenceRepaired { row.precedenceRepaired = won.precedenceRepaired }
         }
-        var resolved = try SyncMerger.resolve(gathered)
+        var resolved = try SyncMerger.resolve(gathered, onWinningCascades: onWinningCascades)
         resolved.recordings = resolved.recordings.map { entry in
             var named = entry
             if let row = held[entry.id], row.sha256 == entry.sha256, row.displayNameChanged || remoteNames[entry.id] == nil {
@@ -2099,19 +2394,32 @@ final class BackupService {
     }
 
     @discardableResult
-    private func apply(inputs raw: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport) throws -> SyncBlob {
+    private func apply(inputs raw: [SyncBlob], to modelContext: ModelContext, report: inout BackupReport,
+                       draftHandoff: BackupDraftHandoff? = nil) throws -> SyncBlob {
         // After the network waits: the recordings' last check must still hold, and the
         // tombstones and move record read now, before anything changes (finding 7).
         try library.requireChecked(modelContext)
+        // Two rows with one id (SwiftData does not refuse them) stop the merge before it
+        // writes anything. Nothing below adds or removes a song row before these are used.
+        let active = try modelContext.fetch(FetchDescriptor<SongProject>())
+        let trashed = try modelContext.fetch(FetchDescriptor<TrashedSongProject>())
+        let activeById = try Dictionary(active.map { ($0.id, $0) },
+                                        uniquingKeysWith: { first, _ in throw BackupError.sameIdSongs(first.id) })
+        let trashById = try Dictionary(trashed.map { ($0.id, $0) },
+                                       uniquingKeysWith: { first, _ in throw BackupError.sameIdSongs(first.id) })
+        let before = try makeSnapshot(modelContext: modelContext, projects: active, trashed: trashed)
+        let snapshots = zip(before.projects, active).map { (SongRecoveryStore.Song(project: $0.0), $0.1.persistentModelID) }
+            + zip(before.trashed, trashed).map { (SongRecoveryStore.Song(trashed: $0.0), $0.1.persistentModelID) }
+        var saved = false
+        defer { if !saved { modelContext.rollback() } }
         // Times are fixed once (A32); resolution and preservation see the same values.
         let inputs = raw.map(fixingPrecedence)
-        let blob = try resolve(inputs, with: modelContext)
+        var winningCascades: [SyncDeletion] = []
+        let blob = try resolve(inputs, with: modelContext, local: before) { winningCascades = $0 }
         try blob.validate()
         // A41: every repaired song this apply removes (held here or in an input) is
         // kept and read back first; a failure stops the run before anything is deleted.
-        try preserveRepairedSongLosers(from: [try makeSnapshot(modelContext: modelContext)] + inputs, merged: blob, report: &report)
-        let activeById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<SongProject>()).map { ($0.id, $0) })
-        let trashById = Dictionary(uniqueKeysWithValues: try modelContext.fetch(FetchDescriptor<TrashedSongProject>()).map { ($0.id, $0) })
+        let repaired = try preserveRepairedSongLosers(from: [before] + inputs, merged: blob, report: &report)
         let mergedActiveIds = Set(blob.projects.map(\.id))
         let mergedTrashIds = Set(blob.trashed.map(\.id))
         // A kept tombstone of a song edited after it does not remove the song.
@@ -2122,12 +2430,18 @@ final class BackupService {
         // A song a tombstone without a time still names (none with a time superseded
         // it above) is left exactly as it is here: not changed, removed or brought back (T5.24).
         let held = try library.held(in: modelContext)
+        let copies = try keepDisplacedLyrics(snapshots, before: before, incoming: inputs, merged: blob, held: held.songs,
+                                        deleted: deletedProjectIds, repaired: repaired, draftHandoff: draftHandoff, in: modelContext)
         // Recordings of removed songs get their own tombstones; recordings an incoming
         // tombstone covers lose their rows; both in this save, files after it.
         var removedFiles: [(url: URL, sha256: String, recordingId: String)] = []
         for projectId in deletedProjectIds {
             let deletedAt = blob.deletions.filter { $0.isSongTombstone && $0.projectId == projectId }.map(\.deletedAt).max() ?? 0
-            for row in try library.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
+            // Commit local and manifest cascades together so a failed save can undo both.
+            let rows = try library.tombstoneRecordings(ofProject: projectId, deletedAt: deletedAt, in: modelContext) {
+                cascades, _ in winningCascades += cascades
+            }
+            for row in rows {
                 if let file = row.fileURL(memosRoot: memosRoot, trashRoot: library.trashRoot) { removedFiles.append((file, row.sha256, row.id)) }
             }
         }
@@ -2203,8 +2517,86 @@ final class BackupService {
         }
         // Deleted recordings leave the memo folders and the Trash for quarantine,
         // recorded before this save and finished after it (A28).
-        try library.saveRecordingMoves(quarantine: removedFiles, in: modelContext) { try modelContext.save() }
+        try library.saveRecordingMoves(quarantine: removedFiles, in: modelContext) {
+            let previousAuthor = modelContext.author
+            if let handoff = draftHandoff, let pending = handoff.pendingDraft(),
+               let copy = copies.first(where: { pending.matches($0.source, rowID: $0.sourceRowID) }),
+               case .song(let id) = copy.destination,
+               !snapshots.contains(where: { $0.0.id == id }),
+               let author = try handoff.prepareCommit(id, modelContext) {
+                modelContext.author = author
+            }
+            defer { modelContext.author = previousAuthor }
+            try RecordingFiles.rememberDraftSourceCascades(winningCascades, for: memosRoot) {
+                try saveAppliedChanges(modelContext)
+            }
+            saved = true
+            draftHandoff?.publish(BackupApplyOutcome(copies: copies))
+        }
         return blob
+    }
+
+    /// The merge decides what stays under the original id. Preserve each distinct
+    /// nonblank local lyric it would displace, preferring active metadata over Trash.
+    private func keepDisplacedLyrics(
+        _ snapshots: [(SongRecoveryStore.Song, PersistentIdentifier)],
+        before: SyncBlob, incoming: [SyncBlob], merged: SyncBlob, held: Set<String>, deleted: Set<String>,
+        repaired: [SongRecoveryStore.Song], draftHandoff: BackupDraftHandoff?, in context: ModelContext
+    ) throws -> [BackupApplyOutcome.Copy] {
+        let winners = Dictionary(merged.projects.map { ($0.id, $0.lyrics) } + merged.trashed.map { ($0.id, $0.lyrics) },
+                                 uniquingKeysWith: { active, _ in active })
+        var usedIDs = Set(snapshots.map { $0.0.id } + before.deletions.map(\.projectId) + merged.deletions.map(\.projectId))
+        usedIDs.formUnion(winners.keys)
+        usedIDs.formUnion(held)
+        let pendingDraft = draftHandoff?.pendingDraft()
+        let savedDrafts = draftHandoff?.savedDrafts ?? []
+        let incomingTombstones = incoming.flatMap(\.deletions).filter(\.isSongTombstone)
+        var considered: [String: Set<String>] = [:]
+        var copies: [BackupApplyOutcome.Copy] = []
+        for (source, rowID) in snapshots {
+            // Removed only by a tombstone this device already held: the local library had
+            // already deleted these words, so the merge displaces nothing. A stored tombstone
+            // can outlive a revival, so an incoming one that beats the row still keeps a copy.
+            if deleted.contains(source.id), !incomingTombstones.contains(where: { deletion in
+                guard deletion.projectId == source.id else { return false }
+                if let project = source.project { return deletion.wins(over: project.updatedAt, repaired: project.precedenceRepaired) }
+                return source.trashed.map { deletion.wins(over: $0.deletedAt, repaired: $0.trashedAtRepaired) } ?? false
+            }) { continue }
+            guard deleted.contains(source.id) || (!held.contains(source.id) && winners[source.id] != nil),
+                  let lyrics = source.project?.lyrics ?? source.trashed?.lyrics,
+                  !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, lyrics != winners[source.id],
+                  considered[source.id, default: []].insert(lyrics).inserted else { continue }
+            if let saved = savedDrafts.first(where: { draft in
+                draft.matches(source, rowID: rowID) && (
+                    merged.projects.contains { $0.id == draft.copyID && $0.title == draft.title && $0.lyrics == draft.lyrics && $0.theme == draft.theme } ||
+                    merged.trashed.contains { $0.id == draft.copyID && $0.title == draft.title && $0.lyrics == draft.lyrics && $0.theme == draft.theme }
+                )
+            }) {
+                copies.append(.init(source: source, sourceRowID: rowID, destination: .song(saved.copyID)))
+                continue
+            }
+            let matchesPending = pendingDraft?.matches(source, rowID: rowID) == true
+            if repaired.contains(source), !matchesPending {
+                copies.append(.init(source: source, sourceRowID: rowID, destination: .repairedSongRecovery))
+                continue
+            }
+            let theme = source.project?.theme ?? source.trashed?.theme ?? ""
+            let copyID: String
+            if let pendingDraft, matchesPending,
+               (try? SyncIdentity.validateProjectId(pendingDraft.copyID)) != nil,
+               usedIDs.insert(pendingDraft.copyID).inserted {
+                copyID = pendingDraft.copyID
+            } else {
+                var id = UUID().uuidString.lowercased()
+                while !usedIDs.insert(id).inserted { id = UUID().uuidString.lowercased() }
+                copyID = id
+                if matchesPending { try draftHandoff?.replaceReservation(copyID) }
+            }
+            let title = matchesPending ? source.title : "\(source.title) (before restore)"
+            context.insert(SongProject(id: copyID, title: title, lyrics: lyrics, theme: theme))
+            copies.append(.init(source: source, sourceRowID: rowID, destination: .song(copyID)))
+        }
+        return copies
     }
 
     private var clientId: String {

@@ -32,7 +32,12 @@ enum RhymeAITokens {
     }
 
     enum Touch {
+        /// A finger's target on iOS; on the Mac, a pointer's: the standard row height.
+        #if os(macOS)
+        static let minimum: CGFloat = 28
+        #else
         static let minimum: CGFloat = 44
+        #endif
         static let comfortable: CGFloat = 56
         static let prominent: CGFloat = 82
     }
@@ -190,12 +195,14 @@ private struct AppearanceActionSurfaceModifier: ViewModifier {
     @Environment(\.appAppearanceStyle) private var appearance
 
     let cornerRadius: CGFloat
+    let isEnabled: Bool
 
     func body(content: Content) -> some View {
+        let palette = appearance.palette
         content
-            .foregroundStyle(appearance.palette.onAction)
+            .foregroundStyle(isEnabled ? palette.onAction : palette.disabledInk)
             .background(
-                appearance.palette.action,
+                isEnabled ? palette.action : palette.raisedSurface,
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
     }
@@ -300,8 +307,10 @@ extension View {
         )
     }
 
-    func appearanceActionSurface(cornerRadius: CGFloat) -> some View {
-        modifier(AppearanceActionSurfaceModifier(cornerRadius: cornerRadius))
+    /// The action fill. A disabled action drops to the raised surface with the
+    /// disabled ink, which keeps the label at 3:1 or more instead of fading it.
+    func appearanceActionSurface(cornerRadius: CGFloat, isEnabled: Bool = true) -> some View {
+        modifier(AppearanceActionSurfaceModifier(cornerRadius: cornerRadius, isEnabled: isEnabled))
     }
 
     @ViewBuilder

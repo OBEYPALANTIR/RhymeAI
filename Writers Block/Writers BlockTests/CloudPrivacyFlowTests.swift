@@ -400,6 +400,219 @@ struct CloudPrivacyFlowTests {
         #expect(await Self.waitUntil { !emptyViewModel.isLoading && emptyViewModel.errorMessage != nil })
         #expect(emptyViewModel.suggestions.isEmpty)
         #expect(emptyViewModel.errorMessage == "AI did not return suggestions. Try again.")
+        #expect(emptyViewModel.suggestionsFailed, "the assistant offers Try again only after a failed request")
+    }
+
+    /// "Try again" follows the failure while it is the error on screen: caret
+    /// moves and edits keep it, and any other error, even with the same
+    /// words, takes the heading back without the failure returning later.
+    @Test func tryAgainOnlyFollowsTheFailureItShows() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        #expect(!viewModel.suggestionsFailed, "an editor error is not a failed request")
+
+        func fail() async {
+            viewModel.getSuggestions()
+            #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+        }
+
+        await fail()
+        let failure = try #require(viewModel.errorMessage)
+        viewModel.cursorPosition = 2
+        #expect(viewModel.suggestionsFailed && viewModel.errorMessage == failure, "a caret move keeps the card and heading")
+        viewModel.lyrics += " still"
+        #expect(viewModel.suggestionsFailed && viewModel.errorMessage == failure, "a lyric edit keeps the card and heading")
+
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        #expect(!viewModel.suggestionsFailed, "a later editor error takes the heading back")
+
+        await fail()
+        viewModel.errorMessage = failure
+        #expect(!viewModel.suggestionsFailed, "an editor error with the same words is not the failure")
+        viewModel.cancelSuggestions()
+        #expect(viewModel.errorMessage == failure, "a cancel keeps an editor error")
+
+        await fail()
+        viewModel.errorMessage = "Couldn't save this song. Your edits remain open."
+        viewModel.errorMessage = nil
+        viewModel.errorMessage = failure
+        #expect(!viewModel.suggestionsFailed, "the old failure does not come back with its words")
+
+        viewModel.errorMessage = nil
+        viewModel.getSuggestions()
+        #expect(viewModel.isLoading)
+        viewModel.cancelSuggestions()
+        #expect(!viewModel.isLoading && !viewModel.suggestionsFailed && viewModel.errorMessage == nil, "Stop while loading")
+    }
+
+    /// A template opens a new draft, so the old song's failed request does not
+    /// follow it, whether or not the template's theme matches the old one.
+    @Test func applyingATemplateRetiresAFailedRequest() async throws {
+        let (defaults, suiteName) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: Self.makeSession()),
+            keychainStore: keychain,
+            defaults: defaults
+        )
+        // A library lets the second template save the first template's draft.
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        let templates = SongTemplate.builtIn
+        #expect(templates[0].theme != templates[1].theme)
+
+        for (template, theme) in [(templates[0], templates[0].theme), (templates[1], templates[0].theme)] {
+            viewModel.theme = theme
+            viewModel.lyrics = "A first unfinished line"
+            viewModel.cursorPosition = viewModel.lyrics.utf16.count
+            viewModel.getSuggestions()
+            #expect(await Self.waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+            viewModel.applyTemplate(template)
+            #expect(viewModel.title == "Untitled \(template.name)", "the template opened")
+            let label = template.theme == theme ? "same theme" : "different theme"
+            #expect(viewModel.errorMessage == nil, "a template with the \(label) clears the failure")
+            #expect(!viewModel.suggestionsFailed, "a template with the \(label) clears the heading")
+        }
+    }
+
+    @Test func undoAndRedoKeepTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            let original = viewModel.lyrics
+            let edited = original + " again"
+            viewModel.onLyricsChanged(edited)
+            let failure = try await Self.failSuggestions(viewModel)
+
+            viewModel.undoLyrics()
+            #expect(viewModel.lyrics == original)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+
+            viewModel.redoLyrics()
+            #expect(viewModel.lyrics == edited)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func changingTheRhymeTypeKeepsTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            viewModel.rhymeType = .perfect
+            let failure = try await Self.failSuggestions(viewModel)
+
+            viewModel.rhymeType = .near
+            #expect(viewModel.rhymeType == .near)
+            #expect(viewModel.errorMessage == failure)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func changingTheThemeRetiresTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, _ in
+            _ = try await Self.failSuggestions(viewModel)
+
+            viewModel.theme = "Finding a way home"
+            #expect(viewModel.errorMessage == nil)
+            #expect(!viewModel.suggestionsFailed)
+        }
+    }
+
+    @Test func openingAndStartingASongRetireTheFailedSuggestionsRequest() async throws {
+        try await Self.withSuggestionsFixture { viewModel, context in
+            let song = SongProject(id: "stored-song", title: "Harbour Lights", lyrics: "Lights across the water", theme: "")
+            context.insert(song)
+            try context.save()
+            _ = try await Self.failSuggestions(viewModel)
+
+            // Keep the theme empty on both sides to exercise navigation's own reset.
+            viewModel.loadProject(song)
+            #expect(viewModel.currentProjectId == song.id)
+            #expect(viewModel.errorMessage == nil, "opening a song clears the message")
+            #expect(!viewModel.suggestionsFailed, "opening a song retires the failure")
+
+            _ = try await Self.failSuggestions(viewModel)
+            viewModel.newProject()
+            #expect(viewModel.currentProjectId == nil)
+            #expect(viewModel.editorOpen.isNewSong)
+            #expect(viewModel.errorMessage == nil, "starting a song clears the message")
+            #expect(!viewModel.suggestionsFailed, "starting a song retires the failure")
+        }
+    }
+
+    @Test func thrownSuggestionsStreamErrorBecomesTheDisplayedFailure() async throws {
+        StagedStreamURLProtocol.reset(firstLine: "Under the pine")
+        defer { StagedStreamURLProtocol.release(.finish) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StagedStreamURLProtocol.self]
+        try await Self.withSuggestionsFixture(session: URLSession(configuration: configuration)) { viewModel, _ in
+            viewModel.getSuggestions()
+            try #require(await Self.waitUntil { viewModel.suggestions.count == 1 })
+            #expect(viewModel.isLoading)
+
+            StagedStreamURLProtocol.release(.fail)
+            try #require(await Self.waitUntil { !viewModel.isLoading })
+            #expect(viewModel.errorMessage == AIServiceError.networkUnavailable.localizedDescription)
+            #expect(viewModel.suggestionsFailed)
+        }
+    }
+
+    private static func withSuggestionsFixture(
+        session: URLSession? = nil,
+        _ body: (EditorViewModel, ModelContext) async throws -> Void
+    ) async throws {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore()
+        keychain.setKey(provider: AIProvider.gemini.rawValue, key: "synthetic-key")
+        PrivacyURLProtocol.reset(suggestionText: "")
+        let viewModel = EditorViewModel(
+            aiService: AIService(session: session ?? makeSession()),
+            keychainStore: keychain,
+            companionStore: WritingCompanionStore(inMemory: true),
+            defaults: defaults
+        )
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        viewModel.modelContext = container.mainContext
+        viewModel.newProject()
+        viewModel.saveProvider(.gemini)
+        viewModel.setCloudAISharingConsent(true, scope: .selectedContext)
+        viewModel.lyrics = "A first unfinished line"
+        viewModel.cursorPosition = viewModel.lyrics.utf16.count
+        try await body(viewModel, container.mainContext)
+    }
+
+    private static func failSuggestions(_ viewModel: EditorViewModel) async throws -> String {
+        viewModel.getSuggestions()
+        try #require(await waitUntil { !viewModel.isLoading && viewModel.suggestionsFailed })
+        let message = try #require(viewModel.errorMessage)
+        #expect(message == "AI did not return suggestions. Try again.")
+        return message
     }
 
     /// The ink burst keys off this signal. Each case streams one line, holds
@@ -455,15 +668,18 @@ struct CloudPrivacyFlowTests {
             case .none:
                 #expect(viewModel.completedSuggestionsRequestID == requestID)
                 #expect(viewModel.suggestions.count == 1)
+                #expect(!viewModel.suggestionsFailed)
             case .consume:
                 #expect(viewModel.completedSuggestionsRequestID == nil)
                 #expect(viewModel.errorMessage == nil, "consumed lines are not an empty answer")
+                #expect(!viewModel.suggestionsFailed)
             case .stop, .setting:
                 #expect(viewModel.completedSuggestionsRequestID == nil, "\(interruption)")
                 #expect(viewModel.suggestions.count == 1, "\(interruption): the line already shown stays")
             case .streamError:
                 #expect(viewModel.completedSuggestionsRequestID == nil)
                 #expect(viewModel.errorMessage != nil)
+                #expect(viewModel.suggestionsFailed)
                 #expect(viewModel.suggestions.count == 1)
             }
         }

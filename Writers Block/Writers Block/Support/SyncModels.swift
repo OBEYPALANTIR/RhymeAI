@@ -843,7 +843,7 @@ enum SyncMerger {
     /// precedence time; each recording a song tombstone removes gets its own
     /// tombstone, so reviving the song (which drops the song tombstone) cannot
     /// bring the audio back. A tombstone whose song or recording survives is dropped.
-    static func resolve(_ gathered: SyncBlob) throws -> SyncBlob {
+    static func resolve(_ gathered: SyncBlob, onWinningCascades: (([SyncDeletion]) -> Void)? = nil) throws -> SyncBlob {
         let resolved = resolveActiveTrashConflicts(projects: gathered.projects, trashed: gathered.trashed)
         let songTombstones = Dictionary(gathered.deletions.filter(\.isSongTombstone).map { ($0.projectId, $0) }) { first, _ in first }
         let projects = resolved.projects.filter { project in
@@ -870,6 +870,11 @@ enum SyncMerger {
                 entry.projectId == deletion.projectId && entry.fileName == deletion.fileName
                     && entry.id == RecordingBackupManifest.legacyRecordingId(projectId: entry.projectId, fileName: entry.fileName, sha256: entry.sha256)
             }
+        }
+        if let onWinningCascades, !covered.isEmpty {
+            // A tied or newer input tombstone still stands. Only new winners came from the cascade.
+            let existing = Set(gathered.deletions)
+            onWinningCascades(deletions.filter { !existing.contains($0) })
         }
         return SyncBlob(
             projects: projects.sorted { ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id) },

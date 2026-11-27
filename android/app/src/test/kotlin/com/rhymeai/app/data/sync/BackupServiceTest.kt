@@ -105,7 +105,8 @@ class BackupServiceTest {
         drive.put(BackupManifest.FILE_NAME, BackupManifest.encode(blob, 1_000L, "other-device"))
     }
 
-    private fun remote(): SyncBlob = BackupManifest.decode(drive.bytes(BackupManifest.FILE_NAME)!!)
+    /** The manifest a backup writes: the newest of those named [BackupManifest.FILE_NAME] (older duplicates are kept). */
+    private fun remote(): SyncBlob = BackupManifest.decode(drive.newest(BackupManifest.FILE_NAME)!!.bytes)
 
     private fun putLegacy(blob: SyncBlob, recordings: Map<RecordingManifestEntry, ByteArray> = emptyMap()) {
         val json = legacyJson.encodeToString(blob).toByteArray()
@@ -903,15 +904,191 @@ class BackupServiceTest {
     }
 
     @Test
-    fun duplicateManifestsAreMergedAndTheOlderOnesRemovedAfterVerification() = runBlocking<Unit> {
+    fun duplicateManifestsAreMergedAndKept() = runBlocking<Unit> {
         drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("older"))), 0L, "a"))
         drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("newer"))), 0L, "b"))
 
         assertEquals(2, assertIs<ProbeResult.Ready>(service.probe()).probe.projectCount)
         assertIs<SyncResult.Success>(service.backUp(repository))
 
-        assertEquals(1, drive.count(BackupManifest.FILE_NAME))
+        // Drive offers no conditional delete, so a duplicate another device may still write is never removed.
+        assertEquals(2, drive.count(BackupManifest.FILE_NAME))
+        assertTrue(drive.deleted.isEmpty())
         assertEquals(setOf("older", "newer"), remote().projects.map { it.id }.toSet())
+    }
+
+    @Test
+    fun aDuplicateWrittenByAnotherDeviceAfterOurReadBackIsKeptAndItsWordsGathered() = runBlocking<Unit> {
+        val duplicate = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"))), 0L, "other-device"))
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"))), 0L, "b"))
+        repository.saveProjects(listOf(song("mine")))
+        // To the other device the older file is its manifest: it writes a new song into it
+        // after our read-back captured our bytes, so our verification still passes.
+        drive.afterManifestWrite = {
+            drive.afterNextDownload = {
+                putRemote(SyncBlob(projects = listOf(song("seed"), song("theirs", updatedAt = 200L, lyrics = "words only in that file"))))
+            }
+        }
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        assertEquals("words only in that file", remote().projects.firstOrNull { it.id == "theirs" }?.lyrics)
+        val (fresh, freshSide) = secondDevice("fresh")
+        assertIs<SyncResult.Success>(freshSide.second.restore(fresh))
+        assertEquals("words only in that file", fresh.projectsFlow.first().firstOrNull { it.id == "theirs" }?.lyrics)
+        assertEquals(2, drive.count(BackupManifest.FILE_NAME))
+        assertFalse(duplicate in drive.deleted)
+    }
+
+    /**
+     * A stale duplicate (created first, so older) and a current manifest; two backups, then a
+     * restore into a fresh device. Both files stay, and nothing is set aside again on the second run.
+     */
+    private suspend fun syncAgainstStaleDuplicate(stale: SyncBlob, current: SyncBlob): Pair<SyncBlob, ProjectRepository> {
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(stale, 0L, "stale"))
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(current, 0L, "current"))
+        repository.saveProjects(listOf(song("here")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        val setAside = repository.recoveredSongs().size
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(setAside, repository.recoveredSongs().size)
+        val (fresh, freshSide) = secondDevice("fresh")
+        assertIs<SyncResult.Success>(freshSide.second.restore(fresh))
+        assertEquals(2, drive.count(BackupManifest.FILE_NAME))
+        return remote() to fresh
+    }
+
+    @Test
+    fun anOldCopyInAStaleDuplicateNeverBringsBackASongDeletedLater() = runBlocking<Unit> {
+        val (written, fresh) = syncAgainstStaleDuplicate(
+            // r has no time (an old backup): its first-seen repair loses to the tombstone and is set aside once.
+            stale = SyncBlob(projects = listOf(song("s", updatedAt = 100L, lyrics = "old words"), song("r", updatedAt = 0L, lyrics = "timeless words"))),
+            current = SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L), SyncDeletion("r", deletedAt = 200L)))
+        )
+
+        assertEquals(listOf("timeless words"), repository.recoveredSongs().map { it.project.lyrics })
+        assertTrue(written.projects.none { it.id == "s" || it.id == "r" } && written.trashed.none { it.project.id == "s" })
+        assertTrue(written.deletions.any { it.projectId == "s" && it.isSongTombstone && it.deletedAt == 200L })
+        assertTrue(fresh.projectsFlow.first().none { it.id == "s" } && fresh.trashedProjectsFlow.first().none { it.project.id == "s" })
+        assertTrue(repository.projectsFlow.first().none { it.id == "s" })
+    }
+
+    @Test
+    fun aStaleTombstoneInADuplicateNeverDeletesASongRevivedOrEditedLater() = runBlocking<Unit> {
+        val (written, fresh) = syncAgainstStaleDuplicate(
+            stale = SyncBlob(projects = listOf(song("t", updatedAt = 100L, lyrics = "old words")), deletions = listOf(SyncDeletion("s", deletedAt = 200L))),
+            // s was revived after the deletion (its tombstone dropped); t was edited after this copy.
+            current = SyncBlob(projects = listOf(song("s", updatedAt = 300L, lyrics = "revived words"), song("t", updatedAt = 300L, lyrics = "edited words")))
+        )
+
+        assertEquals("revived words", written.projects.firstOrNull { it.id == "s" }?.lyrics)
+        assertEquals("revived words", fresh.projectsFlow.first().firstOrNull { it.id == "s" }?.lyrics)
+        assertEquals("edited words", fresh.projectsFlow.first().firstOrNull { it.id == "t" }?.lyrics)
+    }
+
+    /**
+     * Late take, pinned as it is today: a kept duplicate still carries song p's deletion at 200; the
+     * primary holds p edited at 300, so p is active. A take of p recorded at 100 (a real time) then
+     * arrives late. The stale song tombstone still covers it.
+     */
+    private fun lateTakeDrive() {
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion("p", deletedAt = 200L))), 0L, "stale"))
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("p", updatedAt = 300L, lyrics = "edited words"))), 0L, "current"))
+    }
+
+    private fun takeTombstones(written: SyncBlob, take: RecordingManifestEntry) =
+        written.deletions.filter { it.recordingId == take.id }.map { it.deletedAt }
+
+    @Test
+    fun aLateTakeInAnotherDevicesManifestIsDroppedTombstonedAndItsDriveAudioDeletedByTheNextBackup() = runBlocking<Unit> {
+        lateTakeDrive()
+        repository.saveProjects(listOf(song("p", updatedAt = 300L, lyrics = "edited words")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        // Precondition: the edit beat the deletion and the song tombstone is not rewritten.
+        assertEquals("edited words", remote().projects.single { it.id == "p" }.lyrics)
+        assertTrue(remote().deletions.none { it.projectId == "p" })
+
+        // A third device writes its manifest with the take (real time 100) and uploads the take's audio.
+        val bytes = "late take".toByteArray()
+        val take = entry("p", "take.m4a", bytes, uploadedAt = 100L)
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("p", updatedAt = 300L, lyrics = "edited words")), recordings = listOf(take)), 0L, "third"))
+        putRaw(take, bytes)
+        val rawName = BackupManifest.recordingDriveName(take.id)
+        val rawId = drive.listFilesByNamePrefix("t", rawName).single().id
+        assertEquals(100L to false, remote().recordings.single().let { it.precedenceTime to it.precedenceRepaired })
+        assertEquals(3, drive.count(BackupManifest.FILE_NAME))
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        // The kept duplicate's song tombstone (200) beats the take (100): not listed, a per-take
+        // tombstone at 200 is written, and that backup deletes the take's only Drive audio.
+        val written = remote()
+        assertEquals("edited words", written.projects.single { it.id == "p" }.lyrics)
+        assertTrue(written.recordings.none { it.id == take.id })
+        assertEquals(listOf(200L), takeTombstones(written, take))
+        assertTrue(written.deletions.none { it.projectId == "p" && it.isSongTombstone })
+        assertNull(drive.file(rawName))
+        assertTrue(rawId in drive.deleted)
+
+        // A fresh device restoring gets the song without the take.
+        val (fresh, freshSide) = secondDevice("fresh")
+        assertIs<SyncResult.Success>(freshSide.second.restore(fresh))
+        assertEquals("edited words", fresh.projectsFlow.first().single { it.id == "p" }.lyrics)
+        assertTrue(fresh.recordingRecords().none { it.id == take.id })
+        assertTrue(freshSide.first.walk().none { it.isFile && it.name.startsWith(take.id) })
+    }
+
+    @Test
+    fun aLateLocalTakeIsNotUploadedIsTombstonedKeptOnBackupAndQuarantinedOnRestore() = runBlocking<Unit> {
+        lateTakeDrive()
+        repository.saveProjects(listOf(song("p", updatedAt = 300L, lyrics = "edited words")))
+        // Recorded here at 100 (a real time) and never uploaded.
+        val bytes = "local take".toByteArray()
+        val take = writeMemo("p", "take.m4a", bytes, modifiedAt = 100L)
+        val local = RecordingFileStore.targetFile(filesDir, "p", take.id, "take.m4a")
+        assertEquals(100L to false, repository.recordingRecords().single().let { it.uploadedAt to it.precedenceRepaired })
+        assertTrue(local.exists())
+
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        // Back up: not listed, a per-take tombstone at 200, never uploaded; this device's file and record stay.
+        val written = remote()
+        assertEquals("edited words", written.projects.single { it.id == "p" }.lyrics)
+        assertTrue(written.recordings.none { it.id == take.id })
+        assertEquals(listOf(200L), takeTombstones(written, take))
+        assertTrue(drive.writes.none { it.startsWith("upload:${BackupManifest.RECORDING_PREFIX}") })
+        assertNull(drive.file(BackupManifest.recordingDriveName(take.id)))
+        assertContentEquals(bytes, local.readBytes())
+        assertEquals(listOf(take.id), repository.recordingRecords().map { it.id })
+
+        assertIs<SyncResult.Success>(service.restore(repository))
+
+        // Restore: the record goes and the bytes move to quarantine (kept on the device, not in Drive).
+        assertFalse(local.exists())
+        assertTrue(repository.recordingRecords().none { it.id == take.id })
+        val quarantined = RecordingFiles.quarantineDirectory(filesDir, "p").walk().filter { it.isFile }.toList()
+        assertEquals(listOf("${take.id}.m4a"), quarantined.map { it.name })
+        assertContentEquals(bytes, quarantined.single().readBytes())
+        assertEquals("edited words", repository.projectsFlow.first().single { it.id == "p" }.lyrics)
+        assertNull(drive.file(BackupManifest.recordingDriveName(take.id)))
+    }
+
+    @Test
+    fun anOlderCopyInAStaleDuplicateNeverOverwritesANewerSongOrTrashState() = runBlocking<Unit> {
+        val (written, fresh) = syncAgainstStaleDuplicate(
+            stale = SyncBlob(
+                projects = listOf(song("s", updatedAt = 100L, lyrics = "old words")),
+                trashed = listOf(TrashedSongProject(song("u", updatedAt = 100L, lyrics = "old u"), deletedAt = 150L))
+            ),
+            // u was restored from Trash at 300 (a restore stamps the song's time).
+            current = SyncBlob(projects = listOf(song("s", updatedAt = 300L, lyrics = "new words"), song("u", updatedAt = 300L, lyrics = "restored u")))
+        )
+
+        assertEquals("new words", written.projects.firstOrNull { it.id == "s" }?.lyrics)
+        assertEquals("new words", fresh.projectsFlow.first().firstOrNull { it.id == "s" }?.lyrics)
+        assertEquals("restored u", fresh.projectsFlow.first().firstOrNull { it.id == "u" }?.lyrics)
+        assertTrue(written.trashed.none { it.project.id == "u" } && fresh.trashedProjectsFlow.first().none { it.project.id == "u" })
     }
 
     @Test
@@ -1871,12 +2048,18 @@ class BackupServiceTest {
             return id
         }
         fun file(name: String) = files.values.firstOrNull { it.name == name }
+        /** The last created file with this name: the newest by this fake's modifiedTime. */
+        fun newest(name: String) = files.values.lastOrNull { it.name == name }
         fun bytes(name: String) = file(name)?.bytes
         fun count(name: String) = files.values.count { it.name == name }
         fun clear() = files.clear()
 
+        /** As Drive: a file's modifiedTime moves with each write, so an older file can become the newest. Off by default. */
+        var modifiedTimeFollowsWrites = false
+
         private fun meta(id: String, file: StoredFile) = DriveFileMetadata(
-            id, file.name, modifiedTime = "%08d".format(file.created), version = file.version.toString(), appProperties = file.appProperties
+            id, file.name, version = file.version.toString(), appProperties = file.appProperties,
+            modifiedTime = "%08d".format(if (modifiedTimeFollowsWrites) file.revisions.last().number else file.created)
         )
 
         private fun manifestWritten() {
@@ -2432,6 +2615,198 @@ class BackupServiceTest {
         assertIs<SyncResult.Success>(freshSide.second.backUp(fresh))
         assertTrue(remote().projects.isEmpty())
         return fresh to freshSide.second
+    }
+
+    @Test
+    fun aSongDeletedSinceStaysRecoverableWhileAStaleDuplicateStillListsIt() = runBlocking<Unit> {
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "old words"))), 0L, "stale"))
+        val current = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "old words"))), 0L, "a"))
+        // The song is deleted after the revision that lists it; the older duplicate still holds it.
+        drive.updateFile("token", current, BackupManifest.MIME_TYPE, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion("s", deletedAt = 200L))), 0L, "a"), emptyMap())
+        assertIs<SyncResult.Success>(service.backUp(repository))
+
+        val summary = recoverOldest(service, repository)
+
+        assertEquals(1, summary.songsAdded)
+        val recovered = repository.projectsFlow.first().single { it.id != "s" }
+        assertEquals("old words", recovered.lyrics)
+        assertEquals(2, drive.count(BackupManifest.FILE_NAME))
+    }
+
+    @Test
+    fun aPinnedRevisionStaysListedAndRecoverableAfterAnotherManifestFileBecomesTheNewest() = runBlocking<Unit> {
+        drive.modifiedTimeFollowsWrites = true
+        val older = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"))), 0L, "a"))
+        val newer = drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(projects = listOf(song("s", lyrics = "words in b"))), 0L, "b"))
+        repository.saveProjects(listOf(song("here")))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("update:$newer", drive.writes.last())
+
+        // Recover the newer file's first revision: it is pinned.
+        val pinned = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions.last { it.fileId == newer }
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, pinned))
+
+        // Another device writes the older file, which becomes the newest: the next backup writes there.
+        drive.updateFile("token", older, BackupManifest.MIME_TYPE, BackupManifest.encode(SyncBlob(projects = listOf(song("seed"), song("other"))), 0L, "a"), emptyMap())
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals("update:$older", drive.writes.last())
+
+        val listed = assertIs<RevisionsResult.Ready>(service.probeRevisions()).revisions
+        assertEquals(pinned.copy(kept = true), listed.single { it.fileId == newer && it.revisionId == pinned.revisionId })
+        assertTrue(listed.any { it.fileId == older })
+        assertEquals(listed.sortedByDescending { it.modifiedTime }, listed)
+        assertIs<RecoveryResult.Recovered>(service.recoverRevision(repository, listed.single { it.fileId == newer && it.revisionId == pinned.revisionId }))
+    }
+
+    /**
+     * A recovery of the oldest revision stopped after its songs; then a kept duplicate holds a
+     * tombstone at [tombstoneAt] for the recovered "one" while the newest manifest holds an edit of it at [editAt].
+     */
+    private suspend fun stoppedRecoveryWithADuplicateTombstone(tombstoneAt: Long, editAt: Long): Triple<ProjectRepository, String, RecoverySummary> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        val one = fresh.songsByTitle().getValue("one").id
+        assertTrue(fresh.recordingRecords().isEmpty())
+
+        drive.modifiedTimeFollowsWrites = true
+        val current = drive.listFilesByNamePrefix("token", BackupManifest.FILE_NAME).single()
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(deletions = listOf(SyncDeletion(one, deletedAt = tombstoneAt))), 0L, "stale"))
+        val blob = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.bytes)
+        val edited = song(one, updatedAt = editAt, lyrics = "edited elsewhere").copy(title = "one")
+        drive.updateFile("token", current.id, BackupManifest.MIME_TYPE, BackupManifest.encode(blob.copy(projects = blob.projects + edited), 0L, "b"), emptyMap())
+
+        val summary = assertIs<RecoveryResult.Recovered>(freshService.recoverRevision(fresh, chosen)).summary
+        return Triple(fresh, one, summary)
+    }
+
+    @Test
+    fun aDuplicateTombstoneDefeatedByALaterEditDoesNotStopARecoveryFromFinishing() = runBlocking<Unit> {
+        val (fresh, one, summary) = stoppedRecoveryWithADuplicateTombstone(tombstoneAt = clock + 100L, editAt = clock + 200L)
+
+        assertEquals(2, summary.recordingsAdded)
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().filter { it.projectId == one }.map { it.displayName })
+    }
+
+    @Test
+    fun aDuplicateTombstoneNewerThanTheEditStillKeepsTheRecoveredSongEmpty() = runBlocking<Unit> {
+        val (fresh, one, summary) = stoppedRecoveryWithADuplicateTombstone(tombstoneAt = clock + 200L, editAt = clock + 100L)
+
+        assertEquals(1, summary.deletedSongs)
+        assertEquals(1, summary.recordingsAdded)
+        assertTrue(fresh.recordingRecords().none { it.projectId == one })
+    }
+
+    /**
+     * Another device's recovered take of "one" is in one manifest at 300 and, without a time, in a newer
+     * duplicate beside its tombstone at 200. Sync repairs the missing time, so the real 300 stands and the
+     * take is kept; finishing the stopped recovery reads the backup the same way and attaches it.
+     */
+    @Test
+    fun aRecoveryReadsTheBackupWithMissingTimesRepairedAsSyncDoes() = runBlocking<Unit> {
+        val (device, dying) = dyingDevice("dying")
+        val (fresh, freshService) = lostAfterAFreshBackup(device = device)
+        val chosen = openOldest(freshService)
+        dying.set(true)
+        assertIs<RecoveryResult.Failed>(freshService.recoverRevision(fresh, chosen))
+        dying.set(false)
+        val one = fresh.songsByTitle().getValue("one").id
+        val old = oldTake("one")
+        val take = old.copy(projectId = one, driveName = RecordingManifestEntry.driveNameFor(one, old.fileName), id = recoveredId(chosen, old.id), uploadedAt = 300L)
+
+        drive.modifiedTimeFollowsWrites = true
+        val current = drive.listFilesByNamePrefix("token", BackupManifest.FILE_NAME).single()
+        val blob = BackupManifest.decode(drive.file(BackupManifest.FILE_NAME)!!.bytes)
+        drive.updateFile("token", current.id, BackupManifest.MIME_TYPE, BackupManifest.encode(blob.copy(recordings = blob.recordings + take), 0L, "b"), emptyMap())
+        drive.add(BackupManifest.FILE_NAME, BackupManifest.encode(SyncBlob(
+            recordings = listOf(take.copy(uploadedAt = 0L, modifiedAt = 0L)),
+            deletions = listOf(SyncDeletion(one, take.fileName, 200L, recordingId = take.id))
+        ), 0L, "stale"))
+
+        val summary = assertIs<RecoveryResult.Recovered>(freshService.recoverRevision(fresh, chosen)).summary
+        assertEquals(0, summary.deletedRecordings)
+        assertEquals(2, summary.recordingsAdded)
+        assertEquals(listOf("a.m4a"), fresh.recordingRecords().filter { it.projectId == one }.map { it.displayName })
+        // A device that syncs the same backup keeps the take too.
+        val (observer, observerSide) = secondDevice("observer")
+        assertIs<SyncResult.Success>(observerSide.second.backUp(observer))
+        assertEquals(300L, remote().recordings.single { it.id == take.id }.uploadedAt)
+        assertTrue(remote().deletions.none { it.recordingId == take.id })
+    }
+
+    /**
+     * An earlier version lists "x" active at a repaired time and in Trash with no time. Sync repairs the
+     * missing time too, and of two repairs the smaller wins, so "x" is active there and is recovered.
+     */
+    @Test
+    fun anEarlierVersionsMissingTimesAreRepairedBeforeItIsResolved() = runBlocking<Unit> {
+        val x = song("x").copy(precedenceRepaired = true)
+        putRemote(SyncBlob(projects = listOf(x), trashed = listOf(TrashedSongProject(x, deletedAt = 0L))))
+        putRemote(SyncBlob(projects = listOf(song("keep"))))
+
+        assertEquals(1, recoverOldest(service, repository).songsAdded)
+        assertEquals("lyrics of x", repository.songsByTitle().getValue("x").lyrics)
+    }
+
+    /** What the earlier version's own deletions of unknown date suspend stays out, counted as suspended. */
+    @Test
+    fun anEarlierVersionsOwnUnknownDateDeletionsKeepWhatTheyNameOut() = runBlocking<Unit> {
+        val suspendedTake = entry("t", "a.m4a", "take a".toByteArray())
+        val kept = entry("t", "b.m4a", "take b".toByteArray())
+        putRaw(suspendedTake, "take a".toByteArray())
+        putRaw(kept, "take b".toByteArray())
+        // Another writer's manifest whose tombstones have no time (this app never writes one).
+        val text = String(BackupManifest.encode(SyncBlob(
+            projects = listOf(song("s"), song("t")),
+            recordings = listOf(suspendedTake, kept),
+            deletions = listOf(SyncDeletion("s", deletedAt = 1L), SyncDeletion("t", "a.m4a", 1L, recordingId = suspendedTake.id))
+        ), 1_000L, "other-device"))
+        val body = JsonObject(Json.parseToJsonElement(text).jsonObject - BackupManifest.HASH_KEY).let { b ->
+            JsonObject(b + ("deletions" to kotlinx.serialization.json.JsonArray(b.getValue("deletions").jsonArray.map { JsonObject(it.jsonObject - "deletedAt") })))
+        }
+        val hash = BackupManifest.sha256Hex(BackupManifest.canonical(body).toByteArray())
+        drive.put(BackupManifest.FILE_NAME, BackupManifest.canonical(JsonObject(body + (BackupManifest.HASH_KEY to kotlinx.serialization.json.JsonPrimitive(hash)))).toByteArray())
+        putRemote(SyncBlob(projects = listOf(song("keep"))))
+
+        val summary = recoverOldest(service, repository)
+        assertEquals(1, summary.songsAdded)
+        assertEquals(1, summary.recordingsAdded)
+        assertEquals(2, summary.unknownDateDeletions)
+        assertEquals(setOf("t"), repository.songsByTitle().keys)
+        assertEquals(listOf("b.m4a"), repository.recordingRecords().map { it.displayName })
+    }
+
+    /**
+     * Recovery reads an earlier version without recording a first sighting of its songs (A32 records
+     * what this device sees live): when a time-less song of that version later turns up in the backup,
+     * sync gives it that sync's time, not the time of the recovery.
+     */
+    @Test
+    fun recoveringAnEarlierVersionRecordsNoFirstSightingOfItsSongs() = runBlocking<Unit> {
+        putRemote(SyncBlob(projects = listOf(song("x", updatedAt = 0L))))
+        putRemote(SyncBlob(projects = listOf(song("keep"))))
+        assertEquals(1, recoverOldest(service, repository).songsAdded)
+
+        clock += 60_000L
+        putRemote(SyncBlob(projects = listOf(song("keep"), song("x", updatedAt = 0L))))
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(clock, remote().projects.single { it.id == "x" }.updatedAt)
+    }
+
+    /** The current backup is live: recovery records its first sightings as sync would, and later syncs keep them. */
+    @Test
+    fun recoveryRecordsFirstSightingsOfTheCurrentBackupAsSyncDoes() = runBlocking<Unit> {
+        putRemote(SyncBlob(projects = listOf(song("old"))))
+        putRemote(SyncBlob(projects = listOf(song("c", updatedAt = 0L))))
+        val recoveredAt = clock
+        assertEquals(1, recoverOldest(service, repository).songsAdded)
+
+        clock += 60_000L
+        assertIs<SyncResult.Success>(service.backUp(repository))
+        assertEquals(recoveredAt, remote().projects.single { it.id == "c" }.updatedAt)
     }
 
     /** The oldest listed revision (A's backup); listing asks nothing of Drive but the list. */

@@ -265,13 +265,15 @@ class BackupArchiveTest {
         assertEquals(1, summary.skippedLargeRecordings)
     }
 
-    private fun repoFileOrNull(path: String): File? =
+    /** Fails, never skips, when a fixture is missing: a skipped drift check would leave CI green. */
+    private fun repoFile(path: String): File =
         sequenceOf("../../$path", "../$path", path).map(::File).firstOrNull(File::isFile)
+            ?: error("Fixture $path not found from ${File("").absolutePath}")
 
     @Test
     fun archiveNamesMatchTheSharedFixture() {
         val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
-            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+            repoFile("shared/fixtures/archive-names-v1.json").readText()
         ).jsonObject
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
         fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
@@ -291,7 +293,7 @@ class BackupArchiveTest {
     @Test
     fun archiveNameFixtureCasesRoundTripThroughARealArchive() {
         val fixture = kotlinx.serialization.json.Json.parseToJsonElement(
-            requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readText()
+            repoFile("shared/fixtures/archive-names-v1.json").readText()
         ).jsonObject
         val cases = fixture.getValue("cases").jsonArray.map { it.jsonObject }
         fun field(case: kotlinx.serialization.json.JsonObject, key: String) = case.getValue(key).jsonPrimitive.content
@@ -316,9 +318,8 @@ class BackupArchiveTest {
 
     @Test
     fun theIosCopyOfTheArchiveNamesFixtureMatches() {
-        val iosCopy = repoFileOrNull("Writers Block/Writers BlockTests/archive-names-v1.json")
-        org.junit.Assume.assumeTrue("iOS copy of archive-names-v1.json is not in this checkout yet; drift check skipped.", iosCopy != null)
-        assertContentEquals(requireNotNull(repoFileOrNull("shared/fixtures/archive-names-v1.json")).readBytes(), iosCopy!!.readBytes())
+        val iosCopy = repoFile("Writers Block/Writers BlockTests/archive-names-v1.json")
+        assertContentEquals(repoFile("shared/fixtures/archive-names-v1.json").readBytes(), iosCopy.readBytes())
     }
     @Test
     fun importKeepsAndReportsAnArchiveSongWhoseRepairedTimeLosesToATombstoneHere() = runBlocking<Unit> {
@@ -336,6 +337,26 @@ class BackupArchiveTest {
         assertEquals(1, summary.songsSetAside)
         assertTrue(repo.projectsFlow.first().none { it.id == "r" })
         assertEquals("only copy", repo.recoveredSongs().single().project.lyrics)
+    }
+
+    @Test
+    fun anImportedTrashCopyThatReplacesAnUnknownTimeSongAfterDeleteForeverLeavesItsWordsInRecovery() = runBlocking<Unit> {
+        // The active song's time is unknown, so an incoming Trash copy with a real time wins over it at import.
+        val repo = repository("cross-source")
+        repo.saveProjects(listOf(SongProject(id = "same", title = "Active", lyrics = "LA", updatedAt = 300L, precedenceRepaired = true)))
+        val trashCopy = TrashedSongProject(SongProject(id = "same", title = "Trashed", lyrics = "LT", updatedAt = 400L), deletedAt = 500L)
+        repo.saveTrashedProjects(listOf(trashCopy))
+        val activeBefore = repo.projectsFlow.first()
+        repo.permanentlyDeleteTrashedProject("same", now = 5_000L)
+        assertEquals(activeBefore, repo.projectsFlow.first(), "active list right after Delete forever")
+        val zipFile = File(root, "trash-copy.zip")
+        zipFile.outputStream().use { BackupArchive.write(it, SyncBlob(trashed = listOf(trashCopy)), emptyList(), 1_000L, "device") }
+
+        BackupArchive.import(BackupArchive.read(zipFile), repo, File(root, "cross-source-files").also { it.mkdirs() })
+
+        assertEquals(emptyList(), repo.projectsFlow.first(), "active list after the import")
+        assertEquals(listOf("LA"), repo.recoveredSongs().map { it.project.lyrics })
+        assertEquals(listOf("LT"), repo.trashedProjectsFlow.first().map { it.project.lyrics })
     }
     @Test
     fun anImportWhoseKeptSongsDoNotReadBackRemovesNothing() = runBlocking<Unit> {

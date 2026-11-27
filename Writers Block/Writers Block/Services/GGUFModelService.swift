@@ -234,20 +234,28 @@ nonisolated enum GGUFModelSelection {
     ) -> URL? {
         guard let directory = modelsDirectory
                 ?? (try? GGUFModelCatalog.modelsDirectory(create: false)) else { return nil }
-        // A previous version left under a catalog name (the same-size E2B v2.1) is skipped, as
-        // Settings skips it: loading it would hash gigabytes and fail on every request.
-        let files = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).filter { name in
-            guard let option = GGUFModelCatalog.descriptor(fileName: name),
-                  let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(name).path) else {
-                return true
+        // A catalog file that is partial or a previous version left under the catalog name
+        // (the wrong size, or a marker written for exactly that file that records another
+        // SHA-256, such as the same-size E2B v2.1) is not offered, as Settings does not offer
+        // it: loading it would fail on every request. One stat per catalog file, never a
+        // digest, as this runs on the main thread.
+        let listed = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let files = listed.filter { name in
+            guard let model = GGUFModelCatalog.descriptor(fileName: name) else { return true }
+            guard let identity = try? GGUFModelFileIdentity.read(at: directory.appendingPathComponent(name).path) else {
+                return false
             }
-            return !GGUFModelStorage.isStaleArtifact(identity, of: option, defaults: defaults)
+            return !GGUFModelStorage.isStaleArtifact(identity, of: model, defaults: defaults)
         }
         guard let preferred = preferredFileName(
             in: files, selectedFileName: currentFileName(defaults: defaults), defaults: defaults,
             totalRAMBytes: totalRAMBytes
         ) else { return nil }
-        if preferred != currentFileName(defaults: defaults) { save(fileName: preferred, defaults: defaults) }
+        let current = currentFileName(defaults: defaults)
+        // A selected catalog file that is only unusable (the wrong size, or a previous version)
+        // stays selected; the fallback is used meanwhile.
+        let selectedIsUnusable = current.map { listed.contains($0) && !files.contains($0) } ?? false
+        if preferred != current, !selectedIsUnusable { save(fileName: preferred, defaults: defaults) }
         return directory.appendingPathComponent(preferred)
 
     }

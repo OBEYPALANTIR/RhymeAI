@@ -119,4 +119,47 @@ struct AppAppearanceTests {
         #expect(AppAppearanceStyle.paper.placeholderHexValue == 0x5D574E)
         #expect(AppAppearanceStyle.graphite.placeholderHexValue == 0xAAA49A)
     }
+
+    /// WCAG non-text contrast (3:1): a switch's on track against its white
+    /// thumb and the canvas, and disabled labels against the canvas and the
+    /// raised surface they sit on, read from the palettes, against the ratios DESIGN.md states.
+    @Test
+    func switchTracksAndDisabledInkMeetNonTextContrast() {
+        for style in [AppAppearanceStyle.ink, .paper, .graphite] {
+            let canvas = Self.hex(style.palette.canvas)
+            let raised = Self.hex(style.palette.raisedSurface)
+            #expect(Self.hex(style.palette.disabledInk) == style.disabledInkHexValue)
+            #expect(Self.contrast(style.switchTrackHexValue, 0xFFFFFF) >= 3, "\(style) track to thumb")
+            #expect(Self.contrast(style.switchTrackHexValue, canvas) >= 3, "\(style) track to canvas")
+            // DESIGN.md: at least 4.1:1 on the canvas and 3.3:1 on the raised surface.
+            #expect(Self.contrast(style.disabledInkHexValue, canvas) >= 4.1, "\(style) disabled ink on canvas")
+            #expect(Self.contrast(style.disabledInkHexValue, raised) >= 3.3, "\(style) disabled ink on raised")
+        }
+        // DESIGN.md: the Graphite track is 4.5:1 to the thumb and at least 3.9:1 to the canvas.
+        let graphiteCanvas = Self.hex(AppAppearanceStyle.graphite.palette.canvas)
+        #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, 0xFFFFFF) >= 4.5)
+        #expect(Self.contrast(AppAppearanceStyle.graphite.switchTrackHexValue, graphiteCanvas) >= 3.9)
+        // Ink and Paper keep their action-coloured tracks.
+        #expect(AppAppearanceStyle.ink.switchTrackHexValue == 0x050505)
+        #expect(AppAppearanceStyle.paper.switchTrackHexValue == 0x302E2A)
+    }
+
+    /// A palette colour back as its sRGB hex value.
+    private static func hex(_ color: Color) -> UInt32 {
+        let resolved = color.resolve(in: EnvironmentValues())
+        func byte(_ c: Float) -> UInt32 { UInt32((Double(c) * 255).rounded()) }
+        return byte(resolved.red) << 16 | byte(resolved.green) << 8 | byte(resolved.blue)
+    }
+
+    private static func contrast(_ a: UInt32, _ b: UInt32) -> Double {
+        func luminance(_ hex: UInt32) -> Double {
+            func channel(_ shift: UInt32) -> Double {
+                let c = Double((hex >> shift) & 0xFF) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        }
+        let (l1, l2) = (luminance(a), luminance(b))
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
 }

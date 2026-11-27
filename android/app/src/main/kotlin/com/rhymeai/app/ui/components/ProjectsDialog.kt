@@ -121,11 +121,13 @@ import com.rhymeai.app.data.model.TrashedOneLiner
 import com.rhymeai.app.data.model.TrashedSongProject
 import com.rhymeai.app.service.VoiceMemo
 import com.rhymeai.app.service.VoiceMemoService
+import com.rhymeai.app.util.LyricsExporter
 import com.rhymeai.app.util.SyllableCounter
 import com.rhymeai.app.service.TrashedVoiceMemo
 import com.rhymeai.app.ui.theme.DesignTokens
 import com.rhymeai.app.ui.motion.OffsetMotionState
 import com.rhymeai.app.ui.theme.LocalAnimationsEnabled
+import com.rhymeai.app.ui.theme.LocalHighTextContrastEnabled
 import com.rhymeai.app.ui.theme.SurfaceLevel
 import com.rhymeai.app.ui.theme.appWritingSurface
 import com.rhymeai.app.ui.theme.raisedSurface
@@ -138,7 +140,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 
 private val DrawerAnimationMillis: Int get() = DesignTokens.Motion.drawerPresentMillis
 private val DrawerDismissMillis: Int get() = DesignTokens.Motion.dismissMillis
@@ -171,7 +172,6 @@ fun ProjectsDrawer(
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val importJson = remember { Json { ignoreUnknownKeys = true } }
     var importError by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     val drawerTransition = remember { MutableTransitionState(false).apply { targetState = true } }
@@ -239,7 +239,7 @@ fun ProjectsDrawer(
                     context.contentResolver.openInputStream(uri)?.use(::readProjectText)
                         ?: throw Exception("Cannot read file")
                 }
-                val project = importJson.decodeFromString(SongProject.serializer(), text)
+                val project = LyricsExporter.parseJson(text)
                 importError = null
                 closeDrawer { onImportProject(project) }
             } catch (e: Exception) {
@@ -253,7 +253,7 @@ fun ProjectsDrawer(
     val filteredProjects = remember(sortedProjects, searchQuery) { searchProjects(sortedProjects, searchQuery) }
     val isSearching = searchQuery.isNotBlank()
     val textFieldColors = OutlinedTextFieldDefaults.colors(
-        unfocusedBorderColor = Color.Transparent,
+        unfocusedBorderColor = if (LocalHighTextContrastEnabled.current) colorScheme.outlineVariant else Color.Transparent,
         focusedBorderColor = colorScheme.primary,
         unfocusedContainerColor = colorScheme.surfaceContainerLow,
         focusedContainerColor = colorScheme.surfaceContainerLow,
@@ -908,6 +908,11 @@ private fun ProjectDrawerRow(
     }
     val wordCount = remember(project.lyrics) { SyllableCounter.lyricWordCount(project.lyrics) }
     val rowShape = RoundedCornerShape(DesignTokens.Radius.xl)
+    val secondaryText = if (isActive) {
+        colorScheme.onPrimaryContainer.copy(alpha = DesignTokens.Drawer.selectedRowSecondaryAlpha)
+    } else {
+        colorScheme.onSurfaceVariant
+    }
 
     Card(
         onClick = { onLoadProject(project) },
@@ -945,16 +950,12 @@ private fun ProjectDrawerRow(
                     maxLines = 1
                 )
                 com.rhymeai.app.util.SectionMap.lyricContent(project.lyrics).lineSequence().firstOrNull { it.isNotBlank() }?.let { preview ->
-                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(preview.trim(), style = MaterialTheme.typography.bodyMedium, color = secondaryText, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Text(
                     "$dateStr \u2022 $wordCount words",
                     fontSize = DesignTokens.Typography.caption,
-                    color = if (isActive) {
-                        colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                    } else {
-                        colorScheme.onSurfaceVariant
-                    }
+                    color = secondaryText
                 )
             }
             IconButton(
@@ -964,7 +965,7 @@ private fun ProjectDrawerRow(
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Delete ${project.title.ifEmpty { "Untitled Song" }}",
-                    tint = colorScheme.error.copy(alpha = 0.75f),
+                    tint = colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
             }

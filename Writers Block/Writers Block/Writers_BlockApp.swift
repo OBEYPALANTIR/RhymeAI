@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 import SwiftData
 import CloudKit
 import CoreData
@@ -94,6 +98,7 @@ struct ModelContainerBootstrap {
 }
 
 
+#if canImport(UIKit)
 final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -107,10 +112,16 @@ final class ModelDownloadAppDelegate: NSObject, UIApplicationDelegate {
         GGUFDownloadManager.shared.backgroundCompletionHandler = completionHandler
     }
 }
+#endif
 
 @main
 struct Writers_BlockApp: App {
+    #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(ModelDownloadAppDelegate.self) private var downloadDelegate
+    #endif
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var macDelegate
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearanceStyle.storageKey)
     private var appearanceRawValue = AppAppearanceStyle.ink.rawValue
@@ -121,6 +132,10 @@ struct Writers_BlockApp: App {
     )
     @StateObject private var persistenceState: AppPersistenceState
     @StateObject private var ggufDownloadManager = GGUFDownloadManager.shared
+    #if os(macOS)
+    @StateObject private var workspace = MacWorkspaceModel()
+    @AppStorage(MacQuickCaptureView.shownKey) private var showsMenuBarQuickCapture = true
+    #endif
 
     private let sharedModelContainer: ModelContainer?
 
@@ -157,12 +172,17 @@ struct Writers_BlockApp: App {
         sharedModelContainer = bootstrap.container
     }
 
+    static let editorWindowID = "editor"
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Self.editorWindowID) {
             Group {
                 if let sharedModelContainer {
                     ContentView()
                         .modelContainer(sharedModelContainer)
+                        #if os(macOS)
+                        .environmentObject(workspace)
+                        #endif
                 } else {
                     VStack(spacing: 12) {
                         Image(systemName: "externaldrive.badge.exclamationmark")
@@ -178,18 +198,20 @@ struct Writers_BlockApp: App {
                     .background(appearance.palette.canvas)
                 }
             }
-            .environmentObject(viewModel)
-            .environmentObject(persistenceState)
-            .environmentObject(ggufDownloadManager)
-            .environment(\.appAppearanceStyle, appearance)
-            .environment(\.appAppearanceBinding, appearanceBinding)
-            .preferredColorScheme(appearance.preferredColorScheme)
-            .tint(appearance.palette.action)
-            .modifier(UITestDynamicTypeSizeModifier())
+            #if os(macOS)
+            // One window on shared state: an incoming writersblock:// link goes to the
+            // open window instead of making the group open another.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            #endif
+            .modifier(appEnvironment)
             .safeAreaInset(edge: .top) {
                 persistenceDegradedBanner
             }
             .task {
+                #if os(macOS)
+                // Quit runs the open song's pending autosave first (MacAppDelegate).
+                macDelegate.viewModel = viewModel
+                #endif
                 UITestFlags.seedCustomGGUFModelIfRequested()
                 UITestFlags.seedInstalledGGUFModelIfRequested()
                 persistenceState.refreshCloudSyncStatus()
@@ -197,7 +219,9 @@ struct Writers_BlockApp: App {
                 reconcileOneLinerAudio()
                 publishOneLinersSnapshot()
                 // A recording activity left by a process that ended has no take behind it.
+                #if os(iOS)
                 if !OneLinerRouter.shared.isRecording { await OneLinerActivityAttributes.endAll() }
+                #endif
             }
             .task {
                 // After the first frames, so launch is not competing with it.
@@ -232,6 +256,36 @@ struct Writers_BlockApp: App {
                 }
             }
         }
+        #if os(macOS)
+        .defaultSize(width: 1160, height: 780)
+        .commands { MacAppCommands(viewModel: viewModel, workspace: workspace) }
+        #endif
+
+        #if os(macOS)
+        MenuBarExtra("Catch a One Liner", systemImage: "text.quote", isInserted: $showsMenuBarQuickCapture) {
+            MacQuickCaptureView(container: persistenceState.persistenceDegraded ? nil : sharedModelContainer)
+                .modifier(appEnvironment)
+        }
+        .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .frame(width: 600)
+                .frame(minHeight: 320, idealHeight: 520, maxHeight: 760)
+                .modifier(appEnvironment)
+        }
+        #endif
+    }
+
+    /// The objects and appearance every scene's root view reads.
+    private var appEnvironment: AppEnvironmentModifier {
+        AppEnvironmentModifier(
+            viewModel: viewModel,
+            persistenceState: persistenceState,
+            ggufDownloadManager: ggufDownloadManager,
+            appearance: appearance,
+            appearanceBinding: appearanceBinding
+        )
     }
 
     private func reconcileOneLinerAudio() {
@@ -301,7 +355,7 @@ struct Writers_BlockApp: App {
         // a CloudKit-less container still reads/writes the same local store.
         // The unsigned persistent UI-test bundle cannot initialize CloudKit's
         // asynchronous store setup. Keep its relaunch test local to its own app data.
-        if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store") {
+        if !ProcessInfo.processInfo.arguments.contains("--ui-test-local-store"), hasCloudKitEntitlement {
             let cloudKit = ModelContainerBootstrap.cloudKitConfiguration(schema: schema)
             do {
                 return ModelContainerBootstrap(
@@ -347,6 +401,41 @@ struct Writers_BlockApp: App {
     }
 }
 
+extension Writers_BlockApp {
+    /// A Mac build signed without a provisioning profile (a local run) has no
+    /// iCloud entitlement, and CloudKit then traps instead of throwing, so the
+    /// library opens local-only. iOS always carries the entitlement.
+    fileprivate static var hasCloudKitEntitlement: Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let services = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-services" as CFString, nil)
+        return (services as? [String])?.contains("CloudKit") == true
+        #else
+        return true
+        #endif
+    }
+}
+
+private struct AppEnvironmentModifier: ViewModifier {
+    let viewModel: EditorViewModel
+    let persistenceState: AppPersistenceState
+    let ggufDownloadManager: GGUFDownloadManager
+    let appearance: AppAppearanceStyle
+    let appearanceBinding: Binding<AppAppearanceStyle>
+
+    func body(content: Content) -> some View {
+        content
+            .environmentObject(viewModel)
+            .environmentObject(persistenceState)
+            .environmentObject(ggufDownloadManager)
+            .environment(\.appAppearanceStyle, appearance)
+            .environment(\.appAppearanceBinding, appearanceBinding)
+            .preferredColorScheme(appearance.preferredColorScheme)
+            .tint(appearance.palette.action)
+            .modifier(UITestDynamicTypeSizeModifier())
+    }
+}
+
 private struct UITestDynamicTypeSizeModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -360,6 +449,7 @@ private struct UITestDynamicTypeSizeModifier: ViewModifier {
 
 @MainActor
 private final class BackgroundTaskAssertion {
+    #if canImport(UIKit)
     private var identifier = UIBackgroundTaskIdentifier.invalid
 
     init(name: String) {
@@ -373,4 +463,9 @@ private final class BackgroundTaskAssertion {
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
     }
+    #else
+    // A Mac app keeps running in the background; there is nothing to request.
+    init(name: String) {}
+    func end() {}
+    #endif
 }

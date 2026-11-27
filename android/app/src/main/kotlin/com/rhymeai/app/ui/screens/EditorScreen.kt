@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -64,6 +65,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -254,11 +256,12 @@ internal fun historyControlsVisible(
 ): Boolean = editorActionsVisible && !isRecording
 
 /**
- * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics", and
- * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it.
+ * Overlays that leave the lyric selection alone: the Song Notebook offers "Keep selected lyrics",
+ * One Liners can open from the tile, widget or a link over an in-flight rewrite whose context includes it,
+ * and AI setup opened by "Set up model" returns the writer to the selection they wanted to rewrite.
  */
-internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean): Boolean =
-    songNotebookOpen || oneLinersOpen
+internal fun modalKeepsRewriteSelection(songNotebookOpen: Boolean, oneLinersOpen: Boolean, aiSetupOpen: Boolean): Boolean =
+    songNotebookOpen || oneLinersOpen || aiSetupOpen
 
 /** Opacity of the writing column while a newly opened song settles in; 1 at rest. */
 internal val EditorOpenSettleAlpha = SemanticsPropertyKey<Float>("EditorOpenSettleAlpha")
@@ -644,7 +647,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
 
     LaunchedEffect(showBottomSheet, pendingAssistantSheet, modalOpen) {
         if (showBottomSheet || pendingAssistantSheet || modalOpen) {
-            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners)) {
+            if (!modalKeepsRewriteSelection(viewModel.showSongNotebook, viewModel.showOneLiners, viewModel.settingsOpensAiSetup)) {
                 viewModel.clearPendingRewriteSelection()
             }
             if (modalOpen) {
@@ -746,6 +749,17 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                     modifier = Modifier.size(DesignTokens.Indicator.spinnerSm)
                                 )
                             }
+                            // Stays until a save of the open words commits; the dialog explains it once.
+                            SaveStatus.FAILED -> IconButton(
+                                onClick = viewModel::retrySave,
+                                modifier = Modifier.size(DesignTokens.Touch.minTarget).testTag("retrySave")
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = stringResource(R.string.editor_save_failed_retry),
+                                    tint = colorScheme.error
+                                )
+                            }
                             else -> {}
                         }
                     }
@@ -826,8 +840,9 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 text = { Text("Song Notebook") },
                                 onClick = {
                                     songActionsExpanded = false
-                                    focusManager.clearFocus()
+                                    // Open first, so the cursor collapse from losing focus keeps the selection.
                                     viewModel.showSongNotebook = true
+                                    focusManager.clearFocus()
                                 }
                             )
                             if (!(viewModel.pendingRewriteRange ?: viewModel.lyricsFieldValue.selection).collapsed) {
@@ -1075,7 +1090,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         value = viewModel.title,
                         onValueChange = { viewModel.onTitleChanged(it) },
                         // The song that is leaving for another one takes no input.
-                        readOnly = viewModel.openingSong,
+                        readOnly = viewModel.openingSong || viewModel.editorHeld,
                         // Not singleLine so long titles wrap; Enter (soft Next or a hardware key) moves to the lyrics.
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1236,7 +1251,7 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                                 }
                             },
                             onTextLayout = { lyricsTextLayout = it },
-                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong,
+                            readOnly = viewModel.hasActiveRewrite || viewModel.openingSong || viewModel.editorHeld,
                             textStyle = lyricsTextStyle.copy(color = colorScheme.onBackground),
                             visualTransformation = analysisTransformation,
                             cursorBrush = SolidColor(colorScheme.primary),
@@ -1672,6 +1687,12 @@ fun EditorScreen(viewModel: MainViewModel, onNavigateToStart: () -> Unit = {}) {
                         onApply = { viewModel.applyRewrite() },
                         onCancel = { viewModel.cancelRewriteReview() },
                         onRetry = { viewModel.retryRewrite() },
+                        needsModelSetup = viewModel.rewriteNeedsModelSetup,
+                        // As on iOS: close the no-model bar, keep the selection, then open AI setup.
+                        onModelSetup = {
+                            viewModel.cancelRewriteReview()
+                            viewModel.openModelSetup()
+                        },
                         modifier = Modifier.onSizeChanged { rewriteReviewBarHeightPx = it.height }
                     )
                     }
@@ -1848,6 +1869,7 @@ private fun selectedTextVerticalRange(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun InlineRewriteReviewBar(
     action: RewriteAction,
@@ -1857,89 +1879,114 @@ private fun InlineRewriteReviewBar(
     onApply: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    needsModelSetup: Boolean,
+    onModelSetup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag("inlineRewriteReviewBar")
             .background(colorScheme.surfaceContainerHigh, RoundedCornerShape(DesignTokens.Radius.sheet))
             .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(DesignTokens.Radius.sheet))
             .padding(horizontal = DesignTokens.Spacing.md, vertical = DesignTokens.Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
     ) {
-        if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                color = colorScheme.primary,
-                strokeWidth = 2.dp
-            )
-        } else {
-            Icon(
-                if (error == null) Icons.Default.AutoAwesome else Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = if (error == null) colorScheme.primary else colorScheme.error,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Text(
-            text = inlineRewriteStatusText(action, loading, preview, error),
-            color = if (error == null) colorScheme.onSurface else colorScheme.error,
-            fontSize = DesignTokens.Typography.caption,
-            fontWeight = FontWeight.Medium,
-            maxLines = if (error == null) 1 else 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-
-        if (error != null) {
-            Button(
-                onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
-            ) {
-                Text("Retry", fontSize = 12.sp)
-            }
-        } else if (preview != null && !loading) {
-            Button(
-                onClick = onApply,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorScheme.primary,
-                    contentColor = colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(DesignTokens.Radius.pill)
-            ) {
-                Text("Apply", fontSize = 12.sp)
-            }
-            IconButton(
-                onClick = onRetry,
-                modifier = Modifier.semantics { contentDescription = "Regenerate rewrite" }
-            ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm)
+        ) {
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = colorScheme.primary,
+                    strokeWidth = 2.dp
+                )
+            } else {
                 Icon(
-                    Icons.Default.Refresh,
+                    if (error == null) Icons.Default.AutoAwesome else Icons.Default.ErrorOutline,
                     contentDescription = null,
-                    tint = colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
+                    tint = if (error == null) colorScheme.primary else colorScheme.error,
+                    modifier = Modifier.size(18.dp)
                 )
             }
-        }
 
-        Button(
-            onClick = onCancel,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colorScheme.surfaceContainer,
-                contentColor = colorScheme.onSurfaceVariant
-            ),
-            shape = RoundedCornerShape(DesignTokens.Radius.pill)
-        ) {
-            Text("Cancel", fontSize = 12.sp)
+            Text(
+                text = inlineRewriteStatusText(action, loading, preview, error),
+                color = if (error == null) colorScheme.onSurface else colorScheme.error,
+                fontSize = DesignTokens.Typography.caption,
+                fontWeight = FontWeight.Medium,
+                // An error wraps in full: its actions sit on their own line below it.
+                maxLines = if (error == null) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (error == null && preview != null && !loading) {
+                Button(
+                    onClick = onApply,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
+                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                ) {
+                    Text("Apply", fontSize = 12.sp)
+                }
+                IconButton(
+                    onClick = onRetry,
+                    modifier = Modifier.semantics { contentDescription = "Regenerate rewrite" }
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (error == null) InlineRewriteCancelButton(onCancel)
         }
+        if (error != null) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.sm, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.Spacing.xs)
+            ) {
+                Button(
+                    // No local model: Retry cannot succeed, so open the same AI setup as the Assistant.
+                    onClick = if (needsModelSetup) onModelSetup else onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
+                    shape = RoundedCornerShape(DesignTokens.Radius.pill)
+                ) {
+                    Text(
+                        if (needsModelSetup) stringResource(R.string.assistant_set_up_model) else "Retry",
+                        fontSize = 12.sp
+                    )
+                }
+                InlineRewriteCancelButton(onCancel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineRewriteCancelButton(onCancel: () -> Unit) {
+    val colorScheme = MaterialTheme.colorScheme
+    Button(
+        onClick = onCancel,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = colorScheme.surfaceContainer,
+            contentColor = colorScheme.onSurfaceVariant
+        ),
+        shape = RoundedCornerShape(DesignTokens.Radius.pill)
+    ) {
+        Text("Cancel", fontSize = 12.sp)
     }
 }
 

@@ -186,10 +186,10 @@ struct AIService {
                             makeTokens = { Self.streamGGUFChunks(prompt: prompt, filePath: path, runner: Self.ggufRunner) }
                         } else if Self.gemmaChoiceCleared() {
                             throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
-                        } else if #available(iOS 26.0, *) {
+                        } else if #available(iOS 26.0, macOS 26.0, *) {
                             makeTokens = { streamAppleLocalChunks(prompt: prompt) }
                         } else {
-                            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence local suggestions require iOS 26 or later.")
+                            throw AIServiceError.localModelUnavailable(reason: Self.suggestionsRequireIOS26Reason)
                         }
                         try await emitLocalLines(
                             tokens: makeTokens,
@@ -1217,7 +1217,7 @@ struct AIService {
         return String(decoding: current.utf8.dropFirst(previous.utf8.count), as: UTF8.self)
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func streamAppleLocalChunks(prompt: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -1246,17 +1246,17 @@ struct AIService {
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func describe(_ availability: SystemLanguageModel.Availability) -> String {
         switch availability {
         case .available:
             return "ready"
         case .unavailable(.deviceNotEligible):
-            return "this device is not eligible for Apple Intelligence local models."
+            return Self.deviceNotEligibleReason
         case .unavailable(.appleIntelligenceNotEnabled):
-            return "Apple Intelligence is not enabled."
+            return Self.appleIntelligenceNotEnabledReason
         case .unavailable(.modelNotReady):
-            return "the local model is still downloading or not ready yet."
+            return Self.modelNotReadyReason
         @unknown default:
             return "unknown availability state."
         }
@@ -1305,6 +1305,18 @@ struct AIService {
     }
 
     static let noGGUFModelReason = "No GGUF model found. Download a Gemma model in Settings."
+    static let suggestionsRequireIOS26Reason = "Apple Intelligence local suggestions require iOS 26 or later."
+    static let synonymsRequireIOS26Reason = "Apple Intelligence synonyms require iOS 26 or later."
+    static let rewritesRequireIOS26Reason = "Apple Intelligence rewrites require iOS 26 or later."
+    static let deviceNotEligibleReason = "this device is not eligible for Apple Intelligence local models."
+    static let appleIntelligenceNotEnabledReason = "Apple Intelligence is not enabled."
+    static let modelNotReadyReason = "the local model is still downloading or not ready yet."
+    /// Reasons meaning no on-device model is set up, so Retry cannot succeed.
+    /// AIErrorRecoveryAction matches on these; still-downloading is left out on purpose.
+    static let noModelReasons = [
+        noGGUFModelReason, suggestionsRequireIOS26Reason, synonymsRequireIOS26Reason,
+        rewritesRequireIOS26Reason, deviceNotEligibleReason, appleIntelligenceNotEnabledReason,
+    ]
 
     /// Ensure the shared GGUF runner has the correct model loaded, then call
     /// generate(prompt:) and return the raw output.
@@ -1603,14 +1615,14 @@ struct AIService {
                 if Self.gemmaChoiceCleared() {
                     throw AIServiceError.localModelUnavailable(reason: Self.noGGUFModelReason)
                 }
-                if #available(iOS 26.0, *) {
+                if #available(iOS 26.0, macOS 26.0, *) {
                     return try await callLocalRaw(
                         prompt: prompt,
                         instructions: "You are an expert lexicographer. Reply ONLY with the requested JSON object."
                     )
                 }
                 throw AIServiceError.localModelUnavailable(
-                    reason: "Apple Intelligence synonyms require iOS 26 or later."
+                    reason: Self.synonymsRequireIOS26Reason
                 )
             }
             return try await callCloudText(
@@ -1681,7 +1693,7 @@ struct AIService {
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRaw(prompt: String, instructions: String) async throws -> String {
         let model = SystemLanguageModel.default
         guard model.isAvailable else {
@@ -1727,7 +1739,7 @@ struct AIService {
             }
 
             // Apple Intelligence fallback.
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, macOS 26.0, *) {
                 return try await callLocalRewrite(
                     action: action,
                     lyrics: fullLyrics,
@@ -1738,7 +1750,7 @@ struct AIService {
                     useWholeSongContext: useWholeSongContext
                 )
             }
-            throw AIServiceError.localModelUnavailable(reason: "Apple Intelligence rewrites require iOS 26 or later.")
+            throw AIServiceError.localModelUnavailable(reason: Self.rewritesRequireIOS26Reason)
         }
 
         guard !apiKey.isEmpty else {
@@ -1901,7 +1913,7 @@ struct AIService {
         return "https://generativelanguage.googleapis.com/v1beta"
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private func callLocalRewrite(
         action: RewriteAction,
         lyrics: String,
@@ -2000,7 +2012,7 @@ struct AIService {
         gemmaDownloadAvailable: Bool = GGUFModelService.isEngineAvailable
     ) -> Error {
         if error is CancellationError || error is AIServiceError { return error }
-        if #available(iOS 26.0, *),
+        if #available(iOS 26.0, macOS 26.0, *),
            let generationError = error as? LanguageModelSession.GenerationError,
            case .guardrailViolation = generationError {
             return AIServiceError.blockedResponse

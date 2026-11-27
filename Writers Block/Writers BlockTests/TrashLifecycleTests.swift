@@ -6,6 +6,57 @@ import Testing
 struct TrashLifecycleTests {
 
     @MainActor
+    @Test func trashingAnotherSongKeepsTheOpenSongsPendingAutosave() async throws {
+        let harness = try Self.makeHarness()
+        let viewModel = harness.viewModel
+        let context = harness.context
+        let open = SongProject(id: "open", title: "Open", lyrics: "first words", theme: "")
+        let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
+        context.insert(open)
+        context.insert(other)
+        try context.save()
+        viewModel.loadProject(open)
+
+        viewModel.lyrics = "first words, then more"
+        viewModel.triggerAutoSave()
+        #expect(viewModel.moveProjectToTrash(other))
+
+        // The 1s autosave, waited for up to 10s: parallel suites can hold the main actor.
+        var saved: String?
+        for _ in 0..<100 {
+            saved = try Self.fetchProjects(context).first { $0.id == "open" }?.lyrics
+            if saved == "first words, then more" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(saved == "first words, then more")
+    }
+
+    @MainActor
+    @Test func aNewTitledSongWithNoLyricsReopenedFromItsRowMovesToTrash() throws {
+        // Given: New Song, a title and no lyrics, saved, then reopened from its row after another song
+        let harness = try Self.makeHarness()
+        let context = harness.context
+        // Its notebook stays in memory: a trashed song keeps its notebook file on disk.
+        let viewModel = EditorViewModel(companionStore: WritingCompanionStore(inMemory: true))
+        viewModel.modelContext = context
+        let other = SongProject(id: "other", title: "Other", lyrics: "other words", theme: "")
+        context.insert(other)
+        try context.save()
+        viewModel.newProject()
+        viewModel.title = "ZZ Test Delete 10"
+        #expect(viewModel.flushCurrentDraft())
+        let made = try #require(try Self.fetchProjects(context).first { $0.title == "ZZ Test Delete 10" })
+        viewModel.loadProject(other)
+        viewModel.loadProject(made)
+        #expect(viewModel.currentProjectId == made.id && viewModel.lyrics.isEmpty)
+
+        // When / Then: it goes to Trash and leaves the list
+        #expect(viewModel.moveProjectToTrash(made))
+        #expect(try Self.fetchProjects(context).map(\.title) == ["Other"])
+        #expect(try Self.fetchTrash(context).map(\.title) == ["ZZ Test Delete 10"])
+    }
+
+    @MainActor
     @Test func moveProjectToTrashClearsCurrentEditorAndCreatesTrashEntry() async throws {
         let harness = try Self.makeHarness()
         let viewModel = harness.viewModel
@@ -328,6 +379,31 @@ struct TrashLifecycleTests {
         #expect(!viewModel.permanentlyDeleteTrashedProject(trashed))
         #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
         #expect(try Self.fetchDeletions(container.mainContext).isEmpty)
+    }
+
+    @MainActor
+    @Test func expiryAskedForDuringTheLaunchCheckWaitsForItQuietly() async throws {
+        let schema = Schema([SongProject.self, TrashedSongProject.self, SyncDeletionRecord.self, SyncRecordingDeletion.self, Recording.self])
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("LaunchExpiry-\(UUID().uuidString)", isDirectory: true)
+        let library = RecordingLibrary(memosRoot: scratch.appendingPathComponent("voice-memos", isDirectory: true),
+                                       trashRoot: scratch.appendingPathComponent("voice-memos-trash", isDirectory: true),
+                                       defaults: UserDefaults(suiteName: "LaunchExpiry-\(scratch.lastPathComponent)")!)
+        container.mainContext.insert(TrashedSongProject(id: "expired", title: "Old", lyrics: "", theme: "", updatedAt: Date(timeIntervalSince1970: 1),
+                                                        deletedAt: Date(timeIntervalSince1970: 2), deleteAfter: Date(timeIntervalSince1970: 3)))
+        try container.mainContext.save()
+
+        let viewModel = EditorViewModel(recordingLibrary: library)
+        viewModel.modelContext = container.mainContext
+        // Scene activation at launch, before the recordings check has run.
+        viewModel.purgeExpiredTrashedProjects()
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).map(\.id) == ["expired"])
+
+        // The check runs the expiry once it succeeds.
+        await viewModel.recordingsLaunchTask?.value
+        #expect(viewModel.errorMessage == nil)
+        #expect(try Self.fetchTrash(container.mainContext).isEmpty)
     }
 
     @MainActor
@@ -808,6 +884,44 @@ extension TrashLifecycleTests {
         let kept = try #require(try context.fetch(FetchDescriptor<SongProject>()).first { $0.id == "s" })
         #expect(kept.lyrics == "typed at launch")
         #expect(viewModel.currentProjectId == "s" && viewModel.lyrics == "typed at launch")
+    }
+
+    @MainActor
+    @Test(arguments: [true, false])
+    func aConvergedLocalEditStillOutranksALaunchTombstone(editedBeforeLaunch: Bool) async throws {
+        let (viewModel, _, context, container) = try await Self.libraryViewModel("LaunchConvergedEdit")
+        _ = container
+        let id = UUID().uuidString
+        let song = SongProject(id: id, title: "Song", lyrics: "old line", theme: "old theme",
+                               updatedAt: Date(timeIntervalSince1970: 1_000))
+        let tombstone = SyncDeletionRecord(projectId: id, deletedAt: 3_000_000)
+        context.insert(song)
+        context.insert(tombstone)
+        try context.save()
+
+        viewModel.modelContext = context
+        viewModel.loadProject(song)
+        song.lyrics = "shared line"
+        song.theme = "peer theme"
+        song.updatedAt = Date(timeIntervalSince1970: 2_000)
+        try context.save()
+
+        if editedBeforeLaunch {
+            viewModel.onLyricsChanged("shared line")
+            viewModel.triggerAutoSave()
+        }
+        await viewModel.recordingsLaunchTask?.value
+
+        let remaining = try context.fetch(FetchDescriptor<SongProject>())
+        if editedBeforeLaunch {
+            let kept = try #require(remaining.first)
+            #expect(kept.persistentModelID == song.persistentModelID)
+            #expect(kept.lyrics == "shared line")
+            #expect(kept.theme == "peer theme")
+            #expect(kept.updatedAt.epochMilliseconds > 3_000_000)
+        } else {
+            #expect(remaining.isEmpty)
+        }
     }
 
     /// A41: a song a stored tombstone removes at launch while its time is a repair is

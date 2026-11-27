@@ -36,15 +36,16 @@ final class OneLinersUITests: XCTestCase {
         attach(app, "3-capture-type")
         app.buttons["Save"].tap()
 
-        let line = app.staticTexts["Found the Lord in a gas station bathroom"]
-        XCTAssertTrue(line.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Saved to One Liners"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["10 syl · bathroom"].exists)
+        // The toast dismisses itself after 4 s, so measure it before the slower list checks.
+        XCTAssertTrue(app.staticTexts["Saved to One Liners"].waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 0.5)  // the toast settles
-        attach(app, "4-list-saved")
         let toast = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saved to One Liners")).firstMatch.frame
         let typeButton = app.buttons["Type a one liner"].frame
         XCTAssertLessThan(toast.maxY, typeButton.minY, "The toast covers the floating actions")
+        attach(app, "4-list-saved")
+        let line = app.staticTexts["Found the Lord in a gas station bathroom"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["10 syl · bathroom"].exists)
 
         line.tap()
         XCTAssertTrue(app.staticTexts["Edit one liner"].waitForExistence(timeout: 5))

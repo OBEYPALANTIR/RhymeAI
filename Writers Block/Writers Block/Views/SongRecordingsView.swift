@@ -149,14 +149,13 @@ struct SongRecordingsView: View {
                 if let toast = undoToast { undoToastView(toast).padding() }
             }
         }
-        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.mpeg4Audio, .mp3, .wav, UTType(filenameExtension: "aac") ?? .audio]) { result in
+        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: EditorViewModel.importableAudioTypes) { result in
             switch result {
             case .success(let url):
                 importTask = Task {
                     do {
-                        _ = try await VoiceMemoService.importMemo(from: url, projectId: projectId, publisher: viewModel.voiceMemoService.publisher)
+                        try await viewModel.importRecording(at: url, projectId: projectId)
                         reloadRecordings()
-                        viewModel.voiceMemoService.onFilesChanged?()
                     } catch is CancellationError {
                         // Cancelling leaves neither a recording nor a partial file.
                     } catch {
@@ -190,7 +189,7 @@ struct SongRecordingsView: View {
                 }
             } else if recordingFolders.isEmpty {
                 ScrollView {
-                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "Tap the mic in the editor to record a voice memo.")
+                    emptyState(systemImage: "mic.slash", title: "No recordings yet.", caption: "\(PlatformWording.tap) the mic in the editor to record a voice memo.")
                         .padding(.top, RhymeAITokens.Spacing.md)
                 }
             } else {
@@ -248,6 +247,11 @@ struct SongRecordingsView: View {
                                                 Label("Delete", systemImage: "trash")
                                             }
                                         }
+                                        #if os(macOS)
+                                        .contextMenu {
+                                            Button("Delete", role: .destructive) { trashRecordingWithUndo(item) }
+                                        }
+                                        #endif
                                     }
                                 }
                             }
@@ -255,6 +259,10 @@ struct SongRecordingsView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    #if os(macOS)
+                    // Delete with recordings selected asks as the Delete button does.
+                    .onDeleteCommand { if !selectedRecordingIDs.isEmpty { pendingBulkDelete = true } }
+                    #endif
                 }
             }
         }
@@ -519,7 +527,7 @@ struct SongRecordingsView: View {
         }
         .padding(.horizontal, RhymeAITokens.Spacing.sm)
         .frame(height: RhymeAITokens.Touch.minimum)
-        .liquidGlassSurface(cornerRadius: RhymeAITokens.Radius.lg, interactive: true)
+        .surfaceLevel(.raised, cornerRadius: RhymeAITokens.Radius.lg)
     }
 
     /// Glyph and text in the appearance's secondary ink (not the system grey),

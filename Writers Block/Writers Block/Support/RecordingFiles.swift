@@ -2,6 +2,7 @@ import AVFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import SwiftData
 import os
 
 // A recording sitting in the Trash Bin. On disk it is `<recordingId>.<ext>`
@@ -471,10 +472,49 @@ enum RecordingFiles {
         }
 
         nonisolated struct Adopt: Codable, Equatable, Hashable, Sendable {
+            struct DraftBinding: Codable, Equatable, Hashable, Sendable {
+                let projectId: String
+                let row: PersistentIdentifier
+                let sourceProjectId: String
+                let sourceRecordingId: String
+                let originalId: String
+                let bytes: Int64
+                let precedenceTime: Date
+                let precedenceRepaired: Bool
+
+                /// Locally generated cascade times survive a later source tombstone.
+                /// The current same-time pair also identifies cascades from older builds.
+                func isSourceSongCascade(_ deletion: SyncDeletion, among deletions: [SyncDeletion],
+                                         recordedTimes: [String: Set<Int64>]) -> Bool {
+                    sourceProjectId != projectId && deletion.projectId == sourceProjectId
+                        && (recordedTimes[deletion.identity]?.contains(deletion.deletedAt) == true
+                            || deletions.contains { $0.isSongTombstone && $0.projectId == sourceProjectId && $0.deletedAt == deletion.deletedAt })
+                }
+
+                @MainActor func owner(in context: ModelContext) throws -> SongProject? {
+                    let id = projectId
+                    let songs = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+                    guard songs.count == 1, let song = songs.first, song.persistentModelID == row,
+                          try context.fetchCount(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == id })) == 0 else { return nil }
+                    return song
+                }
+
+                func deletionWins(_ deletion: SyncDeletion, among deletions: [SyncDeletion], recordedTimes: [String: Set<Int64>],
+                                  id: String, sha256: String) -> Bool {
+                    guard !deletion.isSongTombstone,
+                          !isSourceSongCascade(deletion, among: deletions, recordedTimes: recordedTimes) else { return false }
+                    return [(sourceProjectId, sourceRecordingId), (projectId, originalId), (projectId, id)].contains { project, id in
+                        deletion.covers(projectId: project, recordingId: id, sha256: sha256,
+                                        at: precedenceTime, repaired: precedenceRepaired)
+                    }
+                }
+            }
+
             var path: String
             var recordingId: String
             var displayName: String
             var sha256: String
+            var draftBinding: DraftBinding? = nil
         }
 
         var isEmpty: Bool { quarantine.isEmpty && detach.isEmpty && adopt.isEmpty }
@@ -485,7 +525,10 @@ enum RecordingFiles {
             Set(quarantine.map(\.path) + detach.filter { !$0.source.isEmpty }.flatMap { [$0.source, $0.destination] })
         }
         /// Not listed or played: waiting for quarantine, or still at its source.
-        var listingHidden: Set<String> { Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }) }
+        var listingHidden: Set<String> {
+            Set(quarantine.map(\.path) + detach.map(\.source).filter { !$0.isEmpty }
+                + adopt.filter { $0.draftBinding != nil }.map(\.path))
+        }
 
         /// Every field a replay relies on, checked when the record is read (T3.23):
         /// absolute paths, valid ids, digests and lengths, and times.
@@ -509,6 +552,13 @@ enum RecordingFiles {
             for item in adopt {
                 try path(item.path); try digest(item.sha256); try SyncIdentity.validateRecordingId(item.recordingId)
                 try SyncIdentity.validateDisplayName(item.displayName)
+                if let draft = item.draftBinding {
+                    try SyncIdentity.validateProjectId(draft.projectId)
+                    try SyncIdentity.validateProjectId(draft.sourceProjectId)
+                    try SyncIdentity.validateRecordingId(draft.sourceRecordingId)
+                    try SyncIdentity.validateRecordingId(draft.originalId)
+                    guard draft.bytes > 0 else { throw PendingMovesError.invalid }
+                }
             }
         }
     }
@@ -629,6 +679,44 @@ enum RecordingFiles {
         }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(moves).write(to: url, options: .atomic)
+    }
+
+    private nonisolated static func draftSourceCascadeURL(for memosRoot: URL) -> URL {
+        memosRoot.deletingLastPathComponent().appendingPathComponent("draft-source-cascades.json")
+    }
+
+    nonisolated static func draftSourceCascadeTimes(for memosRoot: URL) throws -> [String: Set<Int64>] {
+        let file = draftSourceCascadeURL(for: memosRoot)
+        guard try exists(file) else { return [:] }
+        return try JSONDecoder().decode([String: Set<Int64>].self, from: Data(contentsOf: file))
+    }
+
+    /// Keep exact locally generated take-deletion events across song tombstone
+    /// replacement. A later take deletion at any other time still stands on its own.
+    nonisolated static func rememberDraftSourceCascades(_ deletions: [SyncDeletion], for memosRoot: URL) throws {
+        try rememberDraftSourceCascades(deletions, for: memosRoot, saving: {})
+    }
+
+    nonisolated static func rememberDraftSourceCascades(_ deletions: [SyncDeletion], for memosRoot: URL,
+                                                         saving save: () throws -> Void) throws {
+        guard !deletions.isEmpty else { return try save() }
+        let previous = try draftSourceCascadeTimes(for: memosRoot)
+        var times = previous
+        for deletion in deletions { times[deletion.identity, default: []].insert(deletion.deletedAt) }
+        guard times != previous else { return try save() }
+        let file = draftSourceCascadeURL(for: memosRoot)
+        func write(_ times: [String: Set<Int64>]) throws {
+            try JSONEncoder().encode(times).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try write(times)
+        do {
+            try save()
+        } catch {
+            if previous.isEmpty { try FileManager.default.removeItem(at: file) }
+            else { try write(previous) }
+            throw error
+        }
     }
 
     /// For listings and playback: nil when the record cannot be read, so nothing is listed.

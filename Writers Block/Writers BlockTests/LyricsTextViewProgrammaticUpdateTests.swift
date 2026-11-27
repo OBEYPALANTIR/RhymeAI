@@ -1,3 +1,5 @@
+// UIKit editor tests; the macOS editor has none yet.
+#if canImport(UIKit)
 import SwiftUI
 import Testing
 import UIKit
@@ -94,3 +96,4 @@ struct LyricsTextViewProgrammaticUpdateTests {
         #expect(redraws)
     }
 }
+#endif

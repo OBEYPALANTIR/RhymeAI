@@ -21,13 +21,15 @@ protocol CloudBackupServicing: AnyObject {
     func disconnect() async -> Bool
     func backupNow(modelContext: ModelContext) async throws
     func restoreNow(modelContext: ModelContext) async throws
+    func restoreNow(modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws
     func backupInBackgroundIfPossible(modelContext: ModelContext) async
     func migrateLegacyBackup(passphrase: String, modelContext: ModelContext) async throws
     func remoteBackupSummary() async throws -> RemoteBackupSummary?
     func probeRevisions() async throws -> [BackupRevision]
     func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws
-    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data)
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> BackupExportFile
     func importArchive(_ data: Data, modelContext: ModelContext) async throws
+    func importArchive(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws
 }
 
 extension CloudBackupServicing {
@@ -42,10 +44,16 @@ extension CloudBackupServicing {
     func remoteBackupSummary() async throws -> RemoteBackupSummary? { nil }
     func probeRevisions() async throws -> [BackupRevision] { [] }
     func recoverRevision(_ revision: BackupRevision, modelContext: ModelContext) async throws {}
-    func exportArchive(modelContext: ModelContext, now: Date) throws -> (fileName: String, data: Data) {
+    func exportArchive(modelContext: ModelContext, now: Date) throws -> BackupExportFile {
         throw BackupError.notConfigured
     }
     func importArchive(_ data: Data, modelContext: ModelContext) async throws {}
+    func restoreNow(modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
+        try await restoreNow(modelContext: modelContext)
+    }
+    func importArchive(_ data: Data, modelContext: ModelContext, draftHandoff: BackupDraftHandoff) async throws {
+        try await importArchive(data, modelContext: modelContext)
+    }
 }
 
 /// Google Drive backup as Settings shows it; the same cases on Android.
@@ -79,8 +87,26 @@ enum CloudAISharingScope: String {
 }
 
 final class OpenRecordingSnapshot {
+    nonisolated struct Take: Codable, Equatable, Sendable {
+        let fileName: String
+        let displayName: String
+        let bytes: Int64
+        let sha256: String
+        var origin: SyncRecording? = nil
+
+        func recordingID(for projectId: String) -> String {
+            RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: fileName, sha256: sha256)
+        }
+
+        func matches(_ url: URL) throws -> Bool {
+            try RecordingFiles.facts(url).size == bytes && RecordingFiles.sha256(of: url) == sha256
+        }
+    }
+
     private let recordingsRoot: URL
     private let snapshotFolder: URL
+    private var expectedTakes: [Take]?
+    private(set) var recoveryRecordingIDs: [String: String] = [:]
 
     /// The display names of the snapshot's files, kept beside them (A36: files
     /// are `<id>.<ext>`, the names are metadata).
@@ -109,7 +135,8 @@ final class OpenRecordingSnapshot {
 
     /// Reopens the snapshot a killed session left on disk. `folderName` comes
     /// from a recovery file, so only a plain UUID is accepted as a path part.
-    init?(existingFolderNamed folderName: String, recordingsRoot: URL) {
+    init?(existingFolderNamed folderName: String, recordingsRoot: URL, expectedTakes: [Take]? = nil,
+          recoveryRecordingIDs: [String: String] = [:]) {
         guard UUID(uuidString: folderName) != nil else { return nil }
         let folder = Self.stagingRoot(for: recordingsRoot).appendingPathComponent(folderName, isDirectory: true)
         var isDirectory: ObjCBool = false
@@ -117,6 +144,8 @@ final class OpenRecordingSnapshot {
               isDirectory.boolValue else { return nil }
         self.recordingsRoot = recordingsRoot
         snapshotFolder = folder
+        self.expectedTakes = expectedTakes
+        self.recoveryRecordingIDs = recoveryRecordingIDs
     }
 
     nonisolated static func stagingRoot(for recordingsRoot: URL) -> URL {
@@ -151,48 +180,90 @@ final class OpenRecordingSnapshot {
         return names
     }
 
+    private func audioFiles() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: snapshotFolder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+            .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func readTakes() throws -> [Take] {
+        let names = displayNames()
+        return try audioFiles().map { file in
+            let name = file.lastPathComponent
+            return Take(fileName: name, displayName: names[name] ?? name,
+                        bytes: try RecordingFiles.facts(file).size, sha256: try RecordingFiles.sha256(of: file))
+        }
+    }
+
+    func takesForRecovery() throws -> [Take] {
+        if let expectedTakes { return expectedTakes }
+        let takes = try readTakes()
+        guard !takes.isEmpty else { throw RecordingLibraryError.takeMissing }
+        expectedTakes = takes
+        return takes
+    }
+
     @discardableResult
-    func copy(to projectId: String, expecting expect: (([(url: URL, recordingId: String, displayName: String, sha256: String)]) throws -> Void)? = nil)
+    func copy(to projectId: String, verifyDestination: Bool = false, alreadyVerified: Set<String> = [],
+              persistRecordingIDs: (([String: String]) throws -> Void)? = nil,
+              expecting expect: (([(url: URL, recordingId: String, displayName: String, sha256: String)]) throws -> Void)? = nil)
         throws -> [(url: URL, recordingId: String, displayName: String, sha256: String)] {
         let fileManager = FileManager.default
         let destination = try RecordingFiles.projectURL(projectId: projectId, memosRoot: recordingsRoot)
         let createdFolder = !fileManager.fileExists(atPath: destination.path)
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        let names = displayNames()
         var created: [(url: URL, identity: [AnyHashable]?, sha256: String)] = []
         var copies: [(url: URL, recordingId: String, displayName: String, sha256: String)] = []
         do {
-            let sources = try fileManager.contentsOfDirectory(at: snapshotFolder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-                .filter { RecordingFiles.supportedAudioExtensions.contains($0.pathExtension.lowercased()) }
+            let observed = try readTakes()
+            let takes: [Take]
+            if verifyDestination {
+                let expected = expectedTakes ?? observed
+                takes = expected.filter { !alreadyVerified.contains($0.recordingID(for: projectId)) }
+                guard !expected.isEmpty, takes.allSatisfy(observed.contains) else {
+                    throw RecordingLibraryError.notVerified
+                }
+            } else {
+                takes = observed
+            }
             // Each copy's identity is chosen, and handed to the library as an intent,
             // before any byte is copied (T1.29). A destination holding other bytes is
             // never skipped: the copy takes a fresh id instead, so every recording in
             // the snapshot reaches the song (BLOCKER 1).
-            var planned: [(source: URL, target: URL, recordingId: String, displayName: String, sha256: String, existing: Bool)] = []
-            for source in sources.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let digest = try RecordingFiles.sha256(of: source)
-                let displayName = names[source.lastPathComponent] ?? source.lastPathComponent
-                var id = RecordingBackupManifest.legacyRecordingId(projectId: projectId, fileName: source.lastPathComponent, sha256: digest)
-                var target = destination.appendingPathComponent(RecordingFiles.storedName(id: id, displayName: displayName))
+            var planned: [(take: Take, target: URL, recordingId: String, existing: Bool)] = []
+            var recordingIDs = recoveryRecordingIDs
+            for take in takes {
+                let originalID = take.recordingID(for: projectId)
+                var id = recordingIDs[originalID] ?? originalID
+                var target = destination.appendingPathComponent(RecordingFiles.storedName(id: id, displayName: take.displayName))
                 var existing = false
                 if fileManager.fileExists(atPath: target.path) {
-                    if try RecordingFiles.sha256(of: target) == digest {
+                    if try take.matches(target) {
                         // Copied by an earlier attempt: taken in as it is.
                         existing = true
                     } else {
                         id = UUID().uuidString.lowercased()
-                        target = destination.appendingPathComponent(RecordingFiles.storedName(id: id, displayName: displayName))
+                        target = destination.appendingPathComponent(RecordingFiles.storedName(id: id, displayName: take.displayName))
+                        if verifyDestination { recordingIDs[originalID] = id }
                     }
                 }
-                planned.append((source, target, id, displayName, digest, existing))
+                planned.append((take, target, id, existing))
             }
-            try expect?(planned.map { ($0.target, $0.recordingId, $0.displayName, $0.sha256) })
+            if recordingIDs != recoveryRecordingIDs {
+                guard let persistRecordingIDs else { throw RecordingLibraryError.notVerified }
+                try persistRecordingIDs(recordingIDs)
+                recoveryRecordingIDs = recordingIDs
+            }
+            try expect?(planned.map { ($0.target, $0.recordingId, $0.take.displayName, $0.take.sha256) })
             for item in planned {
-                copies.append((item.target, item.recordingId, item.displayName, item.sha256))
-                if item.existing { continue }
-                // Refuses an existing destination, so a file that appeared meanwhile is kept.
-                try fileManager.copyItem(at: item.source, to: item.target)
-                created.append((item.target, Self.identity(of: item.target), item.sha256))
+                copies.append((item.target, item.recordingId, item.take.displayName, item.take.sha256))
+                if !item.existing {
+                    // Refuses an existing destination, so a file that appeared meanwhile is kept.
+                    let source = snapshotFolder.appendingPathComponent(item.take.fileName)
+                    try fileManager.copyItem(at: source, to: item.target)
+                    created.append((item.target, Self.identity(of: item.target), item.take.sha256))
+                }
+                if verifyDestination, try !item.take.matches(item.target) { throw RecordingLibraryError.notVerified }
             }
         } catch {
             Self.remove(created, folder: createdFolder ? destination : nil)
@@ -268,6 +339,70 @@ final class OpenRecordingSnapshot {
 /// Kept in a file outside the SwiftData store so the text survives the app
 /// being killed before the operation reconciles it.
 nonisolated private struct DraftRecoveryRecord: Codable, Sendable {
+    struct Owner: Codable, Equatable, Sendable {
+        let projectId: String
+        let row: PersistentIdentifier
+        let time: Date
+        let repaired: Bool
+
+        @MainActor init(_ song: SongProject) {
+            projectId = song.id
+            row = song.persistentModelID
+            time = song.updatedAt
+            repaired = song.precedenceRepaired
+        }
+    }
+
+    struct Attempt: Codable, Sendable {
+        let id: UUID
+        let projectId: String
+        let row: PersistentIdentifier?
+        let store: String
+        let anchor: DefaultHistoryToken?
+
+        var author: String { "draft-recovery:\(id.uuidString)" }
+
+        @MainActor init(id: UUID = UUID(), projectId: String, row: PersistentIdentifier?, source: PersistentIdentifier?,
+                        in context: ModelContext) throws {
+            // The current save can still seal its receipt when history is
+            // temporarily unavailable. A later retry cannot infer rollback
+            // from an attempt without a verified history anchor.
+            let history = (try? context.fetchHistory(HistoryDescriptor<DefaultHistoryTransaction>())) ?? []
+            guard let store = row?.storeIdentifier ?? source?.storeIdentifier ?? history.last?.storeIdentifier else {
+                throw RecordingLibraryError.notVerified
+            }
+            self.id = id
+            self.projectId = projectId
+            self.row = row
+            self.store = store
+            anchor = history.last { $0.storeIdentifier == store }?.token
+        }
+
+        /// Nil is a proved uncommitted attempt. Missing history or a nonqualifying
+        /// tagged change cannot authorize another write.
+        @MainActor func committedRow(in context: ModelContext, projects: [SongProject]) throws -> SongProject? {
+            let history = try context.fetchHistory(HistoryDescriptor<DefaultHistoryTransaction>())
+            let local = history.filter { $0.storeIdentifier == store }
+            let changes = local.filter { $0.author == author }.flatMap(\.changes)
+            if changes.isEmpty {
+                guard let anchor, local.contains(where: { $0.token == anchor }) else {
+                    throw RecordingLibraryError.notVerified
+                }
+                return nil
+            }
+            let ids = Set(changes.compactMap { change -> PersistentIdentifier? in
+                switch change {
+                case .insert where row == nil: return change.changedPersistentIdentifier
+                case .update where change.changedPersistentIdentifier == row: return change.changedPersistentIdentifier
+                default: return nil
+                }
+            })
+            let matching = projects.filter { $0.id == projectId && ids.contains($0.persistentModelID) }
+            guard matching.count == 1, let saved = matching.first else { throw RecordingLibraryError.notVerified }
+            return saved
+        }
+    }
+
     var projectId: String?
     var title: String
     var lyrics: String
@@ -276,12 +411,24 @@ nonisolated private struct DraftRecoveryRecord: Codable, Sendable {
     var baselineLyrics: String
     var baselineTheme: String
     var savedAt: Date
-    /// The id the interrupted operation would give this draft if it had to be
-    /// saved as a separate song. A song with this id means it already was.
+    /// The id reserved for a separate copy of these exact words.
     var separateCopyId: String?
+    /// The service may have committed this exact draft under the general rescue title.
+    var committedCopyTitle: String?
     /// Folder under `recording-recovery` holding the open song's recordings as
     /// they were when the operation began, if it had any.
     var recordingSnapshotFolder: String?
+    var recordingTakes: [OpenRecordingSnapshot.Take]?
+    /// Alternate recording IDs, keyed by the deterministic ID for the destination song.
+    var recordingIDs: [String: String]?
+    var sourceRow: PersistentIdentifier?
+    var attempt: Attempt?
+    var owner: Owner?
+    var suppressedRecordingIDs: Set<String>?
+
+    func write(to file: URL) throws {
+        try JSONEncoder().encode(self).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
 }
 
 private struct InspectorSynonymRequestIdentity: Equatable {
@@ -316,10 +463,13 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Editor State
 
-    @Published var title: String = ""
+    @Published var title: String = "" {
+        didSet { if title != oldValue { versionRestorePending = false } }
+    }
     @Published var lyrics: String = "" {
         didSet {
             if lyrics != oldValue {
+                versionRestorePending = false
                 clearInsertionFeedback()
                 // A request answers the lyrics and cursor it was built from
                 // (Android cancels on text and selection changes too).
@@ -332,6 +482,7 @@ final class EditorViewModel: ObservableObject {
     @Published var theme: String = "" {
         didSet {
             guard theme != oldValue else { return }
+            versionRestorePending = false
             // The theme field stays editable while a request runs, so a theme edit
             // drops in-flight AI work and its results, as Android onThemeChanged does.
             cancelEditorAIWork()
@@ -372,7 +523,16 @@ final class EditorViewModel: ObservableObject {
 
     @Published var suggestions: [SuggestedLine] = []
     @Published var isLoading: Bool = false
-    @Published var errorMessage: String?
+    /// Any assignment turns `suggestionsFailed` off; only the suggestions
+    /// failure path turns it back on, right after setting its message.
+    @Published var errorMessage: String? {
+        didSet { suggestionsFailed = false }
+    }
+    /// True while the error shown was set by the latest suggestions request's
+    /// failure. `errorMessage` also carries editor errors, so on iOS the
+    /// assistant only offers "Try again" and scrolls to the error when this is
+    /// set; the Mac panel still does both for any local error.
+    @Published private(set) var suggestionsFailed = false
     /// The request whose stream ended on its own with its lines still listed.
     /// Cleared when a request starts and on every cancel, so Stop, Settings
     /// changes, navigation, errors and lines used before the end never leave it set.
@@ -461,7 +621,12 @@ final class EditorViewModel: ObservableObject {
     var showInspector: Bool { inspectorWord != nil }
 
     var singleWordSelection: (word: String, range: NSRange)? {
-        let range = selectedRange
+        Self.singleWord(in: lyrics, range: selectedRange)
+    }
+
+    /// The text in `range` when it is one word: two or more letters or
+    /// apostrophes. The Word Inspector looks up only such a range.
+    static func singleWord(in lyrics: String, range: NSRange) -> (word: String, range: NSRange)? {
         guard range.length > 0 else { return nil }
         let ns = lyrics as NSString
         guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
@@ -492,7 +657,38 @@ final class EditorViewModel: ObservableObject {
 
     // MARK: - Project Management
 
-    @Published var currentProjectId: String?
+    @Published var currentProjectId: String? {
+        // Every other way the editor's song changes leaves it not loaded from a known row.
+        didSet {
+            loadedProjectRow = nil
+            versionRestorePending = false
+        }
+    }
+    /// The stored row whose words the editor holds (loaded, created or last saved to), so two
+    /// rows sharing one song id (a restore on two devices, then sync) are told apart.
+    /// Read by the Mac sidebar.
+    @Published private(set) var loadedProjectRow: PersistentIdentifier?
+
+    /// Binds the editor to a stored row. Assigns only changed IDs, so saving the same row publishes nothing.
+    private func bindEditor(to project: SongProject, editorWords: OpenDraft? = nil) {
+        versionRestorePending = false
+        if currentProjectId != project.id { currentProjectId = project.id }
+        if loadedProjectRow != project.persistentModelID { loadedProjectRow = project.persistentModelID }
+        loadedProjectWords = editorWords ?? OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+    }
+    /// The editor's baseline for the bound row, used to distinguish edits from stored changes.
+    private var loadedProjectWords: OpenDraft?
+    /// Retry the whole selected version until it is saved, edited, or the editor changes songs.
+    private var versionRestorePending = false
+
+    /// The stored row the open song's words belong to: the bound one; else the first with the
+    /// song's id when none is bound, or when `adoptingAnother` (a restore reconcile, which reads
+    /// that row's words before claiming it). With unique ids and the row in place, the one row.
+    private func storedProject(id: String, in context: ModelContext, adoptingAnother: Bool = true) throws -> SongProject? {
+        let rows = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+        if let bound = rows.first(where: { $0.persistentModelID == loadedProjectRow }) { return bound }
+        return loadedProjectRow == nil || adoptingAnother ? rows.first : nil
+    }
     @Published var saveStatus: SaveStatus = .idle
 
     /// One song opened or started in the editor. `newProject` and `loadProject`
@@ -560,6 +756,9 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var recordingListsSuspended = false
     /// The launch check of the recordings, awaited by tests.
     private(set) var recordingsLaunchTask: Task<Void, Never>?
+    /// Launch checks of the recordings still running (a context set twice starts
+    /// two): expiry asked for meanwhile is left to them, which run it once one succeeds.
+    private var recordingsLaunchChecksRunning = 0
     private let recordingLibrary: RecordingLibrary?
     private var automaticBackupTask: Task<Void, Never>?
     private var automaticBackupFailures = 0
@@ -607,16 +806,27 @@ final class EditorViewModel: ObservableObject {
             } else {
                 // The recordings are checked off the main actor first; deletions and
                 // expiry wait for that to succeed (A33).
+                recordingsLaunchChecksRunning += 1
+                // Each check acts only on the context it started with: one replaced
+                // meanwhile leaves deletions and expiry to the check of its successor.
+                let checkedContext = modelContext
                 recordingsLaunchTask = Task { [weak self] in
                     guard let self else { return }
                     // Audio an interrupted restore, import or recovery left staged goes now;
                     // anything a row or the staging journal claims stays (T1.7).
-                    if let library = self.recordingLibrary, let context = self.modelContext {
-                        await library.withGate { library.clearStaging(context: context) }
+                    if let library = self.recordingLibrary, let context = checkedContext, self.modelContext === context {
+                        await library.withGate {
+                            // Again once the gate is held: a context set while this waited claims staging this one cannot see.
+                            if self.modelContext === context { library.clearStaging(context: context) }
+                        }
                     }
-                    guard await self.reconcileRecordings() else { return }
+                    var checked = false
+                    if self.modelContext === checkedContext { checked = await self.reconcileRecordings() }
+                    self.recordingsLaunchChecksRunning -= 1
+                    guard checked, let checkedContext, self.modelContext === checkedContext else { return }
                     self.applyPersistedDeletions()
                     self.purgeExpiredTrashedProjects()
+                    await self.recoverPendingDraftAudio(in: checkedContext)
                     await self.voiceMemoService.retryPendingTakes()
                     // Imports a killed app left are published or disposed of (T1.21).
                     if let library = self.recordingLibrary {
@@ -644,6 +854,8 @@ final class EditorViewModel: ObservableObject {
     private let backupService: CloudBackupServicing?
     private let lyricsHistory = EditHistory<LyricsEditState>()
     private var autoSaveTask: Task<Void, Never>?
+    /// The song that was open when `autoSaveTask` was scheduled.
+    private var autoSaveProjectId: String?
     private var trashSchedulerTask: Task<Void, Never>?
     private var didSeedTrashProjectForUITests = false
 
@@ -729,6 +941,8 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Init
 
     private let persistModelContext: (ModelContext) throws -> Void
+    /// Runs before Move to Trash / Restore from Trash read the other side's rows (tests can inject a failed fetch).
+    var willFetchTrashCounterparts: (any PersistentModel.Type) throws -> Void = { _ in }
 
     /// Every library save goes through here, so a saved change starts the backup countdown.
     private func saveModelContext(_ context: ModelContext) throws {
@@ -1129,6 +1343,7 @@ final class EditorViewModel: ObservableObject {
                 if !Task.isCancelled, self.suggestionsRequestID == requestID {
                     if !emittedSuggestion {
                         self.errorMessage = "AI did not return suggestions. Try again."
+                        self.suggestionsFailed = true
                     } else if !self.suggestions.isEmpty {
                         // Lines can be used or cleared while the stream finishes
                         // (an inserted line clears the list); only results still
@@ -1141,6 +1356,7 @@ final class EditorViewModel: ObservableObject {
             } catch {
                 guard self.suggestionsRequestID == requestID else { return }
                 self.errorMessage = error.localizedDescription
+                self.suggestionsFailed = true
             }
         }
     }
@@ -1195,6 +1411,8 @@ final class EditorViewModel: ObservableObject {
         suggestionsTask = nil
         suggestionsRequestID = nil
         completedSuggestionsRequestID = nil
+        // A finished request's failure stays on screen (with its iOS heading)
+        // through caret moves and edits; a new request or another message retires it.
         isLoading = false
     }
 
@@ -1682,7 +1900,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = 0
-        currentProjectId = project.id
+        bindEditor(to: project)
         editorOpen = EditorOpen(isNewSong: false)
         restoreCompanionPosition()
         suggestions = []
@@ -1692,6 +1910,29 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation(recordingSnapshot: nextRecordingSnapshot)
+    }
+
+    /// Welcome's Continue, Android's `continueSong`: the row last open in the editor while it is
+    /// listed, else the most recently updated song; never one a stored tombstone is about to remove.
+    func continueSong(in projects: [SongProject], context: ModelContext) -> SongProject? {
+        // Unreadable tombstones offer nothing: Welcome stays as it was without Continue.
+        guard let deletions = try? SyncMerger.mergeDeletions(DeletionStore.all(in: context)) else { return nil }
+        let tombstones = Self.songTombstones(deletions)
+        let listed = projects.filter { !Self.tombstoneRemoves($0, tombstones[$0.id]) }
+        // The bound row first, so a newer row sharing its song id does not stand in for it.
+        return listed.first { $0.persistentModelID == loadedProjectRow }
+            ?? listed.first { $0.id == currentProjectId }
+            ?? listed.max { $0.updatedAt < $1.updatedAt }
+    }
+
+    /// Continue's tap. Opens `song` through `loadProject` only while Welcome is up and only if,
+    /// read from the store now, it is still the song to continue.
+    func continueSong(_ song: SongProject) {
+        // A refused open leaves Welcome up, so the tap can be tried again.
+        guard showWelcome, let context = modelContext,
+              let current = continueSong(in: (try? context.fetch(FetchDescriptor<SongProject>())) ?? [], context: context),
+              current.persistentModelID == song.persistentModelID else { return }
+        loadProject(current)
     }
 
     /// Why the last `moveProjectToTrash` was refused, for the song lists. Kept
@@ -1706,16 +1947,17 @@ final class EditorViewModel: ObservableObject {
             return false
         }
         if projectDeletionNotice != nil { projectDeletionNotice = nil }
+        // The flush cancels the open song's pending autosave; trashing another song leaves it running.
         if currentProjectId == project.id, !flushCurrentDraft(checkpoint: true) { return false }
         guard let context = modelContext else { return false }
-        autoSaveTask?.cancel()
 
         let trashedProject = TrashedSongProject(project: project)
-        removeExistingTrashEntries(id: project.id, in: context)
-        context.insert(trashedProject)
         let clearsCurrentEditor = currentProjectId == project.id
-        removeExistingProjects(id: project.id, in: context)
         do {
+            // A row that cannot be read is not removed, so nothing is saved beside it.
+            try removeExistingTrashEntries(id: project.id, in: context)
+            context.insert(trashedProject)
+            try removeExistingProjects(id: project.id, in: context)
             try saveModelContext(context)
         } catch {
             context.rollback()
@@ -1733,10 +1975,10 @@ final class EditorViewModel: ObservableObject {
     func restoreTrashedProject(_ trashedProject: TrashedSongProject) -> SongProject? {
         guard let context = modelContext else { return nil }
         let restoredProject = trashedProject.restoredProject()
-        removeExistingProjects(id: restoredProject.id, in: context)
-        context.insert(restoredProject)
-        removeExistingTrashEntries(id: restoredProject.id, in: context)
         do {
+            try removeExistingProjects(id: restoredProject.id, in: context)
+            context.insert(restoredProject)
+            try removeExistingTrashEntries(id: restoredProject.id, in: context)
             try saveModelContext(context)
         } catch {
             context.rollback()
@@ -1789,6 +2031,10 @@ final class EditorViewModel: ObservableObject {
         guard let context = modelContext else { return }
         // One liners hold no song recordings, so they expire before the recordings check.
         try? OneLinersStore(context: context).purgeExpired()
+        // Housekeeping asked for before the launch check ran (scene activation, the
+        // Trash timer) is left to that check, which expires once it succeeds; it is
+        // not reported as a refused deletion the user never asked for.
+        guard recordingsLaunchChecksRunning == 0 else { return }
         // Expiry deletes recordings: only once they are recovered and adopted.
         guard recordingsChecked() else { return }
         // Deadlines are fixed first, also for rows iCloud delivered since launch (T2.50).
@@ -1969,6 +2215,18 @@ final class EditorViewModel: ObservableObject {
         if (try? repairSongTimes(in: context)) == true { try? saveModelContext(context) }
     }
 
+    /// Each song's newest tombstone time.
+    private static func songTombstones(_ deletions: [SyncDeletion]) -> [String: Int64] {
+        Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+    }
+
+    /// A tombstone removes a song only when it is newer than the song's last change,
+    /// or that time is a repair (A38: a recorded time beats a repaired one).
+    private static func tombstoneRemoves(_ project: SongProject, _ deletedAt: Int64?) -> Bool {
+        guard let deletedAt else { return false }
+        return project.precedenceRepaired || deletedAt > project.updatedAt.epochMilliseconds
+    }
+
     private func applyPersistedDeletions() {
         guard let context = modelContext else { return }
         do {
@@ -1980,7 +2238,7 @@ final class EditorViewModel: ObservableObject {
             guard !deletions.isEmpty else { return }
             // A tombstone removes a song only when it is newer than the song's last change,
             // or that time is a repair (A38: a recorded time beats a repaired one).
-            let tombstones = Dictionary(deletions.filter(\.isSongTombstone).map { ($0.projectId, $0.deletedAt) }) { max($0, $1) }
+            let tombstones = Self.songTombstones(deletions)
             // An edit to the open song typed before this launch-time work ran (the
             // editor is usable at once) is saved first: its new time then stands
             // against the tombstone instead of the edit being lost with the song.
@@ -1995,7 +2253,7 @@ final class EditorViewModel: ObservableObject {
             var deletedProjects = Set(tombstones.keys)
             let memosRoot = recordingLibrary?.memosRoot ?? RecordingFiles.memosRoot()
             for project in try context.fetch(FetchDescriptor<SongProject>()) where tombstones[project.id] != nil {
-                if project.precedenceRepaired || tombstones[project.id]! > project.updatedAt.epochMilliseconds {
+                if Self.tombstoneRemoves(project, tombstones[project.id]) {
                     // A41: a song removed against a repaired time is kept first.
                     if project.precedenceRepaired { try SongRecoveryStore.keep(.init(project: SyncSongProject(project: project)), memosRoot: memosRoot) }
                     context.delete(project)
@@ -2104,24 +2362,24 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
-    private func removeExistingProjects(id: String, in context: ModelContext) {
+    private func removeExistingProjects(id: String, in context: ModelContext) throws {
         let projectId = id
         let descriptor = FetchDescriptor<SongProject>(
             predicate: #Predicate<SongProject> { $0.id == projectId }
         )
-        guard let existingProjects = try? context.fetch(descriptor) else { return }
-        for existing in existingProjects {
+        try willFetchTrashCounterparts(SongProject.self)
+        for existing in try context.fetch(descriptor) {
             context.delete(existing)
         }
     }
 
-    private func removeExistingTrashEntries(id: String, in context: ModelContext) {
+    private func removeExistingTrashEntries(id: String, in context: ModelContext) throws {
         let projectId = id
         let descriptor = FetchDescriptor<TrashedSongProject>(
             predicate: #Predicate<TrashedSongProject> { $0.id == projectId }
         )
-        guard let existingProjects = try? context.fetch(descriptor) else { return }
-        for existing in existingProjects {
+        try willFetchTrashCounterparts(TrashedSongProject.self)
+        for existing in try context.fetch(descriptor) {
             context.delete(existing)
         }
     }
@@ -2202,7 +2460,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         suggestions = []
         errorMessage = nil
         saveStatus = .saved
@@ -2244,7 +2502,7 @@ final class EditorViewModel: ObservableObject {
         lyrics = project.lyrics
         theme = project.theme
         cursorPosition = project.lyrics.utf16.count
-        currentProjectId = project.id
+        bindEditor(to: project)
         resetCompanionPosition()
         suggestions = []
         errorMessage = nil
@@ -2253,6 +2511,8 @@ final class EditorViewModel: ObservableObject {
         showProjectsSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation()
+        // A different song is on screen, as after loadProject.
+        editorOpen = EditorOpen(isNewSong: false)
         return true
     }
 
@@ -2270,16 +2530,18 @@ final class EditorViewModel: ObservableObject {
         currentProjectId = nil
         resetCompanionPosition()
         suggestions = []
+        errorMessage = nil
         saveStatus = .idle
         showWelcome = false
         showTemplatesSheet = false
         resetLyricsHistory()
         trackSelectedDraftDuringCloudOperation(isUnsaved: true)
+        editorOpen = EditorOpen(isNewSong: false)
         triggerAutoSave()
     }
 
     func goToStartMenu() {
-        guard flushCurrentDraft(checkpoint: true) else { return }
+        guard flushCurrentDraft(checkpoint: true) || openRowVanishedUnedited() else { return }
         showWelcome = true
     }
 
@@ -2302,7 +2564,7 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't create a song for this recording."
             return nil
         }
-        currentProjectId = project.id
+        bindEditor(to: project, editorWords: rawEditorWords)
         showWelcome = false
         return project.id
     }
@@ -2319,9 +2581,13 @@ final class EditorViewModel: ObservableObject {
             return
         }
         let projectIdAtTrigger = currentProjectId
+        autoSaveProjectId = projectIdAtTrigger
         autoSaveTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
+            // A cancelled task leaves every state alone, even one cancelled before it first ran.
+            guard let self, !Task.isCancelled else { return }
+            // Finished: no autosave is pending. A replaced or stopped task was cancelled and leaves it.
+            defer { if !Task.isCancelled { autoSaveTask = nil } }
+            guard !emptiedDraftNeedsNoSave else {
                 saveStatus = .idle
                 return
             }
@@ -2329,17 +2595,57 @@ final class EditorViewModel: ObservableObject {
 
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-
-            // The editor switched projects (or cleared) during the debounce —
-            // saving now would write into the wrong project or create an empty one.
-            guard currentProjectId == projectIdAtTrigger,
-                  !title.isEmpty || !lyrics.isEmpty || !theme.isEmpty else {
-                saveStatus = .idle
-                return
-            }
-
-            _ = persistCurrentDraft(checkpoint: false)
+            runAutoSave(projectIdAtTrigger: projectIdAtTrigger)
         }
+    }
+
+    /// The autosave once its wait is over; Mac close and quit run it early.
+    /// False when the write was refused.
+    @discardableResult
+    private func runAutoSave(projectIdAtTrigger: String?) -> Bool {
+        // The editor switched projects (or cleared) during the debounce —
+        // saving now would write into the wrong project or create an empty one.
+        guard currentProjectId == projectIdAtTrigger, !emptiedDraftNeedsNoSave else {
+            saveStatus = .idle
+            return true
+        }
+        return persistCurrentDraft(checkpoint: false)
+    }
+
+    /// An emptied editor has nothing to save, unless it holds a stored song whose row a lookup
+    /// does not find: erasing that song is a refused edit, which Close and Quit must see.
+    private var emptiedDraftNeedsNoSave: Bool {
+        guard !versionRestorePending, title.isEmpty, lyrics.isEmpty, theme.isEmpty else { return false }
+        guard let id = currentProjectId, let context = modelContext else { return true }
+        return (try? storedProject(id: id, in: context, adoptingAnother: false)) != nil
+    }
+
+    /// Leaving the editor (Open, New, import, template, Start Menu) without writing: its bound
+    /// row is confirmed gone and it holds that row's words unchanged, so there is nothing to keep.
+    /// A failed lookup proves nothing. Saves also read it, only to report such a refusal as idle.
+    private func openRowVanishedUnedited() -> Bool {
+        guard !versionRestorePending, activeCloudEditorOperation == nil, let id = currentProjectId, let row = loadedProjectRow,
+              let words = loadedProjectWords, let context = modelContext,
+              let rows = try? context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })),
+              !rows.contains(where: { $0.persistentModelID == row }) else { return false }
+        return words == rawEditorWords
+    }
+
+    /// A backup or restore holds the library; saves wait for it to finish and the
+    /// open song's edits go to its recovery copy meanwhile.
+    var cloudOperationHoldsEditor: Bool { activeCloudEditorOperation != nil }
+
+    /// Closing the Mac window and quitting: the waiting autosave fires now. With none
+    /// waiting nothing is written, and a failed last save is reported, not retried.
+    /// False when the open song's edits are not saved.
+    func savePendingEdit() -> Bool {
+        if let task = autoSaveTask, !task.isCancelled {
+            task.cancel()
+            autoSaveTask = nil
+            runAutoSave(projectIdAtTrigger: autoSaveProjectId)
+        }
+        // A refused edit is .failed; a vanished row with nothing edited is not.
+        return saveStatus != .failed
     }
 
     @discardableResult
@@ -2359,30 +2665,46 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Couldn't save this song. Your edits remain open."
             return false
         }
+        let draft = rawEditorWords
         var createdProjectID: String?
+        let saved: SongProject
         do {
             if let id = currentProjectId {
-                let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-                guard let project = try context.fetch(descriptor).first else {
-                    saveStatus = .idle
+                // A save never writes over another row that took the open one's song id.
+                guard let project = try storedProject(id: id, in: context, adoptingAnother: false) else {
+                    // The open row is gone: nothing is saved. Unedited, nothing has failed either.
+                    if openRowVanishedUnedited() {
+                        saveStatus = .idle
+                        return false
+                    }
+                    saveStatus = .failed
                     errorMessage = "This song is no longer in the library. Your edits remain open."
                     return false
                 }
-                if project.title != normalizedProjectTitle() || project.lyrics != lyrics || project.theme != theme {
-                    project.title = normalizedProjectTitle()
-                    project.lyrics = lyrics
-                    project.theme = theme
+                let baseline = loadedProjectRow == project.persistentModelID ? loadedProjectWords : nil
+                let savedTitle = versionRestorePending ? draft.title : normalizedProjectTitle()
+                let writeTitle = (versionRestorePending || draft.title != baseline?.title) && savedTitle != project.title
+                let writeLyrics = (versionRestorePending || draft.lyrics != baseline?.lyrics) && draft.lyrics != project.lyrics
+                let writeTheme = (versionRestorePending || draft.theme != baseline?.theme) && draft.theme != project.theme
+                if writeTitle { project.title = savedTitle }
+                if writeLyrics { project.lyrics = draft.lyrics }
+                if writeTheme { project.theme = draft.theme }
+                // Even when a peer already wrote the same words, a local edit counts against a tombstone.
+                if writeTitle || writeLyrics || writeTheme || (baseline != nil && baseline != draft) {
                     project.updatedAt = Date()
                     project.precedenceRepaired = false  // an edit beats a repair (A37)
                 }
+                saved = project
             } else {
                 let project = makeUntitledSongProject()
                 try copyRecordings(of: pendingRecordingRecovery, to: project.id)
                 context.insert(project)
                 createdProjectID = project.id
+                saved = project
             }
             try saveModelContext(context)
-            if let createdProjectID { currentProjectId = createdProjectID }
+            // Keep the editor's baseline when the row also contains changes it has not seen.
+            bindEditor(to: saved, editorWords: draft)
             if createdProjectID != nil {
                 discardSnapshot(pendingRecordingRecovery)
                 pendingRecordingRecovery = nil
@@ -2494,6 +2816,7 @@ final class EditorViewModel: ObservableObject {
         applyAtomicLyricsEdit(text: version.lyrics, cursorPosition: 0)
         editorScrollY = 0
         positionRestoreID = UUID()
+        versionRestorePending = true
         flushCurrentDraft()
     }
 
@@ -2555,10 +2878,15 @@ final class EditorViewModel: ObservableObject {
 
     /// Copies a draft snapshot's recordings to a song as new recordings, recorded
     /// for the library to take in with their names.
-    private func copyRecordings(of snapshot: OpenRecordingSnapshot?, to projectId: String) throws {
+    private func copyRecordings(of snapshot: OpenRecordingSnapshot?, to projectId: String,
+                                verifyDestination: Bool = false, alreadyVerified: Set<String> = [],
+                                persistRecordingIDs: (([String: String]) throws -> Void)? = nil) throws {
         guard let snapshot else { return }
         // The library records each copy's identity before its bytes are copied (T1.29).
-        try snapshot.copy(to: projectId) { [weak self] planned in try self?.recordingLibrary?.expectCopies(planned) }
+        try snapshot.copy(to: projectId, verifyDestination: verifyDestination, alreadyVerified: alreadyVerified,
+                          persistRecordingIDs: persistRecordingIDs) { [weak self] planned in
+            try self?.recordingLibrary?.expectCopies(planned)
+        }
         if snapshot.namesDamaged {
             recordingNotes.append("The names of recordings from an interrupted edit could not be read; they were copied under their file names.")
         }
@@ -2567,7 +2895,12 @@ final class EditorViewModel: ObservableObject {
     /// Discards a draft snapshot only when every recording in it is preserved; one
     /// that is not is kept on this device and reported (BLOCKER 2, 13).
     private func discardSnapshot(_ snapshot: OpenRecordingSnapshot?) {
-        guard let snapshot, !snapshot.discard() else { return }
+        guard let snapshot else { return }
+        if let url = draftRecoveryURL {
+            guard let needed = Self.snapshotNamesNeededByRecovery(in: url.deletingLastPathComponent()),
+                  !needed.contains(snapshot.folderName) else { return }
+        }
+        guard !snapshot.discard() else { return }
         let note = "Recordings from an interrupted edit are kept on this device because not all of them are in a song yet."
         if !recordingNotes.contains(note) { recordingNotes.append(note) }
     }
@@ -2940,7 +3273,7 @@ final class EditorViewModel: ObservableObject {
             changesLibrary: false,
             success: "Backup complete.",
             separateDraft: "Backup complete. Your edits were saved as a separate local draft; back up again to include them."
-        ) { service, context in
+        ) { service, context, _ in
             try await service.backupNow(modelContext: context)
         }
     }
@@ -2950,8 +3283,8 @@ final class EditorViewModel: ObservableObject {
             noun: "Restore",
             success: "Restore complete. Projects, trash, and missing recordings were restored.",
             separateDraft: "Restore complete. Your open edits were saved as a separate local draft."
-        ) { service, context in
-            try await service.restoreNow(modelContext: context)
+        ) { service, context, handoff in
+            try await service.restoreNow(modelContext: context, draftHandoff: handoff)
         }
         voiceMemoService.recordingsChanged()
     }
@@ -2977,7 +3310,7 @@ final class EditorViewModel: ObservableObject {
             noun: "Recovery",
             success: "",
             separateDraft: "Recovery complete. Your open edits were saved as a separate local draft."
-        ) { service, context in
+        ) { service, context, _ in
             try await service.recoverRevision(revision, modelContext: context)
         }
         voiceMemoService.recordingsChanged()
@@ -3002,7 +3335,7 @@ final class EditorViewModel: ObservableObject {
             changesLibrary: false,
             success: "",
             separateDraft: "Your open edits were saved as a separate local draft."
-        ) { service, context in
+        ) { service, context, _ in
             try await service.migrateLegacyBackup(passphrase: passphrase, modelContext: context)
         }
     }
@@ -3014,16 +3347,24 @@ final class EditorViewModel: ObservableObject {
             requiresDrive: false,
             success: "Import complete. Songs from the file were merged into your library.",
             separateDraft: "Import complete. Your open edits were saved as a separate local draft."
-        ) { service, context in
-            try await service.importArchive(data, modelContext: context)
+        ) { service, context, handoff in
+            try await service.importArchive(data, modelContext: context, draftHandoff: handoff)
         }
         // Imported recordings are files, which no library save announces.
         voiceMemoService.recordingsChanged()
         scheduleAutomaticBackup()
     }
 
+    /// A backup file the file picker could not read or the save panel could not
+    /// write, shown in the backup status line. Cancelling the panel is not one.
+    func reportBackupFileFailure(_ message: String, _ error: Error) {
+        guard (error as? CocoaError)?.code != .userCancelled else { return }
+        cloudBackupLastResultIsError = true
+        cloudBackupStatusText = message
+    }
+
     /// The "Export all songs" zip, after saving the open song.
-    func exportAllSongs() -> (fileName: String, data: Data)? {
+    func exportAllSongs() -> BackupExportFile? {
         guard let backupService, let context = modelContext, !cloudBackupIsWorking, flushCurrentDraft() else {
             cloudBackupLastResultIsError = true
             cloudBackupStatusText = "Export failed: save the open song and try again."
@@ -3050,7 +3391,7 @@ final class EditorViewModel: ObservableObject {
         changesLibrary: Bool = true,
         success: String,
         separateDraft: String,
-        action: (CloudBackupServicing, ModelContext) async throws -> Void
+        action: (CloudBackupServicing, ModelContext, BackupDraftHandoff) async throws -> Void
     ) async {
         guard let backupService, let context = modelContext,
               requiresDrive ? canRunCloudBackup : !cloudBackupIsWorking else {
@@ -3070,26 +3411,41 @@ final class EditorViewModel: ObservableObject {
         cloudBackupStatusText = ""
         refreshCloudBackupState()
         defer {
-            finishCloudEditorOperation()
             cloudBackupIsWorking = false
             refreshCloudBackupState()
             finishAutomaticBackupRun()
         }
 
         var failure: Error?
+        let handoff = activeCloudEditorOperation?.draftHandoff ?? BackupDraftHandoff()
         do {
-            try await action(backupService, context)
+            try await action(backupService, context, handoff)
         } catch {
             failure = error
         }
-        guard let recovered = changesLibrary ? reconcileOpenDraftAfterCloudOperation(in: context) : false else {
+        let copyNote = handoff.outcome?.copies.isEmpty == false ? "Displaced lyrics were kept locally." : nil
+        let recoveredDraft = changesLibrary ? reconcileOpenDraftAfterCloudOperation(in: context) : false
+        finishCloudEditorOperation()
+        if changesLibrary, let url = draftRecoveryURL, (try? parkedDrafts(beside: url).isEmpty) == false {
+            if await reconcileRecordings(), modelContext === context {
+                applyPersistedDeletions()
+                await recoverPendingDraftAudio(in: context)
+            }
+        }
+        guard let recovered = recoveredDraft else {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "\(noun) finished, but the open draft could not be saved. Keep this editor open and retry saving."
+            cloudBackupStatusText = [
+                "\(noun) finished, but recovery of the open draft could not be completed.",
+                copyNote, failure.map(cloudBackupErrorDescription)
+            ].compactMap { $0 }.joined(separator: " ")
             return
         }
         if let failure {
             cloudBackupLastResultIsError = true
-            cloudBackupStatusText = "\(noun) failed: \(cloudBackupErrorDescription(failure)). Your open edits remain in the local library."
+            let reason = cloudBackupErrorDescription(failure)
+            // Most reasons already end in a full stop; add one only when missing.
+            cloudBackupStatusText = "\(noun) failed: \(reason)\(reason.hasSuffix(".") ? "" : ".") Your open edits remain in the local library."
+            if let copyNote { cloudBackupStatusText += " \(copyNote)" }
             return
         }
         automaticBackupFailures = 0
@@ -3097,7 +3453,7 @@ final class EditorViewModel: ObservableObject {
         backupGateFailure = nil
         let report = backupService.lastReport
         cloudBackupLastResultIsError = !(report?.damagedRecordings.isEmpty ?? true) || !(report?.missingRecordings.isEmpty ?? true)
-        cloudBackupStatusText = [recovered ? separateDraft : success, reportNote(report)]
+        cloudBackupStatusText = [recovered ? separateDraft : success, recovered ? nil : copyNote, reportNote(report)]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
@@ -3191,6 +3547,10 @@ final class EditorViewModel: ObservableObject {
         let title: String
         let lyrics: String
         let theme: String
+
+        func reservation(row: PersistentIdentifier, id: String) -> BackupPendingDraft {
+            BackupPendingDraft(sourceRowID: row, title: title, lyrics: lyrics, theme: theme, copyID: id)
+        }
     }
 
     private final class CloudEditorOperation {
@@ -3198,6 +3558,7 @@ final class EditorViewModel: ObservableObject {
         var currentHadPendingEdit: Bool
         var recordingProjectId: String?
         var savedSeparateOutgoingDraft = false
+        let draftHandoff = BackupDraftHandoff()
         /// The id for the next draft this operation saves as a separate song.
         /// The recovery file records it so a relaunch can tell that happened.
         var separateDraftID = UUID().uuidString
@@ -3212,13 +3573,16 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    private var rawEditorWords: OpenDraft {
+        OpenDraft(title: title, lyrics: lyrics, theme: theme)
+    }
+
     private var openDraft: OpenDraft {
         OpenDraft(title: normalizedProjectTitle(), lyrics: lyrics, theme: theme)
     }
 
     private func storedDraft(id: String, in context: ModelContext) throws -> (SongProject, OpenDraft)? {
-        let descriptor = FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id })
-        guard let project = try context.fetch(descriptor).first else { return nil }
+        guard let project = try storedProject(id: id, in: context) else { return nil }
         return (project, OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme))
     }
 
@@ -3249,12 +3613,28 @@ final class EditorViewModel: ObservableObject {
             errorMessage = "Could not protect the open song's recordings. Backup was canceled."
             return false
         }
-        activeCloudEditorOperation = CloudEditorOperation(
+        let operation = CloudEditorOperation(
             currentBaseline: openDraft,
             currentHadPendingEdit: hadPendingEdit,
             recordingProjectId: currentProjectId,
             recordingSnapshot: recordingSnapshot
         )
+        activeCloudEditorOperation = operation
+        operation.draftHandoff.pendingDraft = { [weak self, weak operation] in
+            guard let self, let operation, let row = self.loadedProjectRow else { return nil }
+            let draft = self.openDraft
+            guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return nil }
+            return draft.reservation(row: row, id: operation.separateDraftID)
+        }
+        operation.draftHandoff.replaceReservation = { [weak self, weak operation] id in
+            guard let self, let operation else { throw CocoaError(.fileWriteUnknown) }
+            operation.separateDraftID = id
+            // The replacement has to reach the journal before the service saves the song.
+            guard self.updateDraftRecoveryCopy() else { throw CocoaError(.fileWriteUnknown) }
+        }
+        operation.draftHandoff.prepareCommit = { [weak self] id, context in
+            try self?.prepareDraftCommit(id: id, row: nil, in: context)?.author
+        }
         // An edit that was pending when the operation begins needs its recovery
         // copy from the start: the operation may replace the song, and nothing
         // rewrites the copy unless the user types again. Without it, do not
@@ -3268,17 +3648,18 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func preserveOutgoingDraftBeforeNavigation(checkpoint: Bool = false) -> Bool {
-        guard let operation = activeCloudEditorOperation else { return flushCurrentDraft(checkpoint: checkpoint) }
+        guard let operation = activeCloudEditorOperation else {
+            return flushCurrentDraft(checkpoint: checkpoint) || openRowVanishedUnedited()
+        }
         autoSaveTask?.cancel()
         let draft = openDraft
         guard operation.currentHadPendingEdit || draft != operation.currentBaseline else { return true }
         guard let context = modelContext else { return false }
-        let recoveredID = operation.separateDraftID
+        var committed: SongProject?
         do {
-            try copyRecordings(of: operation.recordingSnapshot, to: recoveredID)
-            let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
-            context.insert(recovered)
-            try saveModelContext(context)
+            let row = loadedProjectRow
+            committed = try committedCopy(for: draft, row: row, operation: operation, in: context)
+            _ = try keepCloudDraft(draft, row: row, committed: &committed, operation: operation, in: context)
             operation.savedSeparateOutgoingDraft = true
             operation.separateDraftID = UUID().uuidString
             if pendingRecordingRecovery === operation.recordingSnapshot {
@@ -3289,9 +3670,80 @@ final class EditorViewModel: ObservableObject {
             return true
         } catch {
             context.rollback()
-            operation.recordingSnapshot?.removeCopy(for: recoveredID)
-            errorMessage = "Could not save this draft before switching songs. Your edits remain open."
+            if let committed {
+                updateDraftRecoveryCopy(committedCopy: committed)
+                deferDraftRecoveryCopy()
+                operation.separateDraftID = UUID().uuidString
+                bindEditor(to: committed, editorWords: rawEditorWords)
+                operation.currentBaseline = openDraft
+                operation.currentHadPendingEdit = false
+                operation.recordingProjectId = committed.id
+                operation.recordingSnapshot = nil
+                operation.savedSeparateOutgoingDraft = true
+                saveStatus = .saved
+                errorMessage = "Your draft was saved. Its recordings are still in recovery."
+            } else {
+                errorMessage = "Could not save this draft before switching songs. Your edits remain open."
+            }
             return false
+        }
+    }
+
+    private func committedCopy(for draft: OpenDraft, row: PersistentIdentifier?, operation: CloudEditorOperation,
+                               in context: ModelContext) throws -> SongProject? {
+        guard let row, let receipt = operation.draftHandoff.outcome?.copies.first(where: {
+            draft.reservation(row: row, id: operation.separateDraftID).matches($0.source, rowID: $0.sourceRowID)
+        }), case .song(let id) = receipt.destination else { return nil }
+        let rows = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+        guard let saved = rows.first, rows.count == 1,
+              saved.lyrics == draft.lyrics, saved.theme == draft.theme,
+              saved.title == draft.title || saved.title == "\(draft.title) (before restore)" else { return nil }
+        return saved
+    }
+
+    private func keepCloudDraft(_ draft: OpenDraft, row: PersistentIdentifier?, committed: inout SongProject?,
+                                operation: CloudEditorOperation, in context: ModelContext) throws -> SongProject {
+        if committed == nil, operation.draftHandoff.outcome?.copies.contains(where: {
+            $0.destination == .song(operation.separateDraftID)
+        }) == true {
+            operation.separateDraftID = UUID().uuidString
+            guard updateDraftRecoveryCopy() else { throw CocoaError(.fileWriteUnknown) }
+        }
+        let id = committed?.id ?? operation.separateDraftID
+        do {
+            if let committed {
+                if committed.title != draft.title {
+                    committed.title = draft.title
+                    try saveModelContext(context)
+                }
+                if try parkCommittedDraft(committed) { return committed }
+                try copyRecordings(of: operation.recordingSnapshot, to: id, verifyDestination: true,
+                                   persistRecordingIDs: { ids in
+                    guard self.updateDraftRecoveryCopy(committedCopy: committed, recordingIDs: ids) else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                })
+                return committed
+            }
+            let attempt = try prepareDraftCommit(id: id, row: nil, in: context)
+            if attempt == nil { try copyRecordings(of: operation.recordingSnapshot, to: id) }
+            let recovered = SongProject(id: id, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
+            let author = context.author
+            if let attempt { context.author = attempt.author }
+            do {
+                defer { context.author = author }
+                context.insert(recovered)
+                try saveModelContext(context)
+            }
+            committed = recovered
+            if let row {
+                operation.draftHandoff.savedDrafts.append(draft.reservation(row: row, id: recovered.id))
+            }
+            if attempt != nil { _ = try parkCommittedDraft(recovered) }
+            return recovered
+        } catch {
+            operation.recordingSnapshot?.removeCopy(for: id)
+            throw error
         }
     }
 
@@ -3325,7 +3777,7 @@ final class EditorViewModel: ObservableObject {
         let recovered = reconcileOpenDraft(in: context)
         // On failure the edits exist only in the open editor, so the recovery
         // file stays until a later save succeeds.
-        if recovered != nil { removeDraftRecoveryCopy() }
+        if recovered != nil { deferOrRemoveDraftRecoveryCopy() }
         return recovered
     }
 
@@ -3333,31 +3785,65 @@ final class EditorViewModel: ObservableObject {
 
     /// False only when the copy was needed and could not be written.
     @discardableResult
-    private func updateDraftRecoveryCopy() -> Bool {
-        guard draftRecoveryUsable, let url = draftRecoveryURL,
-              let operation = activeCloudEditorOperation else { return true }
+    private func updateDraftRecoveryCopy(committedCopy: SongProject? = nil, recordingIDs: [String: String]? = nil) -> Bool {
+        guard let operation = activeCloudEditorOperation else { return true }
         let draft = openDraft
         let baseline = operation.currentBaseline
         guard operation.currentHadPendingEdit || draft != baseline else {
-            removeDraftRecoveryCopy()
+            deferOrRemoveDraftRecoveryCopy()
             return true
         }
-        let record = DraftRecoveryRecord(
-            projectId: currentProjectId,
-            title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
-            baselineTitle: baseline.title, baselineLyrics: baseline.lyrics, baselineTheme: baseline.theme,
-            savedAt: Date(),
-            separateCopyId: operation.separateDraftID,
-            recordingSnapshotFolder: operation.recordingSnapshot?.folderName
-        )
+        var kept = committedCopy
+        if kept == nil, let outcome = operation.draftHandoff.outcome {
+            if let context = modelContext,
+               let saved = try? self.committedCopy(for: draft, row: loadedProjectRow, operation: operation, in: context) {
+                operation.separateDraftID = saved.id
+                kept = saved
+            } else if outcome.copies.contains(where: { $0.destination == .song(operation.separateDraftID) }) {
+                operation.separateDraftID = UUID().uuidString
+            }
+        }
+        guard draftRecoveryUsable, let url = draftRecoveryURL else { return true }
         do {
+            var previous = try readActiveDraftRecovery()
+            if let old = previous, (old.attempt != nil || old.owner != nil),
+               (old.title != draft.title || old.lyrics != draft.lyrics || old.theme != draft.theme
+                || old.recordingSnapshotFolder != operation.recordingSnapshot?.folderName) {
+                try parkDraftRecovery(at: url)
+                previous = nil
+            }
+            // Only a library adopts inventoried takes (recoverDraftAudio). Without one the
+            // journal stays the legacy kind, whose recovery copies the snapshot itself.
+            var takes = recordingLibrary == nil ? nil : try operation.recordingSnapshot?.takesForRecovery()
+            if takes != nil, let context = modelContext, let projectId = operation.recordingProjectId {
+                let rows = try context.fetch(FetchDescriptor<Recording>(predicate: #Predicate { $0.projectId == projectId }))
+                takes = takes?.map { take in
+                    var take = take
+                    take.origin = rows.first { $0.storedName == take.fileName && $0.sha256 == take.sha256 }?.syncEntry
+                        ?? previous?.recordingTakes?.first { $0.fileName == take.fileName && $0.sha256 == take.sha256 }?.origin
+                    return take
+                }
+            }
+            var record = DraftRecoveryRecord(
+                projectId: committedCopy == nil ? currentProjectId : operation.recordingProjectId,
+                title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
+                baselineTitle: baseline.title, baselineLyrics: baseline.lyrics, baselineTheme: baseline.theme,
+                savedAt: Date(),
+                separateCopyId: kept?.id ?? operation.separateDraftID,
+                committedCopyTitle: kept.flatMap { $0.title == draft.title ? nil : $0.title },
+                recordingSnapshotFolder: operation.recordingSnapshot?.folderName,
+                recordingTakes: takes,
+                recordingIDs: recordingIDs ?? operation.recordingSnapshot?.recoveryRecordingIDs
+            )
+            record.sourceRow = previous?.sourceRow ?? loadedProjectRow
+            record.attempt = previous?.attempt
+            record.owner = previous?.owner
+            if let committedCopy, takes != nil { record.owner = .init(committedCopy) }
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true
             )
             // Readable while the device is locked: the background backup writes here.
-            try JSONEncoder().encode(record).write(
-                to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-            )
+            try record.write(to: url)
             return true
         } catch {
             // The edit is still in the open editor and is reconciled when the
@@ -3368,11 +3854,62 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    private func readActiveDraftRecovery() throws -> DraftRecoveryRecord? {
+        guard draftRecoveryUsable, let url = draftRecoveryURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(DraftRecoveryRecord.self, from: Data(contentsOf: url))
+    }
+
+    private func prepareDraftCommit(id: String, row: PersistentIdentifier?, in context: ModelContext) throws -> DraftRecoveryRecord.Attempt? {
+        guard activeCloudEditorOperation?.recordingSnapshot != nil, let url = draftRecoveryURL, draftRecoveryUsable else { return nil }
+        guard updateDraftRecoveryCopy(), var record = try readActiveDraftRecovery() else { throw CocoaError(.fileWriteUnknown) }
+        let attempt = try DraftRecoveryRecord.Attempt(projectId: id, row: row, source: record.sourceRow, in: context)
+        record.attempt = attempt
+        try record.write(to: url)
+        return attempt
+    }
+
+    private func parkCommittedDraft(_ song: SongProject) throws -> Bool {
+        guard activeCloudEditorOperation?.recordingSnapshot != nil, let url = draftRecoveryURL, draftRecoveryUsable else { return false }
+        guard updateDraftRecoveryCopy(committedCopy: song), try readActiveDraftRecovery()?.owner?.row == song.persistentModelID else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try parkDraftRecovery(at: url)
+        return true
+    }
+
+    private func parkDraftRecovery(at url: URL) throws {
+        let retry = url.deletingLastPathComponent().appendingPathComponent("unrecovered-\(UUID().uuidString).json")
+        try FileManager.default.moveItem(at: url, to: retry)
+    }
+
     /// Removes only the file this session writes; copies left by earlier
     /// sessions have other names and are removed by their own recovery.
     private func removeDraftRecoveryCopy() {
         guard draftRecoveryUsable, let url = draftRecoveryURL else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    private func deferDraftRecoveryCopy() {
+        guard draftRecoveryUsable, let url = draftRecoveryURL,
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try parkDraftRecovery(at: url)
+        } catch {
+            // Protect the file from later saves even if it could not be renamed.
+            draftRecoveryUsable = false
+        }
+    }
+
+    private func deferOrRemoveDraftRecoveryCopy() {
+        do {
+            if let record = try readActiveDraftRecovery(), record.owner != nil || record.attempt != nil {
+                deferDraftRecoveryCopy()
+            } else {
+                removeDraftRecoveryCopy()
+            }
+        } catch {
+            deferDraftRecoveryCopy()
+        }
     }
 
     private var isLibraryStoredOnDisk: Bool {
@@ -3540,89 +4077,392 @@ final class EditorViewModel: ObservableObject {
     private func recoverDraft(from file: URL, in context: ModelContext) {
         let fileManager = FileManager.default
         guard let data = try? Data(contentsOf: file) else { return }
-        guard let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else {
-            // Not readable by this build, but it may still hold text. Keep it under
-            // a name that is not retried rather than deleting it.
-            let unreadable = file.deletingLastPathComponent()
-                .appendingPathComponent("unreadable-\(file.lastPathComponent)")
+        guard var record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else {
+            let unreadable = file.deletingLastPathComponent().appendingPathComponent("unreadable-\(file.lastPathComponent)")
             try? fileManager.moveItem(at: file, to: unreadable)
             return
         }
+        if record.owner != nil { return }
+        let inventoried = record.recordingTakes != nil
         let draft = OpenDraft(title: record.title, lyrics: record.lyrics, theme: record.theme)
-        let baseline = OpenDraft(
-            title: record.baselineTitle, lyrics: record.baselineLyrics, theme: record.baselineTheme
-        )
-        var recoveredCopyID: String?
+        let baseline = OpenDraft(title: record.baselineTitle, lyrics: record.baselineLyrics, theme: record.baselineTheme)
         var copiedSnapshot: OpenRecordingSnapshot?
+        var copiedID: String?
         do {
             let projects = try context.fetch(FetchDescriptor<SongProject>())
-            func content(_ project: SongProject) -> OpenDraft {
-                OpenDraft(title: project.title, lyrics: project.lyrics, theme: project.theme)
+            let trashed = try context.fetch(FetchDescriptor<TrashedSongProject>())
+            func content(_ song: SongProject) -> OpenDraft {
+                OpenDraft(title: song.title, lyrics: song.lyrics, theme: song.theme)
             }
-            let stored = record.projectId.flatMap { id in projects.first { $0.id == id } }
-            let separateID = record.separateCopyId ?? UUID().uuidString
-            // The text already reached the library (the kill came after the save
-            // but before the file was removed): nothing to recover. Only the
-            // interrupted song itself, or the separate song saved under the id
-            // recorded for this draft, counts. An unrelated song with the same
-            // text does not: identical songs are legitimate.
-            let trashedIDs = try context.fetch(FetchDescriptor<TrashedSongProject>()).map(\.id)
-            let savedInPlace = stored.map { content($0) == draft } ?? false
-            let savedSeparately = projects.contains { $0.id == separateID } || trashedIDs.contains(separateID)
-            // The open song's recordings as they were when the operation began.
-            let recordingSnapshot: OpenRecordingSnapshot? = {
-                guard let name = record.recordingSnapshotFolder,
-                      let root = backupService?.recordingRecoveryRoot else { return nil }
-                return OpenRecordingSnapshot(existingFolderNamed: name, recordingsRoot: root)
-            }()
-            if savedInPlace || savedSeparately {
-                // The song that owns the text was saved, with its recordings.
-                try? fileManager.removeItem(at: file)
-                discardSnapshot(recordingSnapshot)
+            if let attempt = record.attempt, let committed = try attempt.committedRow(in: context, projects: projects) {
+                record.owner = .init(committed)
+                try record.write(to: file)
                 return
             }
+
+            let originals = projects.filter { $0.id == record.projectId }
+            let stored = inventoried
+                ? originals.count == 1 && (record.sourceRow == nil || originals.first?.persistentModelID == record.sourceRow)
+                    ? originals.first : nil
+                : originals.first
+            var separateID = record.separateCopyId ?? UUID().uuidString
+            let separateProjects = projects.filter { $0.id == separateID }
+            let separateTrash = trashed.filter { $0.id == separateID }
+            let snapshot = recoverySnapshot(for: record)
+            let exactOriginal = stored.flatMap { content($0) == draft ? $0 : nil }
+            if !inventoried, exactOriginal != nil || !separateProjects.isEmpty || !separateTrash.isEmpty {
+                try? fileManager.removeItem(at: file)
+                discardSnapshot(snapshot)
+                return
+            }
+
+            // Inventories written before owner receipts were introduced remain
+            // readable. Only an exact, unique pre-existing copy can be admitted.
+            if inventoried {
+                let exactCopy = record.sourceRow == nil ? separateProjects.first {
+                    $0.lyrics == draft.lyrics && $0.theme == draft.theme
+                        && ($0.title == draft.title || $0.title == record.committedCopyTitle)
+                } : nil
+                if let saved = exactOriginal ?? exactCopy {
+                    let owners = projects.filter { $0.id == saved.id }.count + trashed.filter { $0.id == saved.id }.count
+                    guard owners == 1 else { throw RecordingLibraryError.notVerified }
+                    if saved.title != draft.title {
+                        saved.title = draft.title
+                        try saveModelContext(context)
+                    }
+                    record.owner = .init(saved)
+                    try record.write(to: file)
+                    return
+                }
+                if record.sourceRow == nil, !separateTrash.isEmpty {
+                    // No durable predecessor to follow through Trash/Restore.
+                    throw RecordingLibraryError.notVerified
+                }
+            }
+
+            let inPlace = stored.flatMap { song in
+                content(song) == baseline && (song.updatedAt <= record.savedAt || song.precedenceRepaired)
+                    && !libraryIsCloudBacked(context.container) ? song : nil
+            }
             let recovered: SongProject
-            // A CloudKit-backed library may not have downloaded another device's
-            // newer version of this song yet, and that sync does not compare
-            // `updatedAt`. Writing into the song now could replace those edits,
-            // so only a local-only library is updated in place.
-            // A stored time that is a repair is not an edit, so the typed text (a real
-            // edit) stands over it (A37, T2.56); the separate copy stays the fallback.
-            if let stored, content(stored) == baseline, stored.updatedAt <= record.savedAt || stored.precedenceRepaired,
-               !libraryIsCloudBacked(context.container) {
-                stored.title = draft.title
-                stored.lyrics = draft.lyrics
-                stored.theme = draft.theme
-                // The time the text was typed, so timestamp merges rank it as that edit.
-                stored.updatedAt = record.savedAt
-                stored.precedenceRepaired = false
-                recovered = stored
+            if let inPlace {
+                recovered = inPlace
             } else {
-                // The song was replaced, deleted, or changed after this copy was
-                // written, or may be about to be by sync. Keep both: never write
-                // old text over a newer row.
-                // No song owns this id (checked above). Recordings already under it
-                // were left by an attempt killed before its save; they are kept and
-                // only missing copies are added.
-                copiedSnapshot = recordingSnapshot
-                try copyRecordings(of: recordingSnapshot, to: separateID)
-                recoveredCopyID = separateID
-                recovered = SongProject(
-                    id: separateID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
-                    updatedAt: record.savedAt
-                )
+                if inventoried {
+                    let occupied = Set(projects.map(\.id) + trashed.map(\.id) + (try DeletionStore.all(in: context)).map(\.projectId))
+                    while occupied.contains(separateID) { separateID = UUID().uuidString }
+                    record.separateCopyId = separateID
+                } else {
+                    try copyRecordings(of: snapshot, to: separateID)
+                    copiedSnapshot = snapshot
+                    copiedID = separateID
+                }
+                recovered = SongProject(id: separateID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme,
+                                        updatedAt: record.savedAt)
+            }
+            let previousAuthor = context.author
+            defer { context.author = previousAuthor }
+            if inventoried {
+                let targetRow = inPlace?.persistentModelID
+                let attempt: DraftRecoveryRecord.Attempt
+                if let prior = record.attempt, prior.projectId == recovered.id, prior.row == targetRow {
+                    attempt = prior
+                } else {
+                    attempt = try DraftRecoveryRecord.Attempt(id: record.attempt?.id ?? UUID(), projectId: recovered.id,
+                        row: targetRow, source: record.sourceRow ?? originals.first?.persistentModelID, in: context)
+                    if let previous = record.attempt {
+                        for sibling in try parkedDrafts(beside: file) where sibling != file {
+                            guard let bytes = try? Data(contentsOf: sibling),
+                                  var duplicate = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: bytes),
+                                  duplicate.attempt?.id == previous.id, duplicate.owner == nil,
+                                  duplicate.projectId == record.projectId, duplicate.sourceRow == record.sourceRow,
+                                  duplicate.title == draft.title, duplicate.lyrics == draft.lyrics,
+                                  duplicate.theme == draft.theme else { continue }
+                            duplicate.attempt = attempt
+                            duplicate.separateCopyId = record.separateCopyId
+                            try duplicate.write(to: sibling)
+                        }
+                    }
+                }
+                record.attempt = attempt
+                try record.write(to: file)
+                context.author = attempt.author
+            }
+            if let inPlace {
+                inPlace.title = draft.title
+                inPlace.lyrics = draft.lyrics
+                inPlace.theme = draft.theme
+                inPlace.updatedAt = record.savedAt
+                inPlace.precedenceRepaired = false
+            } else {
                 context.insert(recovered)
             }
             try saveModelContext(context)
-            try? fileManager.removeItem(at: file)
-            // Only after the song that owns the recordings is saved.
-            discardSnapshot(recordingSnapshot)
+            context.author = previousAuthor
+            if inventoried {
+                record.owner = .init(recovered)
+                try record.write(to: file)
+            } else {
+                try? fileManager.removeItem(at: file)
+                discardSnapshot(snapshot)
+            }
             loadProject(recovered)
             saveStatus = .saved
         } catch {
             context.rollback()
-            if let recoveredCopyID { copiedSnapshot?.removeCopy(for: recoveredCopyID) }
-            errorMessage = "Could not recover the song you were editing during the last backup. It will be retried the next time the app opens."
+            if let copiedID { copiedSnapshot?.removeCopy(for: copiedID) }
+            errorMessage = "Could not finish recovering the song you were editing. The draft was kept and will be retried. You can copy it from Settings → Backup."
+        }
+    }
+
+    private func recoverySnapshot(for record: DraftRecoveryRecord) -> OpenRecordingSnapshot? {
+        guard let name = record.recordingSnapshotFolder, let root = backupService?.recordingRecoveryRoot else { return nil }
+        return OpenRecordingSnapshot(existingFolderNamed: name, recordingsRoot: root)
+    }
+
+    private func parkedDrafts(beside url: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: url.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("unrecovered-") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// The writer can export a journal without authorizing automatic text replay.
+    struct InterruptedDraft: Identifiable {
+        let id: URL
+        let title: String
+        let text: String
+        let recordings: [URL]
+    }
+
+    var interruptedDrafts: [InterruptedDraft] {
+        guard let url = draftRecoveryURL, let parked = try? parkedDrafts(beside: url) else { return [] }
+        return parked.compactMap { file in
+            guard let data = try? Data(contentsOf: file),
+                  let record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data) else { return nil }
+            var recordings: [URL] = []
+            if let snapshot = recoverySnapshot(for: record), let root = backupService?.recordingRecoveryRoot {
+                let staging = OpenRecordingSnapshot.stagingRoot(for: root)
+                let folder = staging.appendingPathComponent(snapshot.folderName)
+                recordings = (record.recordingTakes ?? []).compactMap { take in
+                    let path = folder.appendingPathComponent(take.fileName)
+                    guard take.fileName == path.lastPathComponent,
+                          RecordingFiles.isRecordingFile(path, in: [staging]) else { return nil }
+                    return path
+                }
+            }
+            return InterruptedDraft(id: file, title: record.title, text: record.lyrics, recordings: recordings)
+        }
+    }
+
+    private func recoverPendingDraftAudio(in context: ModelContext) async {
+        guard let url = draftRecoveryURL, let library = recordingLibrary,
+              let files = try? parkedDrafts(beside: url), !files.isEmpty else { return }
+        await library.withGate {
+            for file in files where modelContext === context {
+                do {
+                    try await recoverDraftAudio(from: file, using: library, in: context)
+                } catch {
+                    errorMessage = "Some recordings are still in draft recovery and will be retried the next time the app opens."
+                }
+            }
+        }
+    }
+
+    private func recoverDraftAudio(from file: URL, using library: RecordingLibrary, in context: ModelContext) async throws {
+        guard let data = try? Data(contentsOf: file),
+              var record = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: data),
+              let owner = record.owner, let takes = record.recordingTakes else { return }
+        let root = library.memosRoot
+        let projectId = owner.projectId
+        let snapshot = recoverySnapshot(for: record)
+        let staging = OpenRecordingSnapshot.stagingRoot(for: root)
+        let folder = snapshot.map { staging.appendingPathComponent($0.folderName) }
+        let links = try parkedDrafts(beside: file).filter { $0 != file }.compactMap { url -> (URL, DraftRecoveryRecord)? in
+            guard let bytes = try? Data(contentsOf: url),
+                  let other = try? JSONDecoder().decode(DraftRecoveryRecord.self, from: bytes),
+                  other.owner?.row == owner.row, other.projectId == record.projectId else { return nil }
+            return (url, other)
+        }
+
+        var incomplete = false
+        for take in takes {
+            let key = take.recordingID(for: projectId)
+            if record.suppressedRecordingIDs?.contains(key) == true { continue }
+            do {
+                try library.requireChecked(context)
+                let deletions = try DeletionStore.all(in: context)
+                let songs = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == projectId }))
+                let trash = try context.fetch(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == projectId }))
+                if !songs.contains(where: { $0.persistentModelID == owner.row }), trash.isEmpty, deletions.contains(where: {
+                    $0.isSongTombstone && $0.projectId == projectId && $0.wins(over: owner.time, repaired: owner.repaired)
+                }) {
+                    record.suppressedRecordingIDs = Set(takes.map { $0.recordingID(for: projectId) })
+                    try record.write(to: file)
+                    break
+                }
+                guard songs.count == 1, trash.isEmpty, let song = songs.first,
+                      song.persistentModelID == owner.row,
+                      !deletions.contains(where: {
+                          $0.isSongTombstone && $0.projectId == projectId && $0.wins(over: song.updatedAt, repaired: song.precedenceRepaired)
+                      }) else { throw RecordingLibraryError.notVerified }
+
+                let relevant = links.filter { link in link.1.recordingTakes?.contains(where: {
+                    $0.fileName == take.fileName && $0.bytes == take.bytes && $0.sha256 == take.sha256
+                }) == true }
+                let aliases = Set(([record.recordingIDs?[key]] + relevant.map { $0.1.recordingIDs?[key] })
+                    .compactMap { $0 }.filter { UUID(uuidString: $0) != nil })
+                guard aliases.count <= 1 else { throw RecordingLibraryError.notVerified }
+                var id = aliases.first ?? key
+                let original = take.origin?.id ?? URL(fileURLWithPath: take.fileName).deletingPathExtension().lastPathComponent
+                let sourceProjectId = record.projectId ?? projectId
+                let sourceRecordingId = UUID(uuidString: original) != nil ? original : take.recordingID(for: sourceProjectId)
+                let binding = RecordingFiles.PendingMoves.Adopt.DraftBinding(
+                    projectId: projectId, row: owner.row, sourceProjectId: sourceProjectId,
+                    sourceRecordingId: sourceRecordingId, originalId: key, bytes: take.bytes,
+                    precedenceTime: take.origin?.uploadedAt ?? record.savedAt,
+                    precedenceRepaired: take.origin?.precedenceRepaired ?? true
+                )
+                let rows = try context.fetch(FetchDescriptor<Recording>())
+                let cascadeTimes = sourceProjectId == projectId ? [:] : try RecordingFiles.draftSourceCascadeTimes(for: root)
+
+                if deletions.contains(where: { deletion in
+                    guard !deletion.isSongTombstone,
+                          !binding.isSourceSongCascade(deletion, among: deletions, recordedTimes: cascadeTimes) else { return false }
+                    if let origin = take.origin, deletion.covers(origin) { return true }
+                    let addresses = [(projectId, id), (projectId, key), (sourceProjectId, sourceRecordingId)]
+                    return addresses.contains { project, recording in
+                        let row = rows.first { $0.projectId == project && $0.id == recording && $0.sha256 == take.sha256 }
+                        return deletion.covers(projectId: project, recordingId: recording, sha256: take.sha256,
+                            at: row?.precedenceTime ?? take.origin?.uploadedAt ?? record.savedAt,
+                            repaired: row?.precedenceIsRepair ?? take.origin?.precedenceRepaired ?? true)
+                    }
+                }) {
+                    record.suppressedRecordingIDs = (record.suppressedRecordingIDs ?? []).union([key])
+                    try record.write(to: file)
+                    continue
+                }
+                // Keep a proved original in place and an already-adopted copy under its chosen ID.
+                let matching = rows.filter {
+                    $0.projectId == projectId && ($0.id == id || (record.projectId == projectId && $0.id == original))
+                    && $0.sha256 == take.sha256 && $0.bytes == take.bytes
+                }
+                if matching.contains(where: { row in
+                    guard let path = row.fileURL(memosRoot: root, trashRoot: library.trashRoot) else { return false }
+                    return (try? take.matches(path)) == true
+                }) {
+                    if let alias = aliases.first {
+                        try saveDraftRecordingAlias(alias, for: key, record: &record, file: file, links: relevant)
+                    }
+                    continue
+                }
+                let oversizedOccupant = try OversizedRecordings.read(for: root)[id]
+                if let entry = oversizedOccupant, entry.completed != false, entry.projectId == projectId {
+                    let base = entry.trashedAt == nil ? root : library.trashRoot
+                    let path = try RecordingFiles.localURL(projectId: projectId,
+                        fileName: RecordingFiles.storedName(id: id, displayName: entry.fileName), memosRoot: base)
+                    if (try? take.matches(path)) == true { continue }
+                }
+
+                var target = try RecordingFiles.localURL(projectId: projectId,
+                    fileName: RecordingFiles.storedName(id: id, displayName: take.displayName), memosRoot: root)
+                let moves = try RecordingFiles.readPendingMoves(for: root)
+                let planned = moves.adopt.first {
+                    $0.recordingId == id && $0.sha256 == take.sha256 && $0.path == RecordingFiles.canonicalPath(target)
+                }
+                let idOccupied = rows.contains { $0.id == id }
+                if try RecordingFiles.exists(target), planned != nil, !idOccupied, (try? take.matches(target)) == true {
+                    try await library.reconcile(context: context)
+                } else {
+                    guard let folder, take.fileName == URL(fileURLWithPath: take.fileName).lastPathComponent else {
+                        throw RecordingLibraryError.takeMissing
+                    }
+                    let source = folder.appendingPathComponent(take.fileName)
+                    guard RecordingFiles.isRecordingFile(source, in: [staging]),
+                          (try? take.matches(source)) == true else { throw RecordingLibraryError.takeMissing }
+                    if try idOccupied || oversizedOccupant != nil || RecordingFiles.exists(target) {
+                        id = UUID().uuidString.lowercased()
+                        target = try RecordingFiles.localURL(projectId: projectId,
+                            fileName: RecordingFiles.storedName(id: id, displayName: take.displayName), memosRoot: root)
+                    }
+                    if id != key { try saveDraftRecordingAlias(id, for: key, record: &record, file: file, links: relevant) }
+                    let temporary = folder.appendingPathComponent(".recovery-\(UUID().uuidString)")
+                    defer { try? FileManager.default.removeItem(at: temporary) }
+                    try FileManager.default.copyItem(at: source, to: temporary)
+                    if take.bytes > SyncRecording.maxBytes {
+                        guard try take.matches(temporary) else { throw RecordingLibraryError.notVerified }
+                        _ = try library.publishFinished(temporary, projectId: projectId, preferredName: take.displayName,
+                            origin: .recorded, id: id, finishedAt: take.origin?.uploadedAt, draftBinding: binding)
+                    } else {
+                        if planned?.draftBinding != binding || id != (aliases.first ?? key) {
+                            try library.expectCopies([(target, id, take.displayName, take.sha256)], draftBinding: binding)
+                        }
+                        try RecordingFiles.verifiedMove(temporary, to: target, sha256: take.sha256, bytes: take.bytes, within: [root, folder])
+                    }
+                    try await library.reconcile(context: context)
+                }
+                guard modelContext === context else { return }
+                let adopted = try context.fetch(FetchDescriptor<Recording>()).contains {
+                    $0.id == id && $0.projectId == projectId && $0.sha256 == take.sha256 && $0.bytes == take.bytes
+                }
+                let oversized = try take.bytes > SyncRecording.maxBytes
+                    && OversizedRecordings.read(for: root)[id]?.completed == true
+                guard adopted || oversized, (try? take.matches(target)) == true else { throw RecordingLibraryError.notVerified }
+            } catch {
+                // A missing take cannot prevent later takes in this same journal from being adopted.
+                incomplete = true
+                continue
+            }
+        }
+        guard try !incomplete && draftAudioIsComplete(record, using: library, in: context) else {
+            errorMessage = "Some recordings are still in draft recovery and will be retried the next time the app opens."
+            return
+        }
+        try FileManager.default.removeItem(at: file)
+        if let snapshot, let needed = Self.snapshotNamesNeededByRecovery(in: file.deletingLastPathComponent()),
+           !needed.contains(snapshot.folderName) {
+            discardSnapshot(snapshot)
+        }
+    }
+
+    private func saveDraftRecordingAlias(_ id: String, for key: String, record: inout DraftRecoveryRecord, file: URL,
+                                         links: [(URL, DraftRecoveryRecord)]) throws {
+        if record.recordingIDs?[key] != id {
+            record.recordingIDs = (record.recordingIDs ?? [:]).merging([key: id]) { _, new in new }
+            try record.write(to: file)
+        }
+        for (url, _) in links {
+            var shared = try JSONDecoder().decode(DraftRecoveryRecord.self, from: Data(contentsOf: url))
+            guard shared.recordingIDs?[key] != id else { continue }
+            shared.recordingIDs = (shared.recordingIDs ?? [:]).merging([key: id]) { _, new in new }
+            try shared.write(to: url)
+        }
+    }
+
+    private func draftAudioIsComplete(_ record: DraftRecoveryRecord, using library: RecordingLibrary,
+                                      in context: ModelContext) throws -> Bool {
+        guard let owner = record.owner, let takes = record.recordingTakes else { return false }
+        let id = owner.projectId
+        let pending = takes.filter { record.suppressedRecordingIDs?.contains($0.recordingID(for: id)) != true }
+        if pending.isEmpty { return true }
+        let live = try context.fetch(FetchDescriptor<SongProject>(predicate: #Predicate { $0.id == id }))
+        let trash = try context.fetch(FetchDescriptor<TrashedSongProject>(predicate: #Predicate { $0.id == id }))
+        guard live.count == 1, live.first?.persistentModelID == owner.row, trash.isEmpty else { return false }
+        let rows = try context.fetch(FetchDescriptor<Recording>(predicate: #Predicate { $0.projectId == id }))
+        let oversized = try OversizedRecordings.read(for: library.memosRoot)
+        return try pending.allSatisfy { take in
+            let expected = take.recordingID(for: id)
+            let alias = record.recordingIDs?[expected] ?? expected
+            if rows.contains(where: { row in
+                guard row.id == alias || (id == record.projectId && row.storedName == take.fileName),
+                      row.sha256 == take.sha256, row.bytes == take.bytes,
+                      let path = row.fileURL(memosRoot: library.memosRoot, trashRoot: library.trashRoot) else { return false }
+                return (try? take.matches(path)) == true
+            }) { return true }
+            guard let entry = oversized[alias], entry.completed != false, entry.projectId == id else { return false }
+            let root = entry.trashedAt == nil ? library.memosRoot : library.trashRoot
+            let path = try RecordingFiles.localURL(projectId: id,
+                fileName: RecordingFiles.storedName(id: alias, displayName: entry.fileName), memosRoot: root)
+            return (try? take.matches(path)) == true
         }
     }
 
@@ -3631,41 +4471,52 @@ final class EditorViewModel: ObservableObject {
         autoSaveTask?.cancel()
         let draft = openDraft
         let edited = operation.currentHadPendingEdit || draft != operation.currentBaseline
+        // The row the editor held, before the lookup can fall back to another under its song id.
+        let boundRow = loadedProjectRow
+        var committedRecovery: SongProject?
 
         do {
             guard operation.recordingProjectId == currentProjectId else {
                 throw CocoaError(.fileReadUnknown)
             }
             let stored = try currentProjectId.flatMap { try storedDraft(id: $0, in: context) }
+            // Edits go into the row they were made on; if that one is gone they are recovered separately.
+            let originalKept = boundRow != nil && stored?.0.persistentModelID == boundRow
+            // Every branch below leaves the editor with this row's words, or a new row's.
+            if let stored { bindEditor(to: stored.0, editorWords: stored.1 == draft ? rawEditorWords : nil) }
             if edited {
-                if stored?.1 == draft {
+                if originalKept, let stored, stored.1 == draft {
+                    committedRecovery = stored.0
+                    _ = try parkCommittedDraft(stored.0)
                     if saveStatus == .saving || saveStatus == .failed { saveStatus = .saved }
                     return operation.savedSeparateOutgoingDraft
                 }
-                if let stored, stored.1 == operation.currentBaseline {
+                if originalKept, let stored, stored.1 == operation.currentBaseline {
+                    let attempt = try prepareDraftCommit(id: stored.0.id, row: stored.0.persistentModelID, in: context)
                     stored.0.title = draft.title
                     stored.0.lyrics = draft.lyrics
                     stored.0.theme = draft.theme
                     stored.0.updatedAt = Date()
                     stored.0.precedenceRepaired = false
-                    try saveModelContext(context)
+                    let author = context.author
+                    if let attempt { context.author = attempt.author }
+                    do {
+                        defer { context.author = author }
+                        try saveModelContext(context)
+                    }
+                    committedRecovery = stored.0
+                    if attempt != nil { _ = try parkCommittedDraft(stored.0) }
+                    bindEditor(to: stored.0, editorWords: rawEditorWords)
                     saveStatus = .saved
                     return operation.savedSeparateOutgoingDraft
                 }
-                let recoveredID = operation.separateDraftID
-                try copyRecordings(of: operation.recordingSnapshot, to: recoveredID)
-                let recovered = SongProject(id: recoveredID, title: draft.title, lyrics: draft.lyrics, theme: draft.theme)
-                context.insert(recovered)
-                do {
-                    try saveModelContext(context)
-                } catch {
-                    operation.recordingSnapshot?.removeCopy(for: recoveredID)
-                    throw error
-                }
+                committedRecovery = try committedCopy(for: draft, row: boundRow, operation: operation, in: context)
+                let recovered = try keepCloudDraft(draft, row: boundRow, committed: &committedRecovery, operation: operation, in: context)
                 discardSnapshot(operation.recordingSnapshot)
                 operation.recordingSnapshot = nil
                 cancelEditorAIWork()
-                currentProjectId = recovered.id
+                title = recovered.title
+                bindEditor(to: recovered, editorWords: rawEditorWords)
                 saveStatus = .saved
                 showWelcome = false
                 return true
@@ -3693,6 +4544,17 @@ final class EditorViewModel: ObservableObject {
             return operation.savedSeparateOutgoingDraft
         } catch {
             context.rollback()
+            if let committedRecovery {
+                // The text already belongs to this song. Keep the audio recovery file
+                // separate from ordinary saves so they cannot discard the retry.
+                bindEditor(to: committedRecovery, editorWords: rawEditorWords)
+                updateDraftRecoveryCopy(committedCopy: committedRecovery)
+                deferDraftRecoveryCopy()
+                operation.recordingSnapshot = nil
+                saveStatus = .saved
+                errorMessage = "The draft was saved. Its recordings could not be recovered and will be retried the next time the app opens."
+                return nil
+            }
             pendingRecordingRecovery = operation.recordingSnapshot
             // A merged row may now own the old ID. Keep the visible draft detached
             // so a later autosave or flush cannot overwrite that remote winner.

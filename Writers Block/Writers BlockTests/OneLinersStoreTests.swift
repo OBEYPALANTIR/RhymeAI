@@ -54,6 +54,25 @@ struct OneLinersStoreTests {
     }
 
     @Test
+    func oneLinerPlaybackAvailabilityFollowsTheLocalTake() throws {
+        let container = try Self.makeContainer()
+        let store = try Self.makeStore(container)
+        defer { try? FileManager.default.removeItem(at: store.audioRoot) }
+
+        let pending = try Self.pendingTake(store)
+        let line = try store.add(text: "", take: pending, audioDuration: 3)
+        let fileName = try #require(line.audioFileName)
+        let url = store.audioURL(fileName: fileName)
+
+        #expect(OneLinersView.takeAvailability(nil) == .noTake)
+        #expect(OneLinersView.takeAvailability(url) == .local(url))
+        try FileManager.default.removeItem(at: url)
+        #expect(OneLinersView.takeAvailability(url) == .missing)
+        #expect(try store.all().map(\.id) == [line.id])
+        #expect(line.audioFileName == fileName)
+    }
+
+    @Test
     func addSearchTrashAndRestore() throws {
         // Given
         let container = try Self.makeContainer()

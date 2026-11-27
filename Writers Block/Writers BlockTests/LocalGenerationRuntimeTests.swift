@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#endif
 import XCTest
 @testable import Writers_Block
 
@@ -47,7 +49,8 @@ final class LocalGenerationRuntimeTests: XCTestCase {
         viewModel.lyrics = "[Verse]\nRopes tap time against the mast\nBlue light gathers on the water"
         viewModel.cursorPosition = (viewModel.lyrics as NSString).length
         let input = viewModel.suggestionInputForTest()
-        XCTAssertNil(input.targetRhymeLine)
+        // The suggestion is the stanza's third line, A in ABAB, so it rhymes with the first.
+        XCTAssertEqual(input.targetRhymeLine, "Ropes tap time against the mast")
 
         var records: [[String: Any]] = []
         for phase in ["cold", "warm"] {
@@ -120,11 +123,16 @@ final class LocalGenerationRuntimeTests: XCTestCase {
 
         await AIService.unloadGGUFRunner()
         XCTAssertFalse(AIService.ggufRunner.isLoaded)
+        #if canImport(UIKit)
+        let (osVersion, device) = (UIDevice.current.systemVersion, UIDevice.current.model)
+        #else
+        let (osVersion, device) = (ProcessInfo.processInfo.operatingSystemVersionString, "Mac")
+        #endif
         let report: [String: Any] = [
             "sourceSha": sourceSHA,
             "modelSha256": descriptor.sha256,
-            "osVersion": UIDevice.current.systemVersion,
-            "device": UIDevice.current.model,
+            "osVersion": osVersion,
+            "device": device,
             "engine": GGUFModelService.engineVersion,
             "runs": records
         ]
